@@ -1,0 +1,52 @@
+---
+title: Architecture decision records
+status: living
+date: 2026-11-04
+tags: [adr]
+---
+
+# Architecture decision records
+
+Each ADR records one decision that is expensive to reverse: the context that forced it,
+the options that were considered, the choice, and its consequences. ADRs are never edited
+to change a decision; a new ADR supersedes the old one and both link to each other.
+
+Status values: `proposed` (agreed direction, accepted when its phase starts),
+`accepted`, `superseded by NNNN`, `rejected`.
+
+| ADR | Title | Status | Phase |
+|-----|-------|--------|-------|
+| [0001](0001-license-agpl.md) | License the project under AGPL-3.0-or-later | accepted | 0 |
+| [0002](0002-layered-cargo-workspace.md) | Layered Cargo workspace | accepted | 0 |
+| [0003](0003-money-as-decimal.md) | Money is an exact decimal | accepted | 0 |
+| [0004](0004-company-scoped-tenancy.md) | Company-scoped data from day one | accepted | 0 |
+| [0005](0005-spa-frontend.md) | Separate SPA frontend | accepted | 1 |
+| [0006](0006-fiscal-last.md) | Fiscal documents come last | accepted | 7 |
+| [0007](0007-authentication-and-authorization.md) | Authentication and authorization | accepted | 1 |
+| [0008](0008-audit-trail.md) | Audit trail on every business write | accepted | 1 |
+| [0009](0009-postgres-only-background-jobs.md) | PostgreSQL is the only infrastructure; jobs run on it | accepted | 2 |
+| [0010](0010-payment-providers.md) | Payment providers behind ports | proposed | 4 |
+| [0011](0011-bank-data-ingestion.md) | Bank data: OFX first, aggregator later | proposed | 2, 8 |
+| [0012](0012-managerial-accounting-model.md) | Managerial chart of accounts, not a general ledger | proposed | 2, 6 |
+| [0013](0013-accountant-access-and-exports.md) | Accountant access and exports | proposed | 6 |
+| [0014](0014-notifications.md) | Notifications behind ports | proposed | 4 |
+| [0015](0015-public-api-and-webhooks.md) | Public API and webhooks | proposed | 8 |
+
+## Template
+
+```markdown
+---
+title: "ADR NNNN: Short imperative title"
+status: proposed
+date: YYYY-MM-DD
+tags: [adr, area]
+---
+
+# ADR NNNN: Short imperative title
+
+## Context
+## Options considered
+## Decision
+## Consequences
+## Revisit when
+```
