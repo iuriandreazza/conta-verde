@@ -25,7 +25,8 @@ Phases are ordered by dependency: each one builds on the data created by the pre
 - [ ] Accounts payable and receivable, installments, settlement
 - [ ] Cash flow report
 - [ ] Bank statement import (OFX) and reconciliation
-- [ ] Web app (React SPA, [ADR 0005](adr/0005-spa-frontend.md)) with a "Source code" link in the footer to honor AGPL section 13
+- [x] Web app base (React SPA, [ADR 0005](adr/0005-spa-frontend.md)): sign in, sign up, company picker, parties list and form, and a "Source code" link in the footer to honor AGPL section 13
+- [ ] Web screens for each finance feature above, as their endpoints land
 
 ## Phase 2 — Sales and quotes
 
