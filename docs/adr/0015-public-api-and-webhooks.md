@@ -1,0 +1,54 @@
+---
+title: "ADR 0015: Public API and webhooks"
+status: proposed
+date: 2026-11-04
+tags: [adr, api, integrations]
+---
+
+# ADR 0015: Public API and webhooks
+
+## Context
+
+The reference product has a public REST API and a marketplace of integrations
+(e-commerce, automation platforms). Our SPA consumes the API from Phase 1, and the macro
+plan commits to "no private API". Freezing the contract too early would block the modules
+still being designed.
+
+## Options considered
+
+| Option | Pros | Cons |
+|--------|------|------|
+| Private SPA API, separate public API later | Freedom to change | Two APIs to maintain; integrations get a worse one |
+| GraphQL | Flexible queries | Harder caching, auth and rate limiting; less familiar to integrators |
+| One versioned REST API for everyone (chosen) | Single contract; the SPA proves it | Breaking changes need a version bump once frozen |
+
+## Decision
+
+All endpoints live under `/api/v1`, documented by an OpenAPI 3 document generated from
+the axum handlers (`utoipa` or equivalent), from which the SPA client is generated.
+Conventions: JSON, decimals as strings ([ADR 0003](0003-money-as-decimal.md)), cursor
+pagination on lists, RFC 9457 problem details for errors, idempotency keys on creates.
+
+Before Phase 8 the `v1` contract may change between minor versions (the SPA is the only
+client). Phase 8 freezes `v1`: breaking changes go to `v2`, and `v1` is kept for at least
+one year after `v2` ships.
+
+Authentication for integrations is by API key ([ADR 0007](0007-authentication-and-authorization.md))
+with per-key rate limits. Webhooks are subscriptions per company and event type (sale
+created, installment settled, stock below minimum, document authorized, …), delivered by
+jobs ([ADR 0009](0009-postgres-only-background-jobs.md)) with an HMAC signature, retries
+with backoff, and a delivery log visible in the SPA.
+
+Connectors (e-commerce, marketplaces) are separate packages that use only this API and
+webhooks; none lives inside the core workspace.
+
+## Consequences
+
+- The SPA cannot take shortcuts; every screen is backed by a documented endpoint.
+- Integrators get the same capabilities as the product's own UI.
+- Versioning discipline starts at Phase 8; until then the changelog flags API changes.
+
+## Revisit when
+
+A client needs real-time push (reconciliation or POS), which would add server-sent events
+alongside webhooks.
