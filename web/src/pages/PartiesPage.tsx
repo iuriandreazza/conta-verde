@@ -1,11 +1,7 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { useParams } from "react-router-dom";
-import { ApiError, api, type Party } from "../api";
+import { api, errorMessage, type Party } from "../api";
 import { useAuth } from "../auth";
-
-function describe(failure: unknown): string {
-  return failure instanceof ApiError ? failure.message : "Algo deu errado, tente novamente.";
-}
 
 export function PartiesPage() {
   const { companyId = "" } = useParams();
@@ -13,8 +9,14 @@ export function PartiesPage() {
   const [parties, setParties] = useState<Party[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+
+  // A slow reply for a company the user has already left must not overwrite the current list.
+  const currentCompany = useRef(companyId);
+  currentCompany.current = companyId;
 
   const companyName =
     session.status === "authenticated"
@@ -26,12 +28,13 @@ export function PartiesPage() {
     setError(null);
     try {
       const page = await api.listParties(companyId);
+      if (currentCompany.current !== companyId) return;
       setParties(page.items);
       setNextCursor(page.next_cursor);
     } catch (failure) {
-      setError(describe(failure));
+      if (currentCompany.current === companyId) setError(errorMessage(failure));
     } finally {
-      setLoading(false);
+      if (currentCompany.current === companyId) setLoading(false);
     }
   }, [companyId]);
 
@@ -40,24 +43,32 @@ export function PartiesPage() {
   }, [loadFirstPage]);
 
   async function loadMore() {
-    if (nextCursor === null) {
+    if (nextCursor === null || loadingMore) {
       return;
     }
+    setLoadingMore(true);
     setError(null);
     try {
       const page = await api.listParties(companyId, nextCursor);
+      if (currentCompany.current !== companyId) return;
       setParties((current) => [...current, ...page.items]);
       setNextCursor(page.next_cursor);
     } catch (failure) {
-      setError(describe(failure));
+      if (currentCompany.current === companyId) setError(errorMessage(failure));
+    } finally {
+      setLoadingMore(false);
     }
   }
 
   async function handleCreate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (creating) {
+      return;
+    }
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
     const optional = (name: string) => String(form.get(name) ?? "").trim() || undefined;
+    setCreating(true);
     setFormError(null);
     try {
       await api.createParty(companyId, {
@@ -70,7 +81,9 @@ export function PartiesPage() {
       formElement.reset();
       await loadFirstPage();
     } catch (failure) {
-      setFormError(describe(failure));
+      setFormError(errorMessage(failure));
+    } finally {
+      setCreating(false);
     }
   }
 
@@ -103,7 +116,9 @@ export function PartiesPage() {
             </label>
           </fieldset>
           {formError && <p role="alert" className="error">{formError}</p>}
-          <button type="submit">Adicionar</button>
+          <button type="submit" disabled={creating}>
+            Adicionar
+          </button>
         </form>
       </section>
 
@@ -141,7 +156,7 @@ export function PartiesPage() {
           </table>
         )}
         {nextCursor !== null && (
-          <button type="button" onClick={() => void loadMore()}>
+          <button type="button" disabled={loadingMore} onClick={() => void loadMore()}>
             Carregar mais
           </button>
         )}

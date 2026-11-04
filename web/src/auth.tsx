@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { ApiError, api, type Profile, type Registration } from "./api";
+import { ApiError, api, setSessionLostHandler, type Profile, type Registration } from "./api";
 
 type Session =
   | { status: "loading" }
@@ -29,6 +29,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         setSession({ status: "anonymous" });
       });
+  }, []);
+
+  useEffect(() => {
+    setSessionLostHandler(() => setSession({ status: "anonymous" }));
+    return () => setSessionLostHandler(null);
   }, []);
 
   const signIn = useCallback(async (email: string, password: string) => {

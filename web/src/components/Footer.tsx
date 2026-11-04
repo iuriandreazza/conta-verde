@@ -1,7 +1,8 @@
 // AGPL section 13: users of a modified network service must be offered its source. Forks set
 // VITE_SOURCE_URL at build time so the link points at the code they actually run.
 export const SOURCE_URL: string =
-  import.meta.env.VITE_SOURCE_URL ?? "https://github.com/iuriandreazza/conta-verde";
+  // `||`, not `??`: a pipeline that exports an empty variable must not blank the AGPL link.
+  import.meta.env.VITE_SOURCE_URL || "https://github.com/iuriandreazza/conta-verde";
 
 export function Footer() {
   return (

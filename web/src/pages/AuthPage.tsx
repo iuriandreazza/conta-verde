@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { Link, Navigate } from "react-router-dom";
-import { ApiError } from "../api";
+import { errorMessage } from "../api";
 import { useAuth } from "../auth";
 
 export function AuthPage({ mode }: { mode: "login" | "register" }) {
@@ -31,7 +31,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
         await signIn(field("email"), field("password"));
       }
     } catch (failure) {
-      setError(failure instanceof ApiError ? failure.message : "Algo deu errado, tente novamente.");
+      setError(errorMessage(failure));
     } finally {
       setSubmitting(false);
     }

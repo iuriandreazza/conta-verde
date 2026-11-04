@@ -53,6 +53,17 @@ export class ApiError extends Error {
   }
 }
 
+export function errorMessage(failure: unknown): string {
+  return failure instanceof ApiError ? failure.message : "Algo deu errado, tente novamente.";
+}
+
+let onSessionLost: (() => void) | null = null;
+
+/** Called when a request that needs a session gets 401, e.g. the session expired or was revoked elsewhere. */
+export function setSessionLostHandler(handler: (() => void) | null) {
+  onSessionLost = handler;
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   if (init.body !== undefined) {
@@ -63,6 +74,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     return undefined as T;
   }
   const body: unknown = await response.json().catch(() => null);
+  // /auth/* answers 401 for ordinary reasons (wrong password, not signed in yet); only other calls mean a lost session.
+  if (response.status === 401 && !path.startsWith("/auth/")) {
+    onSessionLost?.();
+  }
   if (!response.ok) {
     const message =
       typeof body === "object" && body !== null && "error" in body
@@ -85,11 +100,8 @@ export const api = {
   logout: () => post<void>("/auth/logout"),
   me: () => request<Profile>("/auth/me"),
   listParties: (companyId: string, after?: string) => {
-    const query = new URLSearchParams();
-    if (after) {
-      query.set("after", after);
-    }
-    return request<PartyPage>(`/companies/${companyId}/parties?${query}`);
+    const query = after ? `?${new URLSearchParams({ after })}` : "";
+    return request<PartyPage>(`/companies/${companyId}/parties${query}`);
   },
   createParty: (companyId: string, party: NewParty) =>
     post<Party>(`/companies/${companyId}/parties`, party),

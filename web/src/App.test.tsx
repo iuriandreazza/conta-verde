@@ -98,6 +98,68 @@ describe("App", () => {
     expect(requested).toContain("/api/companies/c1/parties?after=id%7CCarla+%26+Filhos");
   });
 
+  it("signs up and lands on the new company's parties", async () => {
+    const fetchMock = mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 401 };
+      if (url === "/api/auth/register") return { status: 201, body: profile };
+      expect(init?.method ?? "GET").toBe("GET");
+      return { status: 200, body: { items: [], next_cursor: null } };
+    });
+    renderAt("/register");
+
+    await userEvent.type(await screen.findByLabelText("Seu nome"), "Ana");
+    await userEvent.type(screen.getByLabelText("Nome da empresa"), "Padaria");
+    await userEvent.type(screen.getByLabelText("E-mail"), "ana@example.com");
+    await userEvent.type(screen.getByLabelText("Senha"), "correct horse");
+    await userEvent.click(screen.getByRole("button", { name: "Criar conta" }));
+
+    expect(await screen.findByRole("heading", { name: "Padaria" })).toBeInTheDocument();
+    const register = fetchMock.mock.calls.find(([url]) => String(url) === "/api/auth/register");
+    expect(JSON.parse(String(register?.[1]?.body))).toEqual({
+      name: "Ana",
+      email: "ana@example.com",
+      password: "correct horse",
+      company_name: "Padaria",
+    });
+  });
+
+  it("lets users with several companies choose one", async () => {
+    mockApi((url) =>
+      url === "/api/auth/me"
+        ? {
+            status: 200,
+            body: {
+              ...profile,
+              companies: [
+                { id: "c1", name: "Padaria" },
+                { id: "c2", name: "Mercearia" },
+              ],
+            },
+          }
+        : { status: 200, body: { items: [], next_cursor: null } },
+    );
+    renderAt("/");
+
+    expect(await screen.findByRole("heading", { name: "Escolha uma empresa" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("link", { name: "Mercearia" }));
+    expect(await screen.findByRole("heading", { name: "Mercearia" })).toBeInTheDocument();
+  });
+
+  it("returns to sign-in when the session is lost after the page loaded", async () => {
+    mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "POST") {
+        return { status: 401, body: { error: "authentication required" } };
+      }
+      return { status: 200, body: { items: [], next_cursor: null } };
+    });
+    renderAt("/companies/c1/parties");
+
+    await userEvent.type(await screen.findByLabelText("Nome"), "Zeca");
+    await userEvent.click(screen.getByRole("button", { name: "Adicionar" }));
+    expect(await screen.findByRole("heading", { name: "Entrar" })).toBeInTheDocument();
+  });
+
   it("keeps the user signed in and says so when sign-out fails", async () => {
     mockApi((url, init) => {
       if (url === "/api/auth/me") return { status: 200, body: profile };
