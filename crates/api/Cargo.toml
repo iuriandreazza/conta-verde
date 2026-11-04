@@ -1,0 +1,33 @@
+[package]
+name = "conta-verde-api"
+description = "HTTP API of conta-verde"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+name = "conta_verde_api"
+
+[[bin]]
+name = "conta-verde"
+path = "src/main.rs"
+
+[dependencies]
+axum.workspace = true
+conta-verde-application.workspace = true
+conta-verde-domain.workspace = true
+conta-verde-infrastructure.workspace = true
+serde.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+http-body-util.workspace = true
+serde_json.workspace = true
+tower.workspace = true
+
+[lints]
+workspace = true
