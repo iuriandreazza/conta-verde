@@ -1,16 +1,16 @@
 use std::sync::Arc;
 
 use axum::Json;
-use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::extract::{Query, State};
+use axum::http::StatusCode;
 use conta_verde_application::{IdentityRepository, PartyCursor, PartyRepository, SecretService};
-use conta_verde_domain::{CompanyId, Party, PartyDraft, PartyId};
+use conta_verde_domain::{Party, PartyDraft, PartyId};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::AppState;
+use crate::access::CompanyAccess;
 use crate::error::ApiError;
-use crate::session::require_token;
 
 #[derive(Deserialize)]
 pub(crate) struct RegisterPartyRequest {
@@ -74,8 +74,7 @@ pub(crate) struct PartyPageResponse {
 
 pub(crate) async fn register_party<R, I, S>(
     State(state): State<Arc<AppState<R, I, S>>>,
-    Path(company_id): Path<Uuid>,
-    headers: HeaderMap,
+    CompanyAccess(company_id): CompanyAccess,
     Json(request): Json<RegisterPartyRequest>,
 ) -> Result<(StatusCode, Json<PartyResponse>), ApiError>
 where
@@ -83,23 +82,20 @@ where
     I: IdentityRepository,
     S: SecretService,
 {
-    let company_id = authorize(&state, &headers, company_id).await?;
     let party = state.parties.register(company_id, request.into()).await?;
     Ok((StatusCode::CREATED, Json(PartyResponse::from(&party))))
 }
 
 pub(crate) async fn list_parties<R, I, S>(
     State(state): State<Arc<AppState<R, I, S>>>,
-    Path(company_id): Path<Uuid>,
+    CompanyAccess(company_id): CompanyAccess,
     Query(query): Query<ListQuery>,
-    headers: HeaderMap,
 ) -> Result<Json<PartyPageResponse>, ApiError>
 where
     R: PartyRepository,
     I: IdentityRepository,
     S: SecretService,
 {
-    let company_id = authorize(&state, &headers, company_id).await?;
     let after = query.after.as_deref().map(decode_cursor).transpose()?;
     let page = state
         .parties
@@ -109,22 +105,6 @@ where
         items: page.items.iter().map(PartyResponse::from).collect(),
         next_cursor: page.next.as_ref().map(encode_cursor),
     }))
-}
-
-async fn authorize<R, I, S>(
-    state: &AppState<R, I, S>,
-    headers: &HeaderMap,
-    company_id: Uuid,
-) -> Result<CompanyId, ApiError>
-where
-    R: PartyRepository,
-    I: IdentityRepository,
-    S: SecretService,
-{
-    let token = require_token(headers)?;
-    let company_id = CompanyId::from_uuid(company_id);
-    state.auth.authorize(token, company_id).await?;
-    Ok(company_id)
 }
 
 // Clients treat the cursor as opaque. The id comes first because it has a fixed shape,

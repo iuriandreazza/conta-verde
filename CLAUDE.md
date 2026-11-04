@@ -42,7 +42,7 @@ Rules that are easy to break:
 
 ## Gotchas
 
-- Auth is cookie sessions (ADR 0007). Every `/companies/{company_id}/...` handler must call `authorize` before touching data; missing sessions get `401`, non-members and unknown companies both get `404`.
+- Auth is cookie sessions (ADR 0007). Every `/companies/{company_id}/...` handler must take the `CompanyAccess` extractor (before any `Json`/`Query`); missing sessions get `401`, non-members and unknown companies both get `404`.
 - Not built yet: password reset, invitations, login rate limiting, roles. The API still binds to `127.0.0.1` by default and needs a TLS proxy plus `COOKIE_SECURE=true` before being exposed. Do not change the default bind address.
 - The foreign key `parties.company_id -> companies` fails on old dev databases holding orphan parties: `docker compose down -v` resets it.
 - Secrets (Argon2, token generation and digests) sit behind the `SecretService` port; the `argon2` crate is optimized even in dev builds (workspace `Cargo.toml`), or tests would take seconds per login.

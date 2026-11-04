@@ -14,7 +14,7 @@ conta-verde-domain.workspace = true
 rand = "0.10.3"
 sha2 = "0.11.1"
 sqlx.workspace = true
-tokio = { workspace = true, features = ["rt"] }
+tokio = { workspace = true, features = ["rt", "sync"] }
 uuid.workspace = true
 
 [dev-dependencies]

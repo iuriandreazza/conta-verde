@@ -1,3 +1,4 @@
+mod access;
 mod auth;
 mod error;
 mod parties;
@@ -285,6 +286,19 @@ mod tests {
         let app = app();
         let (_, company_id) = sign_up(&app, "ana@example.com").await;
         let reply = send(&app, get_request(&parties_uri(company_id), None)).await;
+        assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn anonymous_callers_are_rejected_before_the_body_is_parsed() {
+        let app = app();
+        let (_, company_id) = sign_up(&app, "ana@example.com").await;
+        let malformed = json!({ "unexpected": true });
+        let reply = send(
+            &app,
+            json_request("POST", &parties_uri(company_id), None, malformed),
+        )
+        .await;
         assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
     }
 

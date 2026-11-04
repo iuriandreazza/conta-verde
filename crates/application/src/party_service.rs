@@ -45,9 +45,11 @@ impl<R: PartyRepository> PartyService<R> {
             .await?;
         let has_more = items.len() > limit;
         items.truncate(limit);
-        let next = has_more
-            .then(|| items.last().map(PartyCursor::from))
-            .flatten();
+        let next = if has_more {
+            items.last().map(PartyCursor::from)
+        } else {
+            None
+        };
         Ok(PartyPage { items, next })
     }
 }

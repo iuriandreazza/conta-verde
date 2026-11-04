@@ -243,6 +243,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn clamps_the_page_size() {
+        let service = PartyService::new(InMemoryPartyRepository::default());
+        let company = CompanyId::generate();
+        for name in ["Ana", "Bruno"] {
+            service.register(company, draft(name, None)).await.unwrap();
+        }
+
+        let smallest = service.list(company, None, Some(0)).await.unwrap();
+        assert_eq!(smallest.items.len(), 1);
+        assert!(smallest.next.is_some());
+
+        let largest = service.list(company, None, Some(1_000_000)).await.unwrap();
+        assert_eq!(largest.items.len(), 2);
+        assert!(largest.next.is_none());
+    }
+
+    #[tokio::test]
     async fn runs_the_account_lifecycle() {
         let auth = AuthService::new(
             InMemoryIdentityRepository::default(),

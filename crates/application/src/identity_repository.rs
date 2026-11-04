@@ -5,14 +5,16 @@ use conta_verde_domain::{Account, Company, CompanyId, Email, User, UserId};
 
 use crate::RepositoryError;
 
+// Neither struct derives Debug: the password hash must not end up in logs or panic messages.
+
 /// A new account together with the hash of its password.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct NewAccount {
     pub account: Account,
     pub password_hash: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct StoredCredentials {
     pub user: User,
     pub password_hash: String,

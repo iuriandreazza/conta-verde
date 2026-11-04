@@ -23,6 +23,7 @@ is a member of the `company_id` in the URL.
 ## Consequences
 
 - Cross-company queries are impossible by construction, which also simplifies a future move to PostgreSQL row-level security.
-- A new company route must call the membership check before touching data; the compiler does not enforce it.
+- A company route gets its access check by declaring the `CompanyAccess` extractor before any body or query extractor.
+  The compiler does not force a handler to declare it, so reviewers must look for it on every new `/companies/{company_id}` route.
 - Before Phase 1 the API trusted `company_id` blindly. Databases created back then may hold parties of companies that do not exist,
   which makes the foreign-key migration fail.

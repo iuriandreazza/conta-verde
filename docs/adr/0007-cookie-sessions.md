@@ -31,4 +31,7 @@ The first client is a browser SPA served from the same origin as the API ([ADR 0
 
 - Every authenticated request costs one indexed lookup on `sessions`.
 - Plain-HTTP deployments must leave `COOKIE_SECURE` off, which is acceptable only on loopback. Put a TLS-terminating proxy in front before exposing the API.
+- Concurrent Argon2 runs are capped at the number of CPUs, since each one holds about 19 MiB.
+- `POST /auth/register` answers `409` for a registered email, so it reveals which emails exist. This is accepted for now because
+  closing it needs email verification; rate limiting is the mitigation once it exists.
 - Not covered yet: password reset, invitations to existing companies, rate limiting of login attempts, and roles other than owner.

@@ -16,10 +16,20 @@ pub struct Profile {
 }
 
 /// The outcome of registering or logging in: the raw session token is shown to the client once.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SignedIn {
     pub token: String,
     pub profile: Profile,
+}
+
+// Manual impl so a logged or unwrapped `SignedIn` never prints a live session token.
+impl std::fmt::Debug for SignedIn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SignedIn")
+            .field("token", &"<redacted>")
+            .field("profile", &self.profile)
+            .finish()
+    }
 }
 
 pub struct AuthService<I, S> {

@@ -19,7 +19,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Loopback by default: put a TLS-terminating reverse proxy in front before exposing the API.
     let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".to_owned());
     let config = ApiConfig {
-        cookie_secure: std::env::var("COOKIE_SECURE").is_ok_and(|value| value == "true"),
+        cookie_secure: parse_flag("COOKIE_SECURE")?,
     };
 
     let pool = connect_and_migrate(&database_url).await?;
@@ -35,6 +35,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())
+}
+
+// Strict on purpose: a typo such as `TRUE` must not silently turn off a security setting.
+fn parse_flag(name: &str) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    match std::env::var(name).as_deref() {
+        Err(_) | Ok("false") => Ok(false),
+        Ok("true") => Ok(true),
+        Ok(other) => Err(format!("{name} must be `true` or `false`, got `{other}`").into()),
+    }
 }
 
 async fn shutdown_signal() {
