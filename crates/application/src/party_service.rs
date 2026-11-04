@@ -1,6 +1,16 @@
 use conta_verde_domain::{CompanyId, Party, PartyDraft, PartyId};
 
-use crate::{ApplicationError, PartyRepository};
+use crate::{ApplicationError, PartyCursor, PartyRepository};
+
+const DEFAULT_PAGE_SIZE: usize = 50;
+const MAX_PAGE_SIZE: usize = 200;
+
+#[derive(Debug, Clone)]
+pub struct PartyPage {
+    pub items: Vec<Party>,
+    /// Present when more parties exist after this page.
+    pub next: Option<PartyCursor>,
+}
 
 pub struct PartyService<R> {
     repository: R,
@@ -21,7 +31,23 @@ impl<R: PartyRepository> PartyService<R> {
         Ok(party)
     }
 
-    pub async fn list(&self, company_id: CompanyId) -> Result<Vec<Party>, ApplicationError> {
-        Ok(self.repository.list_by_company(company_id).await?)
+    pub async fn list(
+        &self,
+        company_id: CompanyId,
+        after: Option<&PartyCursor>,
+        limit: Option<usize>,
+    ) -> Result<PartyPage, ApplicationError> {
+        let limit = limit.unwrap_or(DEFAULT_PAGE_SIZE).clamp(1, MAX_PAGE_SIZE);
+        // One extra row tells whether another page exists without a second query.
+        let mut items = self
+            .repository
+            .list_by_company(company_id, after, limit + 1)
+            .await?;
+        let has_more = items.len() > limit;
+        items.truncate(limit);
+        let next = has_more
+            .then(|| items.last().map(PartyCursor::from))
+            .flatten();
+        Ok(PartyPage { items, next })
     }
 }

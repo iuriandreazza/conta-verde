@@ -16,11 +16,13 @@ Accountants and small groups manage several companies (CNPJs) in one installatio
 Every business table carries a `company_id`, every repository method takes a `CompanyId`, and unique constraints are scoped by it
 (for example, the same CPF/CNPJ may exist in two companies, but not twice in one).
 
-Row-level isolation is enforced in the application layer for now. The `companies` table and the foreign keys are added
-together with authentication in Phase 1; until then `company_id` is an unchecked identifier supplied in the URL,
-so the API **must not be exposed to untrusted networks yet**.
+Row-level isolation is enforced in the application layer. Phase 1 added the `companies` and `memberships` tables, the foreign key
+from `parties`, and authentication ([ADR 0007](0007-cookie-sessions.md)): every company route first checks that the session's user
+is a member of the `company_id` in the URL.
 
 ## Consequences
 
 - Cross-company queries are impossible by construction, which also simplifies a future move to PostgreSQL row-level security.
-- Until authentication lands, any caller can read or write any company's parties.
+- A new company route must call the membership check before touching data; the compiler does not enforce it.
+- Before Phase 1 the API trusted `company_id` blindly. Databases created back then may hold parties of companies that do not exist,
+  which makes the foreign-key migration fail.

@@ -6,6 +6,7 @@ pub enum DomainError {
     InvalidDocument,
     InvalidEmail,
     MissingRole,
+    WeakPassword,
 }
 
 impl fmt::Display for DomainError {
@@ -15,6 +16,7 @@ impl fmt::Display for DomainError {
             Self::InvalidDocument => "document is not a valid CPF or CNPJ",
             Self::InvalidEmail => "email is not valid",
             Self::MissingRole => "party must be a customer, a supplier or both",
+            Self::WeakPassword => "password must have between 8 and 128 characters",
         };
         f.write_str(message)
     }

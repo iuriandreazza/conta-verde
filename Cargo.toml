@@ -25,5 +25,12 @@ conta-verde-domain = { path = "crates/domain" }
 conta-verde-application = { path = "crates/application" }
 conta-verde-infrastructure = { path = "crates/infrastructure" }
 
+# Argon2 is deliberately slow; unoptimized it makes every login and test take seconds.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3
+
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

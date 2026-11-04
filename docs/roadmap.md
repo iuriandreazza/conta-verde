@@ -19,8 +19,8 @@ Phases are ordered by dependency: each one builds on the data created by the pre
 
 ## Phase 1 — Registers and finance
 
-- [ ] Authentication and the `companies` table, then enforce tenancy ([ADR 0004](adr/0004-company-scoped-tenancy.md))
-- [ ] Pagination for list endpoints (the parties list is unbounded today)
+- [x] Authentication ([ADR 0007](adr/0007-cookie-sessions.md)) and the `companies` table, then enforce tenancy ([ADR 0004](adr/0004-company-scoped-tenancy.md))
+- [x] Pagination for list endpoints (keyset cursor, `{items, next_cursor}`)
 - [ ] Bank accounts, categories and cost centers
 - [ ] Accounts payable and receivable, installments, settlement
 - [ ] Cash flow report

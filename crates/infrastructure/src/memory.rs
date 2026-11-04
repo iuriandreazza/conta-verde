@@ -1,7 +1,13 @@
+use std::collections::HashMap;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
-use conta_verde_application::{PartyRepository, RepositoryError};
-use conta_verde_domain::{CompanyId, Party};
+use conta_verde_application::{
+    IdentityRepository, NewAccount, PartyCursor, PartyRepository, RepositoryError,
+    StoredCredentials,
+};
+use conta_verde_domain::{Company, CompanyId, Email, Party, User, UserId};
+use uuid::Uuid;
 
 /// Keeps parties in process memory. Used by tests and for running the API without a database.
 #[derive(Default)]
@@ -24,24 +30,152 @@ impl PartyRepository for InMemoryPartyRepository {
         Ok(())
     }
 
-    async fn list_by_company(&self, company_id: CompanyId) -> Result<Vec<Party>, RepositoryError> {
+    async fn list_by_company(
+        &self,
+        company_id: CompanyId,
+        after: Option<&PartyCursor>,
+        limit: usize,
+    ) -> Result<Vec<Party>, RepositoryError> {
         let parties = self.parties.lock().expect("repository lock poisoned");
+        let sort_key = |name: &str, id: Uuid| (name.to_lowercase(), id);
+        let after_key = after.map(|cursor| sort_key(&cursor.name, cursor.id.as_uuid()));
+
         let mut owned: Vec<Party> = parties
             .iter()
             .filter(|party| party.company_id() == company_id)
+            .filter(|party| {
+                after_key
+                    .as_ref()
+                    .is_none_or(|key| sort_key(party.name(), party.id().as_uuid()) > *key)
+            })
             .cloned()
             .collect();
-        owned.sort_by_cached_key(|party| (party.name().to_lowercase(), party.id().as_uuid()));
+        owned.sort_by_cached_key(|party| sort_key(party.name(), party.id().as_uuid()));
+        owned.truncate(limit);
         Ok(owned)
+    }
+}
+
+/// Keeps users, companies, memberships and sessions in process memory.
+#[derive(Default)]
+pub struct InMemoryIdentityRepository {
+    state: Mutex<IdentityState>,
+}
+
+#[derive(Default)]
+struct IdentityState {
+    users: Vec<StoredCredentials>,
+    companies: Vec<Company>,
+    memberships: Vec<(UserId, CompanyId)>,
+    sessions: HashMap<String, (UserId, Instant)>,
+}
+
+impl IdentityState {
+    fn user(&self, id: UserId) -> Option<&User> {
+        self.users
+            .iter()
+            .map(|credentials| &credentials.user)
+            .find(|user| user.id() == id)
+    }
+}
+
+impl IdentityRepository for InMemoryIdentityRepository {
+    async fn register_account(&self, new_account: &NewAccount) -> Result<(), RepositoryError> {
+        let NewAccount {
+            account,
+            password_hash,
+        } = new_account;
+        let mut state = self.state.lock().expect("repository lock poisoned");
+        if state
+            .users
+            .iter()
+            .any(|existing| existing.user.email() == account.user.email())
+        {
+            return Err(RepositoryError::DuplicateEmail);
+        }
+        state.users.push(StoredCredentials {
+            user: account.user.clone(),
+            password_hash: password_hash.clone(),
+        });
+        state.companies.push(account.company.clone());
+        state
+            .memberships
+            .push((account.user.id(), account.company.id()));
+        Ok(())
+    }
+
+    async fn find_credentials(
+        &self,
+        email: &Email,
+    ) -> Result<Option<StoredCredentials>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        Ok(state
+            .users
+            .iter()
+            .find(|credentials| credentials.user.email() == email)
+            .cloned())
+    }
+
+    async fn companies_of(&self, user_id: UserId) -> Result<Vec<Company>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        let mut companies: Vec<Company> = state
+            .companies
+            .iter()
+            .filter(|company| state.memberships.contains(&(user_id, company.id())))
+            .cloned()
+            .collect();
+        companies
+            .sort_by_cached_key(|company| (company.name().to_lowercase(), company.id().as_uuid()));
+        Ok(companies)
+    }
+
+    async fn is_member(
+        &self,
+        user_id: UserId,
+        company_id: CompanyId,
+    ) -> Result<bool, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        Ok(state.memberships.contains(&(user_id, company_id)))
+    }
+
+    async fn create_session(
+        &self,
+        user_id: UserId,
+        token_digest: &str,
+        lifetime: Duration,
+    ) -> Result<(), RepositoryError> {
+        let mut state = self.state.lock().expect("repository lock poisoned");
+        state.sessions.insert(
+            token_digest.to_owned(),
+            (user_id, Instant::now() + lifetime),
+        );
+        Ok(())
+    }
+
+    async fn find_session_user(&self, token_digest: &str) -> Result<Option<User>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        Ok(state
+            .sessions
+            .get(token_digest)
+            .filter(|(_, expires_at)| *expires_at > Instant::now())
+            .and_then(|(user_id, _)| state.user(*user_id))
+            .cloned())
+    }
+
+    async fn delete_session(&self, token_digest: &str) -> Result<(), RepositoryError> {
+        let mut state = self.state.lock().expect("repository lock poisoned");
+        state.sessions.remove(token_digest);
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use conta_verde_application::{ApplicationError, PartyService};
+    use conta_verde_application::{ApplicationError, AuthService, PartyService};
     use conta_verde_domain::PartyDraft;
 
     use super::*;
+    use crate::{Argon2SecretService, contract};
 
     fn draft(name: &str, document: Option<&str>) -> PartyDraft {
         PartyDraft {
@@ -70,9 +204,10 @@ mod tests {
             .unwrap();
 
         let names: Vec<String> = service
-            .list(company)
+            .list(company, None, None)
             .await
             .unwrap()
+            .items
             .iter()
             .map(|party| party.name().to_owned())
             .collect();
@@ -99,5 +234,31 @@ mod tests {
             .register(CompanyId::generate(), draft("Ana 3", document))
             .await;
         assert!(other.is_ok());
+    }
+
+    #[tokio::test]
+    async fn pages_through_parties_in_name_order() {
+        let service = PartyService::new(InMemoryPartyRepository::default());
+        contract::pages_through_parties(&service, CompanyId::generate()).await;
+    }
+
+    #[tokio::test]
+    async fn runs_the_account_lifecycle() {
+        let auth = AuthService::new(
+            InMemoryIdentityRepository::default(),
+            Argon2SecretService::new().unwrap(),
+            Duration::from_secs(3600),
+        );
+        contract::runs_the_account_lifecycle(&auth).await;
+    }
+
+    #[tokio::test]
+    async fn expired_sessions_are_not_found() {
+        let auth = AuthService::new(
+            InMemoryIdentityRepository::default(),
+            Argon2SecretService::new().unwrap(),
+            Duration::ZERO,
+        );
+        contract::expired_sessions_are_rejected(&auth).await;
     }
 }
