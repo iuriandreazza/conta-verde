@@ -1,0 +1,19 @@
+[package]
+name = "conta-verde-infrastructure"
+description = "Storage adapters of conta-verde"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+conta-verde-application.workspace = true
+conta-verde-domain.workspace = true
+sqlx.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

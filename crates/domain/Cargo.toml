@@ -1,0 +1,14 @@
+[package]
+name = "conta-verde-domain"
+description = "Business rules of conta-verde, free of I/O"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+uuid.workspace = true
+
+[lints]
+workspace = true

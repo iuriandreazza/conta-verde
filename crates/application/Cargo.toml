@@ -1,0 +1,14 @@
+[package]
+name = "conta-verde-application"
+description = "Use cases and ports of conta-verde"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+conta-verde-domain.workspace = true
+
+[lints]
+workspace = true
