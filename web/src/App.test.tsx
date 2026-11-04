@@ -53,13 +53,13 @@ describe("App", () => {
   it("sends anonymous visitors to the sign-in page", async () => {
     mockApi(() => ({ status: 401, body: { error: "authentication required" } }));
     renderAt("/");
-    expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Entrar" })).toBeInTheDocument();
   });
 
   it("always links to the source code in the footer", async () => {
     mockApi(() => ({ status: 401 }));
     renderAt("/login");
-    const link = await screen.findByRole("link", { name: "Source code" });
+    const link = await screen.findByRole("link", { name: "Código-fonte" });
     expect(link).toHaveAttribute("href", SOURCE_URL);
   });
 
@@ -70,9 +70,9 @@ describe("App", () => {
         : { status: 401, body: { error: "invalid email or password" } },
     );
     renderAt("/login");
-    await userEvent.type(await screen.findByLabelText("Email"), "ana@example.com");
-    await userEvent.type(screen.getByLabelText("Password"), "wrong password");
-    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await userEvent.type(await screen.findByLabelText("E-mail"), "ana@example.com");
+    await userEvent.type(screen.getByLabelText("Senha"), "wrong password");
+    await userEvent.click(screen.getByRole("button", { name: "Entrar" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("invalid email or password");
   });
 
@@ -89,13 +89,38 @@ describe("App", () => {
     expect(await screen.findByRole("heading", { name: "Padaria" })).toBeInTheDocument();
     expect(await screen.findByText("Carla")).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: "Load more" }));
+    await userEvent.click(screen.getByRole("button", { name: "Carregar mais" }));
     expect(await screen.findByText("Bruno")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Carregar mais" })).not.toBeInTheDocument();
 
     // The cursor contains `&` and `|`, so it must be percent-encoded.
     const requested = fetchMock.mock.calls.map(([url]) => String(url));
     expect(requested).toContain("/api/companies/c1/parties?after=id%7CCarla+%26+Filhos");
+  });
+
+  it("keeps the user signed in and says so when sign-out fails", async () => {
+    mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "POST") return { status: 500, body: { error: "internal error" } };
+      return { status: 200, body: { items: [], next_cursor: null } };
+    });
+    renderAt("/companies/c1/parties");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Sair" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Não foi possível sair");
+    expect(screen.getByRole("button", { name: "Sair" })).toBeInTheDocument();
+  });
+
+  it("returns to sign-in after a successful sign-out", async () => {
+    mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "POST") return { status: 204 };
+      return { status: 200, body: { items: [], next_cursor: null } };
+    });
+    renderAt("/companies/c1/parties");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Sair" }));
+    expect(await screen.findByRole("heading", { name: "Entrar" })).toBeInTheDocument();
   });
 
   it("shows the API message when a party is rejected", async () => {
@@ -108,9 +133,9 @@ describe("App", () => {
     });
     renderAt("/companies/c1/parties");
 
-    await userEvent.type(await screen.findByLabelText("Name"), "Padaria Central");
-    await userEvent.type(screen.getByLabelText("CPF or CNPJ"), "123");
-    await userEvent.click(screen.getByRole("button", { name: "Add" }));
+    await userEvent.type(await screen.findByLabelText("Nome"), "Padaria Central");
+    await userEvent.type(screen.getByLabelText("CPF ou CNPJ"), "123");
+    await userEvent.click(screen.getByRole("button", { name: "Adicionar" }));
 
     await waitFor(() =>
       expect(screen.getByRole("alert")).toHaveTextContent("document is not a valid CPF or CNPJ"),

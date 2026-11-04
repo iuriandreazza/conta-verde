@@ -4,7 +4,7 @@ import { ApiError, api, type Party } from "../api";
 import { useAuth } from "../auth";
 
 function describe(failure: unknown): string {
-  return failure instanceof ApiError ? failure.message : "Something went wrong, try again.";
+  return failure instanceof ApiError ? failure.message : "Algo deu errado, tente novamente.";
 }
 
 export function PartiesPage() {
@@ -43,6 +43,7 @@ export function PartiesPage() {
     if (nextCursor === null) {
       return;
     }
+    setError(null);
     try {
       const page = await api.listParties(companyId, nextCursor);
       setParties((current) => [...current, ...page.items]);
@@ -75,52 +76,52 @@ export function PartiesPage() {
 
   return (
     <>
-      <h1>{companyName ?? "Customers and suppliers"}</h1>
+      <h1>{companyName ?? "Clientes e fornecedores"}</h1>
 
       <section className="card">
-        <h2>New customer or supplier</h2>
+        <h2>Novo cliente ou fornecedor</h2>
         <form onSubmit={handleCreate}>
           <label>
-            Name
+            Nome
             <input name="name" required />
           </label>
           <label>
-            CPF or CNPJ
+            CPF ou CNPJ
             <input name="document" inputMode="numeric" />
           </label>
           <label>
-            Email
+            E-mail
             <input name="email" type="email" />
           </label>
           <fieldset>
-            <legend>Role</legend>
+            <legend>Tipo</legend>
             <label className="inline">
-              <input name="is_customer" type="checkbox" defaultChecked /> Customer
+              <input name="is_customer" type="checkbox" defaultChecked /> Cliente
             </label>
             <label className="inline">
-              <input name="is_supplier" type="checkbox" /> Supplier
+              <input name="is_supplier" type="checkbox" /> Fornecedor
             </label>
           </fieldset>
           {formError && <p role="alert" className="error">{formError}</p>}
-          <button type="submit">Add</button>
+          <button type="submit">Adicionar</button>
         </form>
       </section>
 
       <section className="card">
-        <h2>Registered</h2>
+        <h2>Cadastrados</h2>
         {error && <p role="alert" className="error">{error}</p>}
         {loading ? (
-          <p role="status">Loading…</p>
+          <p role="status">Carregando…</p>
         ) : parties.length === 0 && !error ? (
-          <p>Nobody registered yet.</p>
+          <p>Nenhum cadastro ainda.</p>
         ) : (
           <table>
             <thead>
               <tr>
-                <th>Name</th>
-                <th>Document</th>
-                <th>Email</th>
-                <th>Role</th>
+                <th>Nome</th>
+                <th>Documento</th>
+                <th>E-mail</th>
+                <th>Tipo</th>
               </tr>
             </thead>
             <tbody>
@@ -130,7 +131,7 @@ export function PartiesPage() {
                   <td>{party.document ?? "—"}</td>
                   <td>{party.email ?? "—"}</td>
                   <td>
-                    {[party.is_customer && "Customer", party.is_supplier && "Supplier"]
+                    {[party.is_customer && "Cliente", party.is_supplier && "Fornecedor"]
                       .filter(Boolean)
                       .join(" · ")}
                   </td>
@@ -141,7 +142,7 @@ export function PartiesPage() {
         )}
         {nextCursor !== null && (
           <button type="button" onClick={() => void loadMore()}>
-            Load more
+            Carregar mais
           </button>
         )}
       </section>

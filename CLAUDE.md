@@ -3,7 +3,9 @@
 Open-source ERP for small businesses (inspired by cloud ERPs such as Conta Azul): a Rust API (`crates/`) and a React SPA (`web/`).
 License: **AGPL-3.0-or-later** (ADR 0001). Never use the Conta Azul name, logo or screenshots in code, docs or UI.
 
-Read `docs/roadmap.md` for scope and phase order, and `docs/adr/` for the reasons behind decisions.
+Read `docs/macro-plan.md` for scope (the reference module map and release plan), `docs/roadmap.md` for
+phase order and progress, and `docs/adr/README.md` for the index of decisions. A phase starts by
+accepting the `proposed` ADRs it depends on.
 
 ## Commands
 

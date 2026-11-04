@@ -15,7 +15,7 @@ export function CompaniesPage() {
 
   return (
     <section className="card narrow">
-      <h1>Choose a company</h1>
+      <h1>Escolha uma empresa</h1>
       <ul className="plain-list">
         {companies.map((company) => (
           <li key={company.id}>

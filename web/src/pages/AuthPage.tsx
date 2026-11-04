@@ -31,7 +31,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
         await signIn(field("email"), field("password"));
       }
     } catch (failure) {
-      setError(failure instanceof ApiError ? failure.message : "Something went wrong, try again.");
+      setError(failure instanceof ApiError ? failure.message : "Algo deu errado, tente novamente.");
     } finally {
       setSubmitting(false);
     }
@@ -39,26 +39,26 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
 
   return (
     <section className="card narrow">
-      <h1>{registering ? "Create your account" : "Sign in"}</h1>
+      <h1>{registering ? "Crie sua conta" : "Entrar"}</h1>
       <form onSubmit={handleSubmit}>
         {registering && (
           <>
             <label>
-              Your name
+              Seu nome
               <input name="name" required autoComplete="name" />
             </label>
             <label>
-              Company name
+              Nome da empresa
               <input name="company_name" required autoComplete="organization" />
             </label>
           </>
         )}
         <label>
-          Email
+          E-mail
           <input name="email" type="email" required autoComplete="email" />
         </label>
         <label>
-          Password
+          Senha
           <input
             name="password"
             type="password"
@@ -69,17 +69,17 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
         </label>
         {error && <p role="alert" className="error">{error}</p>}
         <button type="submit" disabled={submitting}>
-          {registering ? "Create account" : "Sign in"}
+          {registering ? "Criar conta" : "Entrar"}
         </button>
       </form>
       <p>
         {registering ? (
           <>
-            Already have an account? <Link to="/login">Sign in</Link>
+            Já tem conta? <Link to="/login">Entrar</Link>
           </>
         ) : (
           <>
-            New here? <Link to="/register">Create an account</Link>
+            Primeira vez aqui? <Link to="/register">Criar conta</Link>
           </>
         )}
       </p>

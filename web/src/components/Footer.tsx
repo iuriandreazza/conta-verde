@@ -6,9 +6,9 @@ export const SOURCE_URL: string =
 export function Footer() {
   return (
     <footer className="footer">
-      <span>conta-verde is free software under the GNU AGPL v3 or later.</span>{" "}
+      <span>conta-verde é software livre sob a GNU AGPL v3 ou posterior.</span>{" "}
       <a href={SOURCE_URL} target="_blank" rel="noreferrer">
-        Source code
+        Código-fonte
       </a>
     </footer>
   );
