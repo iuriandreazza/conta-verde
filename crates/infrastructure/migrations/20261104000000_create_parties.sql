@@ -15,4 +15,4 @@ CREATE UNIQUE INDEX parties_company_document_key
     ON parties (company_id, document)
     WHERE document IS NOT NULL;
 
-CREATE INDEX parties_company_name_idx ON parties (company_id, name);
+CREATE INDEX parties_company_name_idx ON parties (company_id, lower(name), id);

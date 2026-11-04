@@ -1,0 +1,13 @@
+{
+  "name": "conta-verde",
+  "private": true,
+  "description": "Tooling for the conta-verde repository (git hooks). The application itself is Rust.",
+  "license": "AGPL-3.0-or-later",
+  "scripts": {
+    "prepare": "husky",
+    "check": "cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7"
+  }
+}

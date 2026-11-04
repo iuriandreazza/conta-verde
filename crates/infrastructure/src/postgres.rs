@@ -3,17 +3,19 @@ use conta_verde_domain::{CompanyId, Party, PartyDraft, PartyId};
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row};
 
-pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::migrate::MigrateError> {
-    sqlx::migrate!("./migrations").run(pool).await
-}
+const DOCUMENT_UNIQUE_INDEX: &str = "parties_company_document_key";
 
 pub struct PostgresPartyRepository {
     pool: PgPool,
 }
 
 impl PostgresPartyRepository {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+    pub async fn connect_and_migrate(
+        database_url: &str,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let pool = PgPool::connect(database_url).await?;
+        sqlx::migrate!("./migrations").run(&pool).await?;
+        Ok(Self { pool })
     }
 }
 
@@ -33,7 +35,7 @@ impl PartyRepository for PostgresPartyRepository {
         .execute(&self.pool)
         .await
         .map_err(|error| match &error {
-            sqlx::Error::Database(db) if db.is_unique_violation() => {
+            sqlx::Error::Database(db) if db.constraint() == Some(DOCUMENT_UNIQUE_INDEX) => {
                 RepositoryError::DuplicateDocument
             }
             _ => storage_error(error),
@@ -44,7 +46,7 @@ impl PartyRepository for PostgresPartyRepository {
     async fn list_by_company(&self, company_id: CompanyId) -> Result<Vec<Party>, RepositoryError> {
         let rows = sqlx::query(
             "SELECT id, company_id, name, document, email, is_customer, is_supplier \
-             FROM parties WHERE company_id = $1 ORDER BY name",
+             FROM parties WHERE company_id = $1 ORDER BY lower(name), id",
         )
         .bind(company_id.as_uuid())
         .fetch_all(&self.pool)
@@ -77,7 +79,7 @@ fn storage_error(error: sqlx::Error) -> RepositoryError {
 
 #[cfg(test)]
 mod tests {
-    use conta_verde_application::PartyService;
+    use conta_verde_application::{ApplicationError, PartyService};
 
     use super::*;
 
@@ -86,28 +88,41 @@ mod tests {
     #[ignore = "requires DATABASE_URL"]
     async fn stores_parties_and_enforces_unique_document_per_company() {
         let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-        let pool = PgPool::connect(&url).await.unwrap();
-        migrate(&pool).await.unwrap();
-        let service = PartyService::new(PostgresPartyRepository::new(pool));
+        let repository = PostgresPartyRepository::connect_and_migrate(&url)
+            .await
+            .unwrap();
+        let service = PartyService::new(repository);
         let company = CompanyId::generate();
-        let draft = |name: &str| PartyDraft {
+        let draft = |name: &str, document: Option<&str>| PartyDraft {
             name: name.into(),
-            document: Some("11.222.333/0001-81".into()),
+            document: document.map(Into::into),
             email: Some("contato@example.com".into()),
             is_customer: true,
             is_supplier: true,
         };
 
-        service.register(company, draft("Padaria")).await.unwrap();
-        let duplicate = service.register(company, draft("Padaria 2")).await;
+        service
+            .register(company, draft("Padaria", Some("11.222.333/0001-81")))
+            .await
+            .unwrap();
+        let duplicate = service
+            .register(company, draft("Padaria 2", Some("11.222.333/0001-81")))
+            .await;
         assert_eq!(
             duplicate.unwrap_err(),
-            conta_verde_application::ApplicationError::DuplicateDocument
+            ApplicationError::Repository(RepositoryError::DuplicateDocument)
         );
 
+        service
+            .register(company, draft("zeca", None))
+            .await
+            .unwrap();
+        service.register(company, draft("ana", None)).await.unwrap();
+
         let listed = service.list(company).await.unwrap();
-        assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].document().unwrap().digits(), "11222333000181");
-        assert!(listed[0].is_customer() && listed[0].is_supplier());
+        let names: Vec<&str> = listed.iter().map(Party::name).collect();
+        assert_eq!(names, ["ana", "Padaria", "zeca"]);
+        assert_eq!(listed[1].document().unwrap().digits(), "11222333000181");
+        assert!(listed[1].is_customer() && listed[1].is_supplier());
     }
 }

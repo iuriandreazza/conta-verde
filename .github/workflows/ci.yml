@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   DATABASE_URL: postgres://conta_verde:conta_verde@localhost:5432/conta_verde

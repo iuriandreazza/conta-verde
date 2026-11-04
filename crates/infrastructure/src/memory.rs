@@ -31,7 +31,7 @@ impl PartyRepository for InMemoryPartyRepository {
             .filter(|party| party.company_id() == company_id)
             .cloned()
             .collect();
-        owned.sort_by(|a, b| a.name().cmp(b.name()));
+        owned.sort_by_cached_key(|party| (party.name().to_lowercase(), party.id().as_uuid()));
         Ok(owned)
     }
 }
@@ -63,7 +63,7 @@ mod tests {
             .register(company, draft("Zeca", None))
             .await
             .unwrap();
-        service.register(company, draft("Ana", None)).await.unwrap();
+        service.register(company, draft("ana", None)).await.unwrap();
         service
             .register(other_company, draft("Outra", None))
             .await
@@ -76,7 +76,7 @@ mod tests {
             .iter()
             .map(|party| party.name().to_owned())
             .collect();
-        assert_eq!(names, ["Ana", "Zeca"]);
+        assert_eq!(names, ["ana", "Zeca"]);
     }
 
     #[tokio::test]
@@ -90,7 +90,10 @@ mod tests {
             .await
             .unwrap();
         let duplicate = service.register(company, draft("Ana 2", document)).await;
-        assert_eq!(duplicate.unwrap_err(), ApplicationError::DuplicateDocument);
+        assert_eq!(
+            duplicate.unwrap_err(),
+            ApplicationError::Repository(RepositoryError::DuplicateDocument)
+        );
 
         let other = service
             .register(CompanyId::generate(), draft("Ana 3", document))

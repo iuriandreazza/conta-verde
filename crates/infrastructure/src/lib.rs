@@ -2,4 +2,4 @@ mod memory;
 mod postgres;
 
 pub use memory::InMemoryPartyRepository;
-pub use postgres::{PostgresPartyRepository, migrate};
+pub use postgres::PostgresPartyRepository;

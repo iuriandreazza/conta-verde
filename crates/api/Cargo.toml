@@ -20,8 +20,9 @@ conta-verde-application.workspace = true
 conta-verde-domain.workspace = true
 conta-verde-infrastructure.workspace = true
 serde.workspace = true
-sqlx.workspace = true
 tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]

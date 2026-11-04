@@ -27,12 +27,18 @@ curl -X POST localhost:3000/companies/$(uuidgen)/parties \
 
 ## Development
 
+Install the git hooks once (needs Node and pnpm). The pre-commit hook runs the same checks as CI, except the database tests:
+
 ```bash
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+pnpm install
+```
+
+```bash
+pnpm check                            # fmt, clippy and tests
 cargo test --workspace -- --ignored   # needs the database from docker compose
 ```
+
+The server listens on `127.0.0.1:3000` by default. Set `BIND_ADDR` to change it, and keep it private until authentication exists.
 
 The code is organized in layers, one crate each: `domain`, `application`, `infrastructure`, `api`
 ([ADR 0002](docs/adr/0002-layered-cargo-workspace.md)).

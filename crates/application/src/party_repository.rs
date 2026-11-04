@@ -8,6 +8,7 @@ use crate::RepositoryError;
 pub trait PartyRepository: Send + Sync {
     fn save(&self, party: &Party) -> impl Future<Output = Result<(), RepositoryError>> + Send;
 
+    /// Parties of the company ordered by name ignoring case, then by id.
     fn list_by_company(
         &self,
         company_id: CompanyId,

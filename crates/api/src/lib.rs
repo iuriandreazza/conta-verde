@@ -5,7 +5,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
-use conta_verde_application::{ApplicationError, PartyRepository, PartyService};
+use conta_verde_application::{ApplicationError, PartyRepository, PartyService, RepositoryError};
 use conta_verde_domain::{CompanyId, Party, PartyDraft};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -114,15 +114,21 @@ struct ErrorBody {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let status = match self.0 {
-            ApplicationError::Domain(_) => StatusCode::UNPROCESSABLE_ENTITY,
-            ApplicationError::DuplicateDocument => StatusCode::CONFLICT,
-            ApplicationError::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
-        };
-        // Storage details can leak internals, so clients only see a generic message for them.
-        let message = match self.0 {
-            ApplicationError::Storage(_) => "internal error".to_owned(),
-            ref error => error.to_string(),
+        let (status, message) = match &self.0 {
+            ApplicationError::Domain(error) => {
+                (StatusCode::UNPROCESSABLE_ENTITY, error.to_string())
+            }
+            ApplicationError::Repository(error @ RepositoryError::DuplicateDocument) => {
+                (StatusCode::CONFLICT, error.to_string())
+            }
+            // Storage details can leak internals: log them, but show clients a generic message.
+            ApplicationError::Repository(RepositoryError::Storage(detail)) => {
+                tracing::error!(%detail, "storage failure");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal error".to_owned(),
+                )
+            }
         };
         (status, Json(ErrorBody { error: message })).into_response()
     }

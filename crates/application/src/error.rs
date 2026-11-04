@@ -11,8 +11,7 @@ pub enum RepositoryError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApplicationError {
     Domain(DomainError),
-    DuplicateDocument,
-    Storage(String),
+    Repository(RepositoryError),
 }
 
 impl From<DomainError> for ApplicationError {
@@ -23,10 +22,7 @@ impl From<DomainError> for ApplicationError {
 
 impl From<RepositoryError> for ApplicationError {
     fn from(error: RepositoryError) -> Self {
-        match error {
-            RepositoryError::DuplicateDocument => Self::DuplicateDocument,
-            RepositoryError::Storage(message) => Self::Storage(message),
-        }
+        Self::Repository(error)
     }
 }
 
@@ -43,8 +39,7 @@ impl fmt::Display for ApplicationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Domain(error) => error.fmt(f),
-            Self::DuplicateDocument => f.write_str("a party with this document already exists"),
-            Self::Storage(message) => write!(f, "storage failure: {message}"),
+            Self::Repository(error) => error.fmt(f),
         }
     }
 }
