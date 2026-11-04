@@ -3,7 +3,8 @@
 An open-source ERP for small businesses, inspired by cloud ERPs such as Conta Azul.
 Not affiliated with or endorsed by any commercial product.
 
-> Status: early foundation. See the [roadmap](docs/roadmap.md) and the [architecture decisions](docs/adr).
+> Status: early foundation (v0.1). See the [macro plan](docs/macro-plan.md) for scope and releases,
+> the [roadmap](docs/roadmap.md) for progress per phase, and the [architecture decisions](docs/adr/README.md).
 > The API has no authentication yet, so do not expose it to untrusted networks.
 
 ## Quick start
