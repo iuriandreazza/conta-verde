@@ -8,7 +8,7 @@ import {
   type CostCenterFilters,
 } from "../api";
 import { Button } from "../components/Button";
-import { CompanyNav } from "../components/CompanyNav";
+import { PageHeader } from "../components/PageHeader";
 import { CostCenterHistory } from "../components/CostCenterHistory";
 import { ListRow } from "../components/ListRow";
 import { Notice } from "../components/Notice";
@@ -85,54 +85,9 @@ export function CostCentersPage() {
 
   return (
     <>
-      <h1>Centros de custo</h1>
-      <CompanyNav companyId={companyId} />
-
-      <section className="card">
-        <h2>{editing === null ? "Novo centro de custo" : `Alterar ${editing.name}`}</h2>
-        <form
-          // A new key starts the form over for another cost center, or an empty one after a save.
-          key={`${editing?.id ?? "new"}-${formVersion}`}
-          onSubmit={(event) => void handleSubmit(event)}
-        >
-          <label>
-            Nome
-            <input
-              name="name"
-              required
-              maxLength={200}
-              autoComplete="off"
-              // After a save or when editing, the person is in the form: put the cursor back in it.
-              autoFocus={editing !== null || formVersion > 0}
-              defaultValue={editing?.name}
-            />
-          </label>
-          <label className="inline">
-            <input name="active" type="checkbox" defaultChecked={editing?.active ?? true} /> Ativo
-          </label>
-          <Notice message={formError} />
-          <div className="form-actions">
-            <Button type="submit" icon={editing === null ? PlusIcon : CheckIcon} pending={saving}>
-              {editing === null ? "Adicionar" : "Salvar alterações"}
-            </Button>
-            {editing !== null && (
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => {
-                  setEditing(null);
-                  setFormError(null);
-                }}
-              >
-                Cancelar
-              </Button>
-            )}
-          </div>
-        </form>
-        <Notice message={saved} tone="success" />
-      </section>
-
-      <section className="card">
+      <PageHeader title="Centros de custo" description="Onde cada gasto e cada receita são lançados." />
+      <div className="split">
+        <section className="card list-card">
         <h2>Cadastrados</h2>
         <div className="filters" role="search">
           <label>
@@ -278,6 +233,50 @@ export function CostCentersPage() {
           </Button>
         )}
       </section>
+        <aside className="card form-card">
+        <h2>{editing === null ? "Novo centro de custo" : `Alterar ${editing.name}`}</h2>
+        <form
+          // A new key starts the form over for another cost center, or an empty one after a save.
+          key={`${editing?.id ?? "new"}-${formVersion}`}
+          onSubmit={(event) => void handleSubmit(event)}
+        >
+          <label>
+            Nome
+            <input
+              name="name"
+              required
+              maxLength={200}
+              autoComplete="off"
+              // After a save or when editing, the person is in the form: put the cursor back in it.
+              autoFocus={editing !== null || formVersion > 0}
+              defaultValue={editing?.name}
+            />
+          </label>
+          <label className="inline">
+            <input name="active" type="checkbox" defaultChecked={editing?.active ?? true} /> Ativo
+          </label>
+          <Notice message={formError} />
+          <div className="form-actions">
+            <Button type="submit" icon={editing === null ? PlusIcon : CheckIcon} pending={saving}>
+              {editing === null ? "Adicionar" : "Salvar alterações"}
+            </Button>
+            {editing !== null && (
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => {
+                  setEditing(null);
+                  setFormError(null);
+                }}
+              >
+                Cancelar
+              </Button>
+            )}
+          </div>
+        </form>
+        <Notice message={saved} tone="success" />
+      </aside>
+      </div>
     </>
   );
 }

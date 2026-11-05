@@ -35,6 +35,7 @@ Registers:
 - [ ] Bank accounts (checking, savings, cash, card), payment methods, payment terms
 - [ ] CSV import for parties and products
 - [x] Web app skeleton: login, company switcher, register screens ([ADR 0005](adr/0005-spa-frontend.md)) — sign in, sign up, company picker, and the parties list and form, with the AGPL "Source code" footer link
+- [x] UX pass: sidebar shell, shared design tokens ([docs/design](design/README.md)) and a company dashboard with sample data ([ADR 0020](adr/0020-app-shell-charts-and-sample-data.md)); the numbers become real in Phase 2
 
 Exit criteria: a new user signs up, creates a company, invites a colleague and fills every
 register from the browser; no endpoint accepts a `company_id` the caller is not a member of.

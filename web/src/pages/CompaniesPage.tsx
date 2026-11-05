@@ -12,7 +12,7 @@ export function CompaniesPage() {
 
   // The common case is a single company: skip the picker.
   if (companies.length === 1) {
-    return <Navigate to={`/companies/${companies[0].id}/parties`} replace />;
+    return <Navigate to={`/companies/${companies[0].id}`} replace />;
   }
 
   return (
@@ -28,7 +28,7 @@ export function CompaniesPage() {
             whileHover={{ y: -2 }}
             whileTap={{ scale: 0.98 }}
           >
-            <Link to={`/companies/${company.id}/parties`} className="company-card">
+            <Link to={`/companies/${company.id}`} className="company-card">
               <BriefcaseBusinessIcon size={22} aria-hidden />
               <span>{company.name}</span>
             </Link>

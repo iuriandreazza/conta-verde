@@ -7,7 +7,6 @@ import { Notice } from "../components/Notice";
 import { Button } from "../components/Button";
 import { LogInIcon } from "../components/icons/login";
 import { UserPlusIcon } from "../components/icons/user-plus";
-import { LogoMark } from "../components/Logo";
 import { PasswordField } from "../components/PasswordField";
 
 export function AuthPage({ mode }: { mode: "login" | "register" }) {
@@ -53,10 +52,10 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
       animate={{ opacity: 1, y: 0, scale: 1 }}
       transition={{ type: "spring", stiffness: 260, damping: 24 }}
     >
-      <div className="auth-logo">
-        <LogoMark size={56} animated />
-      </div>
       <h1>{registering ? "Crie sua conta" : "Entrar"}</h1>
+      <p className="page-lead">
+        {registering ? "Leva um minuto e não pede cartão." : "Que bom ver você de novo."}
+      </p>
       <motion.form onSubmit={handleSubmit} animate={shake}>
         {registering && (
           <>

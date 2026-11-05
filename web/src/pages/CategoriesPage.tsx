@@ -4,7 +4,7 @@ import { api, errorMessage, type Category, type NewCategory } from "../api";
 import { Button } from "../components/Button";
 import { CategoryForm, isTransfer } from "../components/CategoryForm";
 import { CategoryHistory } from "../components/CategoryHistory";
-import { CompanyNav } from "../components/CompanyNav";
+import { PageHeader } from "../components/PageHeader";
 import { ListRow } from "../components/ListRow";
 import { Notice } from "../components/Notice";
 import { Spinner } from "../components/Spinner";
@@ -119,32 +119,9 @@ export function CategoriesPage() {
 
   return (
     <>
-      <h1>Categorias</h1>
-      <CompanyNav companyId={companyId} />
-
-      <section className="card" ref={formRef}>
-        <h2>{editing === null ? "Nova categoria" : `Alterar ${editing.name}`}</h2>
-        <CategoryForm
-          // A new key starts the form over for another category, or an empty one after a save.
-          key={`${editing?.id ?? "new"}-${parentForNew ?? ""}-${formVersion}`}
-          categories={categories}
-          editing={editing}
-          initialParentId={parentForNew}
-          // After a save or when editing, the person is in the form: put the cursor back in it.
-          focusName={editing !== null || parentForNew !== null || formVersion > 0}
-          pending={saving}
-          error={formError}
-          onCreate={create}
-          onChange={(input) => editing && change(editing, input)}
-          onCancel={() => {
-            setEditing(null);
-            setFormError(null);
-          }}
-        />
-        <Notice message={saved} tone="success" />
-      </section>
-
-      <section className="card">
+      <PageHeader title="Categorias" description="O plano que organiza entradas e saídas." />
+      <div className="split">
+        <section className="card list-card">
         <h2>Plano de categorias</h2>
         <Notice message={error} />
         {loading ? (
@@ -250,6 +227,28 @@ export function CategoriesPage() {
           </div>
         )}
       </section>
+        <aside className="card form-card" ref={formRef}>
+        <h2>{editing === null ? "Nova categoria" : `Alterar ${editing.name}`}</h2>
+        <CategoryForm
+          // A new key starts the form over for another category, or an empty one after a save.
+          key={`${editing?.id ?? "new"}-${parentForNew ?? ""}-${formVersion}`}
+          categories={categories}
+          editing={editing}
+          initialParentId={parentForNew}
+          // After a save or when editing, the person is in the form: put the cursor back in it.
+          focusName={editing !== null || parentForNew !== null || formVersion > 0}
+          pending={saving}
+          error={formError}
+          onCreate={create}
+          onChange={(input) => editing && change(editing, input)}
+          onCancel={() => {
+            setEditing(null);
+            setFormError(null);
+          }}
+        />
+        <Notice message={saved} tone="success" />
+      </aside>
+      </div>
     </>
   );
 }
