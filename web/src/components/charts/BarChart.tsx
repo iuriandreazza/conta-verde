@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { niceScale, tickLabel, ticksOf, toDrawing, useElementWidth } from "../../lib/chart";
 import { formatMoney } from "../../lib/decimal";
+import { AlertGlyph } from "./AlertGlyph";
 import type { LegendItem } from "./Legend";
 
 export interface BarGroup {
@@ -66,9 +67,8 @@ export function BarChart({ groups, series, label }: { groups: BarGroup[]; series
             >
               <rect x={0} y={top} width={width} height={ROW} fill="transparent" />
               {group.alert && (
-                <g transform={`translate(0 ${top + ROW / 2 - 7})`} aria-hidden>
-                  <circle cx={7} cy={7} r={7} fill="var(--status-critical)" />
-                  <path d="M7 3.5v4.2M7 10v.1" stroke="#fff" strokeWidth={1.6} strokeLinecap="round" />
+                <g transform={`translate(0 ${top + ROW / 2 - 7})`}>
+                  <AlertGlyph />
                 </g>
               )}
               <text className="chart-category" x={group.alert ? 22 : 0} y={top + ROW / 2 + 4}>

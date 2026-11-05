@@ -1023,4 +1023,16 @@ describe("dashboard", () => {
     expect(within(due).getByRole("cell", { name: "Vencidas" })).toBeInTheDocument();
     expect(within(due).getByRole("cell", { name: "R$ 21.350,50" })).toBeInTheDocument();
   });
+
+  it("shows every series of a month, in money, when the chart is focused and moved with the arrows", async () => {
+    renderAt("/companies/c1");
+    const chart = await screen.findByRole("group", { name: /Entradas e saídas por mês/ });
+
+    chart.focus();
+    expect(await screen.findByText("R$ 54.300,00")).toBeInTheDocument();
+    expect(screen.getByText("R$ 46.780,00")).toBeInTheDocument();
+
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(await screen.findByText("R$ 50.480,00")).toBeInTheDocument();
+  });
 });
