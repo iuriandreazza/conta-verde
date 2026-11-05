@@ -187,6 +187,41 @@ describe("App", () => {
       expect(screen.getByText("Zeca Comprador")).toBeInTheDocument();
     });
 
+    it("offers no stale cursor while the new filter loads, and no old rows if it fails", async () => {
+      let failNext = false;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url === "/api/auth/me") return new Response(JSON.stringify(profile), { status: 200 });
+          if (url.includes("kind=supplier")) {
+            return failNext
+              ? new Response(JSON.stringify({ error: "boom" }), { status: 500 })
+              : new Promise<Response>(() => {});
+          }
+          return new Response(
+            JSON.stringify({ items: [party("Carla")], next_cursor: "id|Carla" }),
+            { status: 200 },
+          );
+        }),
+      );
+      renderAt("/companies/c1/parties");
+      expect(await screen.findByText("Carla")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Carregar mais" })).toBeInTheDocument();
+
+      // The request for the new filter never answers: the old cursor must not be offered.
+      await userEvent.selectOptions(screen.getByLabelText("Mostrar"), "supplier");
+      await waitFor(() =>
+        expect(screen.queryByRole("button", { name: "Carregar mais" })).not.toBeInTheDocument(),
+      );
+
+      // When it fails, the old filter's rows go away instead of standing in for the new one.
+      failNext = true;
+      await userEvent.selectOptions(screen.getByLabelText("Ordem"), "-name");
+      expect(await screen.findByRole("alert")).toHaveTextContent("boom");
+      expect(screen.queryByText("Carla")).not.toBeInTheDocument();
+    });
+
     it("says nothing matched and clears the filters from there", async () => {
       mockApi((url) => {
         if (url === "/api/auth/me") return { status: 200, body: profile };

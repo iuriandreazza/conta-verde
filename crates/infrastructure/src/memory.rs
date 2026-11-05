@@ -420,6 +420,15 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn breaks_ties_between_equal_names() {
+        let service = PartyService::new(
+            InMemoryPartyRepository::default(),
+            InMemoryCnpjRegistry::default(),
+        );
+        contract::breaks_ties_between_equal_names(&service, CompanyId::generate()).await;
+    }
+
+    #[tokio::test]
     async fn filters_and_sorts_parties() {
         let service = PartyService::new(InMemoryPartyRepository::default(), contract::registry());
         contract::filters_and_sorts_parties(&service, CompanyId::generate(), CompanyId::generate())

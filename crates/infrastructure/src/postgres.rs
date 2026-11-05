@@ -317,6 +317,18 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires DATABASE_URL"]
+    async fn breaks_ties_between_equal_names() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let service = PartyService::new(
+            PostgresPartyRepository::new(pool),
+            InMemoryCnpjRegistry::default(),
+        );
+        contract::breaks_ties_between_equal_names(&service, company).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
     async fn filters_and_sorts_parties() {
         let pool = contract::test_pool().await;
         let company = contract::create_company(&pool).await;

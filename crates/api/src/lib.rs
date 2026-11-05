@@ -789,6 +789,8 @@ mod tests {
 
         for query in [
             "kind=both",
+            "kind=",
+            "sort=",
             "sort=email",
             "sort=name%20desc",
             &format!("q={}", "a".repeat(101)),

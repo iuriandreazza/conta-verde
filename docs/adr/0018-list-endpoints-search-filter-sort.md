@@ -36,11 +36,12 @@ A list endpoint takes, besides `limit` and `after`:
   `name`, `-name`). Every sortable field is never empty and ends in the row id, so the order is
   total and the cursor can always be built from the last row.
 
-Anything else is `400` with a JSON message that names the parameter, never silently ignored.
+A value a known parameter does not accept (including an empty one) is `400` with a JSON message that
+names the parameter. Parameter names the endpoint does not know are ignored, like any other query string.
 
 In code, the use case takes a `PartyQuery` (built with `searching`, `of_kind`, `sorted`, which
-normalize their input) and both adapters implement it; the contract test runs every
-combination against Postgres and the in-memory adapter. A text search uses `strpos`, not
+normalize their input) and both adapters implement it; the contract tests run the cases
+against Postgres and the in-memory adapter, paged so the cursor is exercised. A text search uses `strpos`, not
 `LIKE`, so `%` and `_` mean themselves and need no escaping.
 
 ## Consequences
@@ -52,6 +53,10 @@ combination against Postgres and the in-memory adapter. A text search uses `strp
 - Search is a substring scan within one company, ordered by the existing
   `(company_id, lower(name), id)` index. That is fine for thousands of rows per company; at
   hundreds of thousands, add a trigram index (`pg_trgm`) behind the same port.
+- Names are ordered by `lower(name)` under the database collation, which is what people expect
+  (`Ana Maria` before `Anabela`). The in-memory adapter orders by code point, so the two agree
+  only for names whose order does not depend on spaces, punctuation or accents. The contract tests
+  use such names; do not read the in-memory order as a model of Postgres for anything else.
 - Search does not ignore accents (`Jose` does not find `José`) and compares case with the
   database's `lower`, which can differ from Rust's for exotic characters. `unaccent` is the
   fix when users ask for it.

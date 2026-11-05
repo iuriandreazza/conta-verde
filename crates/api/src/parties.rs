@@ -53,7 +53,7 @@ impl ListQuery {
         let mut query = PartyQuery::default();
         if let Some(text) = &self.q {
             if text.chars().count() > PartyQuery::MAX_SEARCH_CHARS {
-                return Err(ApiError::InvalidQuery("search text is too long"));
+                return Err(ApiError::InvalidQuery("invalid q: at most 100 characters"));
             }
             query = query.searching(text);
         }

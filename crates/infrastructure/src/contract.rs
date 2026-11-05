@@ -413,18 +413,19 @@ pub async fn finds_parties_and_replaces_their_document_check<R: PartyRepository>
     );
 }
 
-/// Every name the query lists, two to a page, so that each case also proves that the cursor
+/// Every name the query lists, a page at a time, so that each case also proves that the cursor
 /// resumes correctly under that filter and sort.
 async fn listed_names<R: PartyRepository, C: CnpjRegistry>(
     service: &PartyService<R, C>,
     company: CompanyId,
     query: &PartyQuery,
+    page_size: usize,
 ) -> Vec<String> {
     let mut names = Vec::new();
     let mut cursor = None;
     loop {
         let page = service
-            .list(company, query, cursor.as_ref(), Some(2))
+            .list(company, query, cursor.as_ref(), Some(page_size))
             .await
             .unwrap();
         names.extend(page.items.iter().map(|party| party.name().to_owned()));
@@ -433,6 +434,39 @@ async fn listed_names<R: PartyRepository, C: CnpjRegistry>(
             None => return names,
         }
     }
+}
+
+/// Names that differ only in case tie on the sort key, so the id decides: one page at a time, in
+/// both directions, nothing may be skipped or repeated and descending must mirror ascending.
+pub async fn breaks_ties_between_equal_names<R: PartyRepository, C: CnpjRegistry>(
+    service: &PartyService<R, C>,
+    company: CompanyId,
+) {
+    for name in ["Ana", "ana", "ANA", "Bia"] {
+        let draft = PartyDraft {
+            name: name.into(),
+            document: None,
+            email: None,
+            is_customer: true,
+            is_supplier: false,
+        };
+        service.register(company, &actor(), draft).await.unwrap();
+    }
+
+    let ascending = listed_names(service, company, &PartyQuery::default(), 1).await;
+    let descending = listed_names(
+        service,
+        company,
+        &PartyQuery::default().sorted(PartySort::NameDesc),
+        1,
+    )
+    .await;
+    assert_eq!(ascending.len(), 4);
+    assert_eq!(ascending.last().map(String::as_str), Some("Bia"));
+    assert_eq!(
+        descending,
+        ascending.iter().rev().cloned().collect::<Vec<_>>()
+    );
 }
 
 pub async fn filters_and_sorts_parties<R: PartyRepository, C: CnpjRegistry>(
@@ -480,7 +514,7 @@ pub async fn filters_and_sorts_parties<R: PartyRepository, C: CnpjRegistry>(
     register(other_company, "Ana Souza", None, None, true, false).await;
 
     let all = PartyQuery::default();
-    let names = |query: PartyQuery| async move { listed_names(service, company, &query).await };
+    let names = |query: PartyQuery| async move { listed_names(service, company, &query, 2).await };
 
     let ascending = [
         "100% Natural",

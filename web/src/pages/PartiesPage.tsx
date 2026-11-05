@@ -68,6 +68,9 @@ export function PartiesPage() {
   const loadFirstPage = useCallback(async () => {
     const listing = ++latestListing.current;
     setError(null);
+    // The old cursor belongs to the old filters: "load more" must not be clickable until the new
+    // first page says whether there is a next one.
+    setNextCursor(null);
     try {
       const page = await api.listParties(companyId, applied);
       if (listing === latestListing.current) {
@@ -76,6 +79,8 @@ export function PartiesPage() {
       }
     } catch (failure) {
       if (listing === latestListing.current) {
+        // Rows of the previous filters under controls that show the new ones would read as its result.
+        setParties([]);
         setError(errorMessage(failure));
       }
     } finally {
@@ -257,7 +262,7 @@ export function PartiesPage() {
         ) : parties.length === 0 && isFiltered ? (
           <div className="empty">
             <UsersIcon size={40} aria-hidden />
-            <p>Nenhum cadastro encontrado.</p>
+            <p role="status">Nenhum cadastro encontrado.</p>
             <Button type="button" variant="ghost" onClick={() => setFilters({ ...NO_FILTERS, sort: filters.sort })}>
               Limpar filtros
             </Button>
