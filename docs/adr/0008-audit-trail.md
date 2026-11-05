@@ -55,8 +55,12 @@ First slice (`feat/audit-trail`), covering parties. Where it differs from the de
   action, field changes) instead of an `AuditContext`: the use case already knows the before and after, so neither adapter has
   to read the old row, and the Postgres and in-memory adapters behave identically. `PartyRepository::save` and
   `update_document_check` store the write and its entry **atomically** (a transaction in Postgres; in memory the entry is
-  recorded last, so a refused or missed write leaves nothing). Reading the history is `PartyRepository::history`; it moves to
-  its own port when a second entity is audited.
+  recorded last, so a refused or missed write leaves nothing). Reading the history is `PartyRepository::history`. Products are the second audited entity
+  and `ProductRepository` has its own `history` too: the in-memory adapter keeps the rows and their trail behind one lock, which is
+  what makes a write and its entry atomic there, so a shared history port would have to reach into both. What is shared is the
+  `Audited` trait (an entry describes any record), the guard `ensure_audit_describes`, the Postgres insert and read in
+  `postgres_audit`, and the in-memory `AuditLog`. A history port is worth it when something must read the trail across entities,
+  such as the accountant export.
 - **The actor comes from the session.** `CompanyAccess` yields the company id and an `Actor::User { id, name }`. The name is a
   snapshot stored with the row (there is no foreign key on the actor), so history reads the same after a rename or removal.
 - **A change is a field with a before and an after**, as text (`from`/`to`, `None` meaning not set). A creation lists every set
@@ -87,8 +91,10 @@ First slice (`feat/audit-trail`), covering parties. Where it differs from the de
   conditional update would close it if more writers appear. Time is exposed as epoch milliseconds; the SPA formats it in the user's time zone.
 - `GET /companies/{company_id}/parties/{party_id}/history` returns the entries oldest first; a party of another company is a
   `404`, like everywhere else. The SPA shows it under "Histórico" in each row, loaded when opened.
+- **Products** (`feat/products-services`) are audited the same way: a creation lists every set field, an edit lists the fields
+  that changed (prices as their canonical decimal text), and an edit that changes nothing records nothing.
 - **Not done yet:** soft delete and audited hard delete (there is no delete endpoint), a history for entities other than
-  parties, the accountant export, and the account, session and membership writes, which are not business tables.
+  parties and products, the accountant export, and the account, session and membership writes, which are not business tables.
 
 ## Revisit when
 

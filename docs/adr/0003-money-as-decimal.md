@@ -53,6 +53,14 @@ The `rust_decimal` dependency enters `domain` with the first feature that handle
 - Clients (SPA, integrations) must parse decimal strings; the OpenAPI document declares
   the format.
 
+## Implementation notes
+
+`rust_decimal` entered `domain` with the products register (Phase 1, [ADR 0019](0019-products-and-services.md)), earlier
+than planned: a product has a price. The domain type is `Amount`, a non-negative decimal of at most 13 integer and 6
+fractional digits that refuses what it cannot hold instead of rounding it and keeps no trailing zeros, so every adapter and
+the audit trail read the same text. It stands for unit prices and quantities; the `NUMERIC(19, 4)` amounts of entries
+arrive with Phase 2 and get their own rounding functions.
+
 ## Revisit when
 
 Multi-currency is needed (a `Money { amount, currency }` type), or a fiscal rule requires
