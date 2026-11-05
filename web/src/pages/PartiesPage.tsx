@@ -256,7 +256,6 @@ export function PartiesPage() {
                           iconOnly
                           type="button"
                           variant="ghost"
-                          className="btn-small"
                           aria-label={`Verificar de novo o CNPJ de ${party.name}`}
                           icon={RefreshCWIcon}
                           pending={verifyingId === party.id}
@@ -282,7 +281,6 @@ export function PartiesPage() {
                           icon={SquarePenIcon}
                           type="button"
                           variant="ghost"
-                          className="btn-small"
                           aria-label={`Alterar ${party.name}`}
                           disabled={saving}
                           onClick={() => {
@@ -298,7 +296,6 @@ export function PartiesPage() {
                         iconOnly
                         type="button"
                         variant="ghost"
-                        className="btn-small"
                         aria-label={`Histórico de ${party.name}`}
                         aria-expanded={historyOpenFor === party.id}
                         aria-controls={`history-${party.id}`}

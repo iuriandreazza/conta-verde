@@ -218,7 +218,6 @@ export function ProductsPage() {
                             icon={SquarePenIcon}
                             type="button"
                             variant="ghost"
-                            className="btn-small"
                             aria-label={`Alterar ${product.name}`}
                             disabled={saving}
                             onClick={() => startEditing(product)}
@@ -230,7 +229,6 @@ export function ProductsPage() {
                           iconOnly
                           type="button"
                           variant="ghost"
-                          className="btn-small"
                           aria-label={`Histórico de ${product.name}`}
                           aria-expanded={historyOpenFor === product.id}
                           aria-controls={`history-${product.id}`}

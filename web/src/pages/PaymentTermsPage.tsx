@@ -183,7 +183,6 @@ export function PaymentTermsPage() {
                               icon={SquarePenIcon}
                               type="button"
                               variant="ghost"
-                              className="btn-small"
                               aria-label={`Alterar ${term.name}`}
                               disabled={saving}
                               onClick={() => {
@@ -199,7 +198,6 @@ export function PaymentTermsPage() {
                             iconOnly
                             type="button"
                             variant="ghost"
-                            className="btn-small"
                             aria-label={`Histórico de ${term.name}`}
                             aria-expanded={historyOpenFor === term.id}
                             aria-controls={`history-${term.id}`}

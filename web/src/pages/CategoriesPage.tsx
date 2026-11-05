@@ -184,7 +184,6 @@ export function CategoriesPage() {
                             icon={SquarePenIcon}
                             type="button"
                             variant="ghost"
-                            className="btn-small"
                             aria-label={`Alterar ${category.name}`}
                             disabled={saving}
                             onClick={() => startEditing(category)}
@@ -198,7 +197,6 @@ export function CategoriesPage() {
                             icon={PlusIcon}
                             type="button"
                             variant="ghost"
-                            className="btn-small"
                             aria-label={`Nova subcategoria de ${category.name}`}
                             disabled={saving}
                             onClick={() => startSubcategory(category)}
@@ -210,7 +208,6 @@ export function CategoriesPage() {
                           iconOnly
                           type="button"
                           variant="ghost"
-                          className="btn-small"
                           aria-label={`Histórico de ${category.name}`}
                           aria-expanded={historyOpenFor === category.id}
                           aria-controls={`history-${category.id}`}
