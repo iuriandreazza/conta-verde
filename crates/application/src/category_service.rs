@@ -82,7 +82,14 @@ impl<R: CategoryRepository> CategoryService<R> {
             AuditAction::Created,
             category_creation_changes(&category),
         );
-        self.repository.save(&category, &audit).await?;
+        self.repository
+            .save(&category, &audit)
+            .await
+            .map_err(|error| match error {
+                // The parent disappeared, or does not fit, between the read and the write.
+                RepositoryError::NotFound => ApplicationError::ParentCategoryNotFound,
+                other => other.into(),
+            })?;
         Ok(category)
     }
 
@@ -152,8 +159,7 @@ impl<R: CategoryRepository> CategoryService<R> {
         {
             return Err(ApplicationError::CategoriesAlreadyExist);
         }
-        let categories = default_template(company_id);
-        let entries: Vec<(Category, AuditEntry)> = categories
+        let entries: Vec<(Category, AuditEntry)> = default_template(company_id)
             .iter()
             .map(|category| {
                 let audit = category_audit(
@@ -166,7 +172,8 @@ impl<R: CategoryRepository> CategoryService<R> {
             })
             .collect();
         self.repository.save_all(&entries).await?;
-        Ok(categories)
+        // In the order of every other list, not the order the template was written in.
+        self.list(company_id, None).await
     }
 
     /// What was recorded about the category, oldest first.

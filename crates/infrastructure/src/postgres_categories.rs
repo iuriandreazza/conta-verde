@@ -30,7 +30,7 @@ fn write_error(error: sqlx::Error) -> RepositoryError {
         sqlx::Error::Database(db) => match db.constraint() {
             Some(SIBLING_NAME_UNIQUE_INDEX) => RepositoryError::DuplicateName,
             Some(ONE_TRANSFER_UNIQUE_INDEX) => RepositoryError::DuplicateTransferCategory,
-            // The parent is not a category of that company.
+            // The parent is not a category of that company, one level up, with those groups.
             Some(PARENT_FOREIGN_KEY) => RepositoryError::NotFound,
             _ => storage_error(error),
         },
@@ -261,6 +261,11 @@ mod tests {
         assert_eq!(
             case("dre_group, cash_flow_group, level, active) VALUES ($1, $2, 'x', 'transfers', 'transfer', 1, false)").await.as_deref(),
             Some("categories_transfer_stays_active")
+        );
+        // A level-2 row under no parent at all is the foreign key's to refuse.
+        assert_eq!(
+            case("dre_group, cash_flow_group, level, active, parent_id) VALUES ($1, $2, 'x', 'costs', 'operating', 2, true, gen_random_uuid())").await.as_deref(),
+            Some("categories_parent_fk")
         );
         assert_eq!(
             case("dre_group, cash_flow_group, level, active) VALUES ($1, $2, '', 'costs', 'operating', 1, true)").await.as_deref(),

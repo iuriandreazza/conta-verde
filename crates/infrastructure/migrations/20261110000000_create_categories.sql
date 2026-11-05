@@ -9,12 +9,18 @@ CREATE TABLE categories (
     dre_group       TEXT        NOT NULL,
     cash_flow_group TEXT        NOT NULL,
     level           SMALLINT    NOT NULL,
+    -- What the parent's level must be: part of the foreign key below.
+    parent_level    SMALLINT GENERATED ALWAYS AS (level - 1) STORED,
     active          BOOLEAN     NOT NULL,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT categories_company_id_id_key UNIQUE (company_id, id),
-    -- The parent is in the same company; a root has no parent and so is not checked.
-    CONSTRAINT categories_parent_fk FOREIGN KEY (company_id, parent_id)
-        REFERENCES categories (company_id, id),
+    -- Only the target of the foreign key below.
+    CONSTRAINT categories_parent_target_key UNIQUE (company_id, id, dre_group, cash_flow_group, level),
+    -- The parent is a category of the same company, a level up, whose groups this one carries: a
+    -- subcategory inherits both. A root has no parent and so is not checked. Together with the
+    -- transfer constraints below, nothing can be put under the transfer category either.
+    CONSTRAINT categories_parent_fk FOREIGN KEY
+        (company_id, parent_id, dre_group, cash_flow_group, parent_level)
+        REFERENCES categories (company_id, id, dre_group, cash_flow_group, level),
     -- The name is in a btree index, which cannot hold a row of more than about 2.7 KB.
     CONSTRAINT categories_name_is_short CHECK (char_length(name) BETWEEN 1 AND 200),
     CONSTRAINT categories_dre_group_valid CHECK (dre_group IN (

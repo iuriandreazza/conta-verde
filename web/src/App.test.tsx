@@ -1113,6 +1113,38 @@ describe("categories", () => {
     expect(screen.queryByRole("button", { name: "Usar categorias padrão" })).not.toBeInTheDocument();
   });
 
+  it("lists the possible parents in tree order, each subcategory under its own parent", async () => {
+    const flat = [
+      category("Aluguel", { parent_id: "cat-Despesas", level: 2 }),
+      category("Despesas"),
+      category("Receitas", { dre_group: "gross_revenue" }),
+      category("Vendas", { parent_id: "cat-Receitas", level: 2, dre_group: "gross_revenue" }),
+    ];
+    mockApi((url) => (url === "/api/auth/me" ? { status: 200, body: profile } : listed(flat)));
+    renderAt("/companies/c1/categories");
+
+    const select = await screen.findByLabelText("Subcategoria de");
+    const options = within(select).getAllByRole("option").map((option) => option.textContent);
+    expect(options).toEqual(["Nenhuma: categoria principal", "Despesas", "— Aluguel", "Receitas", "— Vendas"]);
+  });
+
+  it("shows the tree when the default categories were applied from another tab meanwhile", async () => {
+    let applied = false;
+    mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "POST") {
+        applied = true;
+        return { status: 409, body: { error: "the default categories can only be applied to a company without categories" } };
+      }
+      return listed(applied ? tree : []);
+    });
+    renderAt("/companies/c1/categories");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Usar categorias padrão" }));
+    expect(await screen.findByRole("table")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Usar categorias padrão" })).not.toBeInTheDocument();
+  });
+
   it("asks a top-level category for its groups, with the usual cash flow filled in", async () => {
     const fetchMock = mockApi((url, init) => {
       if (url === "/api/auth/me") return { status: 200, body: profile };

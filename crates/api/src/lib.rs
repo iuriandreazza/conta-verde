@@ -1674,7 +1674,14 @@ mod tests {
         let reply = send(&app, malformed).await;
         assert_eq!(reply.status, StatusCode::NOT_FOUND);
         assert_eq!(reply.body["error"], "category not found");
-        for query in ["active=yes", "active=", "active=maybe"] {
+        for query in [
+            "active=yes",
+            "active=",
+            "active=maybe",
+            "q=x",
+            "sort=-name",
+            "limit=1",
+        ] {
             let uri = format!("{}?{query}", categories_uri(company_id));
             let reply = send(&app, get_request(&uri, Some(&cookie))).await;
             assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{query}");

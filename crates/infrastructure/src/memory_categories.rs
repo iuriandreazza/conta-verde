@@ -20,13 +20,19 @@ struct CategoryState {
 }
 
 /// What the database's constraints say about adding or renaming `category` among `existing`:
-/// its parent is in the company, siblings (the roots among them) have distinct names ignoring case,
+/// its parent fits (see below), siblings (the roots among them) have distinct names ignoring case,
 /// and there is one transfer category.
 fn check_fits(existing: &[Category], category: &Category) -> Result<(), RepositoryError> {
     if let Some(parent_id) = category.parent_id() {
-        let has_parent = existing
-            .iter()
-            .any(|other| other.id() == parent_id && other.company_id() == category.company_id());
+        // As the database's foreign key: a category of the same company, one level up, whose groups
+        // this one carries.
+        let has_parent = existing.iter().any(|other| {
+            other.id() == parent_id
+                && other.company_id() == category.company_id()
+                && other.dre_group() == category.dre_group()
+                && other.cash_flow_group() == category.cash_flow_group()
+                && other.level() + 1 == category.level()
+        });
         if !has_parent {
             return Err(RepositoryError::NotFound);
         }

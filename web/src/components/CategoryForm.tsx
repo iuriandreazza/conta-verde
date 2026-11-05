@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import type { CashFlowGroup, Category, DreGroup, NewCategory } from "../api";
+import { treeRows } from "../lib/categoryTree";
 import { CASH_FLOW_GROUPS, DRE_GROUPS, cashFlowLabel, dreLabel } from "../lib/groups";
 import { Button } from "./Button";
 import { CheckIcon } from "./icons/check";
@@ -55,8 +56,9 @@ export function CategoryForm({
   const [cashFlowGroup, setCashFlowGroup] = useState<CashFlowGroup>("operating");
   const parent = categories.find((category) => category.id === parentId);
   // Under an inactive category, or the one for transfers, or at the last level, nothing can go.
-  const parents = categories.filter(
-    (category) => category.active && !isTransfer(category) && category.level < 5,
+  // In tree order, so that the dashes mean what they look like: a subcategory under its parent.
+  const parents = treeRows(categories).filter(
+    ({ category }) => category.active && !isTransfer(category) && category.level < 5,
   );
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -95,9 +97,9 @@ export function CategoryForm({
             Subcategoria de
             <select value={parentId} onChange={(event) => setParentId(event.target.value)}>
               <option value="">Nenhuma: categoria principal</option>
-              {parents.map((category) => (
+              {parents.map(({ category, depth }) => (
                 <option key={category.id} value={category.id}>
-                  {"— ".repeat(category.level - 1)}
+                  {"— ".repeat(depth)}
                   {category.name}
                 </option>
               ))}

@@ -11,36 +11,8 @@ import { Spinner } from "../components/Spinner";
 import { BriefcaseBusinessIcon } from "../components/icons/briefcase-business";
 import { HistoryIcon } from "../components/icons/history";
 import { PlusIcon } from "../components/icons/plus";
+import { treeRows } from "../lib/categoryTree";
 import { cashFlowLabel, dreLabel } from "../lib/groups";
-
-interface Row {
-  category: Category;
-  /** 0 for a top-level category. */
-  depth: number;
-  parent: Category | null;
-}
-
-/**
- * The flat list as the tree it describes, depth first, siblings in the order the API sent them.
- * A category whose parent is not in the list (the list was narrowed) is shown at the top.
- */
-function treeRows(categories: Category[]): Row[] {
-  const byId = new Map(categories.map((category) => [category.id, category]));
-  const children = new Map<string | null, Category[]>();
-  for (const category of categories) {
-    const key = category.parent_id !== null && byId.has(category.parent_id) ? category.parent_id : null;
-    children.set(key, [...(children.get(key) ?? []), category]);
-  }
-  const rows: Row[] = [];
-  const visit = (parentId: string | null, depth: number) => {
-    for (const category of children.get(parentId) ?? []) {
-      rows.push({ category, depth, parent: parentId === null ? null : (byId.get(parentId) ?? null) });
-      visit(category.id, depth + 1);
-    }
-  };
-  visit(null, 0);
-  return rows;
-}
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one
 // instance: the old list is dropped and a reply still in flight for another company lands on an
@@ -121,6 +93,8 @@ export function CategoriesPage() {
       setCategories((await api.applyDefaultCategories(companyId)).items);
     } catch (failure) {
       setError(errorMessage(failure));
+      // Another tab may have applied it already: the button would only ever answer 409 again.
+      await load();
     } finally {
       setApplying(false);
     }

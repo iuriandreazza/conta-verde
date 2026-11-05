@@ -85,8 +85,13 @@ do not change; the Portuguese labels live in the web app. `transfers` and `trans
 - At most 1000 categories per company, checked when one is created, so that the whole-tree list is always complete.
 - The rules about the neighbours of a category (no active subcategory left under an inactive one, the limit, whether the company
   has any category yet) are checked by the use case from the list it just read, not by the database. Two requests at the same
-  moment can slip past them; the database still refuses duplicate names, a second transfer category, a parent in another company
-  and a malformed row. A constraint trigger is the fix if it ever matters.
+  moment can slip past them. The database refuses what a single row can show: duplicate names, a second transfer category, a
+  parent that is not in the company, one level up and of the same groups (which also keeps anything off the transfer category),
+  and a malformed row. It does not see that an active row has an inactive parent; a constraint trigger is the fix if it ever
+  matters.
+- The in-memory adapter orders and folds case the way Rust does, and Postgres the way the database's collation does, so siblings
+  with accents (the template has "Água, luz e internet") come out in another order in memory. The contract tests use ASCII names;
+  the in-memory adapter is for tests and local runs.
 - Subcategory names show in the web app as the screen-reader text "Subcategoria de X", under an indented name; the page is a
   table, not an ARIA tree, which would owe the user arrow-key navigation.
 
@@ -96,8 +101,5 @@ They are not a tree for now.
 ## Revisit when
 
 Moving a category, or changing its groups, becomes necessary once entries exist (it then needs a rule for the entries already
-classified), or cost centers need a hierarchy. And, as before:
-
-
-Accountants ask for statutory reports (balance sheet, trial balance) inside the product;
+classified), or cost centers need a hierarchy. And, as before: accountants ask for statutory reports (balance sheet, trial balance) inside the product;
 that would be a new ADR introducing a ledger context.

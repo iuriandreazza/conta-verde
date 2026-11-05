@@ -63,6 +63,7 @@ pub(crate) struct ChangeCategoryRequest {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct ListQuery {
     /// `true` or `false`; both are listed when it is absent.
     active: Option<String>,

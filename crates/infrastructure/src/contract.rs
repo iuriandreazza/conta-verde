@@ -1663,6 +1663,31 @@ pub async fn stores_categories_with_their_trail<R: CategoryRepository>(
     );
     assert_eq!(category_trail(repository, other_company, &orphan).await, 0);
 
+    // A parent has to be one level up and have the groups the child carries.
+    for (dre_group, cash_flow_group, level) in [
+        (DreGroup::Costs, CashFlowGroup::Operating, 2),
+        (DreGroup::GrossRevenue, CashFlowGroup::Financing, 2),
+        (DreGroup::GrossRevenue, CashFlowGroup::Operating, 3),
+    ] {
+        let misfit = Category::restore(
+            CategoryId::generate(),
+            company,
+            Some(revenue.id()),
+            "Fora do lugar",
+            dre_group,
+            cash_flow_group,
+            level,
+            true,
+        )
+        .unwrap();
+        let (misfit, entry) = created(&misfit);
+        assert_eq!(
+            repository.save(&misfit, &entry).await,
+            Err(RepositoryError::NotFound)
+        );
+        assert_eq!(category_trail(repository, company, &misfit).await, 0);
+    }
+
     // One category for transfers per company.
     let transfers = Category::new_root(
         CategoryId::generate(),
@@ -1859,7 +1884,8 @@ pub async fn applies_the_default_template_once<R: CategoryRepository>(
         .await
         .unwrap();
     let listed = service.list(company, None).await.unwrap();
-    assert_eq!(listed.len(), applied.len());
+    // What the template answers is the list as every other list says it, not the template's own order.
+    assert_eq!(applied, listed);
     assert!(applied.len() > 20);
     // Found by its group, never by its name: one category for transfers, a root.
     let transfers: Vec<&Category> = listed
