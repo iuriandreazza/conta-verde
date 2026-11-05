@@ -29,6 +29,7 @@ The pre-commit hook does not run ignored tests, so run them yourself when touchi
 - Keep the footer link and the API contract in `web/src/api.ts` in sync with the Rust DTOs by hand; there is no generated client yet.
 - Tests are Vitest + Testing Library with `fetch` stubbed; prefer asserting what the user sees.
 - Animation is Motion (`motion/react`) and icons are vendored Lucide Animated components in `web/src/components/icons/` (ADR 0016). Do not edit those by hand beyond the documented tweaks; to add one, download its registry JSON from `https://lucide-animated.com/r/<name>.json`, check it (only `motion/react`, `react` and `cn` imports, no network or DOM access) and replace the `@/lib/utils` import with `../../lib/utils`.
+- A list page keeps its search, filters and order in one state object and loads a first page again whenever the debounced values change; replies to an earlier request are dropped (see `latestListing` in `PartiesPage`), and a cursor is always sent with the same parameters that produced it.
 - Use `components/Button` for buttons (it plays its icon on hover/focus and shows a spinner while `pending`). Pages animate on enter only, and `Layout` remounts `<main>` on every path change, so page state never leaks across routes.
 - The logo is `web/public/favicon.svg`, mirrored by `LogoMark` in `web/src/components/Logo.tsx`; change both together. The PNG and ICO favicons are rendered from the SVG.
 - A browser pane or tab that is not painting never advances `requestAnimationFrame`, so animations look frozen at their first frame; that is the environment, not the app. Use a visible tab when checking motion.
@@ -51,6 +52,7 @@ Rules that are easy to break:
 - Serde types belong in `api`. Domain types are not serialized directly.
 - Every business table has `company_id`, every repository method takes a `CompanyId`, and uniqueness is scoped by company (ADR 0004).
 - Every write to a business table carries an `AuditEntry` built by the use case (actor from `CompanyAccess`, field changes from `domain::audit`) and stored in the same transaction (ADR 0008). A new register needs its entity in `AuditEntity`, both adapters recording it, and a contract test that a refused write leaves no entry. Never audit account, session or membership writes, and never edit or delete `audit_log` rows (a trigger forbids it).
+- List endpoints take `limit`, `after`, `q`, one closed-value parameter per filter and `sort` (`field` or `-field`), through a `*Query` type both adapters implement; unknown values are `400` JSON, never ignored (ADR 0018). Sort only by non-null columns ending in the id, so the keyset cursor stays valid. Bind search text with `strpos`, never `LIKE`.
 - Money is exact decimal (`rust_decimal` / `NUMERIC`), never floats (ADR 0003).
 - SQL uses runtime `sqlx::query`, not `query!` macros. Do not add `query!` without also solving offline data for CI.
 - A new adapter or port method needs both adapters (Postgres and in-memory) to behave the same, including ordering.

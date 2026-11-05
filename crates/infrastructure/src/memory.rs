@@ -3,8 +3,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use conta_verde_application::{
-    CnpjLookupError, CnpjRegistry, IdentityRepository, NewAccount, PartyCursor, PartyRepository,
-    RegistryEntry, RepositoryError, StoredCredentials, ensure_audit_describes,
+    CnpjLookupError, CnpjRegistry, IdentityRepository, NewAccount, PartyCursor, PartyQuery,
+    PartyRepository, PartySort, RegistryEntry, RepositoryError, StoredCredentials,
+    ensure_audit_describes,
 };
 use conta_verde_domain::{
     AuditEntity, AuditEntry, AuditRecord, Cnpj, Company, CompanyId, Email, Party, PartyId, User,
@@ -113,27 +114,37 @@ impl PartyRepository for InMemoryPartyRepository {
     async fn list_by_company(
         &self,
         company_id: CompanyId,
+        query: &PartyQuery,
         after: Option<&PartyCursor>,
         limit: usize,
     ) -> Result<Vec<Party>, RepositoryError> {
         let state = self.state.lock().expect("repository lock poisoned");
-        let parties = &state.parties;
         let sort_key = |name: &str, id: Uuid| (name.to_lowercase(), id);
+        let descending = query.sort() == PartySort::NameDesc;
         let after_key = after.map(|cursor| sort_key(&cursor.name, cursor.id.as_uuid()));
 
-        let mut owned: Vec<Party> = parties
+        let mut found: Vec<Party> = state
+            .parties
             .iter()
-            .filter(|party| party.company_id() == company_id)
+            .filter(|party| party.company_id() == company_id && query.matches(party))
             .filter(|party| {
-                after_key
-                    .as_ref()
-                    .is_none_or(|key| sort_key(party.name(), party.id().as_uuid()) > *key)
+                after_key.as_ref().is_none_or(|key| {
+                    let key_of_party = sort_key(party.name(), party.id().as_uuid());
+                    if descending {
+                        key_of_party < *key
+                    } else {
+                        key_of_party > *key
+                    }
+                })
             })
             .cloned()
             .collect();
-        owned.sort_by_cached_key(|party| sort_key(party.name(), party.id().as_uuid()));
-        owned.truncate(limit);
-        Ok(owned)
+        found.sort_by_cached_key(|party| sort_key(party.name(), party.id().as_uuid()));
+        if descending {
+            found.reverse();
+        }
+        found.truncate(limit);
+        Ok(found)
     }
 }
 
@@ -358,7 +369,7 @@ mod tests {
             .unwrap();
 
         let names: Vec<String> = service
-            .list(company, None, None)
+            .list(company, &PartyQuery::default(), None, None)
             .await
             .unwrap()
             .items
@@ -406,6 +417,22 @@ mod tests {
             InMemoryCnpjRegistry::default(),
         );
         contract::pages_through_parties(&service, CompanyId::generate()).await;
+    }
+
+    #[tokio::test]
+    async fn breaks_ties_between_equal_names() {
+        let service = PartyService::new(
+            InMemoryPartyRepository::default(),
+            InMemoryCnpjRegistry::default(),
+        );
+        contract::breaks_ties_between_equal_names(&service, CompanyId::generate()).await;
+    }
+
+    #[tokio::test]
+    async fn filters_and_sorts_parties() {
+        let service = PartyService::new(InMemoryPartyRepository::default(), contract::registry());
+        contract::filters_and_sorts_parties(&service, CompanyId::generate(), CompanyId::generate())
+            .await;
     }
 
     #[tokio::test]
@@ -586,7 +613,11 @@ mod tests {
             DocumentCheck::Verified { situation, .. } if situation == "ATIVA"
         ));
         // The answer is stored, not only returned.
-        let listed = service.list(company, None, None).await.unwrap().items;
+        let listed = service
+            .list(company, &PartyQuery::default(), None, None)
+            .await
+            .unwrap()
+            .items;
         assert_eq!(listed[0].document_check(), verified.document_check());
     }
 
@@ -755,7 +786,11 @@ mod tests {
                 .unwrap_err(),
             ApplicationError::LookupDisabled
         );
-        let listed = service.list(company, None, None).await.unwrap().items;
+        let listed = service
+            .list(company, &PartyQuery::default(), None, None)
+            .await
+            .unwrap()
+            .items;
         assert_eq!(listed[0].document_check(), &DocumentCheck::NotApplicable);
     }
 
@@ -825,11 +860,17 @@ mod tests {
                 .unwrap();
         }
 
-        let smallest = service.list(company, None, Some(0)).await.unwrap();
+        let smallest = service
+            .list(company, &PartyQuery::default(), None, Some(0))
+            .await
+            .unwrap();
         assert_eq!(smallest.items.len(), 1);
         assert!(smallest.next.is_some());
 
-        let largest = service.list(company, None, Some(1_000_000)).await.unwrap();
+        let largest = service
+            .list(company, &PartyQuery::default(), None, Some(1_000_000))
+            .await
+            .unwrap();
         assert_eq!(largest.items.len(), 2);
         assert!(largest.next.is_none());
     }

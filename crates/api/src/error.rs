@@ -8,6 +8,8 @@ use serde::Serialize;
 pub(crate) enum ApiError {
     Application(ApplicationError),
     InvalidCursor,
+    /// A list parameter this API does not understand; the message names which one.
+    InvalidQuery(&'static str),
 }
 
 impl From<ApplicationError> for ApiError {
@@ -25,6 +27,7 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, message) = match &self {
             Self::InvalidCursor => (StatusCode::BAD_REQUEST, "invalid cursor".to_owned()),
+            Self::InvalidQuery(message) => (StatusCode::BAD_REQUEST, (*message).to_owned()),
             Self::Application(error) => describe(error),
         };
         (status, Json(ErrorBody { error: message })).into_response()

@@ -145,7 +145,8 @@ label.inline {
   margin-right: 1rem;
 }
 
-input:not([type="checkbox"]) {
+input:not([type="checkbox"]),
+select {
   width: 100%;
   padding: 0.55rem 0.65rem;
   border: 1px solid var(--line);
@@ -158,10 +159,18 @@ input:not([type="checkbox"]) {
     box-shadow 0.15s ease;
 }
 
-input:not([type="checkbox"]):focus {
+input:not([type="checkbox"]):focus,
+select:focus {
   outline: none;
   border-color: var(--green);
   box-shadow: 0 0 0 3px rgb(31 122 77 / 0.18);
+}
+
+.filters {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1rem;
 }
 
 .field-with-action {
@@ -450,6 +459,10 @@ td {
 }
 
 @media (max-width: 30rem) {
+  .filters {
+    grid-template-columns: 1fr;
+  }
+
   .user-name {
     display: none;
   }

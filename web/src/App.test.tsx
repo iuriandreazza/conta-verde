@@ -121,6 +121,125 @@ describe("App", () => {
     expect(requested).toContain("/api/companies/c1/parties?after=id%7CCarla+%26+Filhos");
   });
 
+  describe("filtering and sorting the list", () => {
+    const listUrls = (fetchMock: ReturnType<typeof mockApi>) =>
+      fetchMock.mock.calls.map(([url]) => String(url)).filter((url) => url.includes("/parties"));
+
+    it("sends the search, kind and order, and keeps them when loading more", async () => {
+      const fetchMock = mockApi((url) => {
+        if (url === "/api/auth/me") return { status: 200, body: profile };
+        if (url.includes("after=")) {
+          return { status: 200, body: { items: [party("Ana Maria")], next_cursor: null } };
+        }
+        if (url.includes("q=ana")) {
+          return { status: 200, body: { items: [party("Ana"), party("Anabela")], next_cursor: "id|Anabela" } };
+        }
+        return { status: 200, body: { items: [party("Carla")], next_cursor: null } };
+      });
+      renderAt("/companies/c1/parties");
+      expect(await screen.findByText("Carla")).toBeInTheDocument();
+
+      await userEvent.type(screen.getByRole("searchbox", { name: "Buscar" }), "  ana ");
+      await userEvent.selectOptions(screen.getByLabelText("Mostrar"), "supplier");
+      await userEvent.selectOptions(screen.getByLabelText("Ordem"), "-name");
+      expect(await screen.findByText("Anabela")).toBeInTheDocument();
+      expect(screen.queryByText("Carla")).not.toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole("button", { name: "Carregar mais" }));
+      expect(await screen.findByText("Ana Maria")).toBeInTheDocument();
+
+      // One request per settled filter, not one per keystroke, and the cursor travels with them.
+      const urls = listUrls(fetchMock);
+      expect(urls).toContain("/api/companies/c1/parties?q=ana&kind=supplier&sort=-name");
+      expect(urls).toContain("/api/companies/c1/parties?q=ana&kind=supplier&sort=-name&after=id%7CAnabela");
+      expect(urls.some((url) => url.includes("q=a&") || url.endsWith("q=a"))).toBe(false);
+    });
+
+    it("ignores a slow answer to an earlier filter", async () => {
+      let answerFirstSearch: (response: Response) => void = () => {};
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) => {
+          const url = String(input);
+          const reply = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
+          if (url === "/api/auth/me") return reply(profile);
+          if (url.includes("kind=customer")) {
+            return reply({ items: [party("Zeca Comprador")], next_cursor: null });
+          }
+          if (url.includes("kind=supplier")) {
+            return new Promise<Response>((resolve) => (answerFirstSearch = resolve));
+          }
+          return reply({ items: [party("Todos")], next_cursor: null });
+        }),
+      );
+      renderAt("/companies/c1/parties");
+      expect(await screen.findByText("Todos")).toBeInTheDocument();
+
+      await userEvent.selectOptions(screen.getByLabelText("Mostrar"), "supplier");
+      await userEvent.selectOptions(screen.getByLabelText("Mostrar"), "customer");
+      expect(await screen.findByText("Zeca Comprador")).toBeInTheDocument();
+
+      answerFirstSearch(
+        new Response(JSON.stringify({ items: [party("Vera Vendedora")], next_cursor: null }), { status: 200 }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(screen.queryByText("Vera Vendedora")).not.toBeInTheDocument();
+      expect(screen.getByText("Zeca Comprador")).toBeInTheDocument();
+    });
+
+    it("offers no stale cursor while the new filter loads, and no old rows if it fails", async () => {
+      let failNext = false;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url === "/api/auth/me") return new Response(JSON.stringify(profile), { status: 200 });
+          if (url.includes("kind=supplier")) {
+            return failNext
+              ? new Response(JSON.stringify({ error: "boom" }), { status: 500 })
+              : new Promise<Response>(() => {});
+          }
+          return new Response(
+            JSON.stringify({ items: [party("Carla")], next_cursor: "id|Carla" }),
+            { status: 200 },
+          );
+        }),
+      );
+      renderAt("/companies/c1/parties");
+      expect(await screen.findByText("Carla")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Carregar mais" })).toBeInTheDocument();
+
+      // The request for the new filter never answers: the old cursor must not be offered.
+      await userEvent.selectOptions(screen.getByLabelText("Mostrar"), "supplier");
+      await waitFor(() =>
+        expect(screen.queryByRole("button", { name: "Carregar mais" })).not.toBeInTheDocument(),
+      );
+
+      // When it fails, the old filter's rows go away instead of standing in for the new one.
+      failNext = true;
+      await userEvent.selectOptions(screen.getByLabelText("Ordem"), "-name");
+      expect(await screen.findByRole("alert")).toHaveTextContent("boom");
+      expect(screen.queryByText("Carla")).not.toBeInTheDocument();
+    });
+
+    it("says nothing matched and clears the filters from there", async () => {
+      mockApi((url) => {
+        if (url === "/api/auth/me") return { status: 200, body: profile };
+        if (url.includes("q=zzz")) return { status: 200, body: { items: [], next_cursor: null } };
+        return { status: 200, body: { items: [party("Carla")], next_cursor: null } };
+      });
+      renderAt("/companies/c1/parties");
+      expect(await screen.findByText("Carla")).toBeInTheDocument();
+
+      await userEvent.type(screen.getByRole("searchbox", { name: "Buscar" }), "zzz");
+      expect(await screen.findByText("Nenhum cadastro encontrado.")).toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole("button", { name: "Limpar filtros" }));
+      expect(await screen.findByText("Carla")).toBeInTheDocument();
+      expect(screen.getByRole("searchbox", { name: "Buscar" })).toHaveValue("");
+    });
+  });
+
   it("disables the submit button while signing in and clears the old error on retry", async () => {
     let attempts = 0;
     vi.stubGlobal(

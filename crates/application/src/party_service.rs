@@ -8,8 +8,8 @@ use conta_verde_domain::{
 };
 
 use crate::{
-    ApplicationError, CnpjLookupError, CnpjRegistry, PartyCursor, PartyRepository, RegistryEntry,
-    RepositoryError,
+    ApplicationError, CnpjLookupError, CnpjRegistry, PartyCursor, PartyQuery, PartyRepository,
+    RegistryEntry, RepositoryError,
 };
 
 const DEFAULT_PAGE_SIZE: usize = 50;
@@ -197,6 +197,7 @@ impl<R: PartyRepository, C: CnpjRegistry> PartyService<R, C> {
     pub async fn list(
         &self,
         company_id: CompanyId,
+        query: &PartyQuery,
         after: Option<&PartyCursor>,
         limit: Option<usize>,
     ) -> Result<PartyPage, ApplicationError> {
@@ -204,7 +205,7 @@ impl<R: PartyRepository, C: CnpjRegistry> PartyService<R, C> {
         // One extra row tells whether another page exists without a second query.
         let mut items = self
             .repository
-            .list_by_company(company_id, after, limit + 1)
+            .list_by_company(company_id, query, after, limit + 1)
             .await?;
         let has_more = items.len() > limit;
         items.truncate(limit);

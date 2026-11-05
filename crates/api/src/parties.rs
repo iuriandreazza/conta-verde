@@ -4,7 +4,8 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use conta_verde_application::{
-    ApplicationError, CnpjRegistry, IdentityRepository, PartyCursor, PartyRepository, SecretService,
+    ApplicationError, CnpjRegistry, IdentityRepository, PartyCursor, PartyKind, PartyQuery,
+    PartyRepository, PartySort, SecretService,
 };
 use conta_verde_domain::{Actor, AuditRecord, DocumentCheck, Party, PartyDraft, PartyId};
 use serde::{Deserialize, Serialize};
@@ -39,6 +40,43 @@ impl From<RegisterPartyRequest> for PartyDraft {
 pub(crate) struct ListQuery {
     limit: Option<usize>,
     after: Option<String>,
+    /// Text found in the name or e-mail, or in the document ignoring punctuation.
+    q: Option<String>,
+    /// `customer` or `supplier`.
+    kind: Option<String>,
+    /// `name` (default) or `-name` for descending, the convention every list follows.
+    sort: Option<String>,
+}
+
+impl ListQuery {
+    fn party_query(&self) -> Result<PartyQuery, ApiError> {
+        let mut query = PartyQuery::default();
+        if let Some(text) = &self.q {
+            if text.chars().count() > PartyQuery::MAX_SEARCH_CHARS {
+                return Err(ApiError::InvalidQuery("invalid q: at most 100 characters"));
+            }
+            query = query.searching(text);
+        }
+        query = match self.kind.as_deref() {
+            None => query,
+            Some("customer") => query.of_kind(PartyKind::Customer),
+            Some("supplier") => query.of_kind(PartyKind::Supplier),
+            Some(_) => {
+                return Err(ApiError::InvalidQuery(
+                    "invalid kind: expected customer or supplier",
+                ));
+            }
+        };
+        Ok(match self.sort.as_deref() {
+            None | Some("name") => query,
+            Some("-name") => query.sorted(PartySort::NameDesc),
+            Some(_) => {
+                return Err(ApiError::InvalidQuery(
+                    "invalid sort: expected name or -name",
+                ));
+            }
+        })
+    }
 }
 
 #[derive(Serialize)]
@@ -238,10 +276,11 @@ where
     I: IdentityRepository,
     S: SecretService,
 {
+    let filter = query.party_query()?;
     let after = query.after.as_deref().map(decode_cursor).transpose()?;
     let page = state
         .parties
-        .list(company_id, after.as_ref(), query.limit)
+        .list(company_id, &filter, after.as_ref(), query.limit)
         .await?;
     Ok(Json(PartyPageResponse {
         items: page.items.iter().map(PartyResponse::from).collect(),
@@ -257,6 +296,10 @@ fn encode_cursor(cursor: &PartyCursor) -> String {
 
 fn decode_cursor(raw: &str) -> Result<PartyCursor, ApiError> {
     let (id, name) = raw.split_once('|').ok_or(ApiError::InvalidCursor)?;
+    // No stored name holds a NUL, so a cursor that does was made up, and Postgres would fail on it.
+    if name.contains('\0') {
+        return Err(ApiError::InvalidCursor);
+    }
     let id = Uuid::parse_str(id).map_err(|_| ApiError::InvalidCursor)?;
     Ok(PartyCursor {
         name: name.to_owned(),
@@ -282,5 +325,7 @@ mod tests {
     fn garbage_cursors_are_rejected() {
         assert!(decode_cursor("nonsense").is_err());
         assert!(decode_cursor("not-a-uuid|Ana").is_err());
+        let id = PartyId::generate().as_uuid();
+        assert!(decode_cursor(&format!("{id}|An\0a")).is_err());
     }
 }
