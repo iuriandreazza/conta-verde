@@ -19,6 +19,7 @@ const STATES = [
 
 /** The API keeps the CEP as eight digits; people write it as 01310-100. */
 const withHyphen = (postalCode: string) => postalCode.replace(/^(\d{5})(\d{3})$/, "$1-$2");
+const digitsOf = (text: string) => text.replace(/\D/g, "");
 
 const MAX_CONTACTS = 20;
 
@@ -74,6 +75,9 @@ export function PartyForm({
   const [postalCode, setPostalCode] = useState(
     party?.address ? withHyphen(party.address.postal_code) : "",
   );
+  // The CEP as it is now, for a lookup that finishes after the person has changed it.
+  const currentPostalCode = useRef(postalCode);
+  currentPostalCode.current = postalCode;
   const [lookingUp, setLookingUp] = useState(false);
   const [lookupNotice, setLookupNotice] = useState<{ message: string; tone: NoticeTone } | null>(
     null,
@@ -102,7 +106,12 @@ export function PartyForm({
     setLookingUp(true);
     setLookupNotice(null);
     try {
-      const entry = await lookupAddress(postalCode);
+      const asked = postalCode;
+      const entry = await lookupAddress(asked);
+      // An answer about another CEP than the one shown would fill in an address that is not its.
+      if (digitsOf(currentPostalCode.current) !== digitsOf(asked)) {
+        return;
+      }
       const elements = formRef.current?.elements;
       const fill = (name: string, value: string | null) => {
         const field = elements?.namedItem(name);
@@ -247,7 +256,7 @@ export function PartyForm({
             variant="ghost"
             className="btn-small"
             pending={lookingUp}
-            disabled={postalCode.replace(/\D/g, "").length !== 8}
+            disabled={digitsOf(postalCode).length !== 8}
             onClick={() => void lookUp()}
           >
             Buscar endereço

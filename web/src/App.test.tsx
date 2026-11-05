@@ -2071,6 +2071,39 @@ describe("looking an address up by CEP", () => {
     expect(screen.getByLabelText("Logradouro")).toHaveValue("Rua do Meio");
   });
 
+  it("ignores an answer that arrives after the CEP was changed", async () => {
+    let answer: (response: Response) => void = () => {};
+    const slow = new Promise<Response>((resolve) => {
+      answer = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/auth/me") return new Response(JSON.stringify(profile), { status: 200 });
+        if (url.includes("/postal-codes/")) return slow;
+        return new Response(JSON.stringify(page.body), { status: 200 });
+      }),
+    );
+    await openTheForm();
+
+    await userEvent.type(screen.getByLabelText("CEP"), "01310-100");
+    await userEvent.click(screen.getByRole("button", { name: "Buscar endereço" }));
+    // While the first answer is on its way, the person changes the code.
+    await userEvent.clear(screen.getByLabelText("CEP"));
+    await userEvent.type(screen.getByLabelText("CEP"), "50000-000");
+    answer(
+      new Response(
+        JSON.stringify({ street: "Avenida Paulista", district: "Bela Vista", city: "São Paulo", state: "SP" }),
+        { status: 200 },
+      ),
+    );
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Buscar endereço" })).toBeEnabled());
+    expect(screen.getByLabelText("Logradouro")).toHaveValue("");
+    expect(screen.queryByText(/Endereço preenchido/)).not.toBeInTheDocument();
+  });
+
   it("says what went wrong and leaves the fields to be typed", async () => {
     let status = 404;
     mockApi((url) => {
