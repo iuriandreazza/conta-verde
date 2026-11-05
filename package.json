@@ -6,6 +6,10 @@
   "packageManager": "pnpm@11.24.0",
   "scripts": {
     "prepare": "husky",
+    "db": "docker compose up -d --wait db",
+    "api": "set -a && . ./.env.example && cargo run -p conta-verde-api",
+    "web": "pnpm --filter conta-verde-web dev",
+    "dev": "pnpm db && (pnpm api & pnpm web & wait)",
     "check": "cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && pnpm --filter conta-verde-web typecheck && pnpm --filter conta-verde-web test"
   },
   "devDependencies": {

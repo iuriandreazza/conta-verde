@@ -29,6 +29,9 @@ pnpm install
 pnpm --filter conta-verde-web dev
 ```
 
+Or start the database, the API (with `.env.example`) and the web app in one go with `pnpm dev`
+(`pnpm db`, `pnpm api` and `pnpm web` run each one alone).
+
 Create an account in the browser, or from the command line (the session lives in the cookie jar):
 
 ```bash
