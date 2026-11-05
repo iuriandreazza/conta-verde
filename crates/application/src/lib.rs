@@ -7,10 +7,13 @@ mod category_service;
 mod cnpj_registry;
 mod cost_center_repository;
 mod cost_center_service;
+mod email_sender;
 mod error;
 mod identity_repository;
 mod import;
+mod invitation_repository;
 mod list_query;
+mod member_service;
 mod name_cursor;
 mod party_repository;
 mod party_service;
@@ -33,12 +36,17 @@ pub use category_service::{CategoryService, NewCategory};
 pub use cnpj_registry::{CnpjLookupError, CnpjRegistry, RegistryEntry};
 pub use cost_center_repository::{CostCenterQuery, CostCenterRepository};
 pub use cost_center_service::{CostCenterPage, CostCenterService};
+pub use email_sender::{EmailError, EmailMessage, EmailSender};
 pub use error::{ApplicationError, AuthError, RepositoryError};
 pub use identity_repository::{
     CompanyMembership, IdentityRepository, NewAccount, StoredCredentials,
 };
 pub use import::{ImportReport, ImportRow, MAX_IMPORT_ROWS, RowNote};
+pub use invitation_repository::{
+    InvitationRepository, InvitationState, NewInvitation, StoredInvitation,
+};
 pub use list_query::{MAX_SEARCH_CHARS, NameSort};
+pub use member_service::{InvitationPreview, Invited, MemberService};
 pub use name_cursor::NameCursor;
 pub use party_repository::{PartyKind, PartyQuery, PartyRepository};
 pub use party_service::{PartyPage, PartyService};

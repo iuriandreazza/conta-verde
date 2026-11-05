@@ -123,7 +123,7 @@ impl<I: IdentityRepository, S: SecretService> AuthService<I, S> {
     }
 
     pub async fn logout(&self, token: &str) -> Result<(), ApplicationError> {
-        let digest = self.secrets.digest_session_token(token);
+        let digest = self.secrets.digest_token(token);
         Ok(self.identities.delete_session(&digest).await?)
     }
 
@@ -147,8 +147,14 @@ impl<I: IdentityRepository, S: SecretService> AuthService<I, S> {
         }
     }
 
+    /// The user a session belongs to, for what is asked of a person who is not (yet) a member of any
+    /// company in particular, like accepting an invitation.
+    pub async fn current_user(&self, token: &str) -> Result<User, ApplicationError> {
+        self.authenticate(token).await
+    }
+
     async fn authenticate(&self, token: &str) -> Result<User, ApplicationError> {
-        let digest = self.secrets.digest_session_token(token);
+        let digest = self.secrets.digest_token(token);
         self.identities
             .find_session_user(&digest)
             .await?
@@ -156,8 +162,8 @@ impl<I: IdentityRepository, S: SecretService> AuthService<I, S> {
     }
 
     async fn open_session(&self, user_id: UserId) -> Result<String, ApplicationError> {
-        let token = self.secrets.new_session_token();
-        let digest = self.secrets.digest_session_token(&token);
+        let token = self.secrets.new_token();
+        let digest = self.secrets.digest_token(&token);
         self.identities
             .create_session(user_id, &digest, self.session_lifetime)
             .await?;

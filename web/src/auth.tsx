@@ -11,6 +11,8 @@ interface AuthContextValue {
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (registration: Registration) => Promise<void>;
   signOut: () => Promise<void>;
+  /** Reads the profile again, for when what the person belongs to changed (an accepted invitation). */
+  refresh: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -51,9 +53,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setSession({ status: "anonymous" });
   }, []);
 
+  const refresh = useCallback(async () => {
+    const profile = await api.me();
+    setSession({ status: "authenticated", profile });
+  }, []);
+
   const value = useMemo(
-    () => ({ session, signIn, signUp, signOut }),
-    [session, signIn, signUp, signOut],
+    () => ({ session, signIn, signUp, signOut, refresh }),
+    [session, signIn, signUp, signOut, refresh],
   );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

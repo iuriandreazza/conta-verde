@@ -1,6 +1,6 @@
 ---
 title: "ADR 0014: Notifications behind ports"
-status: proposed
+status: accepted
 date: 2026-11-04
 tags: [adr, notifications, integrations]
 ---
@@ -43,6 +43,15 @@ Customer-facing links (payment page, quote approval) are signed tokens served by
 - Sending is never done inline in a request handler.
 - Opt-out and delivery status per recipient are first-class, which matters for
   anti-spam and for support.
+
+## Implementation notes
+
+Phase 1 ships the e-mail half only, and not yet the jobs: the `EmailSender` port, a **log** adapter
+that writes the message to the server's log (the default, for an installation without a mail
+server), and fakes for tests. Invitations ([ADR 0027](0027-invitations.md)) send inline in the
+request, which this ADR says not to, because there are no background jobs yet; a send that fails
+never fails what asked for it. The SMTP adapter, the `notifications` table and the WhatsApp port
+come as they are needed.
 
 ## Revisit when
 

@@ -29,7 +29,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0011](0011-bank-data-ingestion.md) | Bank data: OFX first, aggregator later | proposed | 2, 8 |
 | [0012](0012-managerial-accounting-model.md) | Managerial chart of accounts, not a general ledger | accepted | 1, 2, 6 |
 | [0013](0013-accountant-access-and-exports.md) | Accountant access and exports | proposed | 6 |
-| [0014](0014-notifications.md) | Notifications behind ports | proposed | 4 |
+| [0014](0014-notifications.md) | Notifications behind ports | accepted | 4 |
 | [0015](0015-public-api-and-webhooks.md) | Public API and webhooks | proposed | 8 |
 | [0016](0016-ui-motion-and-icons.md) | Motion for animation, vendored Lucide Animated icons | accepted | 1 |
 | [0017](0017-cnpj-registry-lookup.md) | CNPJ checked against the federal registry behind a port | accepted | 1 |
@@ -42,6 +42,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0024](0024-postal-code-lookup.md) | Postal code (CEP) lookup behind a port | accepted | 1 |
 | [0025](0025-csv-import.md) | CSV import of registers | accepted | 1 |
 | [0026](0026-membership-roles-and-permissions.md) | Membership roles and what each may do | accepted | 1 |
+| [0027](0027-invitations.md) | Invitations | accepted | 1 |
 
 ## Template
 

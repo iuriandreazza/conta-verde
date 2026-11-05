@@ -1,12 +1,14 @@
 import { Route, Routes } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { RequireAuth } from "./components/RequireAuth";
+import { AcceptInvitationPage } from "./pages/AcceptInvitationPage";
 import { AuthPage } from "./pages/AuthPage";
 import { BankAccountsPage } from "./pages/BankAccountsPage";
 import { CategoriesPage } from "./pages/CategoriesPage";
 import { CompaniesPage } from "./pages/CompaniesPage";
 import { CostCentersPage } from "./pages/CostCentersPage";
 import { DashboardPage } from "./pages/DashboardPage";
+import { MembersPage } from "./pages/MembersPage";
 import { PartiesPage } from "./pages/PartiesPage";
 import { PaymentMethodsPage } from "./pages/PaymentMethodsPage";
 import { PaymentTermsPage } from "./pages/PaymentTermsPage";
@@ -18,6 +20,7 @@ export function App() {
       <Route element={<Layout />}>
         <Route path="/login" element={<AuthPage mode="login" />} />
         <Route path="/register" element={<AuthPage mode="register" />} />
+        <Route path="/invitations/:token" element={<AcceptInvitationPage />} />
         <Route element={<RequireAuth />}>
           <Route path="/" element={<CompaniesPage />} />
           <Route path="/companies/:companyId" element={<DashboardPage />} />
@@ -28,6 +31,7 @@ export function App() {
           <Route path="/companies/:companyId/bank-accounts" element={<BankAccountsPage />} />
           <Route path="/companies/:companyId/payment-methods" element={<PaymentMethodsPage />} />
           <Route path="/companies/:companyId/payment-terms" element={<PaymentTermsPage />} />
+          <Route path="/companies/:companyId/members" element={<MembersPage />} />
         </Route>
       </Route>
     </Routes>

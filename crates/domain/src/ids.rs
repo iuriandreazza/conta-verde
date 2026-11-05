@@ -25,6 +25,7 @@ uuid_id!(BankAccountId);
 uuid_id!(CategoryId);
 uuid_id!(CompanyId);
 uuid_id!(CostCenterId);
+uuid_id!(InvitationId);
 uuid_id!(PartyId);
 uuid_id!(PaymentMethodId);
 uuid_id!(PaymentTermId);

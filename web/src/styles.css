@@ -1264,6 +1264,19 @@ tbody tr:last-child td {
   grid-column: span 2;
 }
 
+.stack {
+  display: grid;
+  gap: 1.5rem;
+  align-content: start;
+  min-width: 0;
+}
+
+.invite-result {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
 .import-card {
   margin-top: 1.5rem;
 }

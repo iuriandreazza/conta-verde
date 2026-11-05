@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use conta_verde_domain::{Account, Company, CompanyId, Email, Role, User, UserId};
 
-use crate::RepositoryError;
+use crate::{Member, RepositoryError};
 
 // Neither struct derives Debug: the password hash must not end up in logs or panic messages.
 
@@ -47,6 +47,12 @@ pub trait IdentityRepository: Send + Sync {
         &self,
         user_id: UserId,
     ) -> impl Future<Output = Result<Vec<CompanyMembership>, RepositoryError>> + Send;
+
+    /// The company's members and what each is, ordered by name ignoring case, then by id.
+    fn members_of(
+        &self,
+        company_id: CompanyId,
+    ) -> impl Future<Output = Result<Vec<Member>, RepositoryError>> + Send;
 
     /// What the user is in the company, `None` when they are not a member of it.
     fn role_in(

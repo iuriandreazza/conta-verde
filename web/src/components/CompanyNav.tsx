@@ -5,11 +5,19 @@ import { ChartLineIcon } from "./icons/chart-line";
 import { CreditCardIcon } from "./icons/credit-card";
 import { FolderTreeIcon } from "./icons/folder-tree";
 import { LayersIcon } from "./icons/layers";
+import { UserPlusIcon } from "./icons/user-plus";
 import { UsersIcon } from "./icons/users";
 import { WalletIcon } from "./icons/wallet";
 
 /** The sections of a company; the link of the page being shown is marked as current. */
-export function CompanyNav({ companyId }: { companyId: string }) {
+export function CompanyNav({
+  companyId,
+  canSeeMembers,
+}: {
+  companyId: string;
+  /** The role reaches who belongs to the company: the others are not shown the link. */
+  canSeeMembers: boolean;
+}) {
   const base = `/companies/${companyId}`;
   return (
     <nav className="side-nav" aria-label="Seções da empresa">
@@ -45,6 +53,12 @@ export function CompanyNav({ companyId }: { companyId: string }) {
         <CalendarDaysIcon size={18} aria-hidden />
         Prazos de pagamento
       </NavLink>
+      {canSeeMembers && (
+        <NavLink to={`${base}/members`}>
+          <UserPlusIcon size={18} aria-hidden />
+          Membros
+        </NavLink>
+      )}
     </nav>
   );
 }

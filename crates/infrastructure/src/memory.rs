@@ -6,8 +6,8 @@ use crate::memory_audit::AuditLog;
 use crate::memory_list::{keyset_page, name_key};
 
 use conta_verde_application::{
-    CnpjLookupError, CnpjRegistry, CompanyMembership, IdentityRepository, NameCursor, NewAccount,
-    PartyQuery, PartyRepository, RegistryEntry, RepositoryError, StoredCredentials,
+    CnpjLookupError, CnpjRegistry, CompanyMembership, IdentityRepository, Member, NameCursor,
+    NewAccount, PartyQuery, PartyRepository, RegistryEntry, RepositoryError, StoredCredentials,
     ensure_audit_describes,
 };
 use conta_verde_domain::{
@@ -193,6 +193,18 @@ struct IdentityState {
     sessions: HashMap<String, (UserId, Instant)>,
 }
 
+impl InMemoryIdentityRepository {
+    /// The name of a company, for the repositories that join it to what they hold.
+    pub(crate) fn company_name(&self, company_id: CompanyId) -> Option<String> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        state
+            .companies
+            .iter()
+            .find(|company| company.id() == company_id)
+            .map(|company| company.name().to_owned())
+    }
+}
+
 impl IdentityState {
     fn user(&self, id: UserId) -> Option<&User> {
         self.users
@@ -266,6 +278,28 @@ impl IdentityRepository for InMemoryIdentityRepository {
             )
         });
         Ok(memberships)
+    }
+
+    async fn members_of(&self, company_id: CompanyId) -> Result<Vec<Member>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        let mut members: Vec<Member> = state
+            .memberships
+            .iter()
+            .filter(|(_, company, _)| *company == company_id)
+            .filter_map(|(user_id, _, role)| {
+                state.user(*user_id).map(|user| Member {
+                    user: user.clone(),
+                    role: *role,
+                })
+            })
+            .collect();
+        members.sort_by_cached_key(|member| {
+            (
+                member.user.name().to_lowercase(),
+                member.user.id().as_uuid(),
+            )
+        });
+        Ok(members)
     }
 
     async fn role_in(

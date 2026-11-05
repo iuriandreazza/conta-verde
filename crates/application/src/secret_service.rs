@@ -15,11 +15,11 @@ pub trait SecretService: Send + Sync {
         stored_hash: Option<&str>,
     ) -> impl Future<Output = bool> + Send;
 
-    /// A fresh unguessable session token, safe to place in a cookie.
-    fn new_session_token(&self) -> String;
+    /// A fresh unguessable token, safe to place in a cookie or a link: a session's, an invitation's.
+    fn new_token(&self) -> String;
 
-    /// Deterministic digest under which a session token is stored.
-    fn digest_session_token(&self, token: &str) -> String;
+    /// Deterministic digest under which a token is stored, so a leaked database does not leak usable ones.
+    fn digest_token(&self, token: &str) -> String;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -11,6 +11,7 @@ mod document_check;
 mod email;
 mod error;
 mod ids;
+mod invitation;
 mod name;
 mod party;
 mod payment_method;
@@ -38,9 +39,10 @@ pub use document_check::DocumentCheck;
 pub use email::Email;
 pub use error::DomainError;
 pub use ids::{
-    BankAccountId, CategoryId, CompanyId, CostCenterId, PartyId, PaymentMethodId, PaymentTermId,
-    ProductId, UserId,
+    BankAccountId, CategoryId, CompanyId, CostCenterId, InvitationId, PartyId, PaymentMethodId,
+    PaymentTermId, ProductId, UserId,
 };
+pub use invitation::Invitation;
 pub use party::{Party, PartyDraft};
 pub use payment_method::{PaymentMethod, PaymentMethodDraft, PaymentMethodKind};
 pub use payment_term::{
