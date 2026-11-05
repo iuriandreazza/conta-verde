@@ -1,0 +1,189 @@
+import { useState, type FormEvent } from "react";
+import type { CashFlowGroup, Category, DreGroup, NewCategory } from "../api";
+import { CASH_FLOW_GROUPS, DRE_GROUPS, cashFlowLabel, dreLabel } from "../lib/groups";
+import { Button } from "./Button";
+import { CheckIcon } from "./icons/check";
+import { PlusIcon } from "./icons/plus";
+import { Notice } from "./Notice";
+
+// Where a group usually lands in the cash flow; the person can still choose another.
+const USUAL_CASH_FLOW: Record<DreGroup, CashFlowGroup> = {
+  gross_revenue: "operating",
+  deductions: "operating",
+  costs: "operating",
+  operating_expenses: "operating",
+  financial_result: "financing",
+  investments: "investing",
+  outside_result: "financing",
+  transfers: "transfer",
+};
+
+interface CategoryFormProps {
+  /** Every category, to choose the parent from. */
+  categories: Category[];
+  /** The category being changed, or `null` to create one. */
+  editing: Category | null;
+  /** The parent to start with when creating a subcategory. */
+  initialParentId: string | null;
+  focusName: boolean;
+  pending: boolean;
+  error: string | null;
+  onCreate: (input: NewCategory) => void;
+  onChange: (input: { name: string; active: boolean }) => void;
+  onCancel: () => void;
+}
+
+/**
+ * Creates a category or changes one. A top-level category chooses where it lands in the DRE and the
+ * cash flow; a subcategory takes both from its parent, so the form only shows them. Changing one
+ * only renames it or switches it on or off: its place and groups are fixed. Remount it (a `key`)
+ * to start over.
+ */
+export function CategoryForm({
+  categories,
+  editing,
+  initialParentId,
+  focusName,
+  pending,
+  error,
+  onCreate,
+  onChange,
+  onCancel,
+}: CategoryFormProps) {
+  const [parentId, setParentId] = useState(initialParentId ?? "");
+  const [dreGroup, setDreGroup] = useState<DreGroup>("operating_expenses");
+  const [cashFlowGroup, setCashFlowGroup] = useState<CashFlowGroup>("operating");
+  const parent = categories.find((category) => category.id === parentId);
+  // Under an inactive category, or the one for transfers, or at the last level, nothing can go.
+  const parents = categories.filter(
+    (category) => category.active && !isTransfer(category) && category.level < 5,
+  );
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (pending) {
+      return;
+    }
+    const form = new FormData(event.currentTarget);
+    const name = String(form.get("name") ?? "");
+    if (editing !== null) {
+      // A disabled checkbox is not in the form data, and the transfer category is always active.
+      onChange({ name, active: isTransfer(editing) || form.get("active") === "on" });
+    } else if (parent) {
+      onCreate({ name, parent_id: parent.id });
+    } else {
+      onCreate({ name, dre_group: dreGroup, cash_flow_group: cashFlowGroup });
+    }
+  }
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <label>
+        Nome
+        <input
+          name="name"
+          required
+          maxLength={200}
+          autoComplete="off"
+          autoFocus={focusName}
+          defaultValue={editing?.name}
+        />
+      </label>
+      {editing === null ? (
+        <>
+          <label>
+            Subcategoria de
+            <select value={parentId} onChange={(event) => setParentId(event.target.value)}>
+              <option value="">Nenhuma: categoria principal</option>
+              {parents.map((category) => (
+                <option key={category.id} value={category.id}>
+                  {"— ".repeat(category.level - 1)}
+                  {category.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {parent ? (
+            <p className="muted">
+              Herda de {parent.name}: {dreLabel(parent.dre_group)} no DRE,{" "}
+              {cashFlowLabel(parent.cash_flow_group).toLowerCase()} no fluxo de caixa.
+            </p>
+          ) : (
+            <>
+              <label>
+                Grupo no DRE
+                <select
+                  value={dreGroup}
+                  onChange={(event) => {
+                    const next = event.target.value as DreGroup;
+                    setDreGroup(next);
+                    setCashFlowGroup(USUAL_CASH_FLOW[next]);
+                  }}
+                >
+                  {DRE_GROUPS.map((group) => (
+                    <option key={group.key} value={group.key}>
+                      {group.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Grupo no fluxo de caixa
+                <select
+                  value={cashFlowGroup}
+                  // Moves between accounts are the transfers group in both, nothing else.
+                  disabled={dreGroup === "transfers"}
+                  onChange={(event) => setCashFlowGroup(event.target.value as CashFlowGroup)}
+                >
+                  {CASH_FLOW_GROUPS.filter(
+                    (group) => group.key !== "transfer" || dreGroup === "transfers",
+                  ).map((group) => (
+                    <option key={group.key} value={group.key}>
+                      {group.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </>
+          )}
+        </>
+      ) : (
+        <>
+          <p className="muted">
+            {editing.level > 1 ? "Subcategoria. " : ""}
+            {dreLabel(editing.dre_group)} no DRE, {cashFlowLabel(editing.cash_flow_group).toLowerCase()}{" "}
+            no fluxo de caixa. O lugar na árvore e os grupos não mudam.
+          </p>
+          <label className="inline">
+            <input
+              name="active"
+              type="checkbox"
+              defaultChecked={editing.active}
+              disabled={isTransfer(editing)}
+            />{" "}
+            Ativa
+          </label>
+          {isTransfer(editing) && (
+            <p className="muted">A categoria de transferências pode ser renomeada, mas não desativada.</p>
+          )}
+        </>
+      )}
+      <Notice message={error} />
+      <div className="form-actions">
+        <Button type="submit" icon={editing === null ? PlusIcon : CheckIcon} pending={pending}>
+          {editing === null ? "Adicionar" : "Salvar alterações"}
+        </Button>
+        {editing !== null && (
+          <Button type="button" variant="ghost" onClick={onCancel}>
+            Cancelar
+          </Button>
+        )}
+      </div>
+    </form>
+  );
+}
+
+/** The category for moves between the company's own accounts: a top-level one in the transfers group. */
+export function isTransfer(category: Category): boolean {
+  return category.parent_id === null && category.dre_group === "transfers";
+}
