@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, vi } from "vitest";
 import { App } from "./App";
-import type { BankAccount, Category, CostCenter, PaymentMethod, DocumentCheck, HistoryEntry, Party, Product, Profile } from "./api";
+import type { PaymentTerm, BankAccount, Category, CostCenter, PaymentMethod, DocumentCheck, HistoryEntry, Party, Product, Profile } from "./api";
 import { AuthProvider } from "./auth";
 import { SOURCE_URL } from "./components/Footer";
 
@@ -1487,5 +1487,191 @@ describe("payment methods", () => {
     await userEvent.type(screen.getByLabelText("Nome"), "pix");
     await userEvent.click(screen.getByRole("button", { name: "Adicionar" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("already in use");
+  });
+});
+
+describe("payment terms", () => {
+  function term(name: string, installments: PaymentTerm["installments"], active = true): PaymentTerm {
+    return { id: `pt-${name}`, company_id: "c1", name, installments, active };
+  }
+
+  const halves = [
+    { days: 0, percent: "50" },
+    { days: 30, percent: "50" },
+  ];
+  const page = (...items: PaymentTerm[]) => ({ status: 200, body: { items, next_cursor: null } });
+  const bodyOf = (fetchMock: ReturnType<typeof mockApi>, method: string) => {
+    const call = fetchMock.mock.calls.find(([, init]) => init?.method === method);
+    return JSON.parse(String(call?.[1]?.body));
+  };
+
+  it("lists the installments in words", async () => {
+    mockApi((url) =>
+      url === "/api/auth/me" ? { status: 200, body: profile } : page(term("Entrada e 30", halves)),
+    );
+    renderAt("/companies/c1/payment-terms");
+
+    const row = (await screen.findByText("Entrada e 30")).closest("tr")!;
+    expect(row).toHaveTextContent("à vista 50% · 30 dias 50%");
+  });
+
+  it("adds up the percentages as they are typed and registers a term that closes 100", async () => {
+    const fetchMock = mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "POST") return { status: 201, body: term("Entrada e 30", halves) };
+      return page();
+    });
+    renderAt("/companies/c1/payment-terms");
+
+    // The list's own "loading" status is gone once the empty state shows.
+    await screen.findByText("Nenhum prazo de pagamento ainda.");
+    const submit = screen.getByRole("button", { name: "Adicionar" });
+    await userEvent.type(screen.getByLabelText("Nome"), "Entrada e 30");
+    // One installment of 100% to begin with; a second starts 30 days later.
+    await userEvent.click(screen.getByRole("button", { name: "Adicionar parcela" }));
+    expect(screen.getByLabelText("Dias da parcela 2")).toHaveValue("30");
+    // The new installment has no percentage yet, and the message names it.
+    expect(screen.getByRole("status")).toHaveTextContent("Preencha a porcentagem da parcela 2");
+
+    await userEvent.clear(screen.getByLabelText("Porcentagem da parcela 1"));
+    await userEvent.type(screen.getByLabelText("Porcentagem da parcela 1"), "40,5");
+    await userEvent.type(screen.getByLabelText("Porcentagem da parcela 2"), "59");
+    expect(screen.getByRole("status")).toHaveTextContent("Faltam 0,5% para fechar 100%.");
+    expect(submit).toBeDisabled();
+    await userEvent.type(screen.getByLabelText("Porcentagem da parcela 2"), ",5");
+    expect(screen.getByRole("status")).toHaveTextContent("Total: 100%.");
+    expect(submit).toBeEnabled();
+    await userEvent.click(submit);
+
+    expect(await screen.findByText("Entrada e 30 cadastrado.")).toBeInTheDocument();
+    expect(bodyOf(fetchMock, "POST")).toEqual({
+      name: "Entrada e 30",
+      installments: [
+        { days: 0, percent: "40.5" },
+        { days: 30, percent: "59.5" },
+      ],
+      active: true,
+    });
+  });
+
+  it("splits equally with the remainder on the last, and says when it is over", async () => {
+    mockApi((url) => (url === "/api/auth/me" ? { status: 200, body: profile } : page()));
+    renderAt("/companies/c1/payment-terms");
+
+    await screen.findByText("Nenhum prazo de pagamento ainda.");
+    await userEvent.click(screen.getByRole("button", { name: "Adicionar parcela" }));
+    await userEvent.click(screen.getByRole("button", { name: "Adicionar parcela" }));
+    await userEvent.click(screen.getByRole("button", { name: "Dividir igualmente" }));
+    expect(screen.getByLabelText("Porcentagem da parcela 1")).toHaveValue("33,33");
+    expect(screen.getByLabelText("Porcentagem da parcela 2")).toHaveValue("33,33");
+    expect(screen.getByLabelText("Porcentagem da parcela 3")).toHaveValue("33,34");
+    expect(screen.getByRole("status")).toHaveTextContent("Total: 100%.");
+
+    await userEvent.clear(screen.getByLabelText("Porcentagem da parcela 1"));
+    await userEvent.type(screen.getByLabelText("Porcentagem da parcela 1"), "50");
+    expect(screen.getByRole("status")).toHaveTextContent("Passou 16,67% de 100%.");
+    await userEvent.click(screen.getByRole("button", { name: "Remover parcela 3" }));
+    expect(screen.queryByLabelText("Dias da parcela 3")).not.toBeInTheDocument();
+  });
+
+  it("takes zeros after the second decimal and refuses a third decimal that is not zero", async () => {
+    mockApi((url) => (url === "/api/auth/me" ? { status: 200, body: profile } : page()));
+    renderAt("/companies/c1/payment-terms");
+
+    await screen.findByText("Nenhum prazo de pagamento ainda.");
+    await userEvent.click(screen.getByRole("button", { name: "Adicionar parcela" }));
+    await userEvent.clear(screen.getByLabelText("Porcentagem da parcela 1"));
+    await userEvent.type(screen.getByLabelText("Porcentagem da parcela 1"), "33,330");
+    await userEvent.type(screen.getByLabelText("Porcentagem da parcela 2"), "66,67");
+    expect(screen.getByRole("status")).toHaveTextContent("Total: 100%.");
+
+    // 33.333 would be rounded by the database, so it is never sent as a share.
+    await userEvent.clear(screen.getByLabelText("Porcentagem da parcela 1"));
+    await userEvent.type(screen.getByLabelText("Porcentagem da parcela 1"), "33,333");
+    expect(screen.getByRole("status")).toHaveTextContent("Preencha a porcentagem da parcela 1");
+    expect(screen.getByRole("button", { name: "Adicionar" })).toBeDisabled();
+  });
+
+  it("leaves the days empty when the next one would pass the limit", async () => {
+    mockApi((url) => (url === "/api/auth/me" ? { status: 200, body: profile } : page()));
+    renderAt("/companies/c1/payment-terms");
+
+    await screen.findByText("Nenhum prazo de pagamento ainda.");
+    await userEvent.clear(screen.getByLabelText("Dias da parcela 1"));
+    await userEvent.type(screen.getByLabelText("Dias da parcela 1"), "3640");
+    await userEvent.click(screen.getByRole("button", { name: "Adicionar parcela" }));
+    expect(screen.getByLabelText("Dias da parcela 2")).toHaveValue("");
+  });
+
+  it("changes a term with its installments filled in, and shows what the API refused", async () => {
+    const entry = term("Entrada e 30", halves);
+    let answer = 422;
+    const fetchMock = mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "PUT") {
+        return answer === 200
+          ? { status: 200, body: { ...entry, installments: [{ days: 0, percent: "40" }, { days: 45, percent: "60" }] } }
+          : { status: 422, body: { error: "the days of the installments must increase, each later than the one before" } };
+      }
+      return page(entry);
+    });
+    renderAt("/companies/c1/payment-terms");
+
+    await screen.findByRole("table");
+    await userEvent.click(screen.getByRole("button", { name: "Alterar Entrada e 30" }));
+    expect(screen.getByLabelText("Dias da parcela 2")).toHaveValue("30");
+    expect(screen.getByLabelText("Porcentagem da parcela 1")).toHaveValue("50");
+    await userEvent.clear(screen.getByLabelText("Porcentagem da parcela 1"));
+    await userEvent.type(screen.getByLabelText("Porcentagem da parcela 1"), "40");
+    await userEvent.clear(screen.getByLabelText("Porcentagem da parcela 2"));
+    await userEvent.type(screen.getByLabelText("Porcentagem da parcela 2"), "60");
+    await userEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("must increase");
+
+    answer = 200;
+    await userEvent.clear(screen.getByLabelText("Dias da parcela 2"));
+    await userEvent.type(screen.getByLabelText("Dias da parcela 2"), "45");
+    await userEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
+    expect(await screen.findByText("Entrada e 30 atualizado.")).toBeInTheDocument();
+    const puts = fetchMock.mock.calls.filter(([, init]) => init?.method === "PUT");
+    expect(puts).toHaveLength(2);
+    expect(JSON.parse(String(puts[1][1]?.body))).toEqual({
+      name: "Entrada e 30",
+      installments: [
+        { days: 0, percent: "40" },
+        { days: 45, percent: "60" },
+      ],
+      active: true,
+    });
+    expect(screen.getByText("à vista 40% · 45 dias 60%")).toBeInTheDocument();
+  });
+
+  it("asks for the days of every installment, and shows the history in words", async () => {
+    const entry = term("Entrada e 30", halves);
+    const history: HistoryEntry = {
+      at: Date.UTC(2026, 10, 5, 12, 0),
+      actor: { kind: "user", id: "u1", name: "Ana" },
+      action: "updated",
+      changes: [{ field: "installments", from: "0:50,30:50", to: "0:40,30:60" }],
+    };
+    const fetchMock = mockApi((url) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (url.endsWith("/history")) return { status: 200, body: [history] };
+      return page(entry);
+    });
+    renderAt("/companies/c1/payment-terms");
+    await screen.findByRole("table");
+
+    await userEvent.type(screen.getByLabelText("Nome"), "Novo");
+    await userEvent.clear(screen.getByLabelText("Dias da parcela 1"));
+    await userEvent.click(screen.getByRole("button", { name: "Adicionar" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Informe os dias de cada parcela");
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+
+    await userEvent.click(screen.getByRole("button", { name: "Histórico de Entrada e 30" }));
+    const region = await screen.findByRole("region", { name: "Histórico de Entrada e 30" });
+    expect(
+      await within(region).findByText(/à vista 50% · 30 dias 50% → à vista 40% · 30 dias 60%/),
+    ).toBeInTheDocument();
   });
 });

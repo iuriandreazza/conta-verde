@@ -12,6 +12,7 @@ mod ids;
 mod name;
 mod party;
 mod payment_method;
+mod payment_term;
 mod product;
 
 pub use account::{Account, AccountDraft, Company, User, validate_password};
@@ -21,7 +22,7 @@ pub use audit::{
     bank_account_changes, bank_account_creation_changes, category_changes,
     category_creation_changes, cost_center_changes, cost_center_creation_changes, creation_changes,
     document_check_changes, payment_method_changes, payment_method_creation_changes,
-    product_changes, product_creation_changes,
+    payment_term_changes, payment_term_creation_changes, product_changes, product_creation_changes,
 };
 pub use bank_account::{BankAccount, BankAccountDraft, BankAccountKind};
 pub use category::{CashFlowGroup, Category, DreGroup, MAX_CATEGORY_LEVELS, default_template};
@@ -31,8 +32,13 @@ pub use document_check::DocumentCheck;
 pub use email::Email;
 pub use error::DomainError;
 pub use ids::{
-    BankAccountId, CategoryId, CompanyId, CostCenterId, PartyId, PaymentMethodId, ProductId, UserId,
+    BankAccountId, CategoryId, CompanyId, CostCenterId, PartyId, PaymentMethodId, PaymentTermId,
+    ProductId, UserId,
 };
 pub use party::{Party, PartyDraft};
 pub use payment_method::{PaymentMethod, PaymentMethodDraft, PaymentMethodKind};
+pub use payment_term::{
+    Installment, InstallmentDraft, MAX_INSTALLMENT_DAYS, MAX_INSTALLMENTS, PaymentTerm,
+    PaymentTermDraft, Percent,
+};
 pub use product::{Product, ProductDraft, ProductKind};

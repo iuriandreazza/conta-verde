@@ -81,6 +81,7 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
         | ApplicationError::CostCenterNotFound
         | ApplicationError::BankAccountNotFound
         | ApplicationError::PaymentMethodNotFound
+        | ApplicationError::PaymentTermNotFound
         | ApplicationError::CategoryNotFound => (StatusCode::NOT_FOUND, error.to_string()),
         ApplicationError::LookupDisabled => (StatusCode::CONFLICT, error.to_string()),
         ApplicationError::RecheckTooSoon => (StatusCode::TOO_MANY_REQUESTS, error.to_string()),

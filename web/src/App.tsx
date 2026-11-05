@@ -9,6 +9,7 @@ import { CostCentersPage } from "./pages/CostCentersPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { PartiesPage } from "./pages/PartiesPage";
 import { PaymentMethodsPage } from "./pages/PaymentMethodsPage";
+import { PaymentTermsPage } from "./pages/PaymentTermsPage";
 import { ProductsPage } from "./pages/ProductsPage";
 
 export function App() {
@@ -26,6 +27,7 @@ export function App() {
           <Route path="/companies/:companyId/cost-centers" element={<CostCentersPage />} />
           <Route path="/companies/:companyId/bank-accounts" element={<BankAccountsPage />} />
           <Route path="/companies/:companyId/payment-methods" element={<PaymentMethodsPage />} />
+          <Route path="/companies/:companyId/payment-terms" element={<PaymentTermsPage />} />
         </Route>
       </Route>
     </Routes>

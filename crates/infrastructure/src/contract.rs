@@ -8,17 +8,19 @@ use conta_verde_application::{
     PaymentMethodService, ProductQuery, ProductRepository, ProductService, RepositoryError,
     SecretService,
 };
+use conta_verde_application::{PaymentTermQuery, PaymentTermRepository, PaymentTermService};
 use conta_verde_domain::{
     AccountDraft, Actor, AuditAction, AuditEntity, AuditEntry, BankAccount, BankAccountDraft,
     BankAccountId, BankAccountKind, CashFlowGroup, Category, CategoryId, CompanyId, CostCenter,
     CostCenterDraft, CostCenterId, DocumentCheck, DomainError, DreGroup, FieldChange, Party,
     PartyDraft, PartyId, PaymentMethod, PaymentMethodDraft, PaymentMethodId, PaymentMethodKind,
-    Product, ProductDraft, ProductId, ProductKind, UserId, bank_account_changes,
-    bank_account_creation_changes, category_changes, category_creation_changes,
-    cost_center_changes, cost_center_creation_changes, creation_changes, document_check_changes,
-    payment_method_changes, payment_method_creation_changes, product_changes,
-    product_creation_changes,
+    PaymentTerm, PaymentTermDraft, PaymentTermId, Product, ProductDraft, ProductId, ProductKind,
+    UserId, bank_account_changes, bank_account_creation_changes, category_changes,
+    category_creation_changes, cost_center_changes, cost_center_creation_changes, creation_changes,
+    document_check_changes, payment_method_changes, payment_method_creation_changes,
+    product_changes, product_creation_changes,
 };
+use conta_verde_domain::{InstallmentDraft, payment_term_changes, payment_term_creation_changes};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -3015,6 +3017,470 @@ pub async fn filters_and_sorts_payment_methods<R: PaymentMethodRepository>(
     assert!(names(all.clone().searching("nobody")).await.is_empty());
     assert_eq!(names(all.clone().searching("al\0fa")).await, ["Alfa"]);
     assert_eq!(names(all.clone().searching("  ")).await, ascending);
+
+    let active_with_a = all
+        .with_active(true)
+        .searching("a")
+        .sorted(NameSort::NameDesc);
+    assert_eq!(
+        names(active_with_a).await,
+        ["Delta_x", "Charlie 100%", "Alfa"]
+    );
+}
+
+// ---- payment terms
+
+fn term_draft(name: &str, parts: &[(u32, &str)], active: bool) -> PaymentTermDraft {
+    PaymentTermDraft {
+        name: name.into(),
+        installments: parts
+            .iter()
+            .map(|(days, percent)| InstallmentDraft {
+                days: *days,
+                percent: (*percent).into(),
+            })
+            .collect(),
+        active,
+    }
+}
+
+fn new_term(company: CompanyId, name: &str, parts: &[(u32, &str)]) -> PaymentTerm {
+    PaymentTerm::new(
+        PaymentTermId::generate(),
+        company,
+        term_draft(name, parts, true),
+    )
+    .unwrap()
+}
+
+fn term_entry(term: &PaymentTerm, action: AuditAction, changes: Vec<FieldChange>) -> AuditEntry {
+    AuditEntry {
+        company_id: term.company_id(),
+        actor: actor(),
+        entity: AuditEntity::PaymentTerm,
+        entity_id: term.id().as_uuid(),
+        action,
+        changes,
+    }
+}
+
+async fn save_term<R: PaymentTermRepository>(
+    repository: &R,
+    term: &PaymentTerm,
+) -> Result<(), RepositoryError> {
+    let entry = term_entry(
+        term,
+        AuditAction::Created,
+        payment_term_creation_changes(term),
+    );
+    repository.save(term, &entry).await
+}
+
+async fn term_trail<R: PaymentTermRepository>(
+    repository: &R,
+    company: CompanyId,
+    term: &PaymentTerm,
+) -> usize {
+    repository.history(company, term.id()).await.unwrap().len()
+}
+
+async fn stored_installments<R: PaymentTermRepository>(
+    repository: &R,
+    company: CompanyId,
+    term: &PaymentTerm,
+) -> Option<String> {
+    repository
+        .find(company, term.id())
+        .await
+        .unwrap()
+        .map(|stored| stored.installments_text())
+}
+
+/// A write is stored with its audit entry and its installments, scoped by company; one that is
+/// refused or misses leaves nothing in the trail and the old installments in place.
+pub async fn stores_payment_terms_with_their_trail<R: PaymentTermRepository>(
+    repository: &R,
+    company: CompanyId,
+    other_company: CompanyId,
+) {
+    let thirty = new_term(
+        company,
+        "30/60/90",
+        &[(30, "33.33"), (60, "33.33"), (90, "33.34")],
+    );
+    save_term(repository, &thirty).await.unwrap();
+    // What comes back is what went in: the installments, in order, with their percentages.
+    assert_eq!(
+        repository.find(company, thirty.id()).await.unwrap(),
+        Some(thirty.clone())
+    );
+    assert_eq!(
+        stored_installments(repository, company, &thirty)
+            .await
+            .as_deref(),
+        Some("30:33.33,60:33.33,90:33.34")
+    );
+    assert_eq!(
+        repository.find(other_company, thirty.id()).await.unwrap(),
+        None
+    );
+    assert_eq!(term_trail(repository, company, &thirty).await, 1);
+    assert_eq!(term_trail(repository, other_company, &thirty).await, 0);
+
+    // A whole percentage reads back as one, not as `50.00`, whichever adapter keeps it.
+    let half = new_term(company, "Entrada e 30", &[(0, "50"), (30, "50")]);
+    save_term(repository, &half).await.unwrap();
+    assert_eq!(
+        repository.find(company, half.id()).await.unwrap(),
+        Some(half.clone())
+    );
+
+    // The same name, whatever its case, is refused: no term, no installments, no entry.
+    let twin = new_term(company, "30/60/90 ", &[(0, "100")]);
+    let shouting = new_term(company, "ENTRADA E 30", &[(0, "100")]);
+    for refused in [&twin, &shouting] {
+        assert_eq!(
+            save_term(repository, refused).await,
+            Err(RepositoryError::DuplicateName)
+        );
+        assert_eq!(repository.find(company, refused.id()).await.unwrap(), None);
+        assert_eq!(term_trail(repository, company, refused).await, 0);
+    }
+    save_term(
+        repository,
+        &new_term(other_company, "30/60/90", &[(0, "100")]),
+    )
+    .await
+    .unwrap();
+
+    // An entry about another record, or another company, is refused and nothing is stored.
+    let stray = new_term(company, "Estranho", &[(0, "100")]);
+    let wrong_record = term_entry(&thirty, AuditAction::Created, vec![]);
+    assert!(repository.save(&stray, &wrong_record).await.is_err());
+    assert_eq!(repository.find(company, stray.id()).await.unwrap(), None);
+    let mut wrong_company = term_entry(&stray, AuditAction::Created, vec![]);
+    wrong_company.company_id = other_company;
+    assert!(repository.save(&stray, &wrong_company).await.is_err());
+    assert_eq!(term_trail(repository, other_company, &stray).await, 0);
+
+    // An update replaces the name, the flag and the installments as a whole: more, fewer or other
+    // installments, with the entry; the case of its own name is not a clash.
+    let changed = thirty
+        .replaced_with(term_draft("30/60/90 dias", &[(0, "25"), (30, "75")], false))
+        .unwrap();
+    let entry = term_entry(
+        &changed,
+        AuditAction::Updated,
+        payment_term_changes(&thirty, &changed),
+    );
+    repository.update(&changed, &entry).await.unwrap();
+    assert_eq!(
+        repository.find(company, thirty.id()).await.unwrap(),
+        Some(changed.clone())
+    );
+    assert_eq!(
+        stored_installments(repository, company, &thirty)
+            .await
+            .as_deref(),
+        Some("0:25,30:75")
+    );
+    assert_eq!(term_trail(repository, company, &thirty).await, 2);
+    let more = changed
+        .replaced_with(term_draft(
+            "30/60/90 dias",
+            &[(10, "20"), (20, "20"), (30, "20"), (40, "20"), (50, "20")],
+            false,
+        ))
+        .unwrap();
+    let entry = term_entry(
+        &more,
+        AuditAction::Updated,
+        payment_term_changes(&changed, &more),
+    );
+    repository.update(&more, &entry).await.unwrap();
+    assert_eq!(
+        repository.find(company, thirty.id()).await.unwrap(),
+        Some(more.clone())
+    );
+
+    // An update that clashes with another's name changes nothing: not the name, not the flag, not
+    // the installments it was about to replace, and no entry.
+    let clashing = half
+        .replaced_with(term_draft("30/60/90 DIAS", &[(5, "100")], false))
+        .unwrap();
+    let entry = term_entry(
+        &clashing,
+        AuditAction::Updated,
+        payment_term_changes(&half, &clashing),
+    );
+    assert_eq!(
+        repository.update(&clashing, &entry).await,
+        Err(RepositoryError::DuplicateName)
+    );
+    assert_eq!(
+        repository.find(company, half.id()).await.unwrap(),
+        Some(half.clone())
+    );
+    assert_eq!(
+        stored_installments(repository, company, &half)
+            .await
+            .as_deref(),
+        Some("0:50,30:50")
+    );
+    assert_eq!(term_trail(repository, company, &half).await, 1);
+
+    // A name given up by a rename is free again.
+    let renamed = half
+        .replaced_with(term_draft("Entrada + 30", &[(0, "50"), (30, "50")], true))
+        .unwrap();
+    let entry = term_entry(
+        &renamed,
+        AuditAction::Updated,
+        payment_term_changes(&half, &renamed),
+    );
+    repository.update(&renamed, &entry).await.unwrap();
+    save_term(
+        repository,
+        &new_term(company, "entrada e 30", &[(0, "100")]),
+    )
+    .await
+    .unwrap();
+
+    // Not in that company, or not at all: nothing is updated, no installment replaced, no entry.
+    let foreign = PaymentTerm::new(
+        thirty.id(),
+        other_company,
+        term_draft("Roubo", &[(0, "100")], true),
+    )
+    .unwrap();
+    let entry = term_entry(&foreign, AuditAction::Updated, vec![]);
+    assert_eq!(
+        repository.update(&foreign, &entry).await,
+        Err(RepositoryError::NotFound)
+    );
+    assert_eq!(term_trail(repository, other_company, &thirty).await, 0);
+    assert_eq!(
+        stored_installments(repository, company, &thirty)
+            .await
+            .as_deref(),
+        Some("10:20,20:20,30:20,40:20,50:20")
+    );
+    let unknown = new_term(company, "Fantasma", &[(0, "100")]);
+    let entry = term_entry(&unknown, AuditAction::Updated, vec![]);
+    assert_eq!(
+        repository.update(&unknown, &entry).await,
+        Err(RepositoryError::NotFound)
+    );
+    assert_eq!(term_trail(repository, company, &unknown).await, 0);
+}
+
+/// An edit that changes nothing writes nothing, and the trail shows the installments that changed.
+pub async fn edits_payment_terms_and_records_only_changes<R: PaymentTermRepository>(
+    service: &PaymentTermService<R>,
+    company: CompanyId,
+    other_company: CompanyId,
+) {
+    let who = actor();
+    let created = service
+        .register(
+            company,
+            &who,
+            term_draft("  À vista e 30 ", &[(0, " 50.00 "), (30, "50")], true),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.name(), "À vista e 30");
+    assert_eq!(created.installments_text(), "0:50,30:50");
+
+    // The same installments written differently are no change.
+    service
+        .update(
+            company,
+            &who,
+            created.id(),
+            term_draft("À vista e 30", &[(0, "50"), (30, "50.0")], true),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        service.history(company, created.id()).await.unwrap().len(),
+        1
+    );
+
+    let updated = service
+        .update(
+            company,
+            &who,
+            created.id(),
+            term_draft("À vista e 30", &[(0, "40"), (30, "60")], false),
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.installments_text(), "0:40,30:60");
+    let history = service.history(company, created.id()).await.unwrap();
+    assert_eq!(history.len(), 2);
+    let fields: Vec<(&str, Option<&str>, Option<&str>)> = history[1]
+        .entry
+        .changes
+        .iter()
+        .map(|change| {
+            (
+                change.field.as_str(),
+                change.from.as_deref(),
+                change.to.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        fields,
+        [
+            ("installments", Some("0:50,30:50"), Some("0:40,30:60")),
+            ("active", Some("true"), Some("false"))
+        ]
+    );
+
+    // A term that does not add up, or whose days do not increase, is refused and changes nothing.
+    let domain = |error: DomainError| Err(ApplicationError::Domain(error));
+    assert_eq!(
+        service
+            .update(
+                company,
+                &who,
+                created.id(),
+                term_draft("X", &[(0, "40"), (30, "59.99")], true)
+            )
+            .await,
+        domain(DomainError::PercentsDoNotSumTo100)
+    );
+    assert_eq!(
+        service
+            .update(
+                company,
+                &who,
+                created.id(),
+                term_draft("X", &[(30, "50"), (30, "50")], true)
+            )
+            .await,
+        domain(DomainError::InstallmentDaysNotIncreasing)
+    );
+    assert_eq!(
+        service.history(company, created.id()).await.unwrap().len(),
+        2
+    );
+
+    assert_eq!(
+        service
+            .update(
+                other_company,
+                &who,
+                created.id(),
+                term_draft("X", &[(0, "100")], true)
+            )
+            .await,
+        Err(ApplicationError::PaymentTermNotFound)
+    );
+    assert_eq!(
+        service.history(other_company, created.id()).await,
+        Err(ApplicationError::PaymentTermNotFound)
+    );
+    assert_eq!(
+        service
+            .register(
+                company,
+                &who,
+                term_draft("à VISTA E 30", &[(0, "100")], true)
+            )
+            .await,
+        Err(ApplicationError::Repository(RepositoryError::DuplicateName))
+    );
+}
+
+async fn listed_term_names<R: PaymentTermRepository>(
+    service: &PaymentTermService<R>,
+    company: CompanyId,
+    query: &PaymentTermQuery,
+    page_size: usize,
+) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = service
+            .list(company, query, cursor.as_ref(), Some(page_size))
+            .await
+            .unwrap();
+        names.extend(page.items.iter().map(|item| item.name().to_owned()));
+        match page.next {
+            Some(next) => cursor = Some(next),
+            None => return names,
+        }
+    }
+}
+
+pub async fn filters_and_sorts_payment_terms<R: PaymentTermRepository>(
+    service: &PaymentTermService<R>,
+    company: CompanyId,
+    other_company: CompanyId,
+) {
+    let who = actor();
+    for (name, parts, active) in [
+        ("Alfa", vec![(0, "100")], true),
+        ("bravo", vec![(30, "50"), (60, "50")], false),
+        (
+            "Charlie 100%",
+            vec![(0, "20"), (10, "30"), (20, "50")],
+            true,
+        ),
+        ("Delta_x", vec![(7, "100")], true),
+        ("echo", vec![(0, "100")], false),
+    ] {
+        service
+            .register(company, &who, term_draft(name, &parts, active))
+            .await
+            .unwrap();
+    }
+    service
+        .register(other_company, &who, term_draft("Alfa", &[(0, "100")], true))
+        .await
+        .unwrap();
+
+    let all = PaymentTermQuery::default();
+    let names = |query: PaymentTermQuery| async move {
+        listed_term_names(service, company, &query, 2).await
+    };
+    let ascending = ["Alfa", "bravo", "Charlie 100%", "Delta_x", "echo"];
+    assert_eq!(names(all.clone()).await, ascending);
+    let descending: Vec<&str> = ascending.iter().rev().copied().collect();
+    assert_eq!(
+        names(all.clone().sorted(NameSort::NameDesc)).await,
+        descending
+    );
+
+    assert_eq!(
+        names(all.clone().with_active(true)).await,
+        ["Alfa", "Charlie 100%", "Delta_x"]
+    );
+    assert_eq!(
+        names(all.clone().with_active(false)).await,
+        ["bravo", "echo"]
+    );
+    assert_eq!(names(all.clone().searching("ALF")).await, ["Alfa"]);
+    assert_eq!(names(all.clone().searching("%")).await, ["Charlie 100%"]);
+    assert_eq!(names(all.clone().searching("_")).await, ["Delta_x"]);
+    assert!(names(all.clone().searching("nobody")).await.is_empty());
+    assert_eq!(names(all.clone().searching("al\0fa")).await, ["Alfa"]);
+    assert_eq!(names(all.clone().searching("  ")).await, ascending);
+
+    // Each listed term has its own installments, in order, not another term's.
+    let page = service.list(company, &all, None, None).await.unwrap();
+    let texts: Vec<String> = page
+        .items
+        .iter()
+        .map(PaymentTerm::installments_text)
+        .collect();
+    assert_eq!(
+        texts,
+        ["0:100", "30:50,60:50", "0:20,10:30,20:50", "7:100", "0:100"]
+    );
 
     let active_with_a = all
         .with_active(true)
