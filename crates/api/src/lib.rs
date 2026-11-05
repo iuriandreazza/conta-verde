@@ -371,14 +371,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_cnpj_missing_from_the_registry_is_rejected() {
-        // Valid check digits, but not a registered company.
+    async fn a_cnpj_missing_from_the_registry_is_accepted_with_a_warning() {
+        // Valid check digits, but unknown to the registry, whose data lags: a new company must
+        // still be registrable.
         let reply = register_party(&app(), Some("00.000.000/0001-91")).await;
-        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
-        assert_eq!(
-            reply.body["error"],
-            "CNPJ is not registered with Receita Federal"
-        );
+        assert_eq!(reply.status, StatusCode::CREATED);
+        assert_eq!(reply.body["document"], "00000000000191");
+        assert_eq!(reply.body["document_check"]["status"], "not_found");
+        assert_eq!(reply.body["document_check"]["needs_attention"], true);
     }
 
     #[tokio::test]

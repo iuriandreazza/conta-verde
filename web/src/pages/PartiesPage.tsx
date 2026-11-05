@@ -227,6 +227,13 @@ interface RegistryNotice {
 // so a warning never asks the user to redo anything.
 function registryNoticeFor(party: Party): RegistryNotice | null {
   const check = party.document_check;
+  if (check.status === "not_found") {
+    return {
+      tone: "warning",
+      message:
+        "Cadastrado, mas a Receita não encontrou este CNPJ. Confira o número: ela pode demorar a incluir empresas recém-abertas.",
+    };
+  }
   if (check.status === "unverified") {
     return {
       tone: "warning",

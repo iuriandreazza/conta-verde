@@ -12,8 +12,10 @@ use crate::InMemoryCnpjRegistry;
 
 pub const ACTIVE_CNPJ: &str = "11.222.333/0001-81";
 pub const CLOSED_ALPHANUMERIC_CNPJ: &str = "12.ABC.345/01DE-35";
+/// Valid check digits, but unknown to the contract registry.
+pub const UNKNOWN_CNPJ: &str = "00.000.000/0001-91";
 
-/// A registry that knows the two companies the contract tests register.
+/// A registry that knows the two companies the contract tests register, and no others.
 pub fn registry() -> InMemoryCnpjRegistry {
     InMemoryCnpjRegistry::default()
         .with_company("11222333000181", "PADARIA CENTRAL LTDA", "ATIVA")
@@ -55,6 +57,7 @@ pub async fn keeps_what_the_registry_said<R: PartyRepository>(
     for (name, document) in [
         ("Padaria", Some(ACTIVE_CNPJ)),
         ("Oficina", Some(CLOSED_ALPHANUMERIC_CNPJ)),
+        ("Fantasma", Some(UNKNOWN_CNPJ)),
         ("Ana", Some("529.982.247-25")),
         ("Sem documento", None),
     ] {
@@ -77,13 +80,14 @@ pub async fn keeps_what_the_registry_said<R: PartyRepository>(
         checks,
         [
             ("Ana", DocumentCheck::NotApplicable),
+            ("Fantasma", DocumentCheck::NotFound),
             ("Oficina", verified("OFICINA ALFANUMERICA LTDA", "BAIXADA")),
             ("Padaria", verified("PADARIA CENTRAL LTDA", "ATIVA")),
             ("Sem documento", DocumentCheck::NotApplicable),
         ]
     );
     assert_eq!(
-        listed[1].document().map(|document| document.as_str()),
+        listed[2].document().map(|document| document.as_str()),
         Some("12ABC34501DE35")
     );
 }

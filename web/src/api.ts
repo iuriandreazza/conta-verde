@@ -16,10 +16,10 @@ export interface Profile {
 
 /** What Receita Federal said about a CNPJ when the party was registered. */
 export interface DocumentCheck {
-  status: "not_applicable" | "verified" | "unverified";
+  status: "not_applicable" | "verified" | "not_found" | "unverified";
   legal_name: string | null;
   situation: string | null;
-  /** The registry was unreachable or the company is not active. Never blocks registering. */
+  /** The registry does not know the company, was unreachable, or the company is not active. Never blocks registering. */
   needs_attention: boolean;
 }
 

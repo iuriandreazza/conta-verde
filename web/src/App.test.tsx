@@ -311,6 +311,20 @@ describe("App", () => {
       expect(await screen.findByText("BAIXADA")).toBeInTheDocument();
     });
 
+    it("keeps a CNPJ the registry does not know, and asks the user to check the number", async () => {
+      await registerWith({
+        status: "not_found",
+        legal_name: null,
+        situation: null,
+        needs_attention: true,
+      });
+      expect(await screen.findByRole("status")).toHaveTextContent(
+        "a Receita não encontrou este CNPJ",
+      );
+      // Saved and listed, not refused.
+      expect(await screen.findByText("Não encontrado")).toBeInTheDocument();
+    });
+
     it("says so when the registry could not be reached", async () => {
       await registerWith({
         status: "unverified",

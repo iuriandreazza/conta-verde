@@ -5,6 +5,16 @@ export function DocumentBadge({ check }: { check: DocumentCheck }) {
   if (check.status === "not_applicable") {
     return null;
   }
+  if (check.status === "not_found") {
+    return (
+      <span
+        className="badge badge-warning"
+        title="A Receita não encontrou este CNPJ. Confira o número: os dados dela podem demorar a incluir empresas novas."
+      >
+        Não encontrado
+      </span>
+    );
+  }
   if (check.status === "unverified") {
     return (
       <span className="badge badge-muted" title="A Receita não pôde ser consultada ao cadastrar">

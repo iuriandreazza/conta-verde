@@ -28,7 +28,7 @@ Identity:
 - [ ] Pagination, sorting and filtering convention for list endpoints (parties first) — keyset pagination (`limit`, `after`, `{items, next_cursor}`) is in; sorting and filtering are not
 
 Registers:
-- [x] Parties: CNPJ checked against the federal registry and alphanumeric CNPJ support ([ADR 0017](adr/0017-cnpj-registry-lookup.md)); an "unverified" party cannot be re-checked yet
+- [x] Parties: CNPJ checked against the federal registry and alphanumeric CNPJ support ([ADR 0017](adr/0017-cnpj-registry-lookup.md)); a party flagged "unverified" or "not found" cannot be re-checked yet
 - [ ] Parties: addresses with CEP lookup, contacts, carrier and seller types, tags
 - [ ] Products and services: SKU, unit, NCM, prices, minimum stock, active flag
 - [ ] Categories as a tree with DRE group mapping; cost centers ([ADR 0012](adr/0012-managerial-accounting-model.md))

@@ -1,6 +1,4 @@
-use conta_verde_domain::{
-    Cnpj, CompanyId, Document, DocumentCheck, DomainError, Party, PartyDraft, PartyId,
-};
+use conta_verde_domain::{Cnpj, CompanyId, Document, DocumentCheck, Party, PartyDraft, PartyId};
 
 use crate::{
     ApplicationError, CnpjLookupError, CnpjRegistry, PartyCursor, PartyRepository, RegistryEntry,
@@ -31,10 +29,11 @@ impl<R: PartyRepository, C: CnpjRegistry> PartyService<R, C> {
 
     /// Validates the draft, checks a CNPJ against the federal registry and stores the party.
     ///
-    /// A CPF is validated by its check digits only. A CNPJ the registry does not know is
-    /// rejected; if the registry cannot be reached the party is stored as unverified, so an
-    /// outage of a third-party service never stops data entry. With the lookup switched off
-    /// nothing is asked and nothing is claimed about the CNPJ.
+    /// A CPF is validated by its check digits only. What the registry says about a CNPJ is
+    /// recorded and never blocks: unknown to the registry (its open data lags, so a new company
+    /// can be missing) is stored as not found, and an unreachable registry as unverified, so a
+    /// third-party limitation never stops data entry. With the lookup switched off nothing is
+    /// asked and nothing is claimed about the CNPJ.
     pub async fn register(
         &self,
         company_id: CompanyId,
@@ -42,25 +41,25 @@ impl<R: PartyRepository, C: CnpjRegistry> PartyService<R, C> {
     ) -> Result<Party, ApplicationError> {
         let mut party = Party::new(PartyId::generate(), company_id, draft)?;
         if let Some(cnpj) = party.document().and_then(Document::cnpj) {
-            let check = self.check_cnpj(cnpj).await?;
+            let check = self.check_cnpj(cnpj).await;
             party = party.with_document_check(check);
         }
         self.repository.save(&party).await?;
         Ok(party)
     }
 
-    async fn check_cnpj(&self, cnpj: Cnpj<'_>) -> Result<DocumentCheck, DomainError> {
+    async fn check_cnpj(&self, cnpj: Cnpj<'_>) -> DocumentCheck {
         match self.registry.lookup(cnpj).await {
             Ok(RegistryEntry {
                 legal_name,
                 situation,
-            }) => Ok(DocumentCheck::Verified {
+            }) => DocumentCheck::Verified {
                 legal_name,
                 situation,
-            }),
-            Err(CnpjLookupError::NotFound) => Err(DomainError::DocumentNotRegistered),
-            Err(CnpjLookupError::Unavailable) => Ok(DocumentCheck::Unverified),
-            Err(CnpjLookupError::Disabled) => Ok(DocumentCheck::NotApplicable),
+            },
+            Err(CnpjLookupError::NotFound) => DocumentCheck::NotFound,
+            Err(CnpjLookupError::Unavailable) => DocumentCheck::Unverified,
+            Err(CnpjLookupError::Disabled) => DocumentCheck::NotApplicable,
         }
     }
 

@@ -53,8 +53,9 @@ pub(crate) struct PartyResponse {
     document_check: DocumentCheckResponse,
 }
 
-/// What the federal registry said about a CNPJ. `needs_attention` is true when the registry was
-/// unreachable or the company is not active, so the UI never has to know the registry's wording.
+/// What the federal registry said about a CNPJ. `needs_attention` is true when the registry does
+/// not know the company, was unreachable, or the company is not active, so the UI never has to
+/// know the registry's wording.
 #[derive(Serialize)]
 struct DocumentCheckResponse {
     status: &'static str,
@@ -67,6 +68,7 @@ impl From<&DocumentCheck> for DocumentCheckResponse {
     fn from(check: &DocumentCheck) -> Self {
         let (status, legal_name, situation) = match check {
             DocumentCheck::NotApplicable => ("not_applicable", None, None),
+            DocumentCheck::NotFound => ("not_found", None, None),
             DocumentCheck::Unverified => ("unverified", None, None),
             DocumentCheck::Verified {
                 legal_name,

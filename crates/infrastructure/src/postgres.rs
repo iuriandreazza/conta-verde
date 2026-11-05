@@ -120,6 +120,7 @@ fn check_kind(check: &DocumentCheck) -> &'static str {
     match check {
         DocumentCheck::NotApplicable => "not_applicable",
         DocumentCheck::Verified { .. } => "verified",
+        DocumentCheck::NotFound => "not_found",
         DocumentCheck::Unverified => "unverified",
     }
 }
@@ -144,6 +145,7 @@ fn document_check_from_row(row: &PgRow) -> Result<DocumentCheck, RepositoryError
     let situation: Option<String> = row.try_get("registry_situation").map_err(storage_error)?;
     match (kind.as_str(), legal_name, situation) {
         ("not_applicable", None, None) => Ok(DocumentCheck::NotApplicable),
+        ("not_found", None, None) => Ok(DocumentCheck::NotFound),
         ("unverified", None, None) => Ok(DocumentCheck::Unverified),
         ("verified", Some(legal_name), Some(situation)) => Ok(DocumentCheck::Verified {
             legal_name,

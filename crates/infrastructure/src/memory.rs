@@ -212,7 +212,7 @@ impl IdentityRepository for InMemoryIdentityRepository {
 #[cfg(test)]
 mod tests {
     use conta_verde_application::{ApplicationError, AuthService, PartyService};
-    use conta_verde_domain::{DocumentCheck, DomainError, PartyDraft};
+    use conta_verde_domain::{DocumentCheck, PartyDraft};
 
     use super::*;
     use crate::{Argon2SecretService, contract};
@@ -307,19 +307,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_a_cnpj_the_registry_does_not_know() {
+    async fn registers_a_cnpj_the_registry_does_not_know_with_a_warning() {
         let service = PartyService::new(InMemoryPartyRepository::default(), contract::registry());
-        // Valid check digits, but no such company in the registry.
-        let result = service
+        // Valid check digits, but no such company in the registry. Its open data lags, so a
+        // company opened recently must still be registrable.
+        let party = service
             .register(
                 CompanyId::generate(),
-                draft("Fantasma", Some("00.000.000/0001-91")),
+                draft("Recém-aberta", Some(contract::UNKNOWN_CNPJ)),
             )
-            .await;
-        assert_eq!(
-            result.unwrap_err(),
-            ApplicationError::Domain(DomainError::DocumentNotRegistered)
-        );
+            .await
+            .unwrap();
+        assert_eq!(party.document_check(), &DocumentCheck::NotFound);
+        assert!(party.document_check().needs_attention());
     }
 
     #[tokio::test]

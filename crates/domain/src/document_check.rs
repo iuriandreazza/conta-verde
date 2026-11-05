@@ -12,18 +12,22 @@ pub enum DocumentCheck {
         legal_name: String,
         situation: String,
     },
+    /// The registry answered that it has no such company. Not proof the company does not exist:
+    /// the open data lags, so a recently opened company can be missing. It may also be a typo.
+    NotFound,
     /// The registry could not be reached, so only the check digits were validated.
     Unverified,
 }
 
 impl DocumentCheck {
-    /// Whether the user should be told about this party's document: the registry was unreachable
-    /// or the company is not in the active situation (closed, suspended, ...). It never blocks.
+    /// Whether the user should be told about this party's document: the registry does not know
+    /// the company, could not be reached, or the company is not active (closed, suspended, ...).
+    /// It never blocks registering.
     pub fn needs_attention(&self) -> bool {
         match self {
             Self::NotApplicable => false,
             Self::Verified { situation, .. } => !situation.eq_ignore_ascii_case(ACTIVE_SITUATION),
-            Self::Unverified => true,
+            Self::NotFound | Self::Unverified => true,
         }
     }
 }
@@ -47,5 +51,6 @@ mod tests {
         assert!(verified("BAIXADA").needs_attention());
         assert!(verified("SUSPENSA").needs_attention());
         assert!(DocumentCheck::Unverified.needs_attention());
+        assert!(DocumentCheck::NotFound.needs_attention());
     }
 }

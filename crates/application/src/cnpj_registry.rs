@@ -12,7 +12,8 @@ pub struct RegistryEntry {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CnpjLookupError {
-    /// The registry answered and has no company with this CNPJ.
+    /// The registry answered and has no company with this CNPJ. Its data lags the source, so this
+    /// does not prove the company does not exist.
     NotFound,
     /// No trustworthy answer: network failure, timeout, rate limit or server error. Adapters log
     /// the cause; callers only need to know the CNPJ could not be checked right now.

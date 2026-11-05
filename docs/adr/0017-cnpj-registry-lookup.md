@@ -30,13 +30,16 @@ the last two numeric check digits (modulo 11, each character valued as its ASCII
 
 - `domain`: `Document` accepts both CNPJ formats and a CPF (digits only, check digits only). `DocumentCheck` records what
   is known about a party's document: `NotApplicable` (no document, a CPF, or the lookup switched off),
-  `Verified { legal_name, situation }`, or `Unverified`. The registry only ever receives a `Cnpj`, a borrowed value that
+  `Verified { legal_name, situation }`, `NotFound` or `Unverified`. The registry only ever receives a `Cnpj`, a borrowed value that
   `Document::cnpj` alone can build, so it cannot be handed a CPF or an unnormalized string.
 - `application`: the `CnpjRegistry` port answers `RegistryEntry`, `NotFound`, `Unavailable` or `Disabled`.
   `PartyService::register` looks a **CNPJ** up and never a CPF:
   - found: stored as `Verified`, whatever the situation. A closed, suspended or inactive company is accepted and flagged
     (`needs_attention`), because inactive suppliers still appear on invoices and history;
-  - `NotFound` (only a clear 404): rejected with `422`;
+  - `NotFound` (only a clear 404): stored as `NotFound` and flagged, **not rejected**. BrasilAPI republishes Receita's open
+    data with a lag, so a recently opened company, or a newly issued alphanumeric CNPJ, can be missing although it exists;
+    refusing it would let a third party's lag block data entry. The user is told to check the number, since it may also be a
+    typo that happens to have valid check digits;
   - `Unavailable` (timeout, network error, 429, 5xx, a 400 that contradicts our own check digits): stored as `Unverified`
     and flagged. A third-party outage must never stop data entry;
   - `Disabled` (the operator set `CNPJ_LOOKUP=off`): nothing was asked, so the party is `NotApplicable` and not flagged. A
@@ -61,10 +64,9 @@ the last two numeric check digits (modulo 11, each character valued as its ASCII
 - Rate limits are real (a handful of calls from one address were enough to trigger `429`) and are shared by everyone on the
   installation. Installations that register many CNPJs at once should expect `Unverified` rows, run their own mirror of the
   open data, or add the Serpro adapter.
-- **Open question: a 404 rejects the CNPJ.** BrasilAPI republishes Receita's open data with a lag, so a company opened
-  recently, or a newly issued alphanumeric CNPJ, can be unknown to it although it exists. Today that blocks registering it.
-  If this proves too strict in practice, store such a party as unverified with an explicit "not found" mark, or let the
-  user confirm and register anyway.
+- Nothing the registry says can stop a registration, so a typo that lands on a valid-but-unknown number is caught only by
+  the warning, not by a refusal. The first design rejected unknown CNPJs; it was changed after noting that the open data lags.
+  A `NotFound` or `Unverified` party stays so until someone edits it (see re-verification above).
 - Alphanumeric CNPJs are stored uppercase without punctuation. The web app no longer uses a numeric keypad for the document field.
 
 ## Revisit when
