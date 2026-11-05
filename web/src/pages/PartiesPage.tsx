@@ -1,5 +1,5 @@
 import { motion } from "motion/react";
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { Fragment, useCallback, useEffect, useState, type FormEvent } from "react";
 import { useParams } from "react-router-dom";
 import { api, errorMessage, type Party } from "../api";
 import { useAuth } from "../auth";
@@ -7,9 +7,11 @@ import { DocumentBadge } from "../components/DocumentBadge";
 import { Notice, type NoticeTone } from "../components/Notice";
 import { Button } from "../components/Button";
 import { ChevronDownIcon } from "../components/icons/chevron-down";
+import { HistoryIcon } from "../components/icons/history";
 import { PlusIcon } from "../components/icons/plus";
 import { RefreshCWIcon } from "../components/icons/refresh-cw";
 import { UsersIcon } from "../components/icons/users";
+import { PartyHistory } from "../components/PartyHistory";
 import { Spinner } from "../components/Spinner";
 
 // Rows enter one after another, but never wait longer than the eighth for a long page.
@@ -31,6 +33,7 @@ export function PartiesPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [registryNotice, setRegistryNotice] = useState<RegistryNotice | null>(null);
   const [verifyingId, setVerifyingId] = useState<string | null>(null);
+  const [historyOpenFor, setHistoryOpenFor] = useState<string | null>(null);
   const [verifyNotice, setVerifyNotice] = useState<RegistryNotice | null>(null);
 
   const companyName =
@@ -193,12 +196,15 @@ export function PartiesPage() {
                   <th>Documento</th>
                   <th>E-mail</th>
                   <th>Tipo</th>
+                  <th>
+                    <span className="visually-hidden">Histórico</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 {parties.map((party, index) => (
+                  <Fragment key={party.id}>
                   <motion.tr
-                    key={party.id}
                     initial={{ opacity: 0, y: 8, backgroundColor: highlightColor(party, highlightedId, 1) }}
                     animate={{
                       opacity: 1,
@@ -234,7 +240,35 @@ export function PartiesPage() {
                         .filter(Boolean)
                         .join(" · ")}
                     </td>
+                    <td>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="btn-small"
+                        aria-label={`Histórico de ${party.name}`}
+                        aria-expanded={historyOpenFor === party.id}
+                        icon={HistoryIcon}
+                        onClick={() =>
+                          setHistoryOpenFor(historyOpenFor === party.id ? null : party.id)
+                        }
+                      >
+                        Histórico
+                      </Button>
+                    </td>
                   </motion.tr>
+                  {historyOpenFor === party.id && (
+                    <tr>
+                      <td colSpan={5}>
+                        <PartyHistory
+                          // Remounted when the check changes, so an open history follows a re-check.
+                          key={`${party.document_check.status}-${party.document_check.situation}`}
+                          companyId={companyId}
+                          partyId={party.id}
+                        />
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>

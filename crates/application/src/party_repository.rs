@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use conta_verde_domain::{CompanyId, Party, PartyId};
+use conta_verde_domain::{AuditEntry, AuditRecord, CompanyId, Party, PartyId};
 
 use crate::RepositoryError;
 
@@ -22,8 +22,15 @@ impl From<&Party> for PartyCursor {
 }
 
 /// Port implemented by storage adapters. Futures are `Send` so use cases can run on a multi-threaded runtime.
+///
+/// Every write takes the audit entry that describes it and stores both **atomically** ([ADR 0008]):
+/// if the write fails, nothing is recorded, and an entry is never stored without its write.
 pub trait PartyRepository: Send + Sync {
-    fn save(&self, party: &Party) -> impl Future<Output = Result<(), RepositoryError>> + Send;
+    fn save(
+        &self,
+        party: &Party,
+        audit: &AuditEntry,
+    ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
 
     /// The party, only if it belongs to the company.
     fn find(
@@ -36,7 +43,16 @@ pub trait PartyRepository: Send + Sync {
     fn update_document_check(
         &self,
         party: &Party,
+        audit: &AuditEntry,
     ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
+
+    /// What was recorded about the party, oldest first. Empty for a party of another company.
+    /// Reading the trail is not itself recorded.
+    fn history(
+        &self,
+        company_id: CompanyId,
+        id: PartyId,
+    ) -> impl Future<Output = Result<Vec<AuditRecord>, RepositoryError>> + Send;
 
     /// At most `limit` parties of the company, ordered by name ignoring case, then by id,
     /// starting right after `after` when given.

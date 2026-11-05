@@ -1,4 +1,5 @@
 mod account;
+mod audit;
 mod document;
 mod document_check;
 mod email;
@@ -7,6 +8,10 @@ mod ids;
 mod party;
 
 pub use account::{Account, AccountDraft, Company, User, validate_password};
+pub use audit::{
+    Actor, AuditAction, AuditEntity, AuditEntry, AuditRecord, FieldChange, creation_changes,
+    document_check_changes,
+};
 pub use document::{Cnpj, Document};
 pub use document_check::DocumentCheck;
 pub use email::Email;

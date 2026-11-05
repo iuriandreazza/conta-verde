@@ -5,19 +5,20 @@ use axum::http::request::Parts;
 use conta_verde_application::{
     AuthError, CnpjRegistry, IdentityRepository, PartyRepository, SecretService,
 };
-use conta_verde_domain::CompanyId;
+use conta_verde_domain::{Actor, CompanyId};
 use uuid::Uuid;
 
 use crate::AppState;
 use crate::error::ApiError;
 use crate::session::require_token;
 
-/// Proof that the caller's session belongs to a member of the `{company_id}` in the route.
+/// Proof that the caller's session belongs to a member of the `{company_id}` in the route, and who the
+/// caller is, for the audit trail.
 ///
 /// Declare it as a handler argument before any body or query extractor: it runs first, so
 /// unauthenticated callers are rejected before anything else is parsed, and a company route
 /// cannot be written without choosing whether to check access.
-pub(crate) struct CompanyAccess(pub CompanyId);
+pub(crate) struct CompanyAccess(pub CompanyId, pub Actor);
 
 impl<R, C, I, S> FromRequestParts<Arc<AppState<R, C, I, S>>> for CompanyAccess
 where
@@ -47,7 +48,12 @@ where
             .and_then(|value| Uuid::parse_str(value).ok())
             .ok_or_else(forbidden)?;
         let company_id = CompanyId::from_uuid(raw_id);
-        state.auth.authorize(&token, company_id).await?;
-        Ok(Self(company_id))
+        let user = state.auth.authorize(&token, company_id).await?;
+        // The actor is what the audit trail will name: the user as they are called right now.
+        let actor = Actor::User {
+            id: user.id(),
+            name: user.name().to_owned(),
+        };
+        Ok(Self(company_id, actor))
     }
 }

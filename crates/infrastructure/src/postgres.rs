@@ -1,5 +1,8 @@
+use crate::postgres_audit;
 use conta_verde_application::{PartyCursor, PartyRepository, RepositoryError};
-use conta_verde_domain::{CompanyId, DocumentCheck, Party, PartyDraft, PartyId};
+use conta_verde_domain::{
+    AuditEntity, AuditEntry, AuditRecord, CompanyId, DocumentCheck, Party, PartyDraft, PartyId,
+};
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row};
 
@@ -32,7 +35,10 @@ const SELECT_PARTIES: &str = "SELECT id, company_id, name, document, email, is_c
      FROM parties WHERE company_id = $1";
 
 impl PartyRepository for PostgresPartyRepository {
-    async fn save(&self, party: &Party) -> Result<(), RepositoryError> {
+    async fn save(&self, party: &Party, audit: &AuditEntry) -> Result<(), RepositoryError> {
+        // One transaction: if the party is refused (a duplicate document) or the audit row cannot
+        // be written, the rollback leaves neither behind.
+        let mut tx = self.pool.begin().await.map_err(storage_error)?;
         sqlx::query(
             "INSERT INTO parties (id, company_id, name, document, email, is_customer, is_supplier, \
              document_check, registry_legal_name, registry_situation) \
@@ -48,7 +54,7 @@ impl PartyRepository for PostgresPartyRepository {
         .bind(check_kind(party.document_check()))
         .bind(registry_legal_name(party.document_check()))
         .bind(registry_situation(party.document_check()))
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(|error| match &error {
             sqlx::Error::Database(db) if db.constraint() == Some(DOCUMENT_UNIQUE_INDEX) => {
@@ -56,7 +62,16 @@ impl PartyRepository for PostgresPartyRepository {
             }
             _ => storage_error(error),
         })?;
-        Ok(())
+        postgres_audit::insert(&mut tx, audit).await?;
+        tx.commit().await.map_err(storage_error)
+    }
+
+    async fn history(
+        &self,
+        company_id: CompanyId,
+        id: PartyId,
+    ) -> Result<Vec<AuditRecord>, RepositoryError> {
+        postgres_audit::history(&self.pool, company_id, AuditEntity::Party, id.as_uuid()).await
     }
 
     async fn find(
@@ -73,7 +88,12 @@ impl PartyRepository for PostgresPartyRepository {
         row.as_ref().map(party_from_row).transpose()
     }
 
-    async fn update_document_check(&self, party: &Party) -> Result<(), RepositoryError> {
+    async fn update_document_check(
+        &self,
+        party: &Party,
+        audit: &AuditEntry,
+    ) -> Result<(), RepositoryError> {
+        let mut tx = self.pool.begin().await.map_err(storage_error)?;
         let result = sqlx::query(
             "UPDATE parties SET document_check = $3, registry_legal_name = $4, registry_situation = $5 \
              WHERE id = $1 AND company_id = $2",
@@ -83,14 +103,16 @@ impl PartyRepository for PostgresPartyRepository {
         .bind(check_kind(party.document_check()))
         .bind(registry_legal_name(party.document_check()))
         .bind(registry_situation(party.document_check()))
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(storage_error)?;
-        // Matching no row means the party is not in that company: report it, do not pretend.
+        // Matching no row means the party is not in that company: report it, do not pretend. The
+        // transaction is dropped, so no audit row is left for a write that did not happen.
         if result.rows_affected() == 0 {
             return Err(RepositoryError::NotFound);
         }
-        Ok(())
+        postgres_audit::insert(&mut tx, audit).await?;
+        tx.commit().await.map_err(storage_error)
     }
 
     async fn list_by_company(
@@ -215,11 +237,19 @@ mod tests {
         };
 
         service
-            .register(company, draft("Padaria", Some("11.222.333/0001-81")))
+            .register(
+                company,
+                &contract::actor(),
+                draft("Padaria", Some("11.222.333/0001-81")),
+            )
             .await
             .unwrap();
         let duplicate = service
-            .register(company, draft("Padaria 2", Some("11.222.333/0001-81")))
+            .register(
+                company,
+                &contract::actor(),
+                draft("Padaria 2", Some("11.222.333/0001-81")),
+            )
             .await;
         assert_eq!(
             duplicate.unwrap_err(),
@@ -227,10 +257,13 @@ mod tests {
         );
 
         service
-            .register(company, draft("zeca", None))
+            .register(company, &contract::actor(), draft("zeca", None))
             .await
             .unwrap();
-        service.register(company, draft("ana", None)).await.unwrap();
+        service
+            .register(company, &contract::actor(), draft("ana", None))
+            .await
+            .unwrap();
 
         let listed = service.list(company, None, None).await.unwrap().items;
         let names: Vec<&str> = listed.iter().map(Party::name).collect();
@@ -309,6 +342,70 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires DATABASE_URL"]
+    async fn records_what_was_written() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let other_company = contract::create_company(&pool).await;
+        let repository = PostgresPartyRepository::new(pool);
+        contract::records_what_was_written(&repository, company, other_company).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn leaves_no_trace_of_a_write_that_did_not_happen() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let other_company = contract::create_company(&pool).await;
+        let repository = PostgresPartyRepository::new(pool);
+        contract::leaves_no_trace_of_a_write_that_did_not_happen(
+            &repository,
+            company,
+            other_company,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn the_audit_log_cannot_be_changed_or_deleted() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let repository = PostgresPartyRepository::new(pool.clone());
+        let party = Party::new(
+            PartyId::generate(),
+            company,
+            PartyDraft {
+                name: "Padaria".into(),
+                document: None,
+                email: None,
+                is_customer: true,
+                is_supplier: false,
+            },
+        )
+        .unwrap();
+        repository
+            .save(&party, &contract::created_entry(&party))
+            .await
+            .unwrap();
+
+        // Scoped to this company's rows, so a missing trigger cannot touch another test's data.
+        let update = sqlx::query("UPDATE audit_log SET actor_name = 'Eve' WHERE company_id = $1")
+            .bind(company.as_uuid())
+            .execute(&pool)
+            .await;
+        assert!(update.is_err(), "an audit row was updated");
+        let delete = sqlx::query("DELETE FROM audit_log WHERE company_id = $1")
+            .bind(company.as_uuid())
+            .execute(&pool)
+            .await;
+        assert!(delete.is_err(), "an audit row was deleted");
+
+        let history = repository.history(company, party.id()).await.unwrap();
+        assert_eq!(history.len(), 1);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
     async fn finds_parties_and_replaces_their_document_check() {
         let pool = contract::test_pool().await;
         let company = contract::create_company(&pool).await;
@@ -333,6 +430,7 @@ mod tests {
         let result = service
             .register(
                 CompanyId::generate(),
+                &contract::actor(),
                 PartyDraft {
                     name: "Orfa".into(),
                     document: None,

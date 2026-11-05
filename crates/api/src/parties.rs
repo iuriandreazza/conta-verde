@@ -6,7 +6,7 @@ use axum::http::StatusCode;
 use conta_verde_application::{
     ApplicationError, CnpjRegistry, IdentityRepository, PartyCursor, PartyRepository, SecretService,
 };
-use conta_verde_domain::{DocumentCheck, Party, PartyDraft, PartyId};
+use conta_verde_domain::{Actor, AuditRecord, DocumentCheck, Party, PartyDraft, PartyId};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -113,7 +113,7 @@ pub(crate) struct PartyPageResponse {
 
 pub(crate) async fn register_party<R, C, I, S>(
     State(state): State<Arc<AppState<R, C, I, S>>>,
-    CompanyAccess(company_id): CompanyAccess,
+    CompanyAccess(company_id, actor): CompanyAccess,
     Json(request): Json<RegisterPartyRequest>,
 ) -> Result<(StatusCode, Json<PartyResponse>), ApiError>
 where
@@ -122,16 +122,25 @@ where
     I: IdentityRepository,
     S: SecretService,
 {
-    let party = state.parties.register(company_id, request.into()).await?;
+    let party = state
+        .parties
+        .register(company_id, &actor, request.into())
+        .await?;
     Ok((StatusCode::CREATED, Json(PartyResponse::from(&party))))
+}
+
+// A string, parsed here: axum's own rejection for a malformed id is plain text, unlike the JSON
+// errors of the rest of the API. The company id was already validated by `CompanyAccess`.
+fn parse_party_id(raw: &str) -> Result<PartyId, ApiError> {
+    Uuid::parse_str(raw)
+        .map(PartyId::from_uuid)
+        .map_err(|_| ApplicationError::PartyNotFound.into())
 }
 
 /// Asks the registry again about a party's CNPJ and returns the party with the new answer.
 pub(crate) async fn verify_document<R, C, I, S>(
     State(state): State<Arc<AppState<R, C, I, S>>>,
-    CompanyAccess(company_id): CompanyAccess,
-    // A string, parsed below: axum's own rejection for a malformed id is plain text, unlike the
-    // JSON errors of the rest of the API. The company id was already validated by CompanyAccess.
+    CompanyAccess(company_id, actor): CompanyAccess,
     Path((_, party_id)): Path<(Uuid, String)>,
 ) -> Result<Json<PartyResponse>, ApiError>
 where
@@ -140,16 +149,87 @@ where
     I: IdentityRepository,
     S: SecretService,
 {
-    let party_id = Uuid::parse_str(&party_id)
-        .map(PartyId::from_uuid)
-        .map_err(|_| ApplicationError::PartyNotFound)?;
-    let party = state.parties.verify_document(company_id, party_id).await?;
+    let party_id = parse_party_id(&party_id)?;
+    let party = state
+        .parties
+        .verify_document(company_id, &actor, party_id)
+        .await?;
     Ok(Json(PartyResponse::from(&party)))
+}
+
+/// What was recorded about a party, oldest first.
+#[derive(Serialize)]
+pub(crate) struct HistoryEntryResponse {
+    sequence: i64,
+    /// Milliseconds since the Unix epoch; the client formats it in the user's time zone.
+    at: i64,
+    actor: ActorResponse,
+    action: &'static str,
+    changes: Vec<ChangeResponse>,
+}
+
+#[derive(Serialize)]
+struct ActorResponse {
+    kind: &'static str,
+    id: Uuid,
+    /// The name the actor had when they made the change.
+    name: String,
+}
+
+#[derive(Serialize)]
+struct ChangeResponse {
+    field: String,
+    from: Option<String>,
+    to: Option<String>,
+}
+
+impl From<&AuditRecord> for HistoryEntryResponse {
+    fn from(record: &AuditRecord) -> Self {
+        let Actor::User { id, name } = &record.entry.actor;
+        Self {
+            sequence: record.sequence,
+            at: record.at_millis,
+            actor: ActorResponse {
+                kind: "user",
+                id: id.as_uuid(),
+                name: name.clone(),
+            },
+            action: record.entry.action.as_str(),
+            changes: record
+                .entry
+                .changes
+                .iter()
+                .map(|change| ChangeResponse {
+                    field: change.field.clone(),
+                    from: change.from.clone(),
+                    to: change.to.clone(),
+                })
+                .collect(),
+        }
+    }
+}
+
+pub(crate) async fn party_history<R, C, I, S>(
+    State(state): State<Arc<AppState<R, C, I, S>>>,
+    CompanyAccess(company_id, _): CompanyAccess,
+    Path((_, party_id)): Path<(Uuid, String)>,
+) -> Result<Json<Vec<HistoryEntryResponse>>, ApiError>
+where
+    R: PartyRepository,
+    C: CnpjRegistry,
+    I: IdentityRepository,
+    S: SecretService,
+{
+    let party_id = parse_party_id(&party_id)?;
+    let history = state.parties.history(company_id, party_id).await?;
+    Ok(Json(
+        history.iter().map(HistoryEntryResponse::from).collect(),
+    ))
 }
 
 pub(crate) async fn list_parties<R, C, I, S>(
     State(state): State<Arc<AppState<R, C, I, S>>>,
-    CompanyAccess(company_id): CompanyAccess,
+    CompanyAccess(company_id, _): CompanyAccess,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<PartyPageResponse>, ApiError>
 where

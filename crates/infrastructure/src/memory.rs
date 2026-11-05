@@ -1,32 +1,61 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use conta_verde_application::{
     CnpjLookupError, CnpjRegistry, IdentityRepository, NewAccount, PartyCursor, PartyRepository,
     RegistryEntry, RepositoryError, StoredCredentials,
 };
-use conta_verde_domain::{Cnpj, Company, CompanyId, Email, Party, PartyId, User, UserId};
+use conta_verde_domain::{
+    AuditEntity, AuditEntry, AuditRecord, Cnpj, Company, CompanyId, Email, Party, PartyId, User,
+    UserId,
+};
 use uuid::Uuid;
 
-/// Keeps parties in process memory. Used by tests and for running the API without a database.
+/// Keeps parties and their audit trail in process memory. Used by tests and for running the API
+/// without a database. Like the Postgres adapter, it records an audit entry only for a write that
+/// happened: a refused or missed write leaves nothing in the trail.
 #[derive(Default)]
 pub struct InMemoryPartyRepository {
-    parties: Mutex<Vec<Party>>,
+    state: Mutex<PartyState>,
+}
+
+#[derive(Default)]
+struct PartyState {
+    parties: Vec<Party>,
+    audit: Vec<AuditRecord>,
+    next_sequence: i64,
+}
+
+impl PartyState {
+    fn record(&mut self, audit: &AuditEntry) {
+        self.next_sequence += 1;
+        let at_millis = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |elapsed| {
+                i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX)
+            });
+        self.audit.push(AuditRecord {
+            sequence: self.next_sequence,
+            at_millis,
+            entry: audit.clone(),
+        });
+    }
 }
 
 impl PartyRepository for InMemoryPartyRepository {
-    async fn save(&self, party: &Party) -> Result<(), RepositoryError> {
-        let mut parties = self.parties.lock().expect("repository lock poisoned");
+    async fn save(&self, party: &Party, audit: &AuditEntry) -> Result<(), RepositoryError> {
+        let mut state = self.state.lock().expect("repository lock poisoned");
         let duplicate = party.document().is_some()
-            && parties.iter().any(|existing| {
+            && state.parties.iter().any(|existing| {
                 existing.company_id() == party.company_id()
                     && existing.document() == party.document()
             });
         if duplicate {
             return Err(RepositoryError::DuplicateDocument);
         }
-        parties.push(party.clone());
+        state.parties.push(party.clone());
+        state.record(audit);
         Ok(())
     }
 
@@ -35,23 +64,48 @@ impl PartyRepository for InMemoryPartyRepository {
         company_id: CompanyId,
         id: PartyId,
     ) -> Result<Option<Party>, RepositoryError> {
-        let parties = self.parties.lock().expect("repository lock poisoned");
-        Ok(parties
+        let state = self.state.lock().expect("repository lock poisoned");
+        Ok(state
+            .parties
             .iter()
             .find(|party| party.company_id() == company_id && party.id() == id)
             .cloned())
     }
 
-    async fn update_document_check(&self, party: &Party) -> Result<(), RepositoryError> {
-        let mut parties = self.parties.lock().expect("repository lock poisoned");
-        let stored = parties
+    async fn update_document_check(
+        &self,
+        party: &Party,
+        audit: &AuditEntry,
+    ) -> Result<(), RepositoryError> {
+        let mut state = self.state.lock().expect("repository lock poisoned");
+        let stored = state
+            .parties
             .iter_mut()
             .find(|stored| stored.company_id() == party.company_id() && stored.id() == party.id());
         let stored = stored.ok_or(RepositoryError::NotFound)?;
         *stored = stored
             .clone()
             .with_document_check(party.document_check().clone());
+        state.record(audit);
         Ok(())
+    }
+
+    async fn history(
+        &self,
+        company_id: CompanyId,
+        id: PartyId,
+    ) -> Result<Vec<AuditRecord>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        Ok(state
+            .audit
+            .iter()
+            .filter(|record| {
+                record.entry.company_id == company_id
+                    && record.entry.entity == AuditEntity::Party
+                    && record.entry.entity_id == id.as_uuid()
+            })
+            .cloned()
+            .collect())
     }
 
     async fn list_by_company(
@@ -60,7 +114,8 @@ impl PartyRepository for InMemoryPartyRepository {
         after: Option<&PartyCursor>,
         limit: usize,
     ) -> Result<Vec<Party>, RepositoryError> {
-        let parties = self.parties.lock().expect("repository lock poisoned");
+        let state = self.state.lock().expect("repository lock poisoned");
+        let parties = &state.parties;
         let sort_key = |name: &str, id: Uuid| (name.to_lowercase(), id);
         let after_key = after.map(|cursor| sort_key(&cursor.name, cursor.id.as_uuid()));
 
@@ -263,7 +318,7 @@ impl IdentityRepository for InMemoryIdentityRepository {
 #[cfg(test)]
 mod tests {
     use conta_verde_application::{ApplicationError, AuthService, PartyService};
-    use conta_verde_domain::{DocumentCheck, DomainError, PartyDraft};
+    use conta_verde_domain::{Actor, DocumentCheck, DomainError, PartyDraft, UserId};
 
     use super::*;
     use crate::{Argon2SecretService, contract};
@@ -288,12 +343,15 @@ mod tests {
         let other_company = CompanyId::generate();
 
         service
-            .register(company, draft("Zeca", None))
+            .register(company, &contract::actor(), draft("Zeca", None))
             .await
             .unwrap();
-        service.register(company, draft("ana", None)).await.unwrap();
         service
-            .register(other_company, draft("Outra", None))
+            .register(company, &contract::actor(), draft("ana", None))
+            .await
+            .unwrap();
+        service
+            .register(other_company, &contract::actor(), draft("Outra", None))
             .await
             .unwrap();
 
@@ -318,17 +376,23 @@ mod tests {
         let document = Some("529.982.247-25");
 
         service
-            .register(company, draft("Ana", document))
+            .register(company, &contract::actor(), draft("Ana", document))
             .await
             .unwrap();
-        let duplicate = service.register(company, draft("Ana 2", document)).await;
+        let duplicate = service
+            .register(company, &contract::actor(), draft("Ana 2", document))
+            .await;
         assert_eq!(
             duplicate.unwrap_err(),
             ApplicationError::Repository(RepositoryError::DuplicateDocument)
         );
 
         let other = service
-            .register(CompanyId::generate(), draft("Ana 3", document))
+            .register(
+                CompanyId::generate(),
+                &contract::actor(),
+                draft("Ana 3", document),
+            )
             .await;
         assert!(other.is_ok());
     }
@@ -358,6 +422,112 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn records_what_was_written() {
+        let repository = InMemoryPartyRepository::default();
+        contract::records_what_was_written(
+            &repository,
+            CompanyId::generate(),
+            CompanyId::generate(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn leaves_no_trace_of_a_write_that_did_not_happen() {
+        let repository = InMemoryPartyRepository::default();
+        contract::leaves_no_trace_of_a_write_that_did_not_happen(
+            &repository,
+            CompanyId::generate(),
+            CompanyId::generate(),
+        )
+        .await;
+    }
+
+    fn bia() -> Actor {
+        Actor::User {
+            id: UserId::generate(),
+            name: "Bia Lima".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn registering_records_who_did_it_and_what_was_set() {
+        let service = PartyService::new(InMemoryPartyRepository::default(), contract::registry());
+        let company = CompanyId::generate();
+        let party = service
+            .register(
+                company,
+                &bia(),
+                draft("Padaria", Some(contract::ACTIVE_CNPJ)),
+            )
+            .await
+            .unwrap();
+
+        let history = service.history(company, party.id()).await.unwrap();
+        assert_eq!(history.len(), 1);
+        let entry = &history[0].entry;
+        assert!(matches!(&entry.actor, Actor::User { name, .. } if name == "Bia Lima"));
+        assert_eq!(entry.action, conta_verde_domain::AuditAction::Created);
+        let set: Vec<&str> = entry.changes.iter().map(|c| c.field.as_str()).collect();
+        assert_eq!(
+            set,
+            [
+                "name",
+                "document",
+                "is_customer",
+                "is_supplier",
+                "document_check",
+                "registry_legal_name",
+                "registry_situation"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_recheck_that_changes_nothing_adds_no_entry() {
+        let (service, _registry, company, party_id) = unverified_party().await;
+        // Still down: the same answer as before, so there is nothing to record.
+        service
+            .verify_document(company, &contract::actor(), party_id)
+            .await
+            .unwrap();
+        assert_eq!(service.history(company, party_id).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_recheck_that_changes_something_is_recorded_under_whoever_asked() {
+        let (service, registry, company, party_id) = unverified_party().await;
+        registry.recover();
+        registry.add_company("11222333000181", "PADARIA CENTRAL LTDA", "ATIVA");
+        service
+            .verify_document(company, &bia(), party_id)
+            .await
+            .unwrap();
+
+        let history = service.history(company, party_id).await.unwrap();
+        assert_eq!(history.len(), 2);
+        // The first entry is whoever registered it, the second whoever re-checked.
+        assert!(matches!(&history[0].entry.actor, Actor::User { name, .. } if name == "Ana Souza"));
+        assert!(matches!(&history[1].entry.actor, Actor::User { name, .. } if name == "Bia Lima"));
+        let first = &history[1].entry.changes[0];
+        assert_eq!(first.field, "document_check");
+        assert_eq!(first.from.as_deref(), Some("unverified"));
+        assert_eq!(first.to.as_deref(), Some("verified"));
+    }
+
+    #[tokio::test]
+    async fn the_history_of_another_companys_party_is_not_found() {
+        let (service, _registry, _company, party_id) = unverified_party().await;
+        assert_eq!(
+            service
+                .history(CompanyId::generate(), party_id)
+                .await
+                .unwrap_err(),
+            ApplicationError::PartyNotFound
+        );
+    }
+
+    #[tokio::test]
     async fn finds_parties_and_replaces_their_document_check() {
         let repository = InMemoryPartyRepository::default();
         contract::finds_parties_and_replaces_their_document_check(
@@ -381,7 +551,11 @@ mod tests {
             .with_recheck_interval(Duration::ZERO);
         let company = CompanyId::generate();
         let party = service
-            .register(company, draft("Padaria", Some(contract::ACTIVE_CNPJ)))
+            .register(
+                company,
+                &contract::actor(),
+                draft("Padaria", Some(contract::ACTIVE_CNPJ)),
+            )
             .await
             .unwrap();
         assert_eq!(party.document_check(), &DocumentCheck::Unverified);
@@ -393,12 +567,18 @@ mod tests {
         let (service, registry, company, party_id) = unverified_party().await;
 
         // Still down: it stays unverified instead of failing.
-        let still_down = service.verify_document(company, party_id).await.unwrap();
+        let still_down = service
+            .verify_document(company, &contract::actor(), party_id)
+            .await
+            .unwrap();
         assert_eq!(still_down.document_check(), &DocumentCheck::Unverified);
 
         registry.recover();
         registry.add_company("11222333000181", "PADARIA CENTRAL LTDA", "ATIVA");
-        let verified = service.verify_document(company, party_id).await.unwrap();
+        let verified = service
+            .verify_document(company, &contract::actor(), party_id)
+            .await
+            .unwrap();
         assert!(matches!(
             verified.document_check(),
             DocumentCheck::Verified { situation, .. } if situation == "ATIVA"
@@ -415,27 +595,38 @@ mod tests {
         let service = PartyService::new(InMemoryPartyRepository::default(), registry);
         let company = CompanyId::generate();
         let first = service
-            .register(company, draft("Padaria", Some(contract::ACTIVE_CNPJ)))
+            .register(
+                company,
+                &contract::actor(),
+                draft("Padaria", Some(contract::ACTIVE_CNPJ)),
+            )
             .await
             .unwrap();
         let second = service
             .register(
                 company,
+                &contract::actor(),
                 draft("Oficina", Some(contract::CLOSED_ALPHANUMERIC_CNPJ)),
             )
             .await
             .unwrap();
 
-        service.verify_document(company, first.id()).await.unwrap();
+        service
+            .verify_document(company, &contract::actor(), first.id())
+            .await
+            .unwrap();
         assert_eq!(
             service
-                .verify_document(company, first.id())
+                .verify_document(company, &contract::actor(), first.id())
                 .await
                 .unwrap_err(),
             ApplicationError::RecheckTooSoon
         );
         // Another CNPJ is not held back by the first one.
-        service.verify_document(company, second.id()).await.unwrap();
+        service
+            .verify_document(company, &contract::actor(), second.id())
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -446,18 +637,29 @@ mod tests {
         let service = PartyService::new(InMemoryPartyRepository::default(), registry);
         let (company_a, company_b) = (CompanyId::generate(), CompanyId::generate());
         let in_a = service
-            .register(company_a, draft("Padaria", Some(contract::ACTIVE_CNPJ)))
+            .register(
+                company_a,
+                &contract::actor(),
+                draft("Padaria", Some(contract::ACTIVE_CNPJ)),
+            )
             .await
             .unwrap();
         let in_b = service
-            .register(company_b, draft("Padaria", Some(contract::ACTIVE_CNPJ)))
+            .register(
+                company_b,
+                &contract::actor(),
+                draft("Padaria", Some(contract::ACTIVE_CNPJ)),
+            )
             .await
             .unwrap();
 
-        service.verify_document(company_a, in_a.id()).await.unwrap();
+        service
+            .verify_document(company_a, &contract::actor(), in_a.id())
+            .await
+            .unwrap();
         assert_eq!(
             service
-                .verify_document(company_b, in_b.id())
+                .verify_document(company_b, &contract::actor(), in_b.id())
                 .await
                 .unwrap_err(),
             ApplicationError::RecheckTooSoon
@@ -468,7 +670,10 @@ mod tests {
     async fn a_party_can_turn_out_to_be_unknown_to_the_registry() {
         let (service, registry, company, party_id) = unverified_party().await;
         registry.recover();
-        let party = service.verify_document(company, party_id).await.unwrap();
+        let party = service
+            .verify_document(company, &contract::actor(), party_id)
+            .await
+            .unwrap();
         assert_eq!(party.document_check(), &DocumentCheck::NotFound);
     }
 
@@ -476,12 +681,13 @@ mod tests {
     async fn only_a_partys_own_company_can_verify_it() {
         let (service, _registry, _company, party_id) = unverified_party().await;
         let result = service
-            .verify_document(CompanyId::generate(), party_id)
+            .verify_document(CompanyId::generate(), &contract::actor(), party_id)
             .await;
         assert_eq!(result.unwrap_err(), ApplicationError::PartyNotFound);
         let unknown = service
             .verify_document(
                 CompanyId::generate(),
+                &contract::actor(),
                 conta_verde_domain::PartyId::generate(),
             )
             .await;
@@ -496,17 +702,21 @@ mod tests {
         );
         let company = CompanyId::generate();
         let cpf = service
-            .register(company, draft("Ana", Some("529.982.247-25")))
+            .register(
+                company,
+                &contract::actor(),
+                draft("Ana", Some("529.982.247-25")),
+            )
             .await
             .unwrap();
         let none = service
-            .register(company, draft("Sem doc", None))
+            .register(company, &contract::actor(), draft("Sem doc", None))
             .await
             .unwrap();
         for party in [cpf, none] {
             assert_eq!(
                 service
-                    .verify_document(company, party.id())
+                    .verify_document(company, &contract::actor(), party.id())
                     .await
                     .unwrap_err(),
                 ApplicationError::Domain(DomainError::NoCnpjToVerify)
@@ -520,12 +730,16 @@ mod tests {
         let service = PartyService::new(InMemoryPartyRepository::default(), registry);
         let company = CompanyId::generate();
         let party = service
-            .register(company, draft("Padaria", Some(contract::ACTIVE_CNPJ)))
+            .register(
+                company,
+                &contract::actor(),
+                draft("Padaria", Some(contract::ACTIVE_CNPJ)),
+            )
             .await
             .unwrap();
         assert_eq!(
             service
-                .verify_document(company, party.id())
+                .verify_document(company, &contract::actor(), party.id())
                 .await
                 .unwrap_err(),
             ApplicationError::LookupDisabled
@@ -534,7 +748,7 @@ mod tests {
         // way again, not with "too soon".
         assert_eq!(
             service
-                .verify_document(company, party.id())
+                .verify_document(company, &contract::actor(), party.id())
                 .await
                 .unwrap_err(),
             ApplicationError::LookupDisabled
@@ -551,6 +765,7 @@ mod tests {
         let party = service
             .register(
                 CompanyId::generate(),
+                &contract::actor(),
                 draft("Recém-aberta", Some(contract::UNKNOWN_CNPJ)),
             )
             .await
@@ -567,7 +782,11 @@ mod tests {
             InMemoryCnpjRegistry::unreachable(),
         );
         let party = service
-            .register(CompanyId::generate(), draft("Ana", Some("529.982.247-25")))
+            .register(
+                CompanyId::generate(),
+                &contract::actor(),
+                draft("Ana", Some("529.982.247-25")),
+            )
             .await
             .unwrap();
         assert_eq!(party.document_check(), &DocumentCheck::NotApplicable);
@@ -581,6 +800,7 @@ mod tests {
         let party = service
             .register(
                 CompanyId::generate(),
+                &contract::actor(),
                 draft("Padaria", Some(contract::ACTIVE_CNPJ)),
             )
             .await
@@ -597,7 +817,10 @@ mod tests {
         );
         let company = CompanyId::generate();
         for name in ["Ana", "Bruno"] {
-            service.register(company, draft(name, None)).await.unwrap();
+            service
+                .register(company, &contract::actor(), draft(name, None))
+                .await
+                .unwrap();
         }
 
         let smallest = service.list(company, None, Some(0)).await.unwrap();

@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, vi } from "vitest";
 import { App } from "./App";
-import type { DocumentCheck, Party, Profile } from "./api";
+import type { DocumentCheck, HistoryEntry, Party, Profile } from "./api";
 import { AuthProvider } from "./auth";
 import { SOURCE_URL } from "./components/Footer";
 
@@ -336,6 +336,88 @@ describe("App", () => {
         "não foi possível consultar o CNPJ na Receita",
       );
       expect(await screen.findByText("Não verificado")).toBeInTheDocument();
+    });
+  });
+
+  describe("the history of a party", () => {
+    const created: HistoryEntry = {
+      sequence: 1,
+      at: Date.UTC(2026, 10, 5, 12, 0),
+      actor: { kind: "user", id: "u1", name: "Ana" },
+      action: "created",
+      changes: [
+        { field: "name", from: null, to: "Padaria Central" },
+        { field: "is_customer", from: null, to: "true" },
+        { field: "is_supplier", from: null, to: "false" },
+        { field: "document_check", from: null, to: "unverified" },
+      ],
+    };
+    const rechecked: HistoryEntry = {
+      sequence: 2,
+      at: Date.UTC(2026, 10, 5, 13, 30),
+      actor: { kind: "user", id: "u2", name: "Bia" },
+      action: "updated",
+      changes: [{ field: "document_check", from: "unverified", to: "verified" }],
+    };
+
+    function listWithHistory(history: () => Reply) {
+      const listed = partyWithCheck({
+        status: "unverified",
+        legal_name: null,
+        situation: null,
+        needs_attention: true,
+      });
+      const fetchMock = mockApi((url) => {
+        if (url === "/api/auth/me") return { status: 200, body: profile };
+        if (url.endsWith("/history")) return history();
+        return { status: 200, body: { items: [listed], next_cursor: null } };
+      });
+      renderAt("/companies/c1/parties");
+      return { listed, fetchMock };
+    }
+
+    it("lists who did what in words, newest first", async () => {
+      const { listed, fetchMock } = listWithHistory(() => ({
+        status: 200,
+        body: [created, rechecked],
+      }));
+
+      await userEvent.click(await screen.findByRole("button", { name: "Histórico de Padaria Central" }));
+
+      const items = await screen.findAllByRole("listitem");
+      const text = items.map((item) => item.textContent ?? "");
+      // Newest first: Bia's re-check, then Ana's registration.
+      const bia = text.findIndex((line) => line.includes("Bia alterou"));
+      const ana = text.findIndex((line) => line.includes("Ana cadastrou"));
+      expect(bia).toBeGreaterThanOrEqual(0);
+      expect(bia).toBeLessThan(ana);
+      // Portuguese labels and statuses, never the stored keys.
+      expect(screen.getByText("Não verificado → Verificado")).toBeInTheDocument();
+      expect(screen.getByText("Fornecedor:")).toBeInTheDocument();
+      expect(screen.queryByText(/is_supplier|document_check/)).not.toBeInTheDocument();
+      expect(String(fetchMock.mock.calls.find(([url]) => String(url).endsWith("/history"))?.[0])).toBe(
+        `/api/companies/c1/parties/${listed.id}/history`,
+      );
+    });
+
+    it("loads only when opened, and closes again", async () => {
+      const { fetchMock } = listWithHistory(() => ({ status: 200, body: [created] }));
+      const opener = await screen.findByRole("button", { name: "Histórico de Padaria Central" });
+      expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/history"))).toBe(false);
+
+      await userEvent.click(opener);
+      expect(opener).toHaveAttribute("aria-expanded", "true");
+      expect(await screen.findByText(/cadastrou/)).toBeInTheDocument();
+
+      await userEvent.click(opener);
+      expect(opener).toHaveAttribute("aria-expanded", "false");
+      expect(screen.queryByText(/cadastrou/)).not.toBeInTheDocument();
+    });
+
+    it("shows the API's reason when the history cannot be loaded", async () => {
+      listWithHistory(() => ({ status: 500, body: { error: "internal error" } }));
+      await userEvent.click(await screen.findByRole("button", { name: "Histórico de Padaria Central" }));
+      expect(await screen.findByRole("alert")).toHaveTextContent("internal error");
     });
   });
 

@@ -24,7 +24,7 @@ Identity:
 - [ ] `users`, `companies`, `memberships` with roles; password hashing and sessions ([ADR 0007](adr/0007-authentication-and-authorization.md)) — tables, Argon2id and cookie sessions are in; roles are not
 - [x] Enforce `company_id` from the session, not the URL; foreign keys from every business table to `companies` — the URL id must match a membership of the caller (`CompanyAccess`)
 - [ ] Invitations by e-mail; accountant role reserved for Phase 6
-- [ ] Audit trail on every write ([ADR 0008](adr/0008-audit-trail.md))
+- [ ] Audit trail on every write ([ADR 0008](adr/0008-audit-trail.md)) — in for parties (creation and CNPJ re-checks, with a history panel); each new register must write its entries too
 - [ ] Pagination, sorting and filtering convention for list endpoints (parties first) — keyset pagination (`limit`, `after`, `{items, next_cursor}`) is in; sorting and filtering are not
 
 Registers:

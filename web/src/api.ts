@@ -34,6 +34,16 @@ export interface Party {
   document_check: DocumentCheck;
 }
 
+/** One recorded change to a party (ADR 0008). The API lists them oldest first. */
+export interface HistoryEntry {
+  sequence: number;
+  /** Milliseconds since the Unix epoch. */
+  at: number;
+  actor: { kind: "user"; id: string; name: string };
+  action: "created" | "updated";
+  changes: { field: string; from: string | null; to: string | null }[];
+}
+
 export interface PartyPage {
   items: Party[];
   next_cursor: string | null;
@@ -115,6 +125,8 @@ export const api = {
   },
   createParty: (companyId: string, party: NewParty) =>
     post<Party>(`/companies/${companyId}/parties`, party),
+  partyHistory: (companyId: string, partyId: string) =>
+    request<HistoryEntry[]>(`/companies/${companyId}/parties/${partyId}/history`),
   /** Asks the registry again about the party's CNPJ; resolves with the party and its new answer. */
   verifyDocument: (companyId: string, partyId: string) =>
     post<Party>(`/companies/${companyId}/parties/${partyId}/document-check`),

@@ -50,6 +50,7 @@ Rules that are easy to break:
 - Use cases are generic over their port (`PartyService<R: PartyRepository>`), not `dyn`. Port methods return `impl Future + Send`.
 - Serde types belong in `api`. Domain types are not serialized directly.
 - Every business table has `company_id`, every repository method takes a `CompanyId`, and uniqueness is scoped by company (ADR 0004).
+- Every write to a business table carries an `AuditEntry` built by the use case (actor from `CompanyAccess`, field changes from `domain::audit`) and stored in the same transaction (ADR 0008). A new register needs its entity in `AuditEntity`, both adapters recording it, and a contract test that a refused write leaves no entry. Never audit account, session or membership writes, and never edit or delete `audit_log` rows (a trigger forbids it).
 - Money is exact decimal (`rust_decimal` / `NUMERIC`), never floats (ADR 0003).
 - SQL uses runtime `sqlx::query`, not `query!` macros. Do not add `query!` without also solving offline data for CI.
 - A new adapter or port method needs both adapters (Postgres and in-memory) to behave the same, including ordering.

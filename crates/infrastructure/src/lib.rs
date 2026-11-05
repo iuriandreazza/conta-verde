@@ -4,6 +4,7 @@ mod cached_registry;
 mod contract;
 mod memory;
 mod postgres;
+mod postgres_audit;
 mod postgres_identity;
 mod secrets;
 
