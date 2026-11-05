@@ -8,6 +8,7 @@ import { Notice, type NoticeTone } from "../components/Notice";
 import { Button } from "../components/Button";
 import { ChevronDownIcon } from "../components/icons/chevron-down";
 import { PlusIcon } from "../components/icons/plus";
+import { RefreshCWIcon } from "../components/icons/refresh-cw";
 import { UsersIcon } from "../components/icons/users";
 import { Spinner } from "../components/Spinner";
 
@@ -29,6 +30,8 @@ export function PartiesPage() {
   const [error, setError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [registryNotice, setRegistryNotice] = useState<RegistryNotice | null>(null);
+  const [verifyingId, setVerifyingId] = useState<string | null>(null);
+  const [verifyNotice, setVerifyNotice] = useState<RegistryNotice | null>(null);
 
   const companyName =
     session.status === "authenticated"
@@ -70,6 +73,24 @@ export function PartiesPage() {
     }
   }
 
+  async function verifyAgain(party: Party) {
+    if (verifyingId !== null) {
+      return;
+    }
+    setVerifyingId(party.id);
+    setError(null);
+    setVerifyNotice(null);
+    try {
+      const updated = await api.verifyDocument(companyId, party.id);
+      setParties((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      setVerifyNotice(registryNoticeFor(updated, "rechecking"));
+    } catch (failure) {
+      setError(errorMessage(failure));
+    } finally {
+      setVerifyingId(null);
+    }
+  }
+
   async function handleCreate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (creating) {
@@ -91,7 +112,7 @@ export function PartiesPage() {
       });
       formElement.reset();
       setHighlightedId(created.id);
-      setRegistryNotice(registryNoticeFor(created));
+      setRegistryNotice(registryNoticeFor(created, "registering"));
       await loadFirstPage();
     } catch (failure) {
       setFormError(errorMessage(failure));
@@ -145,6 +166,7 @@ export function PartiesPage() {
       <section className="card">
         <h2>Cadastrados</h2>
         <Notice message={error} />
+        <Notice message={verifyNotice?.message ?? null} tone={verifyNotice?.tone} />
         {loading ? (
           <p role="status" className="status">
             <Spinner /> Carregando…
@@ -189,6 +211,19 @@ export function PartiesPage() {
                     <td>{party.name}</td>
                     <td>
                       {party.document ?? "—"} <DocumentBadge check={party.document_check} />
+                      {party.document_check.needs_attention && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="btn-small"
+                          icon={RefreshCWIcon}
+                          pending={verifyingId === party.id}
+                          disabled={verifyingId !== null}
+                          onClick={() => void verifyAgain(party)}
+                        >
+                          Verificar de novo
+                        </Button>
+                      )}
                     </td>
                     <td>{party.email ?? "—"}</td>
                     <td>
@@ -224,28 +259,31 @@ interface RegistryNotice {
 }
 
 // The party is already saved when this runs: the notice only reports what the registry said,
-// so a warning never asks the user to redo anything.
-function registryNoticeFor(party: Party): RegistryNotice | null {
+// so a warning never asks the user to redo anything. `after` says which action produced the
+// answer, since "Cadastrado" would be wrong for a re-check of an old row.
+function registryNoticeFor(party: Party, after: "registering" | "rechecking"): RegistryNotice | null {
   const check = party.document_check;
+  const registering = after === "registering";
+  const lead = registering ? "Cadastrado, mas" : `${party.name}:`;
   if (check.status === "not_found") {
     return {
       tone: "warning",
-      message:
-        "Cadastrado, mas a Receita não encontrou este CNPJ. Confira o número: ela pode demorar a incluir empresas recém-abertas.",
+      message: `${lead} a Receita não encontrou este CNPJ. Confira o número: ela pode demorar a incluir empresas recém-abertas.`,
     };
   }
   if (check.status === "unverified") {
     return {
       tone: "warning",
-      message:
-        "Cadastrado, mas não foi possível consultar o CNPJ na Receita agora. Só os dígitos foram conferidos.",
+      message: registering
+        ? "Cadastrado, mas não foi possível consultar o CNPJ na Receita agora. Só os dígitos foram conferidos."
+        : `${party.name}: a Receita continua indisponível. Tente de novo mais tarde.`,
     };
   }
   if (check.status === "verified") {
     return check.needs_attention
       ? {
           tone: "warning",
-          message: `Cadastrado. Atenção: ${check.legal_name} está com situação ${check.situation} na Receita.`,
+          message: `${registering ? "Cadastrado. Atenção:" : `${party.name}:`} ${check.legal_name} está com situação ${check.situation} na Receita.`,
         }
       : { tone: "success", message: `CNPJ verificado: ${check.legal_name}.` };
   }

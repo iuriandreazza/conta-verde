@@ -59,17 +59,20 @@ the last two numeric check digits (modulo 11, each character valued as its ASCII
   `11.222.333/0001-81`, the CNPJ used in examples, turns out to belong to a real company.
 - `parties` gains `document_check`, `registry_legal_name` and `registry_situation` (CHECK constraints keep them consistent).
   Parties registered before this change with a CNPJ are marked `unverified`.
-- There is no re-verification yet: an `Unverified` party stays that way until someone edits it. A "verify again" action is the
-  natural next step.
+- A flagged party can be checked again: `POST /companies/{company_id}/parties/{party_id}/document-check` asks the registry
+  again and replaces the stored answer, whatever it was (so an `Unverified` party can become `Verified`, and a `Verified` one
+  can turn `NotFound`). The UI offers "Verificar de novo" on every flagged row. It answers `404` for a party outside the
+  company, `422` for a party without a CNPJ and `409` when the lookup is switched off. The answer may come from the one-hour
+  cache of found companies, so a company that was just closed can look active for up to an hour.
 - Rate limits are real (a handful of calls from one address were enough to trigger `429`) and are shared by everyone on the
   installation. Installations that register many CNPJs at once should expect `Unverified` rows, run their own mirror of the
   open data, or add the Serpro adapter.
 - Nothing the registry says can stop a registration, so a typo that lands on a valid-but-unknown number is caught only by
   the warning, not by a refusal. The first design rejected unknown CNPJs; it was changed after noting that the open data lags.
-  A `NotFound` or `Unverified` party stays so until someone edits it (see re-verification above).
+  Re-checking (above) is manual: nothing re-checks flagged parties in the background yet.
 - Alphanumeric CNPJs are stored uppercase without punctuation. The web app no longer uses a numeric keypad for the document field.
 
 ## Revisit when
 
-A free official endpoint appears, BrasilAPI changes its terms, or re-verification and bulk import (CSV) land and need caching
-or batching.
+A free official endpoint appears, BrasilAPI changes its terms, or background re-checking and bulk import (CSV) land and need
+caching or batching.

@@ -1,4 +1,6 @@
-use conta_verde_domain::{Cnpj, CompanyId, Document, DocumentCheck, Party, PartyDraft, PartyId};
+use conta_verde_domain::{
+    CompanyId, Document, DocumentCheck, DomainError, Party, PartyDraft, PartyId,
+};
 
 use crate::{
     ApplicationError, CnpjLookupError, CnpjRegistry, PartyCursor, PartyRepository, RegistryEntry,
@@ -6,6 +8,21 @@ use crate::{
 
 const DEFAULT_PAGE_SIZE: usize = 50;
 const MAX_PAGE_SIZE: usize = 200;
+
+fn check_from(answer: Result<RegistryEntry, CnpjLookupError>) -> DocumentCheck {
+    match answer {
+        Ok(RegistryEntry {
+            legal_name,
+            situation,
+        }) => DocumentCheck::Verified {
+            legal_name,
+            situation,
+        },
+        Err(CnpjLookupError::NotFound) => DocumentCheck::NotFound,
+        Err(CnpjLookupError::Unavailable) => DocumentCheck::Unverified,
+        Err(CnpjLookupError::Disabled) => DocumentCheck::NotApplicable,
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct PartyPage {
@@ -41,26 +58,37 @@ impl<R: PartyRepository, C: CnpjRegistry> PartyService<R, C> {
     ) -> Result<Party, ApplicationError> {
         let mut party = Party::new(PartyId::generate(), company_id, draft)?;
         if let Some(cnpj) = party.document().and_then(Document::cnpj) {
-            let check = self.check_cnpj(cnpj).await;
+            let check = check_from(self.registry.lookup(cnpj).await);
             party = party.with_document_check(check);
         }
         self.repository.save(&party).await?;
         Ok(party)
     }
 
-    async fn check_cnpj(&self, cnpj: Cnpj<'_>) -> DocumentCheck {
-        match self.registry.lookup(cnpj).await {
-            Ok(RegistryEntry {
-                legal_name,
-                situation,
-            }) => DocumentCheck::Verified {
-                legal_name,
-                situation,
-            },
-            Err(CnpjLookupError::NotFound) => DocumentCheck::NotFound,
-            Err(CnpjLookupError::Unavailable) => DocumentCheck::Unverified,
-            Err(CnpjLookupError::Disabled) => DocumentCheck::NotApplicable,
+    /// Asks the registry again about the party's CNPJ and records the answer, so a party stored
+    /// as unverified or not found (an outage, a lagging registry) can be re-checked later. The
+    /// answer replaces the old one, whatever it was; like at registration, nothing blocks.
+    pub async fn verify_document(
+        &self,
+        company_id: CompanyId,
+        party_id: PartyId,
+    ) -> Result<Party, ApplicationError> {
+        let party = self
+            .repository
+            .find(company_id, party_id)
+            .await?
+            .ok_or(ApplicationError::PartyNotFound)?;
+        let cnpj = party
+            .document()
+            .and_then(Document::cnpj)
+            .ok_or(DomainError::NoCnpjToVerify)?;
+        let answer = self.registry.lookup(cnpj).await;
+        if answer == Err(CnpjLookupError::Disabled) {
+            return Err(ApplicationError::LookupDisabled);
         }
+        let party = party.with_document_check(check_from(answer));
+        self.repository.update_document_check(&party).await?;
+        Ok(party)
     }
 
     pub async fn list(

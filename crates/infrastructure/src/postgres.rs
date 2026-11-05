@@ -59,6 +59,36 @@ impl PartyRepository for PostgresPartyRepository {
         Ok(())
     }
 
+    async fn find(
+        &self,
+        company_id: CompanyId,
+        id: PartyId,
+    ) -> Result<Option<Party>, RepositoryError> {
+        let row = sqlx::query(&format!("{SELECT_PARTIES} AND id = $2"))
+            .bind(company_id.as_uuid())
+            .bind(id.as_uuid())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(storage_error)?;
+        row.as_ref().map(party_from_row).transpose()
+    }
+
+    async fn update_document_check(&self, party: &Party) -> Result<(), RepositoryError> {
+        sqlx::query(
+            "UPDATE parties SET document_check = $3, registry_legal_name = $4, registry_situation = $5 \
+             WHERE id = $1 AND company_id = $2",
+        )
+        .bind(party.id().as_uuid())
+        .bind(party.company_id().as_uuid())
+        .bind(check_kind(party.document_check()))
+        .bind(registry_legal_name(party.document_check()))
+        .bind(registry_situation(party.document_check()))
+        .execute(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        Ok(())
+    }
+
     async fn list_by_company(
         &self,
         company_id: CompanyId,
@@ -236,6 +266,21 @@ mod tests {
             InMemoryCnpjRegistry::unreachable(),
         );
         contract::keeps_the_unverified_mark(&service, company).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn finds_parties_and_replaces_their_document_check() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let other_company = contract::create_company(&pool).await;
+        let repository = PostgresPartyRepository::new(pool);
+        contract::finds_parties_and_replaces_their_document_check(
+            &repository,
+            company,
+            other_company,
+        )
+        .await;
     }
 
     #[tokio::test]

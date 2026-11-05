@@ -4,7 +4,7 @@ use conta_verde_application::{
     ApplicationError, AuthError, AuthService, CnpjRegistry, IdentityRepository, PartyRepository,
     PartyService, RepositoryError, SecretService,
 };
-use conta_verde_domain::{AccountDraft, CompanyId, DocumentCheck, PartyDraft};
+use conta_verde_domain::{AccountDraft, CompanyId, DocumentCheck, Party, PartyDraft, PartyId};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -103,6 +103,54 @@ pub async fn keeps_the_unverified_mark<R: PartyRepository>(
         .unwrap();
     let listed = service.list(company, None, None).await.unwrap().items;
     assert_eq!(listed[0].document_check(), &DocumentCheck::Unverified);
+}
+
+/// A party is found only inside its own company, and replacing its document check changes
+/// nothing else about it.
+pub async fn finds_parties_and_replaces_their_document_check<R: PartyRepository>(
+    repository: &R,
+    company: CompanyId,
+    other_company: CompanyId,
+) {
+    let party = Party::new(
+        PartyId::generate(),
+        company,
+        party_draft("Padaria", Some(ACTIVE_CNPJ)),
+    )
+    .unwrap()
+    .with_document_check(DocumentCheck::Unverified);
+    repository.save(&party).await.unwrap();
+
+    assert_eq!(
+        repository.find(company, party.id()).await.unwrap(),
+        Some(party.clone())
+    );
+    assert_eq!(
+        repository.find(other_company, party.id()).await.unwrap(),
+        None
+    );
+    assert_eq!(
+        repository.find(company, PartyId::generate()).await.unwrap(),
+        None
+    );
+
+    let verified = party.clone().with_document_check(DocumentCheck::Verified {
+        legal_name: "PADARIA CENTRAL LTDA".into(),
+        situation: "ATIVA".into(),
+    });
+    repository.update_document_check(&verified).await.unwrap();
+    assert_eq!(
+        repository.find(company, party.id()).await.unwrap(),
+        Some(verified)
+    );
+
+    // Going back is allowed too: the latest answer wins, whatever it was.
+    let not_found = party.with_document_check(DocumentCheck::NotFound);
+    repository.update_document_check(&not_found).await.unwrap();
+    assert_eq!(
+        repository.find(company, not_found.id()).await.unwrap(),
+        Some(not_found)
+    );
 }
 
 pub async fn pages_through_parties<R: PartyRepository, C: CnpjRegistry>(

@@ -51,6 +51,10 @@ where
             "/companies/{company_id}/parties",
             get(parties::list_parties::<R, C, I, S>).post(parties::register_party::<R, C, I, S>),
         )
+        .route(
+            "/companies/{company_id}/parties/{party_id}/document-check",
+            post(parties::verify_document::<R, C, I, S>),
+        )
         .with_state(state)
 }
 
@@ -388,6 +392,123 @@ mod tests {
         assert_eq!(reply.status, StatusCode::CREATED);
         assert_eq!(reply.body["document_check"]["status"], "unverified");
         assert_eq!(reply.body["document_check"]["needs_attention"], true);
+    }
+
+    /// Signs up, registers a party with the given document and returns the pieces a follow-up
+    /// request needs: the session cookie, the company id and the party id.
+    async fn party_of_a_new_user(
+        app: &Router,
+        email: &str,
+        document: &str,
+    ) -> (String, Uuid, Uuid) {
+        let (cookie, company_id) = sign_up(app, email).await;
+        let mut body = party_body();
+        body["document"] = Value::from(document);
+        let created = send(
+            app,
+            json_request("POST", &parties_uri(company_id), Some(&cookie), body),
+        )
+        .await;
+        assert_eq!(created.status, StatusCode::CREATED);
+        let party_id = created.body["id"].as_str().unwrap().parse().unwrap();
+        (cookie, company_id, party_id)
+    }
+
+    fn document_check_uri(company_id: Uuid, party_id: Uuid) -> String {
+        format!("{}/{party_id}/document-check", parties_uri(company_id))
+    }
+
+    #[tokio::test]
+    async fn an_unverified_party_can_be_checked_again() {
+        let registry = InMemoryCnpjRegistry::unreachable();
+        let app = app_with_registry(registry.clone());
+        let (cookie, company_id, party_id) =
+            party_of_a_new_user(&app, "ana@example.com", "11.222.333/0001-81").await;
+        let uri = document_check_uri(company_id, party_id);
+
+        // The registry is still down: the answer is the same, not an error.
+        let still_down = send(&app, json_request("POST", &uri, Some(&cookie), Value::Null)).await;
+        assert_eq!(still_down.status, StatusCode::OK);
+        assert_eq!(still_down.body["document_check"]["status"], "unverified");
+
+        registry.recover();
+        registry.add_company("11222333000181", "PADARIA CENTRAL LTDA", "ATIVA");
+        let verified = send(&app, json_request("POST", &uri, Some(&cookie), Value::Null)).await;
+        assert_eq!(verified.status, StatusCode::OK);
+        assert_eq!(verified.body["document_check"]["status"], "verified");
+        assert_eq!(verified.body["document_check"]["situation"], "ATIVA");
+
+        // The new answer was stored: the list shows it.
+        let listed = send(&app, get_request(&parties_uri(company_id), Some(&cookie))).await;
+        assert_eq!(
+            listed.body["items"][0]["document_check"]["status"],
+            "verified"
+        );
+    }
+
+    #[tokio::test]
+    async fn checking_again_needs_a_session_and_the_partys_own_company() {
+        let registry = InMemoryCnpjRegistry::unreachable();
+        let app = app_with_registry(registry);
+        let (cookie, company_id, party_id) =
+            party_of_a_new_user(&app, "ana@example.com", "11.222.333/0001-81").await;
+        let uri = document_check_uri(company_id, party_id);
+
+        let anonymous = send(&app, json_request("POST", &uri, None, Value::Null)).await;
+        assert_eq!(anonymous.status, StatusCode::UNAUTHORIZED);
+
+        // Another user cannot reach a company they are not a member of...
+        let (stranger_cookie, stranger_company) = sign_up(&app, "bia@example.com").await;
+        let foreign = send(
+            &app,
+            json_request("POST", &uri, Some(&stranger_cookie), Value::Null),
+        )
+        .await;
+        assert_eq!(foreign.status, StatusCode::NOT_FOUND);
+
+        // ...nor reach a party through a company of their own.
+        let through_own_company = send(
+            &app,
+            json_request(
+                "POST",
+                &document_check_uri(stranger_company, party_id),
+                Some(&stranger_cookie),
+                Value::Null,
+            ),
+        )
+        .await;
+        assert_eq!(through_own_company.status, StatusCode::NOT_FOUND);
+
+        let unknown_party = send(
+            &app,
+            json_request(
+                "POST",
+                &document_check_uri(company_id, Uuid::new_v4()),
+                Some(&cookie),
+                Value::Null,
+            ),
+        )
+        .await;
+        assert_eq!(unknown_party.status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn a_cpf_party_has_nothing_to_check() {
+        let app = app();
+        let (cookie, company_id, party_id) =
+            party_of_a_new_user(&app, "ana@example.com", "529.982.247-25").await;
+        let reply = send(
+            &app,
+            json_request(
+                "POST",
+                &document_check_uri(company_id, party_id),
+                Some(&cookie),
+                Value::Null,
+            ),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(reply.body["error"], "the party has no CNPJ to verify");
     }
 
     #[tokio::test]

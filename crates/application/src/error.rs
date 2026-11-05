@@ -26,6 +26,10 @@ pub enum ApplicationError {
     Repository(RepositoryError),
     Auth(AuthError),
     Secret(SecretError),
+    /// No party with this id in the company (another company's party looks the same).
+    PartyNotFound,
+    /// The operator switched the CNPJ lookup off, so there is nothing to ask.
+    LookupDisabled,
 }
 
 impl From<SecretError> for ApplicationError {
@@ -80,6 +84,8 @@ impl fmt::Display for ApplicationError {
             Self::Repository(error) => error.fmt(f),
             Self::Auth(error) => error.fmt(f),
             Self::Secret(error) => error.fmt(f),
+            Self::PartyNotFound => f.write_str("party not found"),
+            Self::LookupDisabled => f.write_str("CNPJ lookup is switched off on this installation"),
         }
     }
 }

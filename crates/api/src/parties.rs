@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use axum::Json;
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use conta_verde_application::{
     CnpjRegistry, IdentityRepository, PartyCursor, PartyRepository, SecretService,
@@ -124,6 +124,25 @@ where
 {
     let party = state.parties.register(company_id, request.into()).await?;
     Ok((StatusCode::CREATED, Json(PartyResponse::from(&party))))
+}
+
+/// Asks the registry again about a party's CNPJ and returns the party with the new answer.
+pub(crate) async fn verify_document<R, C, I, S>(
+    State(state): State<Arc<AppState<R, C, I, S>>>,
+    CompanyAccess(company_id): CompanyAccess,
+    Path((_, party_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<PartyResponse>, ApiError>
+where
+    R: PartyRepository,
+    C: CnpjRegistry,
+    I: IdentityRepository,
+    S: SecretService,
+{
+    let party = state
+        .parties
+        .verify_document(company_id, PartyId::from_uuid(party_id))
+        .await?;
+    Ok(Json(PartyResponse::from(&party)))
 }
 
 pub(crate) async fn list_parties<R, C, I, S>(
