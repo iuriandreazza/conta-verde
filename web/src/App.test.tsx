@@ -2452,6 +2452,23 @@ describe("members and invitations", () => {
       expect(screen.queryByRole("button", { name: "Remover Ana" })).not.toBeInTheDocument();
     });
 
+    it("does not offer an admin to change or remove themselves", async () => {
+      const admin: Profile = {
+        ...profile,
+        companies: [{ id: "c1", name: "Padaria", role: "admin", permissions: OWNER_PERMISSIONS }],
+      };
+      mockApi((url) => {
+        if (url === "/api/auth/me") return { status: 200, body: admin };
+        return { status: 200, body: url.endsWith("/members") ? [{ ...ana, role: "admin" }, bia] : [] };
+      });
+      renderAt("/companies/c1/members");
+
+      expect(await screen.findByRole("combobox", { name: "Papel de Bia" })).toBeInTheDocument();
+      expect(screen.queryByRole("combobox", { name: "Papel de Ana" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Remover Ana" })).not.toBeInTheDocument();
+      expect(screen.getByRole("row", { name: /ana@example.com/ })).toHaveTextContent("Administrador");
+    });
+
     it("changes a role and shows the list again", async () => {
       let role: string = "sales";
       const fetchMock = mockApi((url, init) => {

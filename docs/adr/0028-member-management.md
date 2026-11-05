@@ -43,7 +43,8 @@ them out, so a wrong role or a person who left stayed until someone edited the d
 ### The web app
 
 On the members page each member except the owner has a role selector and a "Remover" button that
-asks for confirmation. A refusal is shown above the list, which is read again after every change.
+asks for confirmation. The signed-in person's own row has neither, so nobody loses the page they are
+using (the API still allows it, and the owner or another admin can do it for them). A refusal is shown above the list, which is read again after every change.
 
 ## Consequences
 

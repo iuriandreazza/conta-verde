@@ -5,8 +5,9 @@ import { Button } from "../components/Button";
 import { Notice } from "../components/Notice";
 import { PageHeader } from "../components/PageHeader";
 import { Spinner } from "../components/Spinner";
+import { useAuth } from "../auth";
 import { UserPlusIcon } from "../components/icons/user-plus";
-import { INVITABLE_ROLES, ROLE_HINTS, ROLE_LABELS } from "../lib/roles";
+import { ASSIGNABLE_ROLES, ROLE_HINTS, ROLE_LABELS } from "../lib/roles";
 
 const formatDate = (millis: number) => new Date(millis).toLocaleDateString("pt-BR");
 
@@ -14,6 +15,10 @@ const formatDate = (millis: number) => new Date(millis).toLocaleDateString("pt-B
 // instance.
 export function MembersPage() {
   const { companyId = "" } = useParams();
+  const { session } = useAuth();
+  // Someone who changes or removes themselves here would lose this page under their feet: the owner
+  // (or another admin) does it for them.
+  const ownId = session.status === "authenticated" ? session.profile.user.id : null;
   const [members, setMembers] = useState<Member[]>([]);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [loading, setLoading] = useState(true);
@@ -137,7 +142,7 @@ export function MembersPage() {
                       <tr key={member.user_id}>
                         <td>{member.name}</td>
                         <td>{member.email}</td>
-                        {member.role === "owner" ? (
+                        {member.role === "owner" || member.user_id === ownId ? (
                           // A company has one owner, who is not changed or removed.
                           <>
                             <td>{ROLE_LABELS[member.role]}</td>
@@ -156,7 +161,7 @@ export function MembersPage() {
                                   )
                                 }
                               >
-                                {INVITABLE_ROLES.map((option) => (
+                                {ASSIGNABLE_ROLES.map((option) => (
                                   <option key={option} value={option}>
                                     {ROLE_LABELS[option]}
                                   </option>
@@ -284,7 +289,7 @@ export function MembersPage() {
             <label>
               Papel
               <select value={role} onChange={(event) => setRole(event.target.value as Role)}>
-                {INVITABLE_ROLES.map((option) => (
+                {ASSIGNABLE_ROLES.map((option) => (
                   <option key={option} value={option}>
                     {ROLE_LABELS[option]}
                   </option>

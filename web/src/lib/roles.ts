@@ -22,5 +22,5 @@ export const ROLE_HINTS: Record<Role, string> = {
   viewer: "Só consulta.",
 };
 
-/** The roles an invitation can offer: nobody is invited as an owner. */
-export const INVITABLE_ROLES: Role[] = ["admin", "financial", "sales", "stock", "accountant", "viewer"];
+/** The roles a person can be given, by invitation or later: nobody is made an owner. */
+export const ASSIGNABLE_ROLES: Role[] = ["admin", "financial", "sales", "stock", "accountant", "viewer"];
