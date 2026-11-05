@@ -1080,6 +1080,112 @@ pub async fn imports_parties_and_records_each_creation<R: PartyRepository>(
     assert_eq!(other.created, 3);
 }
 
+fn product_import_rows(rows: Vec<ProductDraft>) -> Vec<ImportRow<ProductDraft>> {
+    rows.into_iter()
+        .enumerate()
+        .map(|(index, draft)| ImportRow {
+            row: index + 2,
+            draft,
+        })
+        .collect()
+}
+
+/// An import of products behaves like one of parties, with the SKU as the key: every row is checked
+/// before any is written, a repeated SKU is refused, a registered one is skipped and not
+/// overwritten, and each creation is recorded.
+pub async fn imports_products_and_records_each_creation<R: ProductRepository>(
+    service: &ProductService<R>,
+    company: CompanyId,
+    other_company: CompanyId,
+) {
+    let import = |company: CompanyId, rows: Vec<ProductDraft>, dry_run: bool| async move {
+        service
+            .import(company, &actor(), product_import_rows(rows), dry_run)
+            .await
+            .unwrap()
+    };
+    let everyone = |company: CompanyId| async move {
+        service
+            .list(company, &ProductQuery::default(), None, None)
+            .await
+            .unwrap()
+            .items
+    };
+    let note = |row: usize, message: &str| conta_verde_application::RowNote {
+        row,
+        message: message.to_owned(),
+    };
+    let draft = |name: &str, sku: Option<&str>| ProductDraft {
+        sale_price: Some("12.50".into()),
+        ..product_draft(name, ProductKind::Product, sku, true)
+    };
+
+    // A bad row and a repeated SKU (written another way) write nothing, and both are reported.
+    let refused = import(
+        company,
+        vec![
+            draft("Pão", Some("PAO-1")),
+            ProductDraft {
+                sale_price: Some("12,5,0".into()),
+                ..draft("Bolo", Some("BOLO-1"))
+            },
+            draft("Pão de novo", Some("pao-1")),
+        ],
+        false,
+    )
+    .await;
+    assert_eq!((refused.valid, refused.created), (1, 0));
+    assert_eq!(
+        refused.refused,
+        [
+            note(
+                3,
+                "sale price must be a decimal with up to 13 integer and 6 fractional digits, written like 10.50"
+            ),
+            note(4, "the same SKU as row 2"),
+        ]
+    );
+    assert!(everyone(company).await.is_empty());
+
+    let rows = || {
+        vec![
+            draft("Pão", Some("PAO-1")),
+            draft("Bolo", Some("BOLO-1")),
+            draft("Sem código", None),
+        ]
+    };
+    let dry = import(company, rows(), true).await;
+    assert_eq!((dry.valid, dry.created), (3, 0));
+    assert!(everyone(company).await.is_empty());
+
+    let done = import(company, rows(), false).await;
+    assert_eq!((done.valid, done.created), (3, 3));
+    let stored = everyone(company).await;
+    assert_eq!(
+        stored.iter().map(Product::name).collect::<Vec<_>>(),
+        ["Bolo", "Pão", "Sem código"]
+    );
+    for product in &stored {
+        let history = service.history(company, product.id()).await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].entry.action, AuditAction::Created);
+    }
+
+    // Sending it again skips what has a SKU and cannot recognize what has none.
+    let again = import(company, rows(), false).await;
+    assert_eq!(again.created, 1);
+    assert_eq!(
+        again.skipped,
+        [
+            note(2, "a product with this SKU already exists"),
+            note(3, "a product with this SKU already exists"),
+        ]
+    );
+
+    // Another company's SKUs are its own.
+    assert_eq!(import(other_company, rows(), false).await.created, 3);
+}
+
 pub async fn pages_through_parties<R: PartyRepository, C: CnpjRegistry>(
     service: &PartyService<R, C>,
     company: CompanyId,

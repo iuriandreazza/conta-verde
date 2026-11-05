@@ -203,6 +203,17 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires DATABASE_URL"]
+    async fn imports_products_and_records_each_creation() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let other_company = contract::create_company(&pool).await;
+        let service = ProductService::new(PostgresProductRepository::new(pool));
+        contract::imports_products_and_records_each_creation(&service, company, other_company)
+            .await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
     async fn edits_products_and_records_only_changes() {
         let pool = contract::test_pool().await;
         let company = contract::create_company(&pool).await;

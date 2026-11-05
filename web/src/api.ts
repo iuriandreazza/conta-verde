@@ -448,6 +448,12 @@ export const api = {
       `/companies/${companyId}/parties/import${dryRun ? "?dry_run=true" : ""}`,
       { method: "POST", headers: { "Content-Type": "text/csv" }, body: file },
     ),
+  /** Like `importParties`: the file goes as it is. */
+  importProducts: (companyId: string, file: File, dryRun: boolean) =>
+    request<ImportResult>(
+      `/companies/${companyId}/products/import${dryRun ? "?dry_run=true" : ""}`,
+      { method: "POST", headers: { "Content-Type": "text/csv" }, body: file },
+    ),
   partyHistory: (companyId: string, partyId: string) =>
     request<HistoryEntry[]>(`/companies/${companyId}/parties/${partyId}/history`),
   /** Asks the registry again about the party's CNPJ; resolves with the party and its new answer. */

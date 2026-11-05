@@ -9,6 +9,7 @@ import {
   type ProductInput,
 } from "../api";
 import { Button } from "../components/Button";
+import { CsvImport } from "../components/CsvImport";
 import { PageHeader } from "../components/PageHeader";
 import { ListRow } from "../components/ListRow";
 import { Notice } from "../components/Notice";
@@ -284,6 +285,36 @@ export function ProductsPage() {
         <Notice message={saved} tone="success" />
       </aside>
       </div>
+      <CsvImport
+        title="Importar de um arquivo CSV"
+        template={PRODUCTS_TEMPLATE}
+        templateName="produtos-e-servicos.csv"
+        run={(file, dryRun) => api.importProducts(companyId, file, dryRun)}
+        onImported={() => void reload()}
+      >
+        <p>
+          A primeira linha dá o nome das colunas, em qualquer ordem; a vírgula ou o ponto e vírgula
+          separam. <code>name</code> e <code>unit</code> (como UN ou KG) são obrigatórias. As outras
+          são <code>kind</code> (<code>product</code> ou <code>service</code>; em branco é produto),{" "}
+          <code>sku</code>, <code>ncm</code>, <code>sale_price</code>, <code>cost_price</code>,{" "}
+          <code>minimum_stock</code> e <code>active</code> (<code>sim</code> ou <code>não</code>; em
+          branco é ativo). Os preços podem usar a vírgula, como <code>12,50</code>. Um valor com ponto ou vírgula
+          seguido de exatamente três dígitos (<code>1.234</code>, <code>1,234</code>) é ambíguo e
+          recusado: escreva <code>1234</code>. Serviço não tem <code>ncm</code> nem estoque mínimo.
+        </p>
+        <p>
+          Nada é importado enquanto uma linha tiver problema. Quem já tem o mesmo SKU é ignorado,
+          nunca sobrescrito; quem não tem SKU não pode ser reconhecido, então enviar o mesmo arquivo
+          duas vezes o repete.
+        </p>
+      </CsvImport>
     </>
   );
 }
+
+const PRODUCTS_TEMPLATE = [
+  "kind,name,sku,unit,ncm,sale_price,cost_price,minimum_stock,active",
+  "product,Pão francês,PAO-001,KG,1905.90.90,\"12,50\",7,10,sim",
+  "service,Entrega,ENT-001,UN,,5,,,sim",
+  "",
+].join("\n");

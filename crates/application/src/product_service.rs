@@ -4,8 +4,10 @@ use conta_verde_domain::{
 };
 
 use crate::audit::audit_entry;
+use crate::import::import_rows;
 use crate::{
-    ApplicationError, NameCursor, ProductQuery, ProductRepository, RepositoryError,
+    ApplicationError, ImportReport, ImportRow, NameCursor, ProductQuery, ProductRepository,
+    RepositoryError,
     list_query::{clamp_limit, split_page},
 };
 
@@ -42,6 +44,38 @@ impl<R: ProductRepository> ProductService<R> {
         );
         self.repository.save(&product, &audit).await?;
         Ok(product)
+    }
+
+    /// Registers the products of an import file, or with `dry_run` only says what would happen:
+    /// every row is checked first, as when registering one, and a SKU that repeats within the file is
+    /// refused; if any row is refused nothing is written. Then the rows are written one by one, each
+    /// with its own audit entry under `actor`: a SKU that is already registered is skipped, never
+    /// overwritten. A product without a SKU cannot be recognized, so sending the file twice repeats it.
+    pub async fn import(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        rows: Vec<ImportRow<ProductDraft>>,
+        dry_run: bool,
+    ) -> Result<ImportReport, ApplicationError> {
+        import_rows(
+            rows,
+            dry_run,
+            "SKU",
+            RepositoryError::DuplicateSku,
+            |draft| Product::new(ProductId::generate(), company_id, draft),
+            |product| product.sku().map(str::to_owned),
+            |product| async move {
+                let audit = audit_entry(
+                    &product,
+                    actor,
+                    AuditAction::Created,
+                    product_creation_changes(&product),
+                );
+                self.repository.save(&product, &audit).await
+            },
+        )
+        .await
     }
 
     /// Replaces every editable field with the draft's. A draft that changes nothing writes nothing

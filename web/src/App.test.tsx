@@ -2263,3 +2263,90 @@ describe("importing parties from a CSV file", () => {
     expect(screen.getByRole("button", { name: "Importar" })).toBeDisabled();
   });
 });
+
+describe("importing products from a CSV file", () => {
+  const empty = { status: 200, body: { items: [], next_cursor: null } };
+
+  it("offers its own template and sends the file to the products endpoint", async () => {
+    const fetchMock = mockApi((url) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (url.includes("/products/import")) {
+        return {
+          status: 200,
+          body: { dry_run: true, valid: 2, created: 0, skipped: [], refused: [] },
+        };
+      }
+      return empty;
+    });
+    renderAt("/companies/c1/products");
+
+    await screen.findByRole("heading", { name: "Importar de um arquivo CSV" });
+    const template = screen.getByRole("link", { name: "Baixar modelo" });
+    expect(template).toHaveAttribute("download", "produtos-e-servicos.csv");
+    expect(decodeURIComponent(template.getAttribute("href") ?? "")).toContain("kind,name,sku,unit");
+    await userEvent.upload(
+      screen.getByLabelText("Arquivo CSV"),
+      new File(["name,unit\nPão,KG\n"], "produtos.csv", { type: "text/csv" }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Verificar arquivo" }));
+
+    expect(await screen.findByText(/Arquivo em ordem: 2 linhas válidas/)).toBeInTheDocument();
+    const sent = fetchMock.mock.calls.filter(([url]) => String(url).includes("/products/import"));
+    expect(String(sent[0][0])).toBe("/api/companies/c1/products/import?dry_run=true");
+  });
+
+  it("reloads the list after products were created and shows the skipped SKUs", async () => {
+    let imported = false;
+    mockApi((url) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (url.includes("/products/import")) {
+        imported = true;
+        return {
+          status: 200,
+          body: {
+            dry_run: false,
+            valid: 2,
+            created: 1,
+            skipped: [{ row: 3, message: "a product with this SKU already exists" }],
+            refused: [],
+          },
+        };
+      }
+      return imported
+        ? {
+            status: 200,
+            body: {
+              items: [
+                {
+                  id: "p1",
+                  company_id: "c1",
+                  kind: "product",
+                  name: "Pão francês",
+                  sku: "PAO-001",
+                  unit: "KG",
+                  ncm: null,
+                  sale_price: "12.5",
+                  cost_price: null,
+                  minimum_stock: null,
+                  active: true,
+                },
+              ],
+              next_cursor: null,
+            },
+          }
+        : empty;
+    });
+    renderAt("/companies/c1/products");
+
+    await screen.findByRole("heading", { name: "Importar de um arquivo CSV" });
+    await userEvent.upload(
+      screen.getByLabelText("Arquivo CSV"),
+      new File(["name,unit\nPão,KG\n"], "produtos.csv", { type: "text/csv" }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Importar" }));
+
+    expect(await screen.findByText("1 cadastro criado; 1 linha ignorada.")).toBeInTheDocument();
+    expect(screen.getByText("Linha 3: a product with this SKU already exists")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Alterar Pão francês" })).toBeInTheDocument();
+  });
+});
