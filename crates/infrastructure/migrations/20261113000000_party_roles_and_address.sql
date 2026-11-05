@@ -34,10 +34,17 @@ ALTER TABLE parties
     ADD CONSTRAINT parties_state_valid CHECK (state IN (
         'AC', 'AL', 'AM', 'AP', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MG', 'MS', 'MT', 'PA',
         'PB', 'PE', 'PI', 'PR', 'RJ', 'RN', 'RO', 'RR', 'RS', 'SC', 'SE', 'SP', 'TO')),
+    -- `btrim` only strips spaces, while the domain trims every white space (tabs, line breaks), so
+    -- the check is a pattern: no white space at either end, which also refuses a text made only of
+    -- it. What counts as white space beyond ASCII (a no-break space) depends on the database's
+    -- locale; the domain is the one that decides, and it never stores such a text.
     ADD CONSTRAINT parties_address_text_valid CHECK (
-        char_length(street) BETWEEN 1 AND 150 AND street = btrim(street)
-        AND char_length(city) BETWEEN 1 AND 80 AND city = btrim(city)
-        AND (street_number IS NULL OR (char_length(street_number) BETWEEN 1 AND 20 AND street_number = btrim(street_number)))
-        AND (complement IS NULL OR (char_length(complement) BETWEEN 1 AND 80 AND complement = btrim(complement)))
-        AND (district IS NULL OR (char_length(district) BETWEEN 1 AND 80 AND district = btrim(district)))
+        char_length(street) BETWEEN 1 AND 150 AND street !~ '^\s|\s$'
+        AND char_length(city) BETWEEN 1 AND 80 AND city !~ '^\s|\s$'
+        AND (street_number IS NULL
+            OR (char_length(street_number) BETWEEN 1 AND 20 AND street_number !~ '^\s|\s$'))
+        AND (complement IS NULL
+            OR (char_length(complement) BETWEEN 1 AND 80 AND complement !~ '^\s|\s$'))
+        AND (district IS NULL
+            OR (char_length(district) BETWEEN 1 AND 80 AND district !~ '^\s|\s$'))
     );

@@ -550,6 +550,10 @@ mod tests {
             (with(6, Some("sp")), "parties_state_valid"),
             (with(1, Some("")), "parties_address_text_valid"),
             (with(1, Some(" Rua A")), "parties_address_text_valid"),
+            // White space the domain trims but `btrim` does not: a tab, a line break, only blanks.
+            (with(1, Some("\tRua A")), "parties_address_text_valid"),
+            (with(1, Some("\t")), "parties_address_text_valid"),
+            (with(5, Some("Recife\n")), "parties_address_text_valid"),
             (with(5, Some("Recife ")), "parties_address_text_valid"),
             (with(2, Some("")), "parties_address_text_valid"),
         ];

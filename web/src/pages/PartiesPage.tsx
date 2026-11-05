@@ -90,8 +90,12 @@ export function PartiesPage() {
         await loadFirstPage();
       } else {
         const updated = await api.updateParty(companyId, editing.id, input);
-        // In place: the list keeps its page and its filters.
-        setParties((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+        // In place: the list keeps its page and its filters, but a party that stopped being of the
+        // kind shown no longer belongs in it.
+        const stillShown = (item: Party) => applied.kind === "" || item[`is_${applied.kind}` as const];
+        setParties((current) =>
+          current.flatMap((item) => (item.id !== updated.id ? [item] : stillShown(updated) ? [updated] : [])),
+        );
         setHighlightedId(updated.id);
         // The registry is only asked about a document that changed: otherwise there is nothing new.
         setRegistryNotice(

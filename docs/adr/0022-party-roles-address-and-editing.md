@@ -23,8 +23,9 @@ contacts and tags, and the CEP lookup, are separate steps (see Consequences).
   body leaves out (the document, the e-mail, the address) is cleared. The roles are the exception
   that must be said: `is_carrier` and `is_seller` may be left out when registering (no) but not
   when replacing, since a body from a client that does not know them would otherwise drop them
-  silently. A field the API does not know is refused, so a typo in `address` is an error, not a
-  cleared address.
+  silently. A field the API does not know is refused, on registering as well as on replacing, so a
+  typo in `address` is an error, not a cleared address (a client that posts back a whole fetched
+  party, with its `id` and `document_check`, is refused too).
 - **The registry is asked about a document only when it changed** ([ADR 0017](0017-cnpj-registry-lookup.md)).
   The same document keeps what the registry said: asking again on every edit would cost a call
   from a rate-limited service for nothing, and "Verificar de novo" exists for a deliberate
@@ -34,7 +35,13 @@ contacts and tags, and the CEP lookup, are separate steps (see Consequences).
   An edit that changes nothing writes nothing and adds no entry. When the document changed, the
   registry's answer is part of the same entry.
 - One port method writes everything about a party, `update`, and the re-check of a CNPJ uses it
-  too: the former `update_document_check` was the same write with fewer columns.
+  too. Because that write replaces the whole row, the re-check reads the party again after the
+  registry answers (the call can take seconds) and drops an answer about a document that is no
+  longer the party's, so an edit made meanwhile is not undone.
+- **Concurrent edits are last-write-wins**, as in every register: two overlapping `PUT`s each
+  compute their audit entry against the party they read, so the trail of the loser's `from` values
+  can be stale. A guard (a version column, or `WHERE` on the previous values answered by `409`)
+  belongs to all registers at once, not to this one.
 - A document that another party of the company already has is `409`, as when registering.
 
 ### Roles
@@ -55,7 +62,9 @@ district are optional. The number is free text because "S/N" and "km 12" exist.
   a rule, and an unreachable service must not stop data entry.
 - It is **all or nothing** in the database as well (a `CHECK`), so a row cannot hold a CEP with no
   city. Text fields are trimmed, not empty and bounded (150 for the street, 80 for the others, 20
-  for the number); NUL bytes are refused, as in names.
+  for the number); NUL bytes are refused, as in names. The `CHECK` refuses white space at either
+  end with a pattern, not `btrim`, which would let a tab through that the domain trims (the names
+  of the other registers still use `btrim`).
 - One address, not a list: delivery and billing addresses are a Phase 3 question (a quote or a
   sale will say which address it uses), and a second address is a new table, not a rewrite.
 - The audit trail records each address field separately (`postal_code`, `street`,
