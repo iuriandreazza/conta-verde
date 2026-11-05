@@ -333,6 +333,14 @@ mod tests {
         parties: PartyService<InMemoryPartyRepository, InMemoryCnpjRegistry>,
         postal_codes: InMemoryPostalCodeDirectory,
     ) -> Router {
+        app_with_auth(parties, postal_codes, auth_service())
+    }
+
+    fn app_with_auth(
+        parties: PartyService<InMemoryPartyRepository, InMemoryCnpjRegistry>,
+        postal_codes: InMemoryPostalCodeDirectory,
+        auth: AuthService<InMemoryIdentityRepository, Argon2SecretService>,
+    ) -> Router {
         router::<MemoryPorts>(
             Services {
                 parties,
@@ -345,7 +353,7 @@ mod tests {
                 ),
                 payment_terms: PaymentTermService::new(InMemoryPaymentTermRepository::default()),
                 postal_codes: PostalCodeService::new(postal_codes),
-                auth: auth_service(),
+                auth,
             },
             ApiConfig::default(),
         )
@@ -1214,6 +1222,257 @@ mod tests {
                 .status,
             StatusCode::NOT_FOUND
         );
+    }
+
+    /// An app whose identities the test keeps a handle to, to give members the roles that no route
+    /// hands out yet.
+    fn app_with_identities() -> (Router, InMemoryIdentityRepository) {
+        let identities = InMemoryIdentityRepository::default();
+        let auth = AuthService::new(
+            identities.clone(),
+            Argon2SecretService::new().unwrap(),
+            Duration::from_secs(3600),
+        );
+        let app = app_with_auth(
+            PartyService::new(InMemoryPartyRepository::default(), known_companies())
+                .with_recheck_interval(Duration::ZERO),
+            known_postal_codes(),
+            auth,
+        );
+        (app, identities)
+    }
+
+    /// The cookie of a new user who is a member of `company_id` with `role`.
+    async fn member_with_role(
+        app: &Router,
+        identities: &InMemoryIdentityRepository,
+        company_id: Uuid,
+        role: conta_verde_domain::Role,
+    ) -> String {
+        let email = format!("{}-{}@example.com", role.as_str(), Uuid::new_v4());
+        let (cookie, _) = sign_up(app, &email).await;
+        let me = send(app, get_request("/auth/me", Some(&cookie))).await;
+        let user_id: Uuid = me.body["user"]["id"].as_str().unwrap().parse().unwrap();
+        identities
+            .add_membership(
+                conta_verde_domain::UserId::from_uuid(user_id),
+                conta_verde_domain::CompanyId::from_uuid(company_id),
+                role,
+            )
+            .await
+            .unwrap();
+        cookie
+    }
+
+    #[tokio::test]
+    async fn what_a_member_may_do_follows_their_role_on_every_route_family() {
+        use conta_verde_domain::Role;
+
+        let (app, identities) = app_with_identities();
+        let (owner_cookie, company_id) = sign_up(&app, "dona@example.com").await;
+        let base = format!("/companies/{company_id}");
+        let party = send(
+            &app,
+            json_request(
+                "POST",
+                &parties_uri(company_id),
+                Some(&owner_cookie),
+                party_body(),
+            ),
+        )
+        .await;
+        let party_id = party.body["id"].as_str().unwrap().to_owned();
+
+        // Which of the three kinds of write each role has. Written out here, apart from the domain's
+        // own table, so that a change to who may do what is a change to this test too.
+        //                      parties products finance
+        let writes = [
+            (Role::Owner, true, true, true),
+            (Role::Admin, true, true, true),
+            (Role::Financial, true, false, true),
+            (Role::Sales, true, false, false),
+            (Role::Stock, false, true, false),
+            (Role::Accountant, false, false, false),
+            (Role::Viewer, false, false, false),
+        ];
+        let denied = "your role in this company does not allow this";
+        let mut created: Vec<String> = vec!["Padaria Central".into()];
+        for (role, parties, products, finance) in writes {
+            let cookie = member_with_role(&app, &identities, company_id, role).await;
+            let name = format!("Cadastro de {}", role.as_str());
+
+            // Looking is for everyone, whatever the area.
+            for path in [
+                "/parties",
+                &format!("/parties/{party_id}/history"),
+                "/products",
+                "/categories",
+                "/cost-centers",
+                "/bank-accounts",
+                "/payment-methods",
+                "/payment-terms",
+                "/postal-codes/01310-100",
+            ] {
+                let reply = send(&app, get_request(&format!("{base}{path}"), Some(&cookie))).await;
+                assert_eq!(reply.status, StatusCode::OK, "{role:?} reads {path}");
+            }
+
+            let party_write = |method: &str, path: &str, body: Value| {
+                json_request(method, &format!("{base}{path}"), Some(&cookie), body)
+            };
+            let mut body = party_body();
+            body["document"] = Value::Null;
+            body["name"] = json!(name);
+            let writes_of = [
+                (
+                    parties,
+                    "creates a party",
+                    party_write("POST", "/parties", body),
+                ),
+                (
+                    parties,
+                    "imports parties",
+                    csv_request(
+                        &format!("{base}/parties/import?dry_run=true"),
+                        Some(&cookie),
+                        "name,customer\nAna,sim\n",
+                    ),
+                ),
+                (
+                    products,
+                    "creates a product",
+                    party_write("POST", "/products", {
+                        let mut product = product_body();
+                        product["sku"] = json!(format!("{}-1", role.as_str()));
+                        product
+                    }),
+                ),
+                (
+                    products,
+                    "imports products",
+                    csv_request(
+                        &format!("{base}/products/import?dry_run=true"),
+                        Some(&cookie),
+                        "name,unit\nPão,kg\n",
+                    ),
+                ),
+                (
+                    finance,
+                    "creates a cost center",
+                    party_write(
+                        "POST",
+                        "/cost-centers",
+                        json!({ "name": format!("Centro {}", role.as_str()) }),
+                    ),
+                ),
+                (
+                    finance,
+                    "applies the default categories",
+                    party_write("POST", "/categories/default-template", Value::Null),
+                ),
+            ];
+            for (allowed, what, request) in writes_of {
+                let reply = send(&app, request).await;
+                if allowed {
+                    assert_ne!(
+                        reply.status,
+                        StatusCode::FORBIDDEN,
+                        "{role:?} {what}: {}",
+                        reply.body
+                    );
+                } else {
+                    assert_eq!(reply.status, StatusCode::FORBIDDEN, "{role:?} {what}");
+                    assert_eq!(reply.body["error"], denied, "{role:?} {what}");
+                }
+            }
+            if parties {
+                created.push(name.clone());
+            }
+
+            // A change to the party is a write too, and so is checking its CNPJ again.
+            let update = send(
+                &app,
+                json_request(
+                    "PUT",
+                    &format!("{base}/parties/{party_id}"),
+                    Some(&cookie),
+                    json!({
+                        "name": "Padaria Central",
+                        "document": "11.222.333/0001-81",
+                        "is_customer": true,
+                        "is_supplier": false,
+                        "is_carrier": false,
+                        "is_seller": false,
+                        "contacts": [],
+                        "tags": []
+                    }),
+                ),
+            )
+            .await;
+            assert_eq!(
+                update.status == StatusCode::FORBIDDEN,
+                !parties,
+                "{role:?} PUT"
+            );
+        }
+
+        // What was refused left nothing behind: only the roles that may write parties added one.
+        let listed = send(
+            &app,
+            get_request(&parties_uri(company_id), Some(&owner_cookie)),
+        )
+        .await;
+        let mut names: Vec<&str> = listed.body["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["name"].as_str().unwrap())
+            .collect();
+        names.sort_unstable();
+        let mut expected: Vec<&str> = created.iter().map(String::as_str).collect();
+        expected.sort_unstable();
+        assert_eq!(names, expected);
+        assert_eq!(created.len(), 1 + 4);
+    }
+
+    #[tokio::test]
+    async fn the_profile_says_what_the_caller_is_and_how_far_it_reaches() {
+        use conta_verde_domain::Role;
+
+        let (app, identities) = app_with_identities();
+        let (owner_cookie, company_id) = sign_up(&app, "dona@example.com").await;
+        let me = send(&app, get_request("/auth/me", Some(&owner_cookie))).await;
+        assert_eq!(me.body["companies"][0]["role"], "owner");
+        assert_eq!(
+            me.body["companies"][0]["permissions"],
+            json!({ "parties": "write", "products": "write", "finance": "write", "members": "write" })
+        );
+
+        let viewer = member_with_role(&app, &identities, company_id, Role::Viewer).await;
+        let me = send(&app, get_request("/auth/me", Some(&viewer))).await;
+        // Their own company first (by name, both are "Padaria"), then the one they were added to:
+        // find the one they were added to by its id.
+        let theirs = me.body["companies"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|company| company["id"] == company_id.to_string())
+            .unwrap();
+        assert_eq!(theirs["role"], "viewer");
+        // Members is out of reach, so the area is not there at all.
+        assert_eq!(
+            theirs["permissions"],
+            json!({ "parties": "read", "products": "read", "finance": "read" })
+        );
+    }
+
+    #[tokio::test]
+    async fn a_non_member_is_still_told_the_company_does_not_exist_not_that_they_may_not() {
+        let (app, _) = app_with_identities();
+        let (_, company_id) = sign_up(&app, "dona@example.com").await;
+        let (stranger, _) = sign_up(&app, "intrusa@example.com").await;
+        let reply = send(&app, get_request(&parties_uri(company_id), Some(&stranger))).await;
+        assert_eq!(reply.status, StatusCode::NOT_FOUND);
     }
 
     async fn register_party(app: &Router, document: Option<&str>) -> Reply {

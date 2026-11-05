@@ -7,9 +7,16 @@ import type { PaymentTerm, BankAccount, Category, CostCenter, PaymentMethod, Doc
 import { AuthProvider } from "./auth";
 import { SOURCE_URL } from "./components/Footer";
 
+const OWNER_PERMISSIONS = {
+  parties: "write",
+  products: "write",
+  finance: "write",
+  members: "write",
+} as const;
+
 const profile: Profile = {
   user: { id: "u1", name: "Ana", email: "ana@example.com" },
-  companies: [{ id: "c1", name: "Padaria" }],
+  companies: [{ id: "c1", name: "Padaria", role: "owner", permissions: OWNER_PERMISSIONS }],
 };
 
 function party(name: string): Party {
@@ -330,8 +337,8 @@ describe("App", () => {
             body: {
               ...profile,
               companies: [
-                { id: "c1", name: "Padaria" },
-                { id: "c2", name: "Mercearia" },
+                { id: "c1", name: "Padaria", role: "owner", permissions: OWNER_PERMISSIONS },
+                { id: "c2", name: "Mercearia", role: "viewer", permissions: { parties: "read" } },
               ],
             },
           }

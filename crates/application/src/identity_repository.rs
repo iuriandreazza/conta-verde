@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::time::Duration;
 
-use conta_verde_domain::{Account, Company, CompanyId, Email, User, UserId};
+use conta_verde_domain::{Account, Company, CompanyId, Email, Role, User, UserId};
 
 use crate::RepositoryError;
 
@@ -20,6 +20,13 @@ pub struct StoredCredentials {
     pub password_hash: String,
 }
 
+/// A company a user belongs to, and what they are there.
+#[derive(Debug, Clone)]
+pub struct CompanyMembership {
+    pub company: Company,
+    pub role: Role,
+}
+
 /// Port for who users are and which companies they may access. Sessions are keyed by a digest of
 /// the token, so a leaked database does not leak usable sessions.
 pub trait IdentityRepository: Send + Sync {
@@ -34,17 +41,28 @@ pub trait IdentityRepository: Send + Sync {
         email: &Email,
     ) -> impl Future<Output = Result<Option<StoredCredentials>, RepositoryError>> + Send;
 
-    /// Companies the user belongs to, ordered by name ignoring case, then by id.
-    fn companies_of(
+    /// Companies the user belongs to, with their role in each, ordered by company name ignoring
+    /// case, then by id.
+    fn memberships_of(
         &self,
         user_id: UserId,
-    ) -> impl Future<Output = Result<Vec<Company>, RepositoryError>> + Send;
+    ) -> impl Future<Output = Result<Vec<CompanyMembership>, RepositoryError>> + Send;
 
-    fn is_member(
+    /// What the user is in the company, `None` when they are not a member of it.
+    fn role_in(
         &self,
         user_id: UserId,
         company_id: CompanyId,
-    ) -> impl Future<Output = Result<bool, RepositoryError>> + Send;
+    ) -> impl Future<Output = Result<Option<Role>, RepositoryError>> + Send;
+
+    /// Makes the user a member of the company. `DuplicateMembership` when they already are: a
+    /// second call never changes a role.
+    fn add_membership(
+        &self,
+        user_id: UserId,
+        company_id: CompanyId,
+        role: Role,
+    ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
 
     fn create_session(
         &self,

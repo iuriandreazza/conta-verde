@@ -9,15 +9,15 @@ use conta_verde_application::{
     SecretService,
 };
 use conta_verde_application::{
-    ImportRow, PaymentTermQuery, PaymentTermRepository, PaymentTermService,
+    ImportRow, NewAccount, PaymentTermQuery, PaymentTermRepository, PaymentTermService,
 };
 use conta_verde_domain::{
-    AccountDraft, Actor, AddressDraft, AuditAction, AuditEntity, AuditEntry, BankAccount,
+    Account, AccountDraft, Actor, AddressDraft, AuditAction, AuditEntity, AuditEntry, BankAccount,
     BankAccountDraft, BankAccountId, BankAccountKind, CashFlowGroup, Category, CategoryId,
     CompanyId, Contact, ContactDraft, CostCenter, CostCenterDraft, CostCenterId, DocumentCheck,
     DomainError, DreGroup, FieldChange, Party, PartyDraft, PartyId, PaymentMethod,
     PaymentMethodDraft, PaymentMethodId, PaymentMethodKind, PaymentTerm, PaymentTermDraft,
-    PaymentTermId, Product, ProductDraft, ProductId, ProductKind, Tag, UserId,
+    PaymentTermId, Product, ProductDraft, ProductId, ProductKind, Role, Tag, UserId,
     bank_account_changes, bank_account_creation_changes, category_changes,
     category_creation_changes, cost_center_changes, cost_center_creation_changes, creation_changes,
     document_check_changes, payment_method_changes, payment_method_creation_changes,
@@ -1248,7 +1248,7 @@ where
     let password = "correct horse";
 
     let signed_up = auth.register(draft(&email), password).await.unwrap();
-    let company = signed_up.profile.companies[0].id();
+    let company = signed_up.profile.memberships[0].company.id();
 
     let duplicate = auth
         .register(draft(&email.to_uppercase()), password)
@@ -1277,8 +1277,9 @@ where
     assert_ne!(logged_in.token, signed_up.token);
     let profile = auth.profile(&logged_in.token).await.unwrap();
     assert_eq!(profile.user.email().as_str(), email);
-    assert_eq!(profile.companies.len(), 1);
-    assert_eq!(profile.companies[0].name(), "Padaria");
+    assert_eq!(profile.memberships.len(), 1);
+    assert_eq!(profile.memberships[0].company.name(), "Padaria");
+    assert_eq!(profile.memberships[0].role, Role::Owner);
 
     auth.authorize(&logged_in.token, company).await.unwrap();
 
@@ -1310,6 +1311,91 @@ where
 }
 
 /// Expects an `AuthService` whose sessions last zero seconds.
+/// A membership says what its user is in the company: the creator is the owner, another user can be
+/// added with a role of their own, a second membership never changes the first one's role, and what
+/// a user is differs from company to company.
+pub async fn memberships_carry_a_role<I: IdentityRepository>(identities: &I) {
+    let register = |name: &str, company: &str| {
+        let account = Account::new(
+            UserId::generate(),
+            CompanyId::generate(),
+            AccountDraft {
+                user_name: name.into(),
+                email: format!("{name}-{}@example.com", Uuid::new_v4()),
+                company_name: company.into(),
+            },
+        )
+        .unwrap();
+        async move {
+            identities
+                .register_account(&NewAccount {
+                    account: account.clone(),
+                    password_hash: "not a real hash".into(),
+                })
+                .await
+                .unwrap();
+            account
+        }
+    };
+    let ana = register("Ana", "Padaria Ana").await;
+    let bia = register("Bia", "Oficina Bia").await;
+    let (ana_company, bia_company) = (ana.company.id(), bia.company.id());
+
+    assert_eq!(
+        identities
+            .role_in(ana.user.id(), ana_company)
+            .await
+            .unwrap(),
+        Some(Role::Owner)
+    );
+    // Not a member of the other company: no role, which is not the same as the lowest one.
+    assert_eq!(
+        identities
+            .role_in(ana.user.id(), bia_company)
+            .await
+            .unwrap(),
+        None
+    );
+
+    identities
+        .add_membership(bia.user.id(), ana_company, Role::Sales)
+        .await
+        .unwrap();
+    assert_eq!(
+        identities
+            .role_in(bia.user.id(), ana_company)
+            .await
+            .unwrap(),
+        Some(Role::Sales)
+    );
+    // The second attempt, with another role, is refused and changes nothing.
+    assert_eq!(
+        identities
+            .add_membership(bia.user.id(), ana_company, Role::Admin)
+            .await
+            .unwrap_err(),
+        RepositoryError::DuplicateMembership
+    );
+    assert_eq!(
+        identities
+            .role_in(bia.user.id(), ana_company)
+            .await
+            .unwrap(),
+        Some(Role::Sales)
+    );
+
+    // What a user is depends on the company, and the list says it, ordered by company name.
+    let memberships = identities.memberships_of(bia.user.id()).await.unwrap();
+    let found: Vec<(&str, Role)> = memberships
+        .iter()
+        .map(|m| (m.company.name(), m.role))
+        .collect();
+    assert_eq!(
+        found,
+        [("Oficina Bia", Role::Owner), ("Padaria Ana", Role::Sales)]
+    );
+}
+
 pub async fn expired_sessions_are_rejected<I, S>(auth: &AuthService<I, S>)
 where
     I: IdentityRepository,

@@ -2,8 +2,9 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
 use conta_verde_application::{Profile, SignedIn};
-use conta_verde_domain::AccountDraft;
+use conta_verde_domain::{AccountDraft, Area};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use uuid::Uuid;
 
 use crate::error::ApiError;
@@ -42,6 +43,13 @@ struct UserResponse {
 struct CompanyResponse {
     id: Uuid,
     name: String,
+    /// What the caller is in this company: `owner`, `admin`, `financial`, `sales`, `stock`,
+    /// `accountant` or `viewer`.
+    role: &'static str,
+    /// How far the role reaches into each area (`parties`, `products`, `finance`, `members`):
+    /// `read` or `write`, and an area the role cannot reach is left out. The web app reads this
+    /// instead of knowing the table.
+    permissions: BTreeMap<&'static str, &'static str>,
 }
 
 impl From<&Profile> for ProfileResponse {
@@ -53,11 +61,21 @@ impl From<&Profile> for ProfileResponse {
                 email: profile.user.email().as_str().to_owned(),
             },
             companies: profile
-                .companies
+                .memberships
                 .iter()
-                .map(|company| CompanyResponse {
-                    id: company.id().as_uuid(),
-                    name: company.name().to_owned(),
+                .map(|membership| CompanyResponse {
+                    id: membership.company.id().as_uuid(),
+                    name: membership.company.name().to_owned(),
+                    role: membership.role.as_str(),
+                    permissions: Area::ALL
+                        .into_iter()
+                        .filter_map(|area| {
+                            membership
+                                .role
+                                .access_to(area)
+                                .map(|access| (area.as_str(), access.as_str()))
+                        })
+                        .collect(),
                 })
                 .collect(),
         }

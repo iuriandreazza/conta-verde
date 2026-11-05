@@ -4,9 +4,18 @@ export interface User {
   email: string;
 }
 
+export type Role = "owner" | "admin" | "financial" | "sales" | "stock" | "accountant" | "viewer";
+
+/** A part of the product a permission is about (ADR 0026). */
+export type Area = "parties" | "products" | "finance" | "members";
+
 export interface Company {
   id: string;
   name: string;
+  /** What the signed-in user is in this company. */
+  role: Role;
+  /** How far the role reaches into each area; an area it cannot reach is not there. The API says it, so the web app never knows the table. */
+  permissions: Partial<Record<Area, "read" | "write">>;
 }
 
 export interface Profile {

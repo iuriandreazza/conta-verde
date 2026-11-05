@@ -16,6 +16,7 @@ mod party;
 mod payment_method;
 mod payment_term;
 mod product;
+mod role;
 mod tag;
 
 pub use account::{Account, AccountDraft, Company, User, validate_password};
@@ -47,4 +48,5 @@ pub use payment_term::{
     PaymentTermDraft, Percent,
 };
 pub use product::{Product, ProductDraft, ProductKind};
+pub use role::{Access, Area, Role};
 pub use tag::{MAX_TAGS, Tag};

@@ -6,12 +6,13 @@ use crate::memory_audit::AuditLog;
 use crate::memory_list::{keyset_page, name_key};
 
 use conta_verde_application::{
-    CnpjLookupError, CnpjRegistry, IdentityRepository, NameCursor, NewAccount, PartyQuery,
-    PartyRepository, RegistryEntry, RepositoryError, StoredCredentials, ensure_audit_describes,
+    CnpjLookupError, CnpjRegistry, CompanyMembership, IdentityRepository, NameCursor, NewAccount,
+    PartyQuery, PartyRepository, RegistryEntry, RepositoryError, StoredCredentials,
+    ensure_audit_describes,
 };
 use conta_verde_domain::{
-    AuditEntity, AuditEntry, AuditRecord, Cnpj, Company, CompanyId, Email, Party, PartyId, User,
-    UserId,
+    AuditEntity, AuditEntry, AuditRecord, Cnpj, Company, CompanyId, Email, Party, PartyId, Role,
+    User, UserId,
 };
 
 /// Keeps parties and their audit trail in process memory. Used by tests and for running the API
@@ -177,17 +178,18 @@ impl CnpjRegistry for InMemoryCnpjRegistry {
     }
 }
 
-/// Keeps users, companies, memberships and sessions in process memory.
-#[derive(Default)]
+/// Keeps users, companies, memberships and sessions in process memory. A clone shares the same
+/// state, so a test can keep a handle to what a service was given.
+#[derive(Default, Clone)]
 pub struct InMemoryIdentityRepository {
-    state: Mutex<IdentityState>,
+    state: Arc<Mutex<IdentityState>>,
 }
 
 #[derive(Default)]
 struct IdentityState {
     users: Vec<StoredCredentials>,
     companies: Vec<Company>,
-    memberships: Vec<(UserId, CompanyId)>,
+    memberships: Vec<(UserId, CompanyId, Role)>,
     sessions: HashMap<String, (UserId, Instant)>,
 }
 
@@ -221,7 +223,7 @@ impl IdentityRepository for InMemoryIdentityRepository {
         state.companies.push(account.company.clone());
         state
             .memberships
-            .push((account.user.id(), account.company.id()));
+            .push((account.user.id(), account.company.id(), Role::Owner));
         Ok(())
     }
 
@@ -237,26 +239,64 @@ impl IdentityRepository for InMemoryIdentityRepository {
             .cloned())
     }
 
-    async fn companies_of(&self, user_id: UserId) -> Result<Vec<Company>, RepositoryError> {
+    async fn memberships_of(
+        &self,
+        user_id: UserId,
+    ) -> Result<Vec<CompanyMembership>, RepositoryError> {
         let state = self.state.lock().expect("repository lock poisoned");
-        let mut companies: Vec<Company> = state
-            .companies
+        let mut memberships: Vec<CompanyMembership> = state
+            .memberships
             .iter()
-            .filter(|company| state.memberships.contains(&(user_id, company.id())))
-            .cloned()
+            .filter(|(member, _, _)| *member == user_id)
+            .filter_map(|(_, company_id, role)| {
+                let company = state
+                    .companies
+                    .iter()
+                    .find(|company| company.id() == *company_id)?;
+                Some(CompanyMembership {
+                    company: company.clone(),
+                    role: *role,
+                })
+            })
             .collect();
-        companies
-            .sort_by_cached_key(|company| (company.name().to_lowercase(), company.id().as_uuid()));
-        Ok(companies)
+        memberships.sort_by_cached_key(|membership| {
+            (
+                membership.company.name().to_lowercase(),
+                membership.company.id().as_uuid(),
+            )
+        });
+        Ok(memberships)
     }
 
-    async fn is_member(
+    async fn role_in(
         &self,
         user_id: UserId,
         company_id: CompanyId,
-    ) -> Result<bool, RepositoryError> {
+    ) -> Result<Option<Role>, RepositoryError> {
         let state = self.state.lock().expect("repository lock poisoned");
-        Ok(state.memberships.contains(&(user_id, company_id)))
+        Ok(state
+            .memberships
+            .iter()
+            .find(|(member, company, _)| *member == user_id && *company == company_id)
+            .map(|(_, _, role)| *role))
+    }
+
+    async fn add_membership(
+        &self,
+        user_id: UserId,
+        company_id: CompanyId,
+        role: Role,
+    ) -> Result<(), RepositoryError> {
+        let mut state = self.state.lock().expect("repository lock poisoned");
+        if state
+            .memberships
+            .iter()
+            .any(|(member, company, _)| *member == user_id && *company == company_id)
+        {
+            return Err(RepositoryError::DuplicateMembership);
+        }
+        state.memberships.push((user_id, company_id, role));
+        Ok(())
     }
 
     async fn create_session(
@@ -1048,6 +1088,11 @@ mod tests {
             Duration::from_secs(3600),
         );
         contract::runs_the_account_lifecycle(&auth).await;
+    }
+
+    #[tokio::test]
+    async fn memberships_carry_a_role() {
+        contract::memberships_carry_a_role(&InMemoryIdentityRepository::default()).await;
     }
 
     #[tokio::test]

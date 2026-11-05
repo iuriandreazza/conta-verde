@@ -1,18 +1,37 @@
 use std::time::Duration;
 
 use conta_verde_domain::{
-    Account, AccountDraft, Company, CompanyId, Email, User, UserId, validate_password,
+    Access, Account, AccountDraft, Area, CompanyId, Email, Role, User, UserId, validate_password,
 };
 
 use crate::{
-    ApplicationError, AuthError, IdentityRepository, NewAccount, SecretService, StoredCredentials,
+    ApplicationError, AuthError, CompanyMembership, IdentityRepository, NewAccount, SecretService,
+    StoredCredentials,
 };
 
-/// A user and the companies they can switch between.
+/// A user and the companies they can switch between, with their role in each.
 #[derive(Debug, Clone)]
 pub struct Profile {
     pub user: User,
-    pub companies: Vec<Company>,
+    pub memberships: Vec<CompanyMembership>,
+}
+
+/// A user proven to belong to a company, and what they are there.
+#[derive(Debug, Clone)]
+pub struct Member {
+    pub user: User,
+    pub role: Role,
+}
+
+impl Member {
+    /// Refuses unless the role reaches the area as far as `access`.
+    pub fn require(&self, area: Area, access: Access) -> Result<(), AuthError> {
+        if self.role.can(area, access) {
+            Ok(())
+        } else {
+            Err(AuthError::NotAllowed)
+        }
+    }
 }
 
 /// The outcome of registering or logging in: the raw session token is shown to the client once.
@@ -70,7 +89,11 @@ impl<I: IdentityRepository, S: SecretService> AuthService<I, S> {
             token,
             profile: Profile {
                 user: account.user,
-                companies: vec![account.company],
+                // The person who creates a company is its owner.
+                memberships: vec![CompanyMembership {
+                    company: account.company,
+                    role: Role::Owner,
+                }],
             },
         })
     }
@@ -89,10 +112,10 @@ impl<I: IdentityRepository, S: SecretService> AuthService<I, S> {
         match credentials {
             Some(StoredCredentials { user, .. }) if verified => {
                 let token = self.open_session(user.id()).await?;
-                let companies = self.identities.companies_of(user.id()).await?;
+                let memberships = self.identities.memberships_of(user.id()).await?;
                 Ok(SignedIn {
                     token,
-                    profile: Profile { user, companies },
+                    profile: Profile { user, memberships },
                 })
             }
             _ => Err(AuthError::InvalidCredentials.into()),
@@ -106,22 +129,21 @@ impl<I: IdentityRepository, S: SecretService> AuthService<I, S> {
 
     pub async fn profile(&self, token: &str) -> Result<Profile, ApplicationError> {
         let user = self.authenticate(token).await?;
-        let companies = self.identities.companies_of(user.id()).await?;
-        Ok(Profile { user, companies })
+        let memberships = self.identities.memberships_of(user.id()).await?;
+        Ok(Profile { user, memberships })
     }
 
-    /// Proves the session owner belongs to the company. Companies the user cannot see and
-    /// companies that do not exist are indistinguishable on purpose.
+    /// Proves the session owner belongs to the company, and says what they are there. Companies
+    /// the user cannot see and companies that do not exist are indistinguishable on purpose.
     pub async fn authorize(
         &self,
         token: &str,
         company_id: CompanyId,
-    ) -> Result<User, ApplicationError> {
+    ) -> Result<Member, ApplicationError> {
         let user = self.authenticate(token).await?;
-        if self.identities.is_member(user.id(), company_id).await? {
-            Ok(user)
-        } else {
-            Err(AuthError::Forbidden.into())
+        match self.identities.role_in(user.id(), company_id).await? {
+            Some(role) => Ok(Member { user, role }),
+            None => Err(AuthError::Forbidden.into()),
         }
     }
 
