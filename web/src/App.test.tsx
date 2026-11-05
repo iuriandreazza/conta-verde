@@ -2204,6 +2204,8 @@ describe("importing parties from a CSV file", () => {
     expect(new Headers(init?.headers).get("Content-Type")).toBe("text/csv");
     // The file goes as it is, not read into text and sent again.
     expect(init?.body).toBeInstanceOf(File);
+    // A file with problems is let go: the fixed one is chosen again.
+    expect(screen.getByRole("button", { name: "Importar" })).toBeDisabled();
   });
 
   it("imports, says what was skipped, and reloads the list", async () => {
@@ -2255,7 +2257,7 @@ describe("importing parties from a CSV file", () => {
     await userEvent.click(screen.getByRole("button", { name: "Importar" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("does not know: phone");
-    // The file stays chosen, so it can be sent again once it is fixed and chosen again.
-    expect(screen.getByRole("button", { name: "Importar" })).toBeEnabled();
+    // The file is let go, so the fixed one has to be chosen again.
+    expect(screen.getByRole("button", { name: "Importar" })).toBeDisabled();
   });
 });

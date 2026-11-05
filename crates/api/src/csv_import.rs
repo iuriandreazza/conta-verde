@@ -136,15 +136,17 @@ pub(crate) fn read_table(
     if headers.iter().all(String::is_empty) {
         return Err(FileError::Empty);
     }
+    // A spreadsheet often leaves a column with no name at the end (a separator too many): it has
+    // nothing the import could read, so it is not one of the columns.
     let mut seen = HashSet::new();
-    for header in &headers {
+    for header in headers.iter().filter(|header| !header.is_empty()) {
         if !seen.insert(header.as_str()) {
             return Err(FileError::RepeatedColumn(header.clone()));
         }
     }
     let unknown: Vec<String> = headers
         .iter()
-        .filter(|header| !columns.contains(&header.as_str()))
+        .filter(|header| !header.is_empty() && !columns.contains(&header.as_str()))
         .cloned()
         .collect();
     if !unknown.is_empty() {
@@ -304,6 +306,12 @@ mod tests {
             table("name\nAna,extra\n").err(),
             Some(FileError::Unreadable(_))
         ));
+    }
+
+    #[test]
+    fn a_column_without_a_name_is_left_alone() {
+        let rows = cells("name;document;\nAna;123;\n");
+        assert_eq!(rows, [(2, Some("Ana".into()), Some("123".into()))]);
     }
 
     #[test]

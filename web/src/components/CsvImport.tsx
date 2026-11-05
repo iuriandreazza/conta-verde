@@ -44,6 +44,11 @@ export function CsvImport({
     setError(null);
   }
 
+  function forgetFile() {
+    setFile(null);
+    setInputKey((key) => key + 1);
+  }
+
   async function send(dryRun: boolean) {
     if (file === null || pending !== null) {
       return;
@@ -54,13 +59,17 @@ export function CsvImport({
     try {
       const outcome = await run(file, dryRun);
       setResult(outcome);
+      if (outcome.created > 0 || outcome.refused.length > 0) {
+        // Imported, or to be fixed: either way the file is let go. A fixed file has to be chosen
+        // again, which is also what makes the browser read it again.
+        forgetFile();
+      }
       if (outcome.created > 0) {
-        setFile(null);
-        setInputKey((key) => key + 1);
         onImported();
       }
     } catch (failure) {
       setError(errorMessage(failure));
+      forgetFile();
     } finally {
       setPending(null);
     }
