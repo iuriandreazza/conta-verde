@@ -74,6 +74,50 @@ export interface Registration {
   company_name: string;
 }
 
+export type ProductKind = "product" | "service";
+
+export interface Product {
+  id: string;
+  company_id: string;
+  kind: ProductKind;
+  name: string;
+  sku: string | null;
+  unit: string;
+  ncm: string | null;
+  /** Decimal strings like `"12.5"`, never numbers: see `lib/decimal.ts`. */
+  sale_price: string | null;
+  cost_price: string | null;
+  minimum_stock: string | null;
+  active: boolean;
+}
+
+export interface ProductPage {
+  items: Product[];
+  next_cursor: string | null;
+}
+
+/** What is sent to register a product, and, whole, to change one: a change replaces every field. */
+export interface ProductInput {
+  kind: ProductKind;
+  name: string;
+  sku?: string;
+  unit: string;
+  ncm?: string;
+  sale_price?: string;
+  cost_price?: string;
+  minimum_stock?: string;
+  active: boolean;
+}
+
+export interface ProductFilters {
+  q: string;
+  kind: "" | ProductKind;
+  active: "" | "true" | "false";
+  sort: "name" | "-name";
+}
+
+export const NO_PRODUCT_FILTERS: ProductFilters = { q: "", kind: "", active: "", sort: "name" };
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -146,4 +190,24 @@ export const api = {
   /** Asks the registry again about the party's CNPJ; resolves with the party and its new answer. */
   verifyDocument: (companyId: string, partyId: string) =>
     post<Party>(`/companies/${companyId}/parties/${partyId}/document-check`),
+  /** As `listParties`: a cursor only continues the list that produced it. */
+  listProducts: (companyId: string, filters: ProductFilters = NO_PRODUCT_FILTERS, after?: string) => {
+    const params = new URLSearchParams();
+    if (filters.q) params.set("q", filters.q);
+    if (filters.kind) params.set("kind", filters.kind);
+    if (filters.active) params.set("active", filters.active);
+    if (filters.sort !== NO_PRODUCT_FILTERS.sort) params.set("sort", filters.sort);
+    if (after) params.set("after", after);
+    const query = params.size > 0 ? `?${params}` : "";
+    return request<ProductPage>(`/companies/${companyId}/products${query}`);
+  },
+  createProduct: (companyId: string, product: ProductInput) =>
+    post<Product>(`/companies/${companyId}/products`, product),
+  updateProduct: (companyId: string, productId: string, product: ProductInput) =>
+    request<Product>(`/companies/${companyId}/products/${productId}`, {
+      method: "PUT",
+      body: JSON.stringify(product),
+    }),
+  productHistory: (companyId: string, productId: string) =>
+    request<HistoryEntry[]>(`/companies/${companyId}/products/${productId}/history`),
 };

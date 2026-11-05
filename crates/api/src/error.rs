@@ -8,8 +8,14 @@ use serde::Serialize;
 pub(crate) enum ApiError {
     Application(ApplicationError),
     InvalidCursor,
+    /// A request body that is not the JSON this endpoint takes.
+    InvalidBody(axum::extract::rejection::JsonRejection),
     /// A list parameter this API does not understand; the message names which one.
     InvalidQuery(&'static str),
+    /// Query parameters that are not even the right shape, like `limit=abc`.
+    InvalidParameters(axum::extract::rejection::QueryRejection),
+    /// A body field this endpoint needs that the request left out.
+    InvalidField(&'static str),
 }
 
 impl From<ApplicationError> for ApiError {
@@ -27,6 +33,11 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, message) = match &self {
             Self::InvalidCursor => (StatusCode::BAD_REQUEST, "invalid cursor".to_owned()),
+            Self::InvalidBody(rejection) => crate::json::describe(rejection),
+            Self::InvalidParameters(rejection) => (rejection.status(), rejection.body_text()),
+            Self::InvalidField(message) => {
+                (StatusCode::UNPROCESSABLE_ENTITY, (*message).to_owned())
+            }
             Self::InvalidQuery(message) => (StatusCode::BAD_REQUEST, (*message).to_owned()),
             Self::Application(error) => describe(error),
         };
@@ -38,7 +49,9 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
     match error {
         ApplicationError::Domain(error) => (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()),
         ApplicationError::Repository(
-            error @ (RepositoryError::DuplicateDocument | RepositoryError::DuplicateEmail),
+            error @ (RepositoryError::DuplicateDocument
+            | RepositoryError::DuplicateEmail
+            | RepositoryError::DuplicateSku),
         ) => (StatusCode::CONFLICT, error.to_string()),
         ApplicationError::Auth(error) => {
             let status = match error {
@@ -54,6 +67,7 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
         | ApplicationError::Repository(RepositoryError::NotFound) => {
             (StatusCode::NOT_FOUND, "party not found".to_owned())
         }
+        ApplicationError::ProductNotFound => (StatusCode::NOT_FOUND, error.to_string()),
         ApplicationError::LookupDisabled => (StatusCode::CONFLICT, error.to_string()),
         ApplicationError::RecheckTooSoon => (StatusCode::TOO_MANY_REQUESTS, error.to_string()),
         // Internal details can leak: log them, but show clients a generic message.

@@ -1,17 +1,18 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
+
+use crate::memory_audit::AuditLog;
+use crate::memory_list::{keyset_page, name_key};
 
 use conta_verde_application::{
-    CnpjLookupError, CnpjRegistry, IdentityRepository, NewAccount, PartyCursor, PartyQuery,
-    PartyRepository, PartySort, RegistryEntry, RepositoryError, StoredCredentials,
-    ensure_audit_describes,
+    CnpjLookupError, CnpjRegistry, IdentityRepository, NameCursor, NewAccount, PartyQuery,
+    PartyRepository, RegistryEntry, RepositoryError, StoredCredentials, ensure_audit_describes,
 };
 use conta_verde_domain::{
     AuditEntity, AuditEntry, AuditRecord, Cnpj, Company, CompanyId, Email, Party, PartyId, User,
     UserId,
 };
-use uuid::Uuid;
 
 /// Keeps parties and their audit trail in process memory. Used by tests and for running the API
 /// without a database. Like the Postgres adapter, it records an audit entry only for a write that
@@ -24,24 +25,7 @@ pub struct InMemoryPartyRepository {
 #[derive(Default)]
 struct PartyState {
     parties: Vec<Party>,
-    audit: Vec<AuditRecord>,
-    next_sequence: i64,
-}
-
-impl PartyState {
-    fn record(&mut self, audit: &AuditEntry) {
-        self.next_sequence += 1;
-        let at_millis = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |elapsed| {
-                i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX)
-            });
-        self.audit.push(AuditRecord {
-            sequence: self.next_sequence,
-            at_millis,
-            entry: audit.clone(),
-        });
-    }
+    audit: AuditLog,
 }
 
 impl PartyRepository for InMemoryPartyRepository {
@@ -57,7 +41,7 @@ impl PartyRepository for InMemoryPartyRepository {
             return Err(RepositoryError::DuplicateDocument);
         }
         state.parties.push(party.clone());
-        state.record(audit);
+        state.audit.record(audit);
         Ok(())
     }
 
@@ -89,7 +73,7 @@ impl PartyRepository for InMemoryPartyRepository {
         *stored = stored
             .clone()
             .with_document_check(party.document_check().clone());
-        state.record(audit);
+        state.audit.record(audit);
         Ok(())
     }
 
@@ -101,50 +85,26 @@ impl PartyRepository for InMemoryPartyRepository {
         let state = self.state.lock().expect("repository lock poisoned");
         Ok(state
             .audit
-            .iter()
-            .filter(|record| {
-                record.entry.company_id == company_id
-                    && record.entry.entity == AuditEntity::Party
-                    && record.entry.entity_id == id.as_uuid()
-            })
-            .cloned()
-            .collect())
+            .history(company_id, AuditEntity::Party, id.as_uuid()))
     }
 
     async fn list_by_company(
         &self,
         company_id: CompanyId,
         query: &PartyQuery,
-        after: Option<&PartyCursor>,
+        after: Option<&NameCursor>,
         limit: usize,
     ) -> Result<Vec<Party>, RepositoryError> {
         let state = self.state.lock().expect("repository lock poisoned");
-        let sort_key = |name: &str, id: Uuid| (name.to_lowercase(), id);
-        let descending = query.sort() == PartySort::NameDesc;
-        let after_key = after.map(|cursor| sort_key(&cursor.name, cursor.id.as_uuid()));
-
-        let mut found: Vec<Party> = state
+        let matching = state
             .parties
             .iter()
             .filter(|party| party.company_id() == company_id && query.matches(party))
-            .filter(|party| {
-                after_key.as_ref().is_none_or(|key| {
-                    let key_of_party = sort_key(party.name(), party.id().as_uuid());
-                    if descending {
-                        key_of_party < *key
-                    } else {
-                        key_of_party > *key
-                    }
-                })
-            })
             .cloned()
             .collect();
-        found.sort_by_cached_key(|party| sort_key(party.name(), party.id().as_uuid()));
-        if descending {
-            found.reverse();
-        }
-        found.truncate(limit);
-        Ok(found)
+        Ok(keyset_page(matching, query.sort(), after, limit, |party| {
+            name_key(party.name(), party.id().as_uuid())
+        }))
     }
 }
 

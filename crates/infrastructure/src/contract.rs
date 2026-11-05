@@ -1,12 +1,15 @@
 //! Behavior every adapter must share, written once and run against each of them.
 
 use conta_verde_application::{
-    ApplicationError, AuthError, AuthService, CnpjRegistry, IdentityRepository, PartyKind,
-    PartyQuery, PartyRepository, PartyService, PartySort, RepositoryError, SecretService,
+    ApplicationError, AuthError, AuthService, CnpjRegistry, IdentityRepository, NameSort,
+    PartyKind, PartyQuery, PartyRepository, PartyService, ProductQuery, ProductRepository,
+    ProductService, RepositoryError, SecretService,
 };
 use conta_verde_domain::{
-    AccountDraft, Actor, AuditAction, AuditEntity, AuditEntry, CompanyId, DocumentCheck, Party,
-    PartyDraft, PartyId, UserId, creation_changes, document_check_changes,
+    AccountDraft, Actor, AuditAction, AuditEntity, AuditEntry, CompanyId, DocumentCheck,
+    DomainError, FieldChange, Party, PartyDraft, PartyId, Product, ProductDraft, ProductId,
+    ProductKind, UserId, creation_changes, document_check_changes, product_changes,
+    product_creation_changes,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -457,7 +460,7 @@ pub async fn breaks_ties_between_equal_names<R: PartyRepository, C: CnpjRegistry
     let descending = listed_names(
         service,
         company,
-        &PartyQuery::default().sorted(PartySort::NameDesc),
+        &PartyQuery::default().sorted(NameSort::NameDesc),
         1,
     )
     .await;
@@ -526,7 +529,7 @@ pub async fn filters_and_sorts_parties<R: PartyRepository, C: CnpjRegistry>(
     assert_eq!(names(all.clone()).await, ascending);
     let descending: Vec<&str> = ascending.iter().rev().copied().collect();
     assert_eq!(
-        names(all.clone().sorted(PartySort::NameDesc)).await,
+        names(all.clone().sorted(NameSort::NameDesc)).await,
         descending
     );
 
@@ -575,7 +578,7 @@ pub async fn filters_and_sorts_parties<R: PartyRepository, C: CnpjRegistry>(
     let customers_with_a = all
         .of_kind(PartyKind::Customer)
         .searching("a")
-        .sorted(PartySort::NameDesc);
+        .sorted(NameSort::NameDesc);
     assert_eq!(
         names(customers_with_a).await,
         ["padaria Central", "Ana Souza", "100% Natural"]
@@ -715,5 +718,470 @@ where
     assert_eq!(
         auth.profile(&signed_up.token).await.unwrap_err(),
         ApplicationError::Auth(AuthError::Unauthenticated)
+    );
+}
+
+// ---- products and services
+
+fn product_draft(name: &str, kind: ProductKind, sku: Option<&str>, active: bool) -> ProductDraft {
+    let is_product = kind == ProductKind::Product;
+    ProductDraft {
+        kind,
+        name: name.into(),
+        sku: sku.map(Into::into),
+        unit: "UN".into(),
+        ncm: is_product.then(|| "1905.90.90".into()),
+        sale_price: Some("10.50".into()),
+        cost_price: Some("4".into()),
+        minimum_stock: is_product.then(|| "2.5".into()),
+        active,
+    }
+}
+
+fn product_entry(product: &Product, action: AuditAction, changes: Vec<FieldChange>) -> AuditEntry {
+    AuditEntry {
+        company_id: product.company_id(),
+        actor: actor(),
+        entity: AuditEntity::Product,
+        entity_id: product.id().as_uuid(),
+        action,
+        changes,
+    }
+}
+
+fn new_product(company: CompanyId, name: &str, sku: Option<&str>) -> Product {
+    Product::new(
+        ProductId::generate(),
+        company,
+        product_draft(name, ProductKind::Product, sku, true),
+    )
+    .unwrap()
+}
+
+async fn trail<R: ProductRepository>(
+    repository: &R,
+    company: CompanyId,
+    product: &Product,
+) -> usize {
+    repository
+        .history(company, product.id())
+        .await
+        .unwrap()
+        .len()
+}
+
+/// A write is stored with its audit entry, scoped by company; one that is refused or misses leaves
+/// nothing in the trail, and an entry that describes something else is refused outright.
+pub async fn stores_products_with_their_trail<R: ProductRepository>(
+    repository: &R,
+    company: CompanyId,
+    other_company: CompanyId,
+) {
+    let bread = new_product(company, "Pão", Some("PAO-1"));
+    let entry = product_entry(
+        &bread,
+        AuditAction::Created,
+        product_creation_changes(&bread),
+    );
+    repository.save(&bread, &entry).await.unwrap();
+
+    // What comes back is what went in, whichever way the adapter keeps amounts.
+    let stored = repository.find(company, bread.id()).await.unwrap().unwrap();
+    assert_eq!(stored, bread);
+    assert_eq!(stored.sale_price().unwrap().to_string(), "10.5");
+    assert_eq!(stored.minimum_stock().unwrap().to_string(), "2.5");
+    // Another company's product looks missing.
+    assert_eq!(
+        repository.find(other_company, bread.id()).await.unwrap(),
+        None
+    );
+
+    let history = repository.history(company, bread.id()).await.unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].entry, entry);
+    assert!(
+        repository
+            .history(other_company, bread.id())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // The same SKU in the same company is refused, with no row and no entry...
+    let twin = new_product(company, "Pão 2", Some("PAO-1"));
+    assert_eq!(
+        repository
+            .save(&twin, &product_entry(&twin, AuditAction::Created, vec![]))
+            .await,
+        Err(RepositoryError::DuplicateSku)
+    );
+    assert_eq!(repository.find(company, twin.id()).await.unwrap(), None);
+    assert_eq!(trail(repository, company, &twin).await, 0);
+    // ...but another company may use it, and a product without SKU never clashes.
+    let elsewhere = new_product(other_company, "Pão", Some("PAO-1"));
+    let entry = product_entry(&elsewhere, AuditAction::Created, vec![]);
+    repository.save(&elsewhere, &entry).await.unwrap();
+    for name in ["Sem SKU 1", "Sem SKU 2"] {
+        let bare = new_product(company, name, None);
+        let entry = product_entry(&bare, AuditAction::Created, vec![]);
+        repository.save(&bare, &entry).await.unwrap();
+    }
+
+    // An entry about another record, or another company, is refused and nothing is stored.
+    let stray = new_product(company, "Estranho", None);
+    let wrong_record = product_entry(&bread, AuditAction::Created, vec![]);
+    assert!(repository.save(&stray, &wrong_record).await.is_err());
+    assert_eq!(repository.find(company, stray.id()).await.unwrap(), None);
+    let mut wrong_company = product_entry(&stray, AuditAction::Created, vec![]);
+    wrong_company.company_id = other_company;
+    assert!(repository.save(&stray, &wrong_company).await.is_err());
+    assert_eq!(trail(repository, other_company, &stray).await, 0);
+
+    // An update replaces the fields and adds an entry...
+    let renamed = bread
+        .replaced_with(product_draft(
+            "Pão francês",
+            ProductKind::Product,
+            Some("PAO-1"),
+            false,
+        ))
+        .unwrap();
+    let changes = product_changes(&bread, &renamed);
+    let entry = product_entry(&renamed, AuditAction::Updated, changes);
+    repository.update(&renamed, &entry).await.unwrap();
+    assert_eq!(
+        repository.find(company, bread.id()).await.unwrap(),
+        Some(renamed.clone())
+    );
+    assert_eq!(trail(repository, company, &bread).await, 2);
+
+    // ...unless it clashes with another product's SKU: then it changes nothing and adds nothing.
+    let bare = repository
+        .list_by_company(
+            company,
+            &ProductQuery::default().searching("Sem SKU 1"),
+            None,
+            5,
+        )
+        .await
+        .unwrap()
+        .remove(0);
+    let clashing = bare
+        .replaced_with(product_draft(
+            "Sem SKU 1",
+            ProductKind::Product,
+            Some("PAO-1"),
+            true,
+        ))
+        .unwrap();
+    let entry = product_entry(
+        &clashing,
+        AuditAction::Updated,
+        product_changes(&bare, &clashing),
+    );
+    assert_eq!(
+        repository.update(&clashing, &entry).await,
+        Err(RepositoryError::DuplicateSku)
+    );
+    assert_eq!(
+        repository.find(company, bare.id()).await.unwrap(),
+        Some(bare.clone())
+    );
+    // Only the entry of its creation: the refused update added none.
+    assert_eq!(trail(repository, company, &bare).await, 1);
+
+    // Keeping its own SKU is not a clash.
+    let same_sku = renamed
+        .replaced_with(product_draft(
+            "Pão francês 2",
+            ProductKind::Product,
+            Some("PAO-1"),
+            true,
+        ))
+        .unwrap();
+    let entry = product_entry(
+        &same_sku,
+        AuditAction::Updated,
+        product_changes(&renamed, &same_sku),
+    );
+    repository.update(&same_sku, &entry).await.unwrap();
+
+    // The kind is fixed at registration: the port refuses to change it, and nothing is written.
+    let kind_swap = Product::new(
+        bread.id(),
+        company,
+        product_draft("Pão serviço", ProductKind::Service, None, true),
+    )
+    .unwrap();
+    let entry = product_entry(&kind_swap, AuditAction::Updated, vec![]);
+    assert_eq!(
+        repository.update(&kind_swap, &entry).await,
+        Err(RepositoryError::NotFound)
+    );
+    assert_eq!(
+        repository
+            .find(company, bread.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .kind(),
+        ProductKind::Product
+    );
+
+    // A SKU given up by a rename is free for another product of the company.
+    let freed = same_sku
+        .replaced_with(product_draft(
+            "Pão francês 2",
+            ProductKind::Product,
+            Some("PAO-2"),
+            true,
+        ))
+        .unwrap();
+    let entry = product_entry(
+        &freed,
+        AuditAction::Updated,
+        product_changes(&same_sku, &freed),
+    );
+    repository.update(&freed, &entry).await.unwrap();
+    let reuse = new_product(company, "Pão novo", Some("PAO-1"));
+    let entry = product_entry(
+        &reuse,
+        AuditAction::Created,
+        product_creation_changes(&reuse),
+    );
+    repository.save(&reuse, &entry).await.unwrap();
+
+    // A product that is not in that company cannot be updated from it, and leaves no entry.
+    let foreign = Product::new(
+        bread.id(),
+        other_company,
+        product_draft("Roubo", ProductKind::Product, None, true),
+    )
+    .unwrap();
+    let entry = product_entry(&foreign, AuditAction::Updated, vec![]);
+    assert_eq!(
+        repository.update(&foreign, &entry).await,
+        Err(RepositoryError::NotFound)
+    );
+    assert_eq!(trail(repository, other_company, &bread).await, 0);
+    let unknown = new_product(company, "Fantasma", None);
+    let entry = product_entry(&unknown, AuditAction::Updated, vec![]);
+    assert_eq!(
+        repository.update(&unknown, &entry).await,
+        Err(RepositoryError::NotFound)
+    );
+    assert_eq!(trail(repository, company, &unknown).await, 0);
+}
+
+/// An edit that changes nothing writes nothing, and the trail shows who changed what.
+pub async fn edits_products_and_records_only_changes<R: ProductRepository>(
+    service: &ProductService<R>,
+    company: CompanyId,
+    other_company: CompanyId,
+) {
+    let created = service
+        .register(
+            company,
+            &actor(),
+            product_draft("Bolo", ProductKind::Product, Some("bolo-1"), true),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.sku(), Some("BOLO-1"));
+
+    // The same values, written differently, are no change.
+    let same = ProductDraft {
+        sale_price: Some("10.5000".into()),
+        ..product_draft("Bolo", ProductKind::Product, Some("BOLO-1"), true)
+    };
+    service
+        .update(company, &actor(), created.id(), same)
+        .await
+        .unwrap();
+    assert_eq!(
+        service.history(company, created.id()).await.unwrap().len(),
+        1
+    );
+
+    let changed = ProductDraft {
+        sale_price: Some("12".into()),
+        ..product_draft("Bolo", ProductKind::Product, Some("BOLO-1"), false)
+    };
+    let updated = service
+        .update(company, &actor(), created.id(), changed)
+        .await
+        .unwrap();
+    assert_eq!(updated.sale_price().unwrap().to_string(), "12");
+    assert!(!updated.is_active());
+
+    let history = service.history(company, created.id()).await.unwrap();
+    assert_eq!(history.len(), 2);
+    assert_eq!(history[0].entry.action, AuditAction::Created);
+    assert_eq!(history[1].entry.action, AuditAction::Updated);
+    let fields: Vec<(&str, Option<&str>, Option<&str>)> = history[1]
+        .entry
+        .changes
+        .iter()
+        .map(|change| {
+            (
+                change.field.as_str(),
+                change.from.as_deref(),
+                change.to.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        fields,
+        [
+            ("sale_price", Some("10.5"), Some("12")),
+            ("active", Some("true"), Some("false"))
+        ]
+    );
+
+    // A product is the same kind for good, and other companies cannot touch or read it.
+    let as_service = product_draft("Bolo", ProductKind::Service, None, true);
+    assert_eq!(
+        service
+            .update(company, &actor(), created.id(), as_service)
+            .await,
+        Err(ApplicationError::Domain(DomainError::KindCannotChange))
+    );
+    let draft = product_draft("Bolo", ProductKind::Product, None, true);
+    assert_eq!(
+        service
+            .update(other_company, &actor(), created.id(), draft)
+            .await,
+        Err(ApplicationError::ProductNotFound)
+    );
+    assert_eq!(
+        service.history(other_company, created.id()).await,
+        Err(ApplicationError::ProductNotFound)
+    );
+}
+
+/// Every name the query lists, a page at a time, so that each case also proves that the cursor
+/// resumes correctly under that filter and sort.
+async fn listed_product_names<R: ProductRepository>(
+    service: &ProductService<R>,
+    company: CompanyId,
+    query: &ProductQuery,
+    page_size: usize,
+) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = service
+            .list(company, query, cursor.as_ref(), Some(page_size))
+            .await
+            .unwrap();
+        names.extend(page.items.iter().map(|product| product.name().to_owned()));
+        match page.next {
+            Some(next) => cursor = Some(next),
+            None => return names,
+        }
+    }
+}
+
+pub async fn filters_and_sorts_products<R: ProductRepository>(
+    service: &ProductService<R>,
+    company: CompanyId,
+    other_company: CompanyId,
+) {
+    let register =
+        |company: CompanyId, name: &str, kind: ProductKind, sku: Option<&str>, active: bool| {
+            let draft = product_draft(name, kind, sku, active);
+            async move { service.register(company, &actor(), draft).await.unwrap() }
+        };
+    use ProductKind::{Product as Good, Service};
+    register(company, "Alfa", Good, Some("AL-1"), true).await;
+    register(company, "bravo", Good, None, false).await;
+    register(company, "Charlie Service", Service, Some("SRV/01"), true).await;
+    register(company, "Delta 100%", Good, Some("DL_2"), true).await;
+    register(company, "echo", Service, None, false).await;
+    // Another company's product never shows up, whatever the text, and may reuse a SKU.
+    register(other_company, "Alfa", Good, Some("AL-1"), true).await;
+
+    let all = ProductQuery::default();
+    let names = |query: ProductQuery| async move {
+        listed_product_names(service, company, &query, 2).await
+    };
+
+    let ascending = ["Alfa", "bravo", "Charlie Service", "Delta 100%", "echo"];
+    assert_eq!(names(all.clone()).await, ascending);
+    let descending: Vec<&str> = ascending.iter().rev().copied().collect();
+    assert_eq!(
+        names(all.clone().sorted(NameSort::NameDesc)).await,
+        descending
+    );
+
+    // Inactive items are listed unless the query says otherwise.
+    assert_eq!(
+        names(all.clone().with_active(true)).await,
+        ["Alfa", "Charlie Service", "Delta 100%"]
+    );
+    assert_eq!(
+        names(all.clone().with_active(false)).await,
+        ["bravo", "echo"]
+    );
+    assert_eq!(
+        names(all.clone().of_kind(Service)).await,
+        ["Charlie Service", "echo"]
+    );
+    assert_eq!(
+        names(all.clone().of_kind(Good)).await,
+        ["Alfa", "bravo", "Delta 100%"]
+    );
+
+    // Search: a name or a SKU anywhere in it, ignoring case.
+    assert_eq!(names(all.clone().searching("ALF")).await, ["Alfa"]);
+    assert_eq!(names(all.clone().searching("  al-1 ")).await, ["Alfa"]);
+    assert_eq!(
+        names(all.clone().searching("srv/")).await,
+        ["Charlie Service"]
+    );
+    // `%` and `_` are ordinary characters, not wildcards.
+    assert_eq!(names(all.clone().searching("%")).await, ["Delta 100%"]);
+    assert_eq!(names(all.clone().searching("_")).await, ["Delta 100%"]);
+    assert_eq!(
+        names(all.clone().searching("a")).await,
+        ["Alfa", "bravo", "Charlie Service", "Delta 100%"]
+    );
+    assert!(names(all.clone().searching("nobody")).await.is_empty());
+    // Control characters (a NUL would be a storage error) are dropped rather than searched for.
+    assert_eq!(names(all.clone().searching("al\0fa")).await, ["Alfa"]);
+    assert_eq!(names(all.clone().searching("   ")).await, ascending);
+
+    // Filters and sort combine, and the cursor keeps working across pages.
+    let inactive_services = all.clone().of_kind(Service).with_active(false);
+    assert_eq!(names(inactive_services).await, ["echo"]);
+    let active_with_a = all
+        .with_active(true)
+        .searching("a")
+        .sorted(NameSort::NameDesc);
+    assert_eq!(
+        names(active_with_a).await,
+        ["Delta 100%", "Charlie Service", "Alfa"]
+    );
+}
+
+/// Names that differ only in case tie on the sort key, so the id decides: one page at a time, in
+/// both directions, nothing may be skipped or repeated and descending must mirror ascending.
+pub async fn breaks_ties_between_equal_product_names<R: ProductRepository>(
+    service: &ProductService<R>,
+    company: CompanyId,
+) {
+    for name in ["Ana", "ana", "ANA", "Bia"] {
+        let draft = product_draft(name, ProductKind::Product, None, true);
+        service.register(company, &actor(), draft).await.unwrap();
+    }
+    let all = ProductQuery::default();
+    let ascending = listed_product_names(service, company, &all, 1).await;
+    let descending =
+        listed_product_names(service, company, &all.sorted(NameSort::NameDesc), 1).await;
+    assert_eq!(ascending.len(), 4);
+    assert_eq!(ascending.last().map(String::as_str), Some("Bia"));
+    assert_eq!(
+        descending,
+        ascending.iter().rev().cloned().collect::<Vec<_>>()
     );
 }

@@ -2,22 +2,14 @@ use std::future::Future;
 
 use conta_verde_domain::{AuditEntry, AuditRecord, CompanyId, Party, PartyId};
 
-use crate::RepositoryError;
+use crate::list_query::clean_search;
+use crate::{NameCursor, NameSort, RepositoryError};
 
-/// Position of the last party of a page. Parties are ordered by name ignoring case, then by id
-/// (both reversed for [`PartySort::NameDesc`]), so the name and id of the last item are enough to
-/// resume right after it in either direction.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PartyCursor {
-    pub name: String,
-    pub id: PartyId,
-}
-
-impl From<&Party> for PartyCursor {
+impl From<&Party> for NameCursor {
     fn from(party: &Party) -> Self {
         Self {
             name: party.name().to_owned(),
-            id: party.id(),
+            id: party.id().as_uuid(),
         }
     }
 }
@@ -27,14 +19,6 @@ impl From<&Party> for PartyCursor {
 pub enum PartyKind {
     Customer,
     Supplier,
-}
-
-/// Every sort is by a column that is never empty, so a cursor can always be built from the last row.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum PartySort {
-    #[default]
-    NameAsc,
-    NameDesc,
 }
 
 /// How a list of parties is narrowed and ordered, the convention other lists follow: a free-text
@@ -48,21 +32,17 @@ pub struct PartyQuery {
     /// document.
     document_needle: Option<String>,
     kind: Option<PartyKind>,
-    sort: PartySort,
+    sort: NameSort,
 }
 
 impl PartyQuery {
-    /// Longest search text accepted; a person types a name or a number, not a paragraph.
-    pub const MAX_SEARCH_CHARS: usize = 100;
-
     /// Matches a name or an e-mail anywhere in it, ignoring case, and a document ignoring its
-    /// punctuation. Blank text means no search. Control characters are dropped: nobody types
-    /// them into a search box, and a NUL is a storage error in Postgres, not a search.
+    /// punctuation. Blank text means no search.
     pub fn searching(mut self, text: &str) -> Self {
-        let text: String = text.chars().filter(|c| !c.is_control()).collect();
-        let text = text.trim();
-        self.search = (!text.is_empty()).then(|| text.to_owned());
-        let needle: String = text
+        self.search = clean_search(text);
+        let needle: String = self
+            .search()
+            .unwrap_or_default()
             .chars()
             .filter(|c| !matches!(c, '.' | '-' | '/') && !c.is_whitespace())
             .map(|c| c.to_ascii_uppercase())
@@ -76,7 +56,7 @@ impl PartyQuery {
         self
     }
 
-    pub fn sorted(mut self, sort: PartySort) -> Self {
+    pub fn sorted(mut self, sort: NameSort) -> Self {
         self.sort = sort;
         self
     }
@@ -89,7 +69,7 @@ impl PartyQuery {
         self.kind
     }
 
-    pub fn sort(&self) -> PartySort {
+    pub fn sort(&self) -> NameSort {
         self.sort
     }
 
@@ -122,19 +102,6 @@ impl PartyQuery {
                     .document()
                     .is_some_and(|document| document.as_str().contains(needle))
             })
-    }
-}
-
-/// Adapters call this before a write: an entry that is not about the party being written (another
-/// company, another id) would put a row into the wrong trail, which is a caller's bug, so it is
-/// refused instead of stored.
-pub fn ensure_audit_describes(audit: &AuditEntry, party: &Party) -> Result<(), RepositoryError> {
-    if audit.describes(party) {
-        Ok(())
-    } else {
-        Err(RepositoryError::Storage(
-            "audit entry does not describe the party being written".to_owned(),
-        ))
     }
 }
 
@@ -177,7 +144,7 @@ pub trait PartyRepository: Send + Sync {
         &self,
         company_id: CompanyId,
         query: &PartyQuery,
-        after: Option<&PartyCursor>,
+        after: Option<&NameCursor>,
         limit: usize,
     ) -> impl Future<Output = Result<Vec<Party>, RepositoryError>> + Send;
 }

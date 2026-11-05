@@ -1,18 +1,18 @@
-use std::sync::Arc;
-
 use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
 use conta_verde_application::{
-    CnpjRegistry, IdentityRepository, PartyRepository, Profile, SecretService, SignedIn,
+    CnpjRegistry, IdentityRepository, PartyRepository, ProductRepository, Profile, SecretService,
+    SignedIn,
 };
 use conta_verde_domain::AccountDraft;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::AppState;
 use crate::error::ApiError;
+use crate::json::ApiJson;
 use crate::session::{clearing_cookie, require_token, session_cookie, token_from};
+use crate::{AppState, SharedState};
 
 #[derive(Deserialize)]
 pub(crate) struct RegisterRequest {
@@ -69,15 +69,16 @@ impl From<&Profile> for ProfileResponse {
 
 type SetCookie = [(header::HeaderName, String); 1];
 
-pub(crate) async fn register<R, C, I, S>(
-    State(state): State<Arc<AppState<R, C, I, S>>>,
-    Json(request): Json<RegisterRequest>,
+pub(crate) async fn register<R, C, I, S, P>(
+    State(state): State<SharedState<R, C, I, S, P>>,
+    ApiJson(request): ApiJson<RegisterRequest>,
 ) -> Result<(StatusCode, SetCookie, Json<ProfileResponse>), ApiError>
 where
     R: PartyRepository,
     C: CnpjRegistry,
     I: IdentityRepository,
     S: SecretService,
+    P: ProductRepository,
 {
     let draft = AccountDraft {
         user_name: request.name,
@@ -92,22 +93,23 @@ where
     ))
 }
 
-pub(crate) async fn login<R, C, I, S>(
-    State(state): State<Arc<AppState<R, C, I, S>>>,
-    Json(request): Json<LoginRequest>,
+pub(crate) async fn login<R, C, I, S, P>(
+    State(state): State<SharedState<R, C, I, S, P>>,
+    ApiJson(request): ApiJson<LoginRequest>,
 ) -> Result<(SetCookie, Json<ProfileResponse>), ApiError>
 where
     R: PartyRepository,
     C: CnpjRegistry,
     I: IdentityRepository,
     S: SecretService,
+    P: ProductRepository,
 {
     let signed_in = state.auth.login(&request.email, &request.password).await?;
     Ok((started(&state, &signed_in), body(&signed_in)))
 }
 
-pub(crate) async fn logout<R, C, I, S>(
-    State(state): State<Arc<AppState<R, C, I, S>>>,
+pub(crate) async fn logout<R, C, I, S, P>(
+    State(state): State<SharedState<R, C, I, S, P>>,
     headers: HeaderMap,
 ) -> Result<(StatusCode, SetCookie), ApiError>
 where
@@ -115,6 +117,7 @@ where
     C: CnpjRegistry,
     I: IdentityRepository,
     S: SecretService,
+    P: ProductRepository,
 {
     if let Some(token) = token_from(&headers) {
         state.auth.logout(token).await?;
@@ -128,8 +131,8 @@ where
     ))
 }
 
-pub(crate) async fn me<R, C, I, S>(
-    State(state): State<Arc<AppState<R, C, I, S>>>,
+pub(crate) async fn me<R, C, I, S, P>(
+    State(state): State<SharedState<R, C, I, S, P>>,
     headers: HeaderMap,
 ) -> Result<Json<ProfileResponse>, ApiError>
 where
@@ -137,18 +140,20 @@ where
     C: CnpjRegistry,
     I: IdentityRepository,
     S: SecretService,
+    P: ProductRepository,
 {
     let token = require_token(&headers)?;
     let profile = state.auth.profile(token).await?;
     Ok(Json(ProfileResponse::from(&profile)))
 }
 
-fn started<R, C, I, S>(state: &AppState<R, C, I, S>, signed_in: &SignedIn) -> SetCookie
+fn started<R, C, I, S, P>(state: &AppState<R, C, I, S, P>, signed_in: &SignedIn) -> SetCookie
 where
     R: PartyRepository,
     C: CnpjRegistry,
     I: IdentityRepository,
     S: SecretService,
+    P: ProductRepository,
 {
     let cookie = session_cookie(
         &signed_in.token,
