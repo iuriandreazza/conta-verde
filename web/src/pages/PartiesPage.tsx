@@ -13,14 +13,11 @@ import { Spinner } from "../components/Spinner";
 // Rows enter one after another, but never wait longer than the eighth for a long page.
 const MAX_STAGGERED_ROWS = 8;
 
+// Layout remounts the page whenever the path changes, so `companyId` never changes within one
+// instance: the old list is dropped and a reply still in flight for another company lands on an
+// unmounted component.
 export function PartiesPage() {
   const { companyId = "" } = useParams();
-  // Keyed by company: switching company remounts the page, which drops the old list and
-  // makes any reply still in flight for the previous company land on an unmounted component.
-  return <CompanyParties key={companyId} companyId={companyId} />;
-}
-
-function CompanyParties({ companyId }: { companyId: string }) {
   const { session } = useAuth();
   const [parties, setParties] = useState<Party[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -141,49 +138,56 @@ function CompanyParties({ companyId }: { companyId: string }) {
           <p role="status" className="status">
             <Spinner /> Carregando…
           </p>
-        ) : parties.length === 0 && !error ? (
+        ) : parties.length === 0 && error ? (
+          // The list could not be loaded at all: offer a retry instead of a table with no rows.
+          <Button type="button" variant="ghost" onClick={() => void loadFirstPage()}>
+            Tentar de novo
+          </Button>
+        ) : parties.length === 0 ? (
           <div className="empty">
             <UsersIcon size={40} aria-hidden />
             <p>Nenhum cadastro ainda.</p>
             <p className="muted">Use o formulário acima para adicionar o primeiro.</p>
           </div>
         ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Nome</th>
-                <th>Documento</th>
-                <th>E-mail</th>
-                <th>Tipo</th>
-              </tr>
-            </thead>
-            <tbody>
-              {parties.map((party, index) => (
-                <motion.tr
-                  key={party.id}
-                  initial={{ opacity: 0, y: 8, backgroundColor: highlightColor(party, highlightedId, 1) }}
-                  animate={{
-                    opacity: 1,
-                    y: 0,
-                    backgroundColor: highlightColor(party, highlightedId, 0),
-                  }}
-                  transition={{
-                    delay: Math.min(index, MAX_STAGGERED_ROWS) * 0.03,
-                    duration: party.id === highlightedId ? 1.4 : 0.2,
-                  }}
-                >
-                  <td>{party.name}</td>
-                  <td>{party.document ?? "—"}</td>
-                  <td>{party.email ?? "—"}</td>
-                  <td>
-                    {[party.is_customer && "Cliente", party.is_supplier && "Fornecedor"]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  </td>
-                </motion.tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Nome</th>
+                  <th>Documento</th>
+                  <th>E-mail</th>
+                  <th>Tipo</th>
+                </tr>
+              </thead>
+              <tbody>
+                {parties.map((party, index) => (
+                  <motion.tr
+                    key={party.id}
+                    initial={{ opacity: 0, y: 8, backgroundColor: highlightColor(party, highlightedId, 1) }}
+                    animate={{
+                      opacity: 1,
+                      y: 0,
+                      backgroundColor: highlightColor(party, highlightedId, 0),
+                    }}
+                    transition={{
+                      delay: Math.min(index, MAX_STAGGERED_ROWS) * 0.03,
+                      duration: party.id === highlightedId ? 1.4 : 0.2,
+                    }}
+                  >
+                    <td>{party.name}</td>
+                    <td>{party.document ?? "—"}</td>
+                    <td>{party.email ?? "—"}</td>
+                    <td>
+                      {[party.is_customer && "Cliente", party.is_supplier && "Fornecedor"]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </td>
+                  </motion.tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
         {nextCursor !== null && (
           <Button

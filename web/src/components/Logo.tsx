@@ -48,10 +48,10 @@ export function LogoMark({ size = 32, tile = true, animated = false }: LogoProps
   );
 }
 
-export function Logo({ size = 32, tile = true, animated = false }: LogoProps) {
+export function Logo({ size = 32, tile = true }: Omit<LogoProps, "animated">) {
   return (
     <span className="logo">
-      <LogoMark size={size} tile={tile} animated={animated} />
+      <LogoMark size={size} tile={tile} />
       <span className="wordmark">
         conta<span className="wordmark-accent">-verde</span>
       </span>

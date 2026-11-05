@@ -29,7 +29,7 @@ The pre-commit hook does not run ignored tests, so run them yourself when touchi
 - Keep the footer link and the API contract in `web/src/api.ts` in sync with the Rust DTOs by hand; there is no generated client yet.
 - Tests are Vitest + Testing Library with `fetch` stubbed; prefer asserting what the user sees.
 - Animation is Motion (`motion/react`) and icons are vendored Lucide Animated components in `web/src/components/icons/` (ADR 0016). Do not edit those by hand beyond the documented tweaks; to add one, download its registry JSON from `https://lucide-animated.com/r/<name>.json`, check it (only `motion/react`, `react` and `cn` imports, no network or DOM access) and replace the `@/lib/utils` import with `../../lib/utils`.
-- Use `components/Button` for buttons (it plays its icon on hover/focus and shows a spinner while `pending`). Pages animate on enter only: an `AnimatePresence` exit phase around the router outlet is a known trap with chained redirects.
+- Use `components/Button` for buttons (it plays its icon on hover/focus and shows a spinner while `pending`). Pages animate on enter only, and `Layout` remounts `<main>` on every path change, so page state never leaks across routes.
 - The logo is `web/public/favicon.svg`, mirrored by `LogoMark` in `web/src/components/Logo.tsx`; change both together. The PNG and ICO favicons are rendered from the SVG.
 - A browser pane or tab that is not painting never advances `requestAnimationFrame`, so animations look frozen at their first frame; that is the environment, not the app. Use a visible tab when checking motion.
 

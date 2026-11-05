@@ -41,8 +41,9 @@ export function Layout() {
           </div>
         )}
       </header>
-      {/* Enter-only on purpose. An exit phase (AnimatePresence "wait") left the page stuck invisible
-          when redirects chained, e.g. sign-up -> "/" -> company page. Remounting per path is robust. */}
+      {/* Enter-only keeps this simple: no exit phase to coordinate with redirects. Keying on the path
+          also remounts the page on every navigation, which drops any state (and any reply still in
+          flight) from the previous page, e.g. the parties of the company the user just left. */}
       <motion.main
         key={location.pathname}
         initial={{ opacity: 0, y: 10 }}

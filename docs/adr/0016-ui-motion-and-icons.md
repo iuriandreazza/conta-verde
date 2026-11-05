@@ -39,6 +39,8 @@ slow people down, hide content, or ignore the system's reduced-motion setting.
 - The JS bundle grows by about 49 kB gzip. If it matters, switch to `LazyMotion` with the `m` component, which would
   mean rewriting the vendored icons too.
 - Adding an icon means running the same check on its registry file before committing it.
+- Each vendored icon wraps its SVG in a `<div>`. That is fine inside links and flex rows (CSS keeps it inline), but it is
+  outside the HTML content model for `<button>` and not allowed in a `<p>`: wrappers that hold an icon must be `<div>`s.
 - The logo and favicon are original artwork (`web/public/favicon.svg`, mirrored by `LogoMark` in `web/src/components/Logo.tsx`);
   they must not resemble any commercial product's identity.
 

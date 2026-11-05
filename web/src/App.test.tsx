@@ -116,6 +116,56 @@ describe("App", () => {
     expect(requested).toContain("/api/companies/c1/parties?after=id%7CCarla+%26+Filhos");
   });
 
+  it("disables the submit button while signing in and clears the old error on retry", async () => {
+    let attempts = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        if (String(input) === "/api/auth/me") {
+          return Promise.resolve(new Response(null, { status: 401 }));
+        }
+        attempts += 1;
+        // The first attempt fails; the second never answers, so we can inspect the pending state.
+        return attempts === 1
+          ? Promise.resolve(
+              new Response(JSON.stringify({ error: "invalid email or password" }), { status: 401 }),
+            )
+          : new Promise<Response>(() => {});
+      }),
+    );
+    renderAt("/login");
+
+    await userEvent.type(await screen.findByLabelText("E-mail"), "ana@example.com");
+    await userEvent.type(screen.getByLabelText("Senha"), "wrong password");
+    await userEvent.click(screen.getByRole("button", { name: "Entrar" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("invalid email or password");
+
+    await userEvent.click(screen.getByRole("button", { name: "Entrar" }));
+    const submit = screen.getByRole("button", { name: "Entrar" });
+    expect(submit).toBeDisabled();
+    expect(submit).toHaveAttribute("aria-busy", "true");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("offers a retry when the first page of parties cannot be loaded", async () => {
+    let listCalls = 0;
+    mockApi((url) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      listCalls += 1;
+      return listCalls === 1
+        ? { status: 500, body: { error: "internal error" } }
+        : { status: 200, body: { items: [party("Carla")], next_cursor: null } };
+    });
+    renderAt("/companies/c1/parties");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("internal error");
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Tentar de novo" }));
+    expect(await screen.findByText("Carla")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("signs up and lands on the new company's parties", async () => {
     const fetchMock = mockApi((url, init) => {
       if (url === "/api/auth/me") return { status: 401 };

@@ -334,6 +334,10 @@ fieldset {
   color: var(--green);
 }
 
+.table-wrap {
+  overflow-x: auto;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -352,6 +356,28 @@ td {
   text-align: center;
   font-size: 0.85rem;
   color: var(--muted);
+}
+
+/* The vendored icons wrap their SVG in a block <div>; keep it inline next to text. */
+.btn > div,
+.alert > div {
+  display: inline-flex;
+}
+
+@media (max-width: 30rem) {
+  .user-name {
+    display: none;
+  }
+
+  main {
+    padding: 1rem 0.75rem;
+  }
+
+  th,
+  td {
+    padding: 0.4rem 0.25rem;
+    font-size: 0.9rem;
+  }
 }
 
 /* Motion is decoration: honor the user's system setting for everything CSS drives. */
