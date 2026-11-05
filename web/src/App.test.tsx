@@ -292,7 +292,9 @@ describe("App", () => {
       });
       expect(sent.document).toBe("12.ABC.345/01DE-35");
       expect(await screen.findByText("CNPJ verificado: PADARIA CENTRAL LTDA.")).toBeInTheDocument();
-      expect(await screen.findByText("Verificado")).toBeInTheDocument();
+      const badge = await screen.findByText("Verificado");
+      // The legal name is part of the badge's text for screen readers, not only a hover title.
+      expect(badge).toHaveTextContent("Verificado (PADARIA CENTRAL LTDA)");
     });
 
     it("warns, without blocking, when the company is not active", async () => {

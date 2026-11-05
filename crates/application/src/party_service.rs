@@ -1,5 +1,5 @@
 use conta_verde_domain::{
-    CompanyId, Document, DocumentCheck, DomainError, Party, PartyDraft, PartyId,
+    Cnpj, CompanyId, Document, DocumentCheck, DomainError, Party, PartyDraft, PartyId,
 };
 
 use crate::{
@@ -33,7 +33,8 @@ impl<R: PartyRepository, C: CnpjRegistry> PartyService<R, C> {
     ///
     /// A CPF is validated by its check digits only. A CNPJ the registry does not know is
     /// rejected; if the registry cannot be reached the party is stored as unverified, so an
-    /// outage of a third-party service never stops data entry.
+    /// outage of a third-party service never stops data entry. With the lookup switched off
+    /// nothing is asked and nothing is claimed about the CNPJ.
     pub async fn register(
         &self,
         company_id: CompanyId,
@@ -48,7 +49,7 @@ impl<R: PartyRepository, C: CnpjRegistry> PartyService<R, C> {
         Ok(party)
     }
 
-    async fn check_cnpj(&self, cnpj: &str) -> Result<DocumentCheck, DomainError> {
+    async fn check_cnpj(&self, cnpj: Cnpj<'_>) -> Result<DocumentCheck, DomainError> {
         match self.registry.lookup(cnpj).await {
             Ok(RegistryEntry {
                 legal_name,
@@ -59,6 +60,7 @@ impl<R: PartyRepository, C: CnpjRegistry> PartyService<R, C> {
             }),
             Err(CnpjLookupError::NotFound) => Err(DomainError::DocumentNotRegistered),
             Err(CnpjLookupError::Unavailable) => Ok(DocumentCheck::Unverified),
+            Err(CnpjLookupError::Disabled) => Ok(DocumentCheck::NotApplicable),
         }
     }
 

@@ -56,11 +56,23 @@ impl Document {
     }
 
     /// The CNPJ, when this is one. Only companies exist in the federal registry we can look up.
-    pub fn cnpj(&self) -> Option<&str> {
+    pub fn cnpj(&self) -> Option<Cnpj<'_>> {
         match self {
-            Self::Cnpj(text) => Some(text),
+            Self::Cnpj(text) => Some(Cnpj(text)),
             Self::Cpf(_) => None,
         }
+    }
+}
+
+/// A CNPJ borrowed from a validated [`Document`]: 14 uppercase characters, no punctuation.
+/// Only `Document::cnpj` builds one, so what is sent to the registry can never be a CPF or an
+/// unnormalized string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cnpj<'a>(&'a str);
+
+impl<'a> Cnpj<'a> {
+    pub fn as_str(&self) -> &'a str {
+        self.0
     }
 }
 
@@ -163,6 +175,9 @@ mod tests {
         let cpf = Document::parse("529.982.247-25").unwrap();
         let cnpj = Document::parse("11.222.333/0001-81").unwrap();
         assert_eq!(cpf.cnpj(), None);
-        assert_eq!(cnpj.cnpj(), Some("11222333000181"));
+        assert_eq!(
+            cnpj.cnpj().map(|cnpj| cnpj.as_str()),
+            Some("11222333000181")
+        );
     }
 }

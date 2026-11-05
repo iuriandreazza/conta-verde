@@ -6,7 +6,7 @@ use conta_verde_application::{
     CnpjLookupError, CnpjRegistry, IdentityRepository, NewAccount, PartyCursor, PartyRepository,
     RegistryEntry, RepositoryError, StoredCredentials,
 };
-use conta_verde_domain::{Company, CompanyId, Email, Party, User, UserId};
+use conta_verde_domain::{Cnpj, Company, CompanyId, Email, Party, User, UserId};
 use uuid::Uuid;
 
 /// Keeps parties in process memory. Used by tests and for running the API without a database.
@@ -56,8 +56,7 @@ impl PartyRepository for InMemoryPartyRepository {
     }
 }
 
-/// A registry that knows only the companies it was given. Used by tests and for running the API
-/// offline, where no CNPJ can be checked against Receita Federal.
+/// A test double: a registry that knows only the companies it was given, or none at all.
 #[derive(Default)]
 pub struct InMemoryCnpjRegistry {
     companies: HashMap<String, RegistryEntry>,
@@ -86,12 +85,12 @@ impl InMemoryCnpjRegistry {
 }
 
 impl CnpjRegistry for InMemoryCnpjRegistry {
-    async fn lookup(&self, cnpj: &str) -> Result<RegistryEntry, CnpjLookupError> {
+    async fn lookup(&self, cnpj: Cnpj<'_>) -> Result<RegistryEntry, CnpjLookupError> {
         if self.unreachable {
             return Err(CnpjLookupError::Unavailable);
         }
         self.companies
-            .get(cnpj)
+            .get(cnpj.as_str())
             .cloned()
             .ok_or(CnpjLookupError::NotFound)
     }
@@ -338,7 +337,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_disabled_lookup_leaves_cnpjs_unverified() {
+    async fn a_disabled_lookup_claims_nothing_about_the_cnpj() {
+        // Switched off on purpose: not an outage, so the party is not flagged as unchecked.
         let registry: Option<InMemoryCnpjRegistry> = None;
         let service = PartyService::new(InMemoryPartyRepository::default(), registry);
         let party = service
@@ -348,7 +348,8 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(party.document_check(), &DocumentCheck::Unverified);
+        assert_eq!(party.document_check(), &DocumentCheck::NotApplicable);
+        assert!(!party.document_check().needs_attention());
     }
 
     #[tokio::test]

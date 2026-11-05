@@ -308,6 +308,15 @@ fieldset {
   color: var(--warning);
 }
 
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .badge-muted {
   background: #eceff1;
   color: var(--muted);

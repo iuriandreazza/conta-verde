@@ -18,6 +18,8 @@ export function DocumentBadge({ check }: { check: DocumentCheck }) {
       title={check.legal_name ?? undefined}
     >
       {check.needs_attention ? check.situation : "Verificado"}
+      {/* The legal name tells whether a typo landed on another company, so it must not depend on hover. */}
+      {check.legal_name && <span className="visually-hidden"> ({check.legal_name})</span>}
     </span>
   );
 }

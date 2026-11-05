@@ -5,7 +5,7 @@ const ACTIVE_SITUATION: &str = "ATIVA";
 /// the federal registry; a CPF is validated by its digits alone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DocumentCheck {
-    /// No document, or a CPF.
+    /// Nothing to claim: no document, a CPF, or the operator switched the CNPJ lookup off.
     NotApplicable,
     /// The CNPJ exists in the registry. `situation` is the registry's own wording ("ATIVA", "BAIXADA", ...).
     Verified {

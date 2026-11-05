@@ -64,7 +64,7 @@ Rules that are easy to break:
 - Editing an applied migration locally breaks your dev database checksum: `docker compose down -v` resets it.
 - Storage errors are logged server-side and returned to clients as a generic `internal error`. Keep it that way.
 - Documents are stored without punctuation and validated with check digits in `domain`: a CPF is 11 digits; a CNPJ is 14 characters whose first 12 may be uppercase letters (alphanumeric CNPJ, since July 2026). Never assume a document is numeric (no `inputMode="numeric"`, no digit-only parsing).
-- A CNPJ is also looked up in the federal registry (ADR 0017); a CPF never is. `NotFound` rejects, anything else that goes wrong stores the party as `Unverified`. `CNPJ_LOOKUP=off` disables the lookup. Tests must never call the real service: use `InMemoryCnpjRegistry` or the local fake in `brasil_api.rs`. The real BrasilAPI answers 429 to requests without a `User-Agent`, and to callers that exceed its rate limit.
+- A CNPJ is also looked up in the federal registry (ADR 0017); a CPF never is. `NotFound` rejects, an outage stores the party as `Unverified`, and `CNPJ_LOOKUP=off` (`Disabled`) stores it as `NotApplicable` without nagging. The port takes a `Cnpj`, which only `Document::cnpj` can build. Tests must never call the real service: use `InMemoryCnpjRegistry` or the local fake in `brasil_api.rs`. The real BrasilAPI answers 429 to requests without a `User-Agent`, and to callers that exceed its rate limit.
 
 ## Conventions
 

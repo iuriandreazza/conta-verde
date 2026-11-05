@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use conta_verde_application::{CnpjLookupError, CnpjRegistry, RegistryEntry};
+use conta_verde_domain::Cnpj;
 use reqwest::StatusCode;
 use serde::Deserialize;
 
@@ -16,6 +17,9 @@ const USER_AGENT: &str = concat!(
     env!("CARGO_PKG_REPOSITORY"),
     ")"
 );
+// The text comes from a third party and is stored and listed with every party: keep it bounded.
+const MAX_LEGAL_NAME_CHARS: usize = 200;
+const MAX_SITUATION_CHARS: usize = 60;
 
 /// Looks CNPJs up on BrasilAPI, a free service built on Receita Federal's open data. It is run by
 /// volunteers, not by the government: it has no uptime guarantee and data can lag the source.
@@ -48,7 +52,8 @@ struct CnpjResponse {
 }
 
 impl CnpjRegistry for BrasilApiCnpjRegistry {
-    async fn lookup(&self, cnpj: &str) -> Result<RegistryEntry, CnpjLookupError> {
+    async fn lookup(&self, cnpj: Cnpj<'_>) -> Result<RegistryEntry, CnpjLookupError> {
+        let cnpj = cnpj.as_str();
         let response = self
             .client
             .get(format!("{}/{cnpj}", self.base_url))
@@ -62,8 +67,8 @@ impl CnpjRegistry for BrasilApiCnpjRegistry {
                     unavailable(cnpj, format_args!("unexpected response body: {error}"))
                 })?;
                 Ok(RegistryEntry {
-                    legal_name: body.razao_social,
-                    situation: body.descricao_situacao_cadastral,
+                    legal_name: bounded(&body.razao_social, MAX_LEGAL_NAME_CHARS),
+                    situation: bounded(&body.descricao_situacao_cadastral, MAX_SITUATION_CHARS),
                 })
             }
             StatusCode::NOT_FOUND => Err(CnpjLookupError::NotFound),
@@ -72,6 +77,10 @@ impl CnpjRegistry for BrasilApiCnpjRegistry {
             status => Err(unavailable(cnpj, format_args!("answered {status}"))),
         }
     }
+}
+
+fn bounded(text: &str, max_chars: usize) -> String {
+    text.trim().chars().take(max_chars).collect()
 }
 
 fn unavailable(cnpj: &str, cause: std::fmt::Arguments<'_>) -> CnpjLookupError {
@@ -87,11 +96,21 @@ mod tests {
     use axum::extract::Path;
     use axum::http::{HeaderMap, StatusCode};
     use axum::routing::get;
+    use conta_verde_domain::Document;
     use serde_json::json;
 
     use super::*;
 
-    // A local stand-in for BrasilAPI: the tests never reach the real service.
+    // A local stand-in for BrasilAPI: the tests never reach the real service. Each CNPJ below has
+    // valid check digits and triggers one behavior.
+    const FOUND: &str = "11.222.333/0001-81";
+    const MISSING: &str = "12.ABC.345/01DE-35";
+    const BAD_REQUEST: &str = "00.000.000/0001-91";
+    const RATE_LIMITED: &str = "12.345.678/0001-95";
+    const UNREADABLE_BODY: &str = "12.345.678/000A-08";
+    const SERVER_ERROR: &str = "AA345678/0003-86";
+    const HUGE_TEXT: &str = "AA345678/000A-29";
+
     async fn serve(router: Router) -> SocketAddr {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -102,6 +121,14 @@ mod tests {
     fn registry_at(addr: SocketAddr, timeout: Duration) -> BrasilApiCnpjRegistry {
         BrasilApiCnpjRegistry::with_endpoint(&format!("http://{addr}/api/cnpj/v1"), timeout)
             .unwrap()
+    }
+
+    async fn lookup(
+        registry: &BrasilApiCnpjRegistry,
+        formatted: &str,
+    ) -> Result<RegistryEntry, CnpjLookupError> {
+        let document = Document::parse(formatted).unwrap();
+        registry.lookup(document.cnpj().unwrap()).await
     }
 
     async fn answer(
@@ -115,28 +142,35 @@ mod tests {
                 axum::Json(json!({"type": "rate_limited"})),
             );
         }
-        match cnpj.as_str() {
-            "11222333000181" => (
+        let stored = |formatted: &str| formatted.replace(['.', '/', '-'], "");
+        let found = |name: String| {
+            (
                 StatusCode::OK,
                 axum::Json(json!({
-                    "razao_social": "PADARIA CENTRAL LTDA",
+                    "razao_social": name,
                     "descricao_situacao_cadastral": "ATIVA",
                     "qsa": []
                 })),
-            ),
-            "12ABC34501DE35" => (
+            )
+        };
+        match cnpj {
+            c if c == stored(FOUND) => found("PADARIA CENTRAL LTDA".into()),
+            c if c == stored(HUGE_TEXT) => found("X".repeat(5_000)),
+            c if c == stored(MISSING) => (
                 StatusCode::NOT_FOUND,
                 axum::Json(json!({"type": "not_found"})),
             ),
-            "00000000000191" => (
+            c if c == stored(BAD_REQUEST) => (
                 StatusCode::BAD_REQUEST,
                 axum::Json(json!({"type": "bad_request"})),
             ),
-            "11111111000191" => (
+            c if c == stored(RATE_LIMITED) => (
                 StatusCode::TOO_MANY_REQUESTS,
                 axum::Json(json!({"type": "rate_limited"})),
             ),
-            "22222222000191" => (StatusCode::OK, axum::Json(json!({"unexpected": true}))),
+            c if c == stored(UNREADABLE_BODY) => {
+                (StatusCode::OK, axum::Json(json!({"unexpected": true})))
+            }
             _ => (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(json!({}))),
         }
     }
@@ -148,8 +182,7 @@ mod tests {
     #[tokio::test]
     async fn maps_a_found_company() {
         let addr = serve(fake_service()).await;
-        let entry = registry_at(addr, Duration::from_secs(2))
-            .lookup("11222333000181")
+        let entry = lookup(&registry_at(addr, Duration::from_secs(2)), FOUND)
             .await
             .unwrap();
         assert_eq!(entry.legal_name, "PADARIA CENTRAL LTDA");
@@ -162,7 +195,7 @@ mod tests {
         // back proves the header is sent.
         let addr = serve(fake_service()).await;
         let registry = registry_at(addr, Duration::from_secs(2));
-        assert!(registry.lookup("11222333000181").await.is_ok());
+        assert!(lookup(&registry, FOUND).await.is_ok());
         assert!(USER_AGENT.starts_with("conta-verde/"), "{USER_AGENT}");
     }
 
@@ -171,21 +204,25 @@ mod tests {
         let addr = serve(fake_service()).await;
         let registry = registry_at(addr, Duration::from_secs(2));
         assert_eq!(
-            registry.lookup("12ABC34501DE35").await,
+            lookup(&registry, MISSING).await,
             Err(CnpjLookupError::NotFound)
         );
-        for unreliable in [
-            "00000000000191", // 400
-            "11111111000191", // 429
-            "33333333000191", // 500
-            "22222222000191", // 200 with a body we cannot read
-        ] {
+        for unreliable in [BAD_REQUEST, RATE_LIMITED, SERVER_ERROR, UNREADABLE_BODY] {
             assert_eq!(
-                registry.lookup(unreliable).await,
+                lookup(&registry, unreliable).await,
                 Err(CnpjLookupError::Unavailable),
                 "{unreliable}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn bounds_the_text_it_stores() {
+        let addr = serve(fake_service()).await;
+        let entry = lookup(&registry_at(addr, Duration::from_secs(2)), HUGE_TEXT)
+            .await
+            .unwrap();
+        assert_eq!(entry.legal_name.chars().count(), MAX_LEGAL_NAME_CHARS);
     }
 
     #[tokio::test]
@@ -200,9 +237,7 @@ mod tests {
         let addr = serve(slow).await;
         let started = std::time::Instant::now();
         assert_eq!(
-            registry_at(addr, Duration::from_millis(150))
-                .lookup("11222333000181")
-                .await,
+            lookup(&registry_at(addr, Duration::from_millis(150)), FOUND).await,
             Err(CnpjLookupError::Unavailable)
         );
         assert!(started.elapsed() < Duration::from_secs(2));
@@ -212,7 +247,7 @@ mod tests {
             BrasilApiCnpjRegistry::with_endpoint("http://127.0.0.1:1", Duration::from_secs(1))
                 .unwrap();
         assert_eq!(
-            nowhere.lookup("11222333000181").await,
+            lookup(&nowhere, FOUND).await,
             Err(CnpjLookupError::Unavailable)
         );
     }
