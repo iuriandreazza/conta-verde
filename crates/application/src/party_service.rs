@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use conta_verde_domain::{
     Actor, AuditAction, AuditRecord, CompanyId, Document, DocumentCheck, DomainError, Party,
-    PartyDraft, PartyId, creation_changes, document_check_changes,
+    PartyDraft, PartyId, creation_changes, document_check_changes, party_changes,
 };
 
 use crate::audit::audit_entry;
@@ -91,6 +91,47 @@ impl<R: PartyRepository, C: CnpjRegistry> PartyService<R, C> {
         Ok(party)
     }
 
+    /// Replaces every editable field of the party with the draft's. A document that changed is
+    /// checked against the registry like a new one (and the old answer goes with the old
+    /// document); the same document keeps what the registry said, since nothing is asked again.
+    ///
+    /// Only the fields that differ are recorded, and a change that changes nothing writes nothing,
+    /// so no audit entry is added for it.
+    pub async fn update(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        party_id: PartyId,
+        draft: PartyDraft,
+    ) -> Result<Party, ApplicationError> {
+        let before = self
+            .repository
+            .find(company_id, party_id)
+            .await?
+            .ok_or(ApplicationError::PartyNotFound)?;
+        let mut party = before.replaced_with(draft)?;
+        if party.document() != before.document()
+            && let Some(cnpj) = party.document().and_then(Document::cnpj)
+        {
+            let check = check_from(self.registry.lookup(cnpj).await);
+            party = party.with_document_check(check);
+        }
+        let changes = party_changes(&before, &party);
+        if changes.is_empty() {
+            return Ok(party);
+        }
+        let audit = audit_entry(&party, actor, AuditAction::Updated, changes);
+        self.repository
+            .update(&party, &audit)
+            .await
+            .map_err(|error| match error {
+                // The party vanished between the read and the write.
+                RepositoryError::NotFound => ApplicationError::PartyNotFound,
+                other => other.into(),
+            })?;
+        Ok(party)
+    }
+
     /// Asks the registry again about the party's CNPJ and records the answer, so a party stored
     /// as unverified or not found (an outage, a lagging registry) can be re-checked later. The
     /// answer replaces the old one, whatever it was; like at registration, nothing blocks.
@@ -128,7 +169,7 @@ impl<R: PartyRepository, C: CnpjRegistry> PartyService<R, C> {
         }
         let audit = audit_entry(&party, actor, AuditAction::Updated, changes);
         self.repository
-            .update_document_check(&party, &audit)
+            .update(&party, &audit)
             .await
             .map_err(|error| {
                 // Nothing was stored, so the user may try again right away.

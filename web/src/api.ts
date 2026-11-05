@@ -23,6 +23,17 @@ export interface DocumentCheck {
   needs_attention: boolean;
 }
 
+/** A postal address: the CEP (digits only), street, city and state always, the rest when there is one. */
+export interface Address {
+  postal_code: string;
+  street: string;
+  number: string | null;
+  complement: string | null;
+  district: string | null;
+  city: string;
+  state: string;
+}
+
 export interface Party {
   id: string;
   company_id: string;
@@ -31,6 +42,9 @@ export interface Party {
   email: string | null;
   is_customer: boolean;
   is_supplier: boolean;
+  is_carrier: boolean;
+  is_seller: boolean;
+  address: Address | null;
   document_check: DocumentCheck;
 }
 
@@ -52,19 +66,33 @@ export interface PartyPage {
 export interface PartyFilters {
   /** Text found in the name, e-mail or document. */
   q: string;
-  kind: "" | "customer" | "supplier";
+  kind: "" | "customer" | "supplier" | "carrier" | "seller";
   /** A leading `-` means descending. */
   sort: "name" | "-name";
 }
 
 export const NO_FILTERS: PartyFilters = { q: "", kind: "", sort: "name" };
 
-export interface NewParty {
+export interface AddressInput {
+  postal_code: string;
+  street: string;
+  number?: string;
+  complement?: string;
+  district?: string;
+  city: string;
+  state: string;
+}
+
+/** The whole party, to register one or to replace one: what is left out is cleared. */
+export interface PartyInput {
   name: string;
   document?: string;
   email?: string;
   is_customer: boolean;
   is_supplier: boolean;
+  is_carrier: boolean;
+  is_seller: boolean;
+  address?: AddressInput;
 }
 
 export interface Registration {
@@ -353,8 +381,13 @@ export const api = {
     const query = params.size > 0 ? `?${params}` : "";
     return request<PartyPage>(`/companies/${companyId}/parties${query}`);
   },
-  createParty: (companyId: string, party: NewParty) =>
+  createParty: (companyId: string, party: PartyInput) =>
     post<Party>(`/companies/${companyId}/parties`, party),
+  updateParty: (companyId: string, partyId: string, party: PartyInput) =>
+    request<Party>(`/companies/${companyId}/parties/${partyId}`, {
+      method: "PUT",
+      body: JSON.stringify(party),
+    }),
   partyHistory: (companyId: string, partyId: string) =>
     request<HistoryEntry[]>(`/companies/${companyId}/parties/${partyId}/history`),
   /** Asks the registry again about the party's CNPJ; resolves with the party and its new answer. */

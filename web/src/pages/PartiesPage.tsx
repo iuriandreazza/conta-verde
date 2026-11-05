@@ -1,14 +1,21 @@
-import { Fragment, useState, type FormEvent } from "react";
+import { Fragment, useState } from "react";
 import { useParams } from "react-router-dom";
-import { NO_FILTERS, api, errorMessage, type Party, type PartyFilters } from "../api";
+import {
+  NO_FILTERS,
+  api,
+  errorMessage,
+  type Party,
+  type PartyFilters,
+  type PartyInput,
+} from "../api";
 import { PageHeader } from "../components/PageHeader";
 import { DocumentBadge } from "../components/DocumentBadge";
 import { ListRow } from "../components/ListRow";
 import { Notice, type NoticeTone } from "../components/Notice";
+import { PartyForm } from "../components/PartyForm";
 import { Button } from "../components/Button";
 import { ChevronDownIcon } from "../components/icons/chevron-down";
 import { HistoryIcon } from "../components/icons/history";
-import { PlusIcon } from "../components/icons/plus";
 import { RefreshCWIcon } from "../components/icons/refresh-cw";
 import { UsersIcon } from "../components/icons/users";
 import { PartyHistory } from "../components/PartyHistory";
@@ -20,7 +27,10 @@ import { usePagedList } from "../lib/usePagedList";
 // unmounted component.
 export function PartiesPage() {
   const { companyId = "" } = useParams();
-  const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<Party | null>(null);
+  // Bumped after a save so the form starts over, empty or for another party.
+  const [formVersion, setFormVersion] = useState(0);
+  const [saving, setSaving] = useState(false);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [registryNotice, setRegistryNotice] = useState<RegistryNotice | null>(null);
@@ -65,35 +75,35 @@ export function PartiesPage() {
     }
   }
 
-  async function handleCreate(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (creating) {
-      return;
-    }
-    const formElement = event.currentTarget;
-    const form = new FormData(formElement);
-    const optional = (name: string) => String(form.get(name) ?? "").trim() || undefined;
-    setCreating(true);
+  async function handleSubmit(input: PartyInput) {
+    setSaving(true);
     setFormError(null);
     setRegistryNotice(null);
     // A message about an earlier re-check would read like a statement about the new state.
     setVerifyNotice(null);
     try {
-      const created = await api.createParty(companyId, {
-        name: String(form.get("name") ?? ""),
-        document: optional("document"),
-        email: optional("email"),
-        is_customer: form.get("is_customer") === "on",
-        is_supplier: form.get("is_supplier") === "on",
-      });
-      formElement.reset();
-      setHighlightedId(created.id);
-      setRegistryNotice(registryNoticeFor(created, "registering"));
-      await loadFirstPage();
+      if (editing === null) {
+        const created = await api.createParty(companyId, input);
+        setHighlightedId(created.id);
+        setRegistryNotice(registryNoticeFor(created, "registering"));
+        setFormVersion((version) => version + 1);
+        await loadFirstPage();
+      } else {
+        const updated = await api.updateParty(companyId, editing.id, input);
+        // In place: the list keeps its page and its filters.
+        setParties((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+        setHighlightedId(updated.id);
+        // The registry is only asked about a document that changed: otherwise there is nothing new.
+        setRegistryNotice(
+          updated.document !== editing.document ? registryNoticeFor(updated, "updating") : null,
+        );
+        setEditing(null);
+        setFormVersion((version) => version + 1);
+      }
     } catch (failure) {
       setFormError(errorMessage(failure));
     } finally {
-      setCreating(false);
+      setSaving(false);
     }
   }
 
@@ -126,6 +136,8 @@ export function PartiesPage() {
               <option value="">Todos</option>
               <option value="customer">Clientes</option>
               <option value="supplier">Fornecedores</option>
+              <option value="carrier">Transportadoras</option>
+              <option value="seller">Vendedores</option>
             </select>
           </label>
           <label>
@@ -174,9 +186,10 @@ export function PartiesPage() {
                   <th>Nome</th>
                   <th>Documento</th>
                   <th>E-mail</th>
+                  <th>Cidade</th>
                   <th>Tipo</th>
                   <th>
-                    <span className="visually-hidden">Histórico</span>
+                    <span className="visually-hidden">Ações</span>
                   </th>
                 </tr>
               </thead>
@@ -195,7 +208,7 @@ export function PartiesPage() {
                           aria-label={`Verificar de novo o CNPJ de ${party.name}`}
                           icon={RefreshCWIcon}
                           pending={verifyingId === party.id}
-                          disabled={verifyingId !== null || creating}
+                          disabled={verifyingId !== null || saving}
                           onClick={() => void verifyAgain(party)}
                         >
                           Verificar de novo
@@ -203,12 +216,32 @@ export function PartiesPage() {
                       )}
                     </td>
                     <td>{party.email ?? "—"}</td>
+                    <td>{party.address ? `${party.address.city}/${party.address.state}` : "—"}</td>
                     <td>
-                      {[party.is_customer && "Cliente", party.is_supplier && "Fornecedor"]
+                      {[
+                        party.is_customer && "Cliente",
+                        party.is_supplier && "Fornecedor",
+                        party.is_carrier && "Transportadora",
+                        party.is_seller && "Vendedor",
+                      ]
                         .filter(Boolean)
                         .join(" · ")}
                     </td>
                     <td>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="btn-small"
+                        aria-label={`Alterar ${party.name}`}
+                        disabled={saving}
+                        onClick={() => {
+                          setEditing(party);
+                          setFormError(null);
+                          setRegistryNotice(null);
+                        }}
+                      >
+                        Alterar
+                      </Button>
                       <Button
                         type="button"
                         variant="ghost"
@@ -227,10 +260,11 @@ export function PartiesPage() {
                   </ListRow>
                   {historyOpenFor === party.id && (
                     <tr id={`history-${party.id}`}>
-                      <td colSpan={5} role="region" aria-label={`Histórico de ${party.name}`}>
+                      <td colSpan={6} role="region" aria-label={`Histórico de ${party.name}`}>
                         <PartyHistory
-                          // Remounted when the check changes, so an open history follows a re-check.
-                          key={JSON.stringify(party.document_check)}
+                          // Remounted when the party changes (a re-check, an edit), so an open
+                          // history follows it.
+                          key={JSON.stringify(party)}
                           companyId={companyId}
                           partyId={party.id}
                         />
@@ -256,41 +290,23 @@ export function PartiesPage() {
         )}
       </section>
         <aside className="card form-card">
-        <h2>Novo cliente ou fornecedor</h2>
-        <form onSubmit={handleCreate}>
-          <label>
-            Nome
-            <input name="name" required maxLength={200} />
-          </label>
-          <label>
-            CPF ou CNPJ
-            {/* No numeric keypad: a CNPJ may contain letters since July 2026. */}
-            <input
-              name="document"
-              autoCapitalize="characters"
-              autoComplete="off"
-              spellCheck={false}
-            />
-          </label>
-          <label>
-            E-mail
-            <input name="email" type="email" />
-          </label>
-          <fieldset>
-            <legend>Tipo</legend>
-            <label className="inline">
-              <input name="is_customer" type="checkbox" defaultChecked /> Cliente
-            </label>
-            <label className="inline">
-              <input name="is_supplier" type="checkbox" /> Fornecedor
-            </label>
-          </fieldset>
-          <Notice message={formError} />
-          <Notice message={registryNotice?.message ?? null} tone={registryNotice?.tone} />
-          <Button type="submit" icon={PlusIcon} pending={creating} disabled={verifyingId !== null}>
-            Adicionar
-          </Button>
-        </form>
+        <h2>{editing === null ? "Novo cliente ou fornecedor" : `Alterar ${editing.name}`}</h2>
+        <PartyForm
+          // A new key starts the form over for another party, or an empty one after a save.
+          key={`${editing?.id ?? "new"}-${formVersion}`}
+          party={editing}
+          // After a save or when editing, the person is in the form: put the cursor back in it.
+          focusName={editing !== null || formVersion > 0}
+          pending={saving}
+          blocked={verifyingId !== null}
+          error={formError}
+          notice={registryNotice}
+          onSubmit={(input) => void handleSubmit(input)}
+          onCancel={() => {
+            setEditing(null);
+            setFormError(null);
+          }}
+        />
       </aside>
       </div>
     </>
@@ -305,10 +321,14 @@ interface RegistryNotice {
 // The party is already saved when this runs: the notice only reports what the registry said,
 // so a warning never asks the user to redo anything. `after` says which action produced the
 // answer, since "Cadastrado" would be wrong for a re-check of an old row.
-function registryNoticeFor(party: Party, after: "registering" | "rechecking"): RegistryNotice | null {
+function registryNoticeFor(
+  party: Party,
+  after: "registering" | "updating" | "rechecking",
+): RegistryNotice | null {
   const check = party.document_check;
-  const registering = after === "registering";
-  const lead = registering ? "Cadastrado, mas" : `${party.name}:`;
+  const rechecking = after === "rechecking";
+  const done = after === "updating" ? "Atualizado" : "Cadastrado";
+  const lead = rechecking ? `${party.name}:` : `${done}, mas`;
   if (check.status === "not_found") {
     return {
       tone: "warning",
@@ -318,20 +338,20 @@ function registryNoticeFor(party: Party, after: "registering" | "rechecking"): R
   if (check.status === "unverified") {
     return {
       tone: "warning",
-      message: registering
-        ? "Cadastrado, mas não foi possível consultar o CNPJ na Receita agora. Só os dígitos foram conferidos."
-        : `${party.name}: a Receita continua indisponível. Tente de novo mais tarde.`,
+      message: rechecking
+        ? `${party.name}: a Receita continua indisponível. Tente de novo mais tarde.`
+        : `${done}, mas não foi possível consultar o CNPJ na Receita agora. Só os dígitos foram conferidos.`,
     };
   }
   if (check.status === "verified") {
     return check.needs_attention
       ? {
           tone: "warning",
-          message: `${registering ? "Cadastrado. Atenção:" : `${party.name}:`} ${check.legal_name} está com situação ${check.situation} na Receita.`,
+          message: `${rechecking ? `${party.name}:` : `${done}. Atenção:`} ${check.legal_name} está com situação ${check.situation} na Receita.`,
         }
       : {
           tone: "success",
-          message: `${registering ? "" : `${party.name}: `}CNPJ verificado: ${check.legal_name}.`,
+          message: `${rechecking ? `${party.name}: ` : ""}CNPJ verificado: ${check.legal_name}.`,
         };
   }
   return null;

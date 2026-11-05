@@ -1,4 +1,4 @@
-use crate::name::clean_name;
+use crate::name::{clean_name, non_blank};
 use crate::{Amount, CompanyId, DomainError, ProductId};
 
 const MAX_SKU_LEN: usize = 60;
@@ -170,11 +170,6 @@ impl Product {
     pub fn is_active(&self) -> bool {
         self.active
     }
-}
-
-fn non_blank(raw: &str) -> Option<&str> {
-    let trimmed = raw.trim();
-    (!trimmed.is_empty()).then_some(trimmed)
 }
 
 /// Upper case, so `abc-1` and `ABC-1` are one SKU; letters, digits and `. _ / -` only.

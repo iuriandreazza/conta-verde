@@ -58,21 +58,23 @@ impl PartyRepository for InMemoryPartyRepository {
             .cloned())
     }
 
-    async fn update_document_check(
-        &self,
-        party: &Party,
-        audit: &AuditEntry,
-    ) -> Result<(), RepositoryError> {
+    async fn update(&self, party: &Party, audit: &AuditEntry) -> Result<(), RepositoryError> {
         ensure_audit_describes(audit, party)?;
         let mut state = self.state.lock().expect("repository lock poisoned");
-        let stored = state
+        let belongs = |stored: &Party| stored.company_id() == party.company_id();
+        let position = state
             .parties
-            .iter_mut()
-            .find(|stored| stored.company_id() == party.company_id() && stored.id() == party.id());
-        let stored = stored.ok_or(RepositoryError::NotFound)?;
-        *stored = stored
-            .clone()
-            .with_document_check(party.document_check().clone());
+            .iter()
+            .position(|stored| belongs(stored) && stored.id() == party.id())
+            .ok_or(RepositoryError::NotFound)?;
+        let duplicate = party.document().is_some()
+            && state.parties.iter().any(|other| {
+                belongs(other) && other.id() != party.id() && other.document() == party.document()
+            });
+        if duplicate {
+            return Err(RepositoryError::DuplicateDocument);
+        }
+        state.parties[position] = party.clone();
         state.audit.record(audit);
         Ok(())
     }
@@ -303,6 +305,7 @@ mod tests {
             email: None,
             is_customer: true,
             is_supplier: false,
+            ..PartyDraft::default()
         }
     }
 
@@ -396,6 +399,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn edits_parties_and_records_only_changes() {
+        let service = PartyService::new(InMemoryPartyRepository::default(), contract::registry());
+        contract::edits_parties_and_records_only_changes(
+            &service,
+            CompanyId::generate(),
+            CompanyId::generate(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
     async fn keeps_what_the_registry_said() {
         let service = PartyService::new(InMemoryPartyRepository::default(), contract::registry());
         contract::keeps_what_the_registry_said(&service, CompanyId::generate()).await;
@@ -465,6 +479,8 @@ mod tests {
                 "document",
                 "is_customer",
                 "is_supplier",
+                "is_carrier",
+                "is_seller",
                 "document_check",
                 "registry_legal_name",
                 "registry_situation"

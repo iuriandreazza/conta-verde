@@ -36,6 +36,10 @@ pub enum DomainError {
     InstallmentDaysNotIncreasing,
     InvalidPercent,
     PercentsDoNotSumTo100,
+    InvalidPostalCode,
+    InvalidState,
+    /// Names the field: an address has several free-text parts.
+    InvalidAddressField(&'static str),
 }
 
 impl fmt::Display for DomainError {
@@ -44,7 +48,7 @@ impl fmt::Display for DomainError {
             Self::EmptyName => f.write_str("name must not be empty"),
             Self::InvalidDocument => f.write_str("document is not a valid CPF or CNPJ"),
             Self::InvalidEmail => f.write_str("email is not valid"),
-            Self::MissingRole => f.write_str("party must be a customer, a supplier or both"),
+            Self::MissingRole => f.write_str("party must be a customer, a supplier, a carrier or a seller"),
             Self::WeakPassword => f.write_str("password must have between 8 and 128 characters"),
             Self::NoCnpjToVerify => f.write_str("the party has no CNPJ to verify"),
             Self::InvalidName => {
@@ -106,6 +110,12 @@ impl fmt::Display for DomainError {
                 "a percentage must be more than 0 and at most 100, with at most 2 decimals, written like 33.33",
             ),
             Self::PercentsDoNotSumTo100 => f.write_str("the percentages must add up to exactly 100"),
+            Self::InvalidPostalCode => f.write_str("postal code (CEP) must have 8 digits"),
+            Self::InvalidState => f.write_str("state must be one of the 27 two-letter abbreviations, like SP"),
+            Self::InvalidAddressField(field) => write!(
+                f,
+                "address {field} is required, or too long or has null characters"
+            ),
             Self::KindCannotChange => f.write_str("the kind cannot change once registered"),
         }
     }
