@@ -31,12 +31,32 @@ function runningDbPort() {
   }
 }
 
+// The same for a service with one or two published ports: reuse them when it is already up.
+function runningPort(service, containerPort) {
+  try {
+    const out = execFileSync("docker", ["compose", "port", service, String(containerPort)], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return Number(out.trim().split(":").pop()) || null;
+  } catch {
+    return null;
+  }
+}
+
 const dbPort = runningDbPort() ?? (await freePort(5432));
+const mailSmtpPort = runningPort("mailpit", 1025) ?? (await freePort(1025));
+const mailUiPort = runningPort("mailpit", 8025) ?? (await freePort(8025));
 const apiPort = await freePort(3000);
 
-execFileSync("docker", ["compose", "up", "-d", "--wait", "db"], {
+execFileSync("docker", ["compose", "up", "-d", "--wait", "db", "mailpit"], {
   stdio: "inherit",
-  env: { ...process.env, DB_PORT: String(dbPort) },
+  env: {
+    ...process.env,
+    DB_PORT: String(dbPort),
+    MAIL_SMTP_PORT: String(mailSmtpPort),
+    MAIL_UI_PORT: String(mailUiPort),
+  },
 });
 
 const exampleEnv = Object.fromEntries(
@@ -54,6 +74,9 @@ const children = [
       ...exampleEnv,
       DATABASE_URL: exampleEnv.DATABASE_URL.replace(":5432/", `:${dbPort}/`),
       BIND_ADDR: `127.0.0.1:${apiPort}`,
+      // Everything the app mails lands in Mailpit, never in a real mailbox.
+      SMTP_URL: `smtp://127.0.0.1:${mailSmtpPort}`,
+      SMTP_FROM: "conta-verde <no-reply@localhost>",
     },
   }),
   // Vite moves to the next port on its own when 5173 is taken.
@@ -63,7 +86,7 @@ const children = [
   }),
 ];
 
-console.log(`db :${dbPort}  api :${apiPort}`);
+console.log(`db :${dbPort}  api :${apiPort}  mail http://localhost:${mailUiPort}`);
 
 const stop = () => children.forEach((child) => child.kill("SIGTERM"));
 process.on("SIGINT", stop);

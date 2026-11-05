@@ -18,13 +18,13 @@ is ticked and its exit criteria hold on `main`.
 - [x] PostgreSQL migrations, CI, Docker Compose for local development, pre-commit checks
 - [x] First vertical slice: parties (customers and suppliers) with CPF/CNPJ validation, scoped by company ([ADR 0004](adr/0004-company-scoped-tenancy.md))
 
-## Phase 1 — Identity, tenancy and registers (v0.2)
+## Phase 1 — Identity, tenancy and registers (v0.2, done)
 
 Identity:
 - [x] `users`, `companies`, `memberships` with roles; password hashing and sessions ([ADR 0007](adr/0007-authentication-and-authorization.md)) — tables, Argon2id and cookie sessions; roles and what each may do ([ADR 0026](adr/0026-membership-roles-and-permissions.md))
 - [x] Enforce `company_id` from the session, not the URL; foreign keys from every business table to `companies` — the URL id must match a membership of the caller (`CompanyAccess`)
-- [ ] Invitations by e-mail; accountant role reserved for Phase 6 ([ADR 0027](adr/0027-invitations.md)) — invite, accept, withdraw and the members page are in, and the message is logged; the SMTP adapter is next
-- [ ] Audit trail on every write ([ADR 0008](adr/0008-audit-trail.md)) — in for parties (creation and CNPJ re-checks, with a history panel); each new register must write its entries too
+- [x] Invitations by e-mail; accountant role reserved for Phase 6 ([ADR 0027](adr/0027-invitations.md)) — invite, accept, withdraw and the members page, sent through SMTP (Mailpit in development) or logged without a server; removing a member and changing a role are not yet
+- [x] Audit trail on every write ([ADR 0008](adr/0008-audit-trail.md)) — every register writes its entries in the same transaction as the write (parties with their re-checks, products, categories, cost centers, bank accounts, payment methods and terms, and each row of an import), with a history panel; membership, session and invitation writes are never audited; each new register must write its entries too
 - [x] Pagination, sorting and filtering convention for list endpoints (parties first) ([ADR 0018](adr/0018-list-endpoints-search-filter-sort.md)) — `limit`, `after`, `q`, a named filter per attribute and `sort`; each new register's list follows it
 
 Registers:

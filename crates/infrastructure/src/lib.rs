@@ -26,6 +26,7 @@ mod postgres_payment_methods;
 mod postgres_payment_terms;
 mod postgres_products;
 mod secrets;
+mod smtp_email_sender;
 
 pub use brasil_api::BrasilApiCnpjRegistry;
 pub use brasil_api_postal_code::BrasilApiPostalCodeDirectory;
@@ -50,3 +51,4 @@ pub use postgres_payment_methods::PostgresPaymentMethodRepository;
 pub use postgres_payment_terms::PostgresPaymentTermRepository;
 pub use postgres_products::PostgresProductRepository;
 pub use secrets::Argon2SecretService;
+pub use smtp_email_sender::SmtpEmailSender;

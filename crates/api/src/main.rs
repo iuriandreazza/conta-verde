@@ -5,12 +5,13 @@ use conta_verde_application::{
     AuthService, BankAccountService, CategoryService, CostCenterService, MemberService,
     PartyService, PaymentMethodService, PaymentTermService, PostalCodeService, ProductService,
 };
+use conta_verde_application::{EmailError, EmailMessage, EmailSender};
 use conta_verde_infrastructure::{
     Argon2SecretService, BrasilApiCnpjRegistry, BrasilApiPostalCodeDirectory, CachedCnpjRegistry,
     LogEmailSender, PostgresBankAccountRepository, PostgresCategoryRepository,
     PostgresCostCenterRepository, PostgresIdentityRepository, PostgresInvitationRepository,
     PostgresPartyRepository, PostgresPaymentMethodRepository, PostgresPaymentTermRepository,
-    PostgresProductRepository, connect_and_migrate,
+    PostgresProductRepository, SmtpEmailSender, connect_and_migrate,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -30,7 +31,7 @@ impl Ports for PostgresPorts {
     type PaymentTerms = PostgresPaymentTermRepository;
     type PostalCodes = Option<BrasilApiPostalCodeDirectory>;
     type Invitations = PostgresInvitationRepository;
-    type Emails = LogEmailSender;
+    type Emails = ConfiguredEmailSender;
 }
 
 const SESSION_LIFETIME: Duration = Duration::from_secs(30 * 24 * 60 * 60);
@@ -73,8 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let members = MemberService::new(
         PostgresInvitationRepository::new(pool.clone()),
         PostgresIdentityRepository::new(pool.clone()),
-        // No mail server yet: the message and its link go to the log ([ADR 0027]).
-        LogEmailSender,
+        email_sender_from_env()?,
         Argon2SecretService::new()?,
         INVITATION_LIFETIME,
         &public_url,
@@ -107,6 +107,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     .with_graceful_shutdown(shutdown_signal())
     .await?;
     Ok(())
+}
+
+/// The mail sender the operator chose: an SMTP server when `SMTP_URL` is set, and otherwise the log.
+enum ConfiguredEmailSender {
+    // Boxed: the transport is large next to the unit of the log adapter.
+    Smtp(Box<SmtpEmailSender>),
+    Log(LogEmailSender),
+}
+
+impl EmailSender for ConfiguredEmailSender {
+    async fn send(&self, message: &EmailMessage) -> Result<(), EmailError> {
+        match self {
+            Self::Smtp(sender) => sender.send(message).await,
+            Self::Log(sender) => sender.send(message).await,
+        }
+    }
+}
+
+/// `SMTP_URL` and `SMTP_FROM` together send real e-mail; with neither, messages go to the log and
+/// nothing is sent (the web app then shows an invitation's link to pass on). One without the other
+/// is a mistake, and stops the server instead of silently not sending.
+fn email_sender_from_env() -> Result<ConfiguredEmailSender, Box<dyn std::error::Error + Send + Sync>>
+{
+    email_sender(
+        std::env::var("SMTP_URL").ok().as_deref(),
+        std::env::var("SMTP_FROM").ok().as_deref(),
+    )
+}
+
+fn email_sender(
+    url: Option<&str>,
+    from: Option<&str>,
+) -> Result<ConfiguredEmailSender, Box<dyn std::error::Error + Send + Sync>> {
+    match (url, from) {
+        (Some(url), Some(from)) if !url.is_empty() => {
+            tracing::info!("e-mail is sent through the SMTP server of SMTP_URL");
+            Ok(ConfiguredEmailSender::Smtp(Box::new(SmtpEmailSender::new(
+                url, from,
+            )?)))
+        }
+        (None, None) => {
+            tracing::warn!("SMTP_URL is not set: e-mail is only logged, nothing is sent");
+            Ok(ConfiguredEmailSender::Log(LogEmailSender))
+        }
+        _ => Err("SMTP_URL and SMTP_FROM must be set together".into()),
+    }
 }
 
 /// `None` when the lookup is switched off. A company the registry already answered for is
@@ -193,6 +239,33 @@ mod tests {
         assert_eq!(lookup_enabled("CNPJ_LOOKUP", None), Ok(true));
         assert_eq!(lookup_enabled("CNPJ_LOOKUP", Some("brasilapi")), Ok(true));
         assert_eq!(lookup_enabled("CNPJ_LOOKUP", Some("off")), Ok(false));
+    }
+
+    #[test]
+    fn e_mail_goes_to_the_log_without_a_server_and_through_smtp_with_one() {
+        const FROM: &str = "conta-verde <no-reply@erp.example>";
+        assert!(matches!(
+            email_sender(None, None),
+            Ok(ConfiguredEmailSender::Log(_))
+        ));
+        assert!(matches!(
+            email_sender(Some("smtp://localhost:1025"), Some(FROM)),
+            Ok(ConfiguredEmailSender::Smtp(_))
+        ));
+    }
+
+    #[test]
+    fn half_a_mail_setting_stops_the_server_instead_of_silently_not_sending() {
+        const FROM: &str = "conta-verde <no-reply@erp.example>";
+        for (url, from) in [
+            (Some("smtp://localhost:1025"), None),
+            (None, Some(FROM)),
+            (Some(""), Some(FROM)),
+            (Some("not a url"), Some(FROM)),
+            (Some("smtp://localhost:1025"), Some("not an address")),
+        ] {
+            assert!(email_sender(url, from).is_err(), "{url:?} {from:?}");
+        }
     }
 
     #[test]

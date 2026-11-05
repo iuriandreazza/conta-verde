@@ -15,5 +15,18 @@ services:
       timeout: 3s
       retries: 10
 
+  # Catches every e-mail the app sends and shows it at http://localhost:8025, so development never
+  # mails a real person. SMTP is on 1025 (SMTP_URL=smtp://localhost:1025).
+  mailpit:
+    image: axllent/mailpit:v1.31
+    ports:
+      - "127.0.0.1:${MAIL_SMTP_PORT:-1025}:1025"
+      - "127.0.0.1:${MAIL_UI_PORT:-8025}:8025"
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
 volumes:
   db-data:

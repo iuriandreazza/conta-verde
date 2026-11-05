@@ -29,8 +29,9 @@ pnpm install
 pnpm --filter conta-verde-web dev
 ```
 
-Or start the database, the API and the web app in one go with `pnpm dev`, which picks free ports when 5432, 3000 or 5173 are taken
-(`pnpm db`, `pnpm api` and `pnpm web` run each one alone).
+Or start the database, a mail catcher, the API and the web app in one go with `pnpm dev`, which picks free ports when 5432, 3000, 5173, 1025 or 8025 are taken
+(`pnpm db`, `pnpm api` and `pnpm web` run each one alone). Every e-mail the app sends (an invitation, for now) lands in
+[Mailpit](https://mailpit.axllent.org), at the address `pnpm dev` prints, and never in a real mailbox.
 
 Create an account in the browser, or from the command line (the session lives in the cookie jar):
 
@@ -56,6 +57,10 @@ service, to confirm the company exists. Set `CNPJ_LOOKUP=off` to keep it all loc
 [ADR 0017](docs/adr/0017-cnpj-registry-lookup.md). The same service finds an address from its CEP, but only
 when someone presses "Buscar endereço" in the party form; `CEP_LOOKUP=off` switches that off too
 ([ADR 0024](docs/adr/0024-postal-code-lookup.md)).
+
+To send e-mail for real, set `SMTP_URL` and `SMTP_FROM` (see `.env.example`); without them messages are only written to the
+log and the web app shows an invitation's link to pass on. A mail server on the internet needs TLS (`smtps://` or
+`?tls=required`), or the password and the message travel in the clear ([ADR 0014](docs/adr/0014-notifications.md)).
 
 The server listens on `127.0.0.1:3000` by default. Set `BIND_ADDR` to change it, and keep it private
 until it sits behind a TLS proxy (set `COOKIE_SECURE=true` there).
