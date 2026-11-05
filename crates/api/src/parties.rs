@@ -2,7 +2,9 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use conta_verde_application::{ApplicationError, PartyKind, PartyQuery};
-use conta_verde_domain::{Address, AddressDraft, DocumentCheck, Party, PartyDraft, PartyId};
+use conta_verde_domain::{
+    Address, AddressDraft, Contact, ContactDraft, DocumentCheck, Party, PartyDraft, PartyId, Tag,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -10,7 +12,7 @@ use crate::access::CompanyAccess;
 use crate::cursor::{decode_cursor, encode_cursor};
 use crate::error::ApiError;
 use crate::history::HistoryEntryResponse;
-use crate::json::{ApiJson, ApiQuery, flag_or};
+use crate::json::{ApiJson, ApiQuery, field_or};
 use crate::list_params;
 use crate::{Ports, SharedState};
 
@@ -29,6 +31,19 @@ pub(crate) struct PartyRequest {
     is_carrier: Option<bool>,
     is_seller: Option<bool>,
     address: Option<AddressRequest>,
+    /// Optional when registering (none), required when replacing, like the roles: a body from a
+    /// client that does not know them would otherwise drop them silently.
+    contacts: Option<Vec<ContactRequest>>,
+    tags: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ContactRequest {
+    name: String,
+    job_title: Option<String>,
+    email: Option<String>,
+    phone: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -44,18 +59,29 @@ struct AddressRequest {
 }
 
 impl PartyRequest {
-    /// `default_role` is what a missing `is_carrier` or `is_seller` means: `Some(false)` when
-    /// registering, `None` when replacing, where it must be said.
-    fn into_draft(self, default_role: Option<bool>) -> Result<PartyDraft, ApiError> {
-        let is_carrier = flag_or(
+    /// `registering` says what a missing `is_carrier`, `is_seller`, `contacts` or `tags` means:
+    /// no (or none) when registering, and a refusal when replacing, where they must be said.
+    fn into_draft(self, registering: bool) -> Result<PartyDraft, ApiError> {
+        let default_role = registering.then_some(false);
+        let is_carrier = field_or(
             self.is_carrier,
             default_role,
             "is_carrier is required when replacing a party",
         )?;
-        let is_seller = flag_or(
+        let is_seller = field_or(
             self.is_seller,
             default_role,
             "is_seller is required when replacing a party",
+        )?;
+        let contacts = field_or(
+            self.contacts,
+            registering.then(Vec::new),
+            "contacts is required when replacing a party",
+        )?;
+        let tags = field_or(
+            self.tags,
+            registering.then(Vec::new),
+            "tags is required when replacing a party",
         )?;
         Ok(PartyDraft {
             name: self.name,
@@ -74,6 +100,16 @@ impl PartyRequest {
                 city: address.city,
                 state: address.state,
             }),
+            contacts: contacts
+                .into_iter()
+                .map(|contact| ContactDraft {
+                    name: contact.name,
+                    job_title: contact.job_title,
+                    email: contact.email,
+                    phone: contact.phone,
+                })
+                .collect(),
+            tags,
         })
     }
 }
@@ -86,6 +122,8 @@ pub(crate) struct ListQuery {
     q: Option<String>,
     /// `customer`, `supplier`, `carrier` or `seller`.
     kind: Option<String>,
+    /// A tag the party carries, in any case.
+    tag: Option<String>,
     /// `name` (default) or `-name` for descending, the convention every list follows.
     sort: Option<String>,
 }
@@ -108,6 +146,13 @@ impl ListQuery {
                 ));
             }
         };
+        // Blank text means no filter, as for the search.
+        if let Some(tag) = self.tag.as_deref().filter(|tag| !tag.trim().is_empty()) {
+            let tag = Tag::parse(tag).map_err(|_| {
+                ApiError::InvalidQuery("invalid tag: 1 to 30 characters, with no commas")
+            })?;
+            query = query.tagged(tag);
+        }
         Ok(query.sorted(list_params::sort(self.sort.as_deref())?))
     }
 }
@@ -124,7 +169,28 @@ pub(crate) struct PartyResponse {
     is_carrier: bool,
     is_seller: bool,
     address: Option<AddressResponse>,
+    contacts: Vec<ContactResponse>,
+    tags: Vec<String>,
     document_check: DocumentCheckResponse,
+}
+
+#[derive(Serialize)]
+struct ContactResponse {
+    name: String,
+    job_title: Option<String>,
+    email: Option<String>,
+    phone: Option<String>,
+}
+
+impl From<&Contact> for ContactResponse {
+    fn from(contact: &Contact) -> Self {
+        Self {
+            name: contact.name().to_owned(),
+            job_title: contact.job_title().map(str::to_owned),
+            email: contact.email().map(|email| email.as_str().to_owned()),
+            phone: contact.phone().map(str::to_owned),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -202,6 +268,12 @@ impl From<&Party> for PartyResponse {
             is_carrier: party.is_carrier(),
             is_seller: party.is_seller(),
             address: party.address().map(AddressResponse::from),
+            contacts: party.contacts().iter().map(ContactResponse::from).collect(),
+            tags: party
+                .tags()
+                .iter()
+                .map(|tag| tag.as_str().to_owned())
+                .collect(),
             document_check: DocumentCheckResponse::from(party.document_check()),
         }
     }
@@ -220,7 +292,7 @@ pub(crate) async fn register_party<X: Ports>(
 ) -> Result<(StatusCode, Json<PartyResponse>), ApiError> {
     let party = state
         .parties
-        .register(company_id, &actor, request.into_draft(Some(false))?)
+        .register(company_id, &actor, request.into_draft(true)?)
         .await?;
     Ok((StatusCode::CREATED, Json(PartyResponse::from(&party))))
 }
@@ -239,7 +311,7 @@ pub(crate) async fn update_party<X: Ports>(
             company_id,
             &actor,
             parse_party_id(&party_id)?,
-            request.into_draft(None)?,
+            request.into_draft(false)?,
         )
         .await?;
     Ok(Json(PartyResponse::from(&party)))

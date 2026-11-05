@@ -12,13 +12,14 @@ use conta_verde_application::{PaymentTermQuery, PaymentTermRepository, PaymentTe
 use conta_verde_domain::{
     AccountDraft, Actor, AddressDraft, AuditAction, AuditEntity, AuditEntry, BankAccount,
     BankAccountDraft, BankAccountId, BankAccountKind, CashFlowGroup, Category, CategoryId,
-    CompanyId, CostCenter, CostCenterDraft, CostCenterId, DocumentCheck, DomainError, DreGroup,
-    FieldChange, Party, PartyDraft, PartyId, PaymentMethod, PaymentMethodDraft, PaymentMethodId,
-    PaymentMethodKind, PaymentTerm, PaymentTermDraft, PaymentTermId, Product, ProductDraft,
-    ProductId, ProductKind, UserId, bank_account_changes, bank_account_creation_changes,
-    category_changes, category_creation_changes, cost_center_changes, cost_center_creation_changes,
-    creation_changes, document_check_changes, payment_method_changes,
-    payment_method_creation_changes, product_changes, product_creation_changes,
+    CompanyId, Contact, ContactDraft, CostCenter, CostCenterDraft, CostCenterId, DocumentCheck,
+    DomainError, DreGroup, FieldChange, Party, PartyDraft, PartyId, PaymentMethod,
+    PaymentMethodDraft, PaymentMethodId, PaymentMethodKind, PaymentTerm, PaymentTermDraft,
+    PaymentTermId, Product, ProductDraft, ProductId, ProductKind, Tag, UserId,
+    bank_account_changes, bank_account_creation_changes, category_changes,
+    category_creation_changes, cost_center_changes, cost_center_creation_changes, creation_changes,
+    document_check_changes, payment_method_changes, payment_method_creation_changes,
+    product_changes, product_creation_changes,
 };
 use conta_verde_domain::{InstallmentDraft, payment_term_changes, payment_term_creation_changes};
 use sqlx::PgPool;
@@ -783,6 +784,177 @@ pub async fn edits_parties_and_records_only_changes<R: PartyRepository>(
     assert_eq!(trail.len(), 5);
     assert_eq!(changed_fields(&trail[4]), ["document", "document_check"]);
     assert!(trail[4].changes.iter().all(|change| change.to.is_none()));
+}
+
+fn contact_draft(name: &str, phone: Option<&str>) -> ContactDraft {
+    ContactDraft {
+        name: name.into(),
+        job_title: Some("Compras".into()),
+        email: Some(format!("{}@example.com", name.to_lowercase())),
+        phone: phone.map(Into::into),
+    }
+}
+
+fn party_with(
+    name: &str,
+    document: Option<&str>,
+    tags: &[&str],
+    contacts: Vec<ContactDraft>,
+) -> PartyDraft {
+    PartyDraft {
+        tags: tags.iter().map(|tag| (*tag).to_owned()).collect(),
+        contacts,
+        ..party_draft(name, document)
+    }
+}
+
+fn tag_names(party: &Party) -> Vec<&str> {
+    party.tags().iter().map(Tag::as_str).collect()
+}
+
+fn contact_names(party: &Party) -> Vec<&str> {
+    party.contacts().iter().map(Contact::name).collect()
+}
+
+fn party_names(parties: &[Party]) -> Vec<&str> {
+    parties.iter().map(Party::name).collect()
+}
+
+/// Contacts and tags are stored with the party, come back in the order they were given, are found
+/// by tag within the company only, and are replaced as a whole; a refused write leaves the old
+/// ones and the trail as they were.
+pub async fn keeps_party_contacts_and_tags<R: PartyRepository>(
+    service: &PartyService<R, InMemoryCnpjRegistry>,
+    company: CompanyId,
+    other_company: CompanyId,
+) {
+    let register = |company: CompanyId, draft: PartyDraft| async move {
+        service.register(company, &actor(), draft).await.unwrap()
+    };
+    let ana = register(
+        company,
+        party_with(
+            "Ana",
+            None,
+            &["VIP", "atacado"],
+            vec![
+                contact_draft("Bruno", Some("(81) 99999-0000")),
+                contact_draft("Carla", None),
+            ],
+        ),
+    )
+    .await;
+    register(company, party_with("Dani", None, &["vip"], vec![])).await;
+    let eva = register(company, party_with("Eva", None, &[], vec![])).await;
+    register(other_company, party_with("Fred", None, &["vip"], vec![])).await;
+
+    let listed = |query: PartyQuery| async move {
+        service
+            .list(company, &query, None, None)
+            .await
+            .unwrap()
+            .items
+    };
+    let tagged = |tag: &str| PartyQuery::default().tagged(Tag::parse(tag).unwrap());
+    let everyone = listed(PartyQuery::default()).await;
+    assert_eq!(party_names(&everyone), ["Ana", "Dani", "Eva"]);
+    // Tags read alphabetically, contacts in the order they were given, each with what it holds.
+    assert_eq!(tag_names(&everyone[0]), ["atacado", "vip"]);
+    assert_eq!(contact_names(&everyone[0]), ["Bruno", "Carla"]);
+    let bruno = &everyone[0].contacts()[0];
+    assert_eq!(bruno.job_title(), Some("Compras"));
+    assert_eq!(bruno.email().unwrap().as_str(), "bruno@example.com");
+    assert_eq!(bruno.phone(), Some("(81) 99999-0000"));
+    assert_eq!(everyone[0].contacts()[1].phone(), None);
+    assert!(everyone[2].contacts().is_empty() && everyone[2].tags().is_empty());
+
+    // The filter finds a tag however it is written, in this company only, and pages like any list.
+    assert_eq!(party_names(&listed(tagged("VIP")).await), ["Ana", "Dani"]);
+    assert_eq!(party_names(&listed(tagged("atacado")).await), ["Ana"]);
+    assert!(listed(tagged("novo")).await.is_empty());
+    let first = service
+        .list(company, &tagged("vip"), None, Some(1))
+        .await
+        .unwrap();
+    assert_eq!(party_names(&first.items), ["Ana"]);
+    let second = service
+        .list(company, &tagged("vip"), first.next.as_ref(), Some(1))
+        .await
+        .unwrap();
+    assert_eq!(party_names(&second.items), ["Dani"]);
+    assert!(second.next.is_none());
+
+    // A refused edit leaves the contacts, the tags and the trail as they were.
+    let gil = register(company, party_draft("Gil", Some("529.982.247-25"))).await;
+    let refused = service
+        .update(
+            company,
+            &actor(),
+            eva.id(),
+            party_with(
+                "Eva",
+                Some("529.982.247-25"),
+                &["novo"],
+                vec![contact_draft("Hugo", None)],
+            ),
+        )
+        .await;
+    assert_eq!(
+        refused.unwrap_err(),
+        ApplicationError::Repository(RepositoryError::DuplicateDocument)
+    );
+    let eva_now = listed(PartyQuery::default().searching("Eva")).await;
+    assert!(eva_now[0].contacts().is_empty() && eva_now[0].tags().is_empty());
+    assert!(listed(tagged("novo")).await.is_empty());
+    assert_eq!(party_trail(service, company, eva.id()).await.len(), 1);
+    assert_eq!(party_trail(service, company, gil.id()).await.len(), 1);
+
+    // An edit replaces both lists as a whole, and the trail says what changed.
+    let reordered = vec![
+        contact_draft("Carla", None),
+        contact_draft("Bruno", Some("(81) 99999-0000")),
+    ];
+    let ana_id = ana.id();
+    let edit = |tags: &[&str], contacts: Vec<ContactDraft>| {
+        let draft = party_with("Ana", None, tags, contacts);
+        async move {
+            service
+                .update(company, &actor(), ana_id, draft)
+                .await
+                .unwrap()
+        }
+    };
+    let edited = edit(&["vip", "novo"], reordered.clone()).await;
+    assert_eq!(tag_names(&edited), ["novo", "vip"]);
+    let after = listed(tagged("vip")).await;
+    assert_eq!(party_names(&after), ["Ana", "Dani"]);
+    assert_eq!(tag_names(&after[0]), ["novo", "vip"]);
+    assert_eq!(contact_names(&after[0]), ["Carla", "Bruno"]);
+    assert!(listed(tagged("atacado")).await.is_empty());
+    let trail = party_trail(service, company, ana.id()).await;
+    assert_eq!(trail.len(), 2);
+    assert_eq!(changed_fields(&trail[1]), ["tags", "contacts"]);
+    assert_eq!(trail[1].changes[0].from.as_deref(), Some("atacado, vip"));
+    assert_eq!(trail[1].changes[0].to.as_deref(), Some("novo, vip"));
+
+    // The same lists written another way change nothing, so nothing is recorded.
+    edit(&["NOVO", " vip"], reordered).await;
+    assert_eq!(party_trail(service, company, ana.id()).await.len(), 2);
+
+    // Leaving both out clears them.
+    let cleared = edit(&[], vec![]).await;
+    assert!(cleared.contacts().is_empty() && cleared.tags().is_empty());
+    assert!(listed(tagged("novo")).await.is_empty());
+    let trail = party_trail(service, company, ana.id()).await;
+    assert_eq!(changed_fields(&trail[2]), ["tags", "contacts"]);
+    assert!(trail[2].changes.iter().all(|change| change.to.is_none()));
+    // Other companies' parties are untouched.
+    let fred = service
+        .list(other_company, &tagged("vip"), None, None)
+        .await
+        .unwrap()
+        .items;
+    assert_eq!(party_names(&fred), ["Fred"]);
 }
 
 pub async fn pages_through_parties<R: PartyRepository, C: CnpjRegistry>(

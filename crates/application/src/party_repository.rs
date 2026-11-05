@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use conta_verde_domain::{AuditEntry, AuditRecord, CompanyId, Party, PartyId};
+use conta_verde_domain::{AuditEntry, AuditRecord, CompanyId, Party, PartyId, Tag};
 
 use crate::list_query::clean_search;
 use crate::{NameCursor, NameSort, RepositoryError};
@@ -34,6 +34,7 @@ pub struct PartyQuery {
     /// document.
     document_needle: Option<String>,
     kind: Option<PartyKind>,
+    tag: Option<Tag>,
     sort: NameSort,
 }
 
@@ -58,6 +59,12 @@ impl PartyQuery {
         self
     }
 
+    /// Only parties that carry the tag.
+    pub fn tagged(mut self, tag: Tag) -> Self {
+        self.tag = Some(tag);
+        self
+    }
+
     pub fn sorted(mut self, sort: NameSort) -> Self {
         self.sort = sort;
         self
@@ -69,6 +76,10 @@ impl PartyQuery {
 
     pub fn kind(&self) -> Option<PartyKind> {
         self.kind
+    }
+
+    pub fn tag(&self) -> Option<&Tag> {
+        self.tag.as_ref()
     }
 
     pub fn sort(&self) -> NameSort {
@@ -90,6 +101,10 @@ impl PartyQuery {
             Some(PartyKind::Seller) => party.is_seller(),
         };
         kind_matches
+            && self
+                .tag
+                .as_ref()
+                .is_none_or(|tag| party.tags().contains(tag))
             && self
                 .search()
                 .is_none_or(|text| self.search_matches(text, party))

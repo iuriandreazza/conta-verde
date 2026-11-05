@@ -547,10 +547,23 @@ mod tests {
         let mut body = party_body();
         body["is_carrier"] = json!(true);
         body["address"] = address_body();
+        body["tags"] = json!(["VIP", "atacado", "vip"]);
+        body["contacts"] = json!([
+            { "name": " Bruno ", "job_title": "Compras", "email": "Bruno@Padaria.example", "phone": "(81) 99999-0000" },
+            { "name": "Carla" }
+        ]);
         let created = send(&app, json_request("POST", &uri, Some(&cookie), body)).await;
         assert_eq!(created.status, StatusCode::CREATED);
         assert_eq!(created.body["is_carrier"], true);
         assert_eq!(created.body["is_seller"], false);
+        assert_eq!(created.body["tags"], json!(["atacado", "vip"]));
+        assert_eq!(
+            created.body["contacts"],
+            json!([
+                { "name": "Bruno", "job_title": "Compras", "email": "bruno@padaria.example", "phone": "(81) 99999-0000" },
+                { "name": "Carla", "job_title": null, "email": null, "phone": null }
+            ])
+        );
         assert_eq!(
             created.body["address"],
             json!({
@@ -566,17 +579,31 @@ mod tests {
         let id = created.body["id"].as_str().unwrap().to_owned();
         let one = format!("{uri}/{id}");
 
-        // A change replaces every field: no address, a seller instead of a carrier.
+        let tagged = send(&app, get_request(&format!("{uri}?tag=VIP"), Some(&cookie))).await;
+        assert_eq!(tagged.body["items"].as_array().unwrap().len(), 1);
+
+        // A change replaces every field: no address, a seller instead of a carrier, one tag fewer
+        // and a contact fewer.
         let mut replacement = party_body();
         replacement["name"] = json!("Padaria do Centro");
         replacement["is_carrier"] = json!(false);
         replacement["is_seller"] = json!(true);
+        replacement["tags"] = json!(["vip"]);
+        replacement["contacts"] = json!([{ "name": "Carla" }]);
         let put = json_request("PUT", &one, Some(&cookie), replacement.clone());
         let changed = send(&app, put).await;
         assert_eq!(changed.status, StatusCode::OK);
         assert_eq!(changed.body["name"], "Padaria do Centro");
         assert_eq!(changed.body["is_seller"], true);
         assert!(changed.body["address"].is_null());
+        assert_eq!(changed.body["tags"], json!(["vip"]));
+        assert_eq!(changed.body["contacts"].as_array().unwrap().len(), 1);
+        let gone = send(
+            &app,
+            get_request(&format!("{uri}?tag=atacado"), Some(&cookie)),
+        )
+        .await;
+        assert!(gone.body["items"].as_array().unwrap().is_empty());
         // The document did not change, so what the registry said stays.
         assert_eq!(changed.body["document_check"]["status"], "verified");
 
@@ -618,7 +645,9 @@ mod tests {
                 "street",
                 "street_number",
                 "city",
-                "state"
+                "state",
+                "tags",
+                "contacts"
             ]
         );
     }
@@ -646,9 +675,64 @@ mod tests {
                 .contains("is_carrier is required")
         );
 
+        // The same for the lists: a client that does not know them would clear them.
+        let mut roles_only = party_body();
+        roles_only["is_carrier"] = json!(false);
+        roles_only["is_seller"] = json!(false);
+        let reply = send(&app, put(roles_only.clone())).await;
+        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            reply.body["error"]
+                .as_str()
+                .unwrap()
+                .contains("contacts is required")
+        );
+        roles_only["contacts"] = json!([]);
+        let reply = send(&app, put(roles_only)).await;
+        assert!(
+            reply.body["error"]
+                .as_str()
+                .unwrap()
+                .contains("tags is required")
+        );
+
         let mut complete = party_body();
         complete["is_carrier"] = json!(false);
         complete["is_seller"] = json!(false);
+        complete["contacts"] = json!([]);
+        complete["tags"] = json!([]);
+
+        for (field, value, expected) in [
+            ("tags", json!(["a,b"]), "tag"),
+            (
+                "tags",
+                json!((0..11).map(|n| format!("t{n}")).collect::<Vec<_>>()),
+                "10 tags",
+            ),
+            ("contacts", json!([{ "name": "" }]), "contact name"),
+            (
+                "contacts",
+                json!([{ "name": "Ana", "phone": "123" }]),
+                "phone",
+            ),
+            (
+                "contacts",
+                json!([{ "name": "Ana", "email": "ana" }]),
+                "email",
+            ),
+        ] {
+            let mut body = complete.clone();
+            body[field] = value;
+            let reply = send(&app, put(body)).await;
+            assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "{field}");
+            assert!(reply.body["error"].as_str().unwrap().contains(expected));
+        }
+        let reply = send(&app, get_request(&format!("{uri}?tag=a,b"), Some(&cookie))).await;
+        assert_eq!(reply.status, StatusCode::BAD_REQUEST);
+        // A blank tag is no filter, like a blank search.
+        let reply = send(&app, get_request(&format!("{uri}?tag=%20"), Some(&cookie))).await;
+        assert_eq!(reply.status, StatusCode::OK);
+
         let mut bad_address = complete.clone();
         bad_address["address"] = address_body();
         bad_address["address"]["postal_code"] = json!("123");
@@ -707,6 +791,8 @@ mod tests {
         let mut body = party_body();
         body["is_carrier"] = json!(false);
         body["is_seller"] = json!(false);
+        body["contacts"] = json!([]);
+        body["tags"] = json!([]);
 
         let theirs = format!("{}/{id}", parties_uri(stranger_company));
         let put = json_request("PUT", &theirs, Some(&stranger_cookie), body.clone());

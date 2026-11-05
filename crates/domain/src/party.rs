@@ -1,6 +1,9 @@
+use crate::contact::MAX_CONTACTS;
 use crate::name::clean_name;
+use crate::tag::clean_tags;
 use crate::{
-    Address, AddressDraft, CompanyId, Document, DocumentCheck, DomainError, Email, PartyId,
+    Address, AddressDraft, CompanyId, Contact, ContactDraft, Document, DocumentCheck, DomainError,
+    Email, PartyId, Tag,
 };
 
 /// Unvalidated input for registering or changing a party.
@@ -14,6 +17,8 @@ pub struct PartyDraft {
     pub is_carrier: bool,
     pub is_seller: bool,
     pub address: Option<AddressDraft>,
+    pub contacts: Vec<ContactDraft>,
+    pub tags: Vec<String>,
 }
 
 /// A customer, supplier, carrier and/or seller owned by a single company.
@@ -29,6 +34,8 @@ pub struct Party {
     is_carrier: bool,
     is_seller: bool,
     address: Option<Address>,
+    contacts: Vec<Contact>,
+    tags: Vec<Tag>,
     document_check: DocumentCheck,
 }
 
@@ -41,6 +48,15 @@ impl Party {
         let document = draft.document.as_deref().map(Document::parse).transpose()?;
         let email = draft.email.as_deref().map(Email::parse).transpose()?;
         let address = draft.address.map(Address::new).transpose()?;
+        if draft.contacts.len() > MAX_CONTACTS {
+            return Err(DomainError::TooManyContacts);
+        }
+        let contacts = draft
+            .contacts
+            .into_iter()
+            .map(Contact::new)
+            .collect::<Result<_, _>>()?;
+        let tags = clean_tags(&draft.tags)?;
 
         Ok(Self {
             id,
@@ -53,6 +69,8 @@ impl Party {
             is_carrier: draft.is_carrier,
             is_seller: draft.is_seller,
             address,
+            contacts,
+            tags,
             document_check: DocumentCheck::NotApplicable,
         })
     }
@@ -118,6 +136,16 @@ impl Party {
 
     pub fn address(&self) -> Option<&Address> {
         self.address.as_ref()
+    }
+
+    /// In the order they were given: the first is the one to call first.
+    pub fn contacts(&self) -> &[Contact] {
+        &self.contacts
+    }
+
+    /// Each once, in alphabetical order.
+    pub fn tags(&self) -> &[Tag] {
+        &self.tags
     }
 
     pub fn document_check(&self) -> &DocumentCheck {
@@ -245,6 +273,62 @@ mod tests {
         assert_eq!(
             other_document.document_check(),
             &DocumentCheck::NotApplicable
+        );
+    }
+
+    #[test]
+    fn keeps_contacts_in_order_and_tags_once_alphabetically() {
+        let party = build(PartyDraft {
+            contacts: vec![
+                ContactDraft {
+                    name: "Bruno".into(),
+                    ..ContactDraft::default()
+                },
+                ContactDraft {
+                    name: "Ana".into(),
+                    ..ContactDraft::default()
+                },
+            ],
+            tags: vec!["VIP".into(), "atacado".into(), "vip".into()],
+            ..draft()
+        })
+        .unwrap();
+        let names: Vec<&str> = party.contacts().iter().map(Contact::name).collect();
+        assert_eq!(names, ["Bruno", "Ana"]);
+        let tags: Vec<&str> = party.tags().iter().map(Tag::as_str).collect();
+        assert_eq!(tags, ["atacado", "vip"]);
+    }
+
+    #[test]
+    fn has_at_most_twenty_contacts_and_each_one_is_checked() {
+        let contacts = |count: usize| {
+            (0..count)
+                .map(|n| ContactDraft {
+                    name: format!("Contato {n}"),
+                    ..ContactDraft::default()
+                })
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            build(PartyDraft {
+                contacts: contacts(20),
+                ..draft()
+            })
+            .is_ok()
+        );
+        assert_eq!(
+            build(PartyDraft {
+                contacts: contacts(21),
+                ..draft()
+            }),
+            Err(DomainError::TooManyContacts)
+        );
+        assert_eq!(
+            build(PartyDraft {
+                contacts: vec![ContactDraft::default()],
+                ..draft()
+            }),
+            Err(DomainError::InvalidContactField("name"))
         );
     }
 

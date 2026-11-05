@@ -55,7 +55,7 @@ export function PartiesPage() {
     (applied, after) => api.listParties(companyId, applied, after),
     filters,
   );
-  const isFiltered = applied.q !== "" || applied.kind !== "";
+  const isFiltered = applied.q !== "" || applied.kind !== "" || applied.tag !== "";
 
   async function verifyAgain(party: Party) {
     if (verifyingId !== null) {
@@ -91,8 +91,11 @@ export function PartiesPage() {
       } else {
         const updated = await api.updateParty(companyId, editing.id, input);
         // In place: the list keeps its page and its filters, but a party that stopped being of the
-        // kind shown no longer belongs in it.
-        const stillShown = (item: Party) => applied.kind === "" || item[`is_${applied.kind}` as const];
+        // kind shown, or lost the tag shown, no longer belongs in it.
+        const tag = applied.tag.trim().toLowerCase();
+        const stillShown = (item: Party) =>
+          (applied.kind === "" || item[`is_${applied.kind}` as const]) &&
+          (tag === "" || item.tags.includes(tag));
         setParties((current) =>
           current.flatMap((item) => (item.id !== updated.id ? [item] : stillShown(updated) ? [updated] : [])),
         );
@@ -143,6 +146,18 @@ export function PartiesPage() {
               <option value="carrier">Transportadoras</option>
               <option value="seller">Vendedores</option>
             </select>
+          </label>
+          <label>
+            Etiqueta
+            <input
+              type="search"
+              value={filters.tag}
+              placeholder="Por exemplo vip"
+              autoComplete="off"
+              maxLength={30}
+              // No comma: a tag never has one, and the API would answer 400 to it.
+              onChange={(event) => setFilters({ ...filters, tag: event.target.value.replace(/,/g, "") })}
+            />
           </label>
           <label>
             Ordem
@@ -205,6 +220,21 @@ export function PartiesPage() {
                       {party.address && (
                         <div className="muted">{`${party.address.city}/${party.address.state}`}</div>
                       )}
+                      {party.tags.length > 0 && (
+                        <div className="tag-list">
+                          {party.tags.map((tag) => (
+                            <button
+                              key={tag}
+                              type="button"
+                              className="badge badge-muted"
+                              aria-label={`Filtrar pela etiqueta ${tag}`}
+                              onClick={() => setFilters({ ...filters, tag })}
+                            >
+                              {tag}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </td>
                     <td>
                       {party.document ?? "—"} <DocumentBadge check={party.document_check} />
@@ -223,7 +253,14 @@ export function PartiesPage() {
                         </Button>
                       )}
                     </td>
-                    <td>{party.email ?? "—"}</td>
+                    <td>
+                      {party.email ?? "—"}
+                      {party.contacts.length > 0 && (
+                        <div className="muted">
+                          {party.contacts.length === 1 ? "1 contato" : `${party.contacts.length} contatos`}
+                        </div>
+                      )}
+                    </td>
                     <td>
                       {[
                         party.is_customer && "Cliente",

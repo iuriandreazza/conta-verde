@@ -17,6 +17,8 @@ const FIELD_LABELS: Record<string, string> = {
   district: "Bairro",
   city: "Cidade",
   state: "UF",
+  tags: "Etiquetas",
+  contacts: "Contatos",
   document_check: "Verificação do CNPJ",
   registry_legal_name: "Razão social (Receita)",
   registry_situation: "Situação (Receita)",

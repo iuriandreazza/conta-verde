@@ -1,5 +1,5 @@
 use crate::DomainError;
-use crate::name::non_blank;
+use crate::name::{optional_text, required_text};
 
 const POSTAL_CODE_LEN: usize = 8;
 const MAX_STREET_CHARS: usize = 150;
@@ -44,15 +44,19 @@ impl Address {
     pub fn new(draft: AddressDraft) -> Result<Self, DomainError> {
         Ok(Self {
             postal_code: clean_postal_code(&draft.postal_code)?,
-            street: required_text(&draft.street, "street", MAX_STREET_CHARS)?,
-            number: optional_text(draft.number.as_deref(), "number", MAX_NUMBER_CHARS)?,
+            street: required_text(&draft.street, MAX_STREET_CHARS, invalid("street"))?,
+            number: optional_text(draft.number.as_deref(), MAX_NUMBER_CHARS, invalid("number"))?,
             complement: optional_text(
                 draft.complement.as_deref(),
-                "complement",
                 MAX_COMPLEMENT_CHARS,
+                invalid("complement"),
             )?,
-            district: optional_text(draft.district.as_deref(), "district", MAX_DISTRICT_CHARS)?,
-            city: required_text(&draft.city, "city", MAX_CITY_CHARS)?,
+            district: optional_text(
+                draft.district.as_deref(),
+                MAX_DISTRICT_CHARS,
+                invalid("district"),
+            )?,
+            city: required_text(&draft.city, MAX_CITY_CHARS, invalid("city"))?,
             state: clean_state(&draft.state)?,
         })
     }
@@ -88,6 +92,10 @@ impl Address {
     }
 }
 
+fn invalid(field: &'static str) -> DomainError {
+    DomainError::InvalidAddressField(field)
+}
+
 /// Eight digits, written with or without the hyphen (`01310-100`).
 fn clean_postal_code(raw: &str) -> Result<String, DomainError> {
     let code: String = raw
@@ -108,26 +116,6 @@ fn clean_state(raw: &str) -> Result<String, DomainError> {
     } else {
         Err(DomainError::InvalidState)
     }
-}
-
-/// Trimmed, not empty, at most `max` characters and without a NUL byte, which Postgres refuses to
-/// store. Nothing stricter: street names have digits, hyphens, apostrophes and accents.
-fn required_text(raw: &str, field: &'static str, max: usize) -> Result<String, DomainError> {
-    let text = raw.trim();
-    if text.is_empty() || text.contains('\0') || text.chars().count() > max {
-        return Err(DomainError::InvalidAddressField(field));
-    }
-    Ok(text.to_owned())
-}
-
-fn optional_text(
-    raw: Option<&str>,
-    field: &'static str,
-    max: usize,
-) -> Result<Option<String>, DomainError> {
-    raw.and_then(non_blank)
-        .map(|text| required_text(text, field, max))
-        .transpose()
 }
 
 #[cfg(test)]

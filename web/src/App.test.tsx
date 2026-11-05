@@ -24,6 +24,8 @@ function party(name: string): Party {
     is_carrier: false,
     is_seller: false,
     address: null,
+    contacts: [],
+    tags: [],
     document_check: { status: "not_applicable", legal_name: null, situation: null, needs_attention: false },
   };
 }
@@ -1734,6 +1736,8 @@ describe("changing a party, its roles and its address", () => {
         city: "São Paulo",
         state: "SP",
       },
+      contacts: [],
+      tags: [],
     });
     // The form is back to registering.
     expect(screen.getByRole("heading", { name: "Novo cliente ou fornecedor" })).toBeInTheDocument();
@@ -1835,6 +1839,121 @@ describe("changing a party, its roles and its address", () => {
     expect(screen.getByRole("button", { name: "Alterar Zeca" })).toBeInTheDocument();
   });
 
+  it("sends the contacts and tags typed, skips an empty contact row, and fills the form with what is stored", async () => {
+    const stored: Party = {
+      ...party("Padaria"),
+      tags: ["atacado", "vip"],
+      contacts: [
+        { name: "Bruno", job_title: "Compras", email: "bruno@padaria.example", phone: "(81) 99999-0000" },
+        { name: "Carla", job_title: null, email: null, phone: null },
+      ],
+    };
+    const fetchMock = mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "PUT") return { status: 200, body: stored };
+      return page(stored);
+    });
+    renderAt("/companies/c1/parties");
+
+    expect(await screen.findByRole("table")).toHaveTextContent("2 contatos");
+    await userEvent.click(screen.getByRole("button", { name: "Alterar Padaria" }));
+    expect(screen.getByLabelText("Etiquetas")).toHaveValue("atacado, vip");
+    expect(screen.getByLabelText("Nome do contato 1")).toHaveValue("Bruno");
+    expect(screen.getByLabelText("Cargo do contato 1")).toHaveValue("Compras");
+    expect(screen.getByLabelText("Telefone do contato 2")).toHaveValue("");
+
+    // Drop Carla, add Dani and a row left empty, and change the tags.
+    await userEvent.click(screen.getByRole("button", { name: "Remover contato 2" }));
+    await userEvent.click(screen.getByRole("button", { name: "Adicionar contato" }));
+    await userEvent.type(screen.getByLabelText("Nome do contato 2"), "  Dani ");
+    await userEvent.type(screen.getByLabelText("Telefone do contato 2"), "81 3333-4444");
+    await userEvent.click(screen.getByRole("button", { name: "Adicionar contato" }));
+    await userEvent.clear(screen.getByLabelText("Etiquetas"));
+    await userEvent.type(screen.getByLabelText("Etiquetas"), " vip, novo ,, ");
+    await userEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
+
+    await waitFor(() => expect(puts(fetchMock)).toHaveLength(1));
+    const body = sentBody(fetchMock);
+    expect(body.tags).toEqual(["vip", "novo"]);
+    expect(body.contacts).toEqual([
+      { name: "Bruno", job_title: "Compras", email: "bruno@padaria.example", phone: "(81) 99999-0000" },
+      { name: "Dani", phone: "81 3333-4444" },
+    ]);
+  });
+
+  it("puts the cursor in the name of a contact just added", async () => {
+    mockApi((url) => (url === "/api/auth/me" ? { status: 200, body: profile } : page(party("Padaria"))));
+    renderAt("/companies/c1/parties");
+
+    await screen.findByRole("table");
+    await userEvent.click(screen.getByRole("button", { name: "Alterar Padaria" }));
+    await userEvent.click(screen.getByRole("button", { name: "Adicionar contato" }));
+    expect(screen.getByLabelText("Nome do contato 1")).toHaveFocus();
+  });
+
+  it("keeps a contact the API refused in the form, with the message", async () => {
+    mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "PUT") {
+        return { status: 422, body: { error: "phone must have 8 to 15 digits, written with only spaces and the characters + - ( ) ." } };
+      }
+      return page(party("Padaria"));
+    });
+    renderAt("/companies/c1/parties");
+
+    await screen.findByRole("table");
+    await userEvent.click(screen.getByRole("button", { name: "Alterar Padaria" }));
+    await userEvent.click(screen.getByRole("button", { name: "Adicionar contato" }));
+    await userEvent.type(screen.getByLabelText("Nome do contato 1"), "Ana");
+    await userEvent.type(screen.getByLabelText("Telefone do contato 1"), "123");
+    await userEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("phone must have 8 to 15 digits");
+    expect(screen.getByLabelText("Telefone do contato 1")).toHaveValue("123");
+  });
+
+  it("filters the list by a tag typed, or by clicking one on a row", async () => {
+    const tagged: Party = { ...party("Padaria"), tags: ["vip"] };
+    const fetchMock = mockApi((url) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      return page(tagged, party("Zeca"));
+    });
+    renderAt("/companies/c1/parties");
+
+    await screen.findByRole("table");
+    await userEvent.click(screen.getByRole("button", { name: "Filtrar pela etiqueta vip" }));
+    expect(screen.getByLabelText("Etiqueta")).toHaveValue("vip");
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith("/api/companies/c1/parties?tag=vip", expect.anything()),
+    );
+
+    await userEvent.clear(screen.getByLabelText("Etiqueta"));
+    // A comma is never part of a tag, so it is not typed into the filter.
+    await userEvent.type(screen.getByLabelText("Etiqueta"), "ata,cado");
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith("/api/companies/c1/parties?tag=atacado", expect.anything()),
+    );
+  });
+
+  it("drops a party from a list of one tag when the change removes the tag", async () => {
+    const tagged: Party = { ...party("Padaria"), tags: ["vip"] };
+    mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "PUT") return { status: 200, body: party("Padaria") };
+      return page(tagged, { ...party("Zeca"), tags: ["vip"] });
+    });
+    renderAt("/companies/c1/parties");
+
+    await screen.findByRole("table");
+    await userEvent.type(screen.getByLabelText("Etiqueta"), "VIP");
+    await userEvent.click(await screen.findByRole("button", { name: "Alterar Padaria" }));
+    await userEvent.clear(screen.getByLabelText("Etiquetas"));
+    await userEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
+
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Alterar Padaria" })).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Alterar Zeca" })).toBeInTheDocument();
+  });
+
   it("cancels a change and goes back to registering", async () => {
     mockApi((url) => (url === "/api/auth/me" ? { status: 200, body: profile } : page(party("Padaria"))));
     renderAt("/companies/c1/parties");
@@ -1856,6 +1975,8 @@ describe("changing a party, its roles and its address", () => {
         { field: "is_carrier", from: "false", to: "true" },
         { field: "postal_code", from: null, to: "01310100" },
         { field: "street_number", from: null, to: "1000" },
+        { field: "tags", from: "atacado, vip", to: "vip" },
+        { field: "contacts", from: null, to: "Ana (Compras) <ana@padaria.example>" },
       ],
     };
     const fetchMock = mockApi((url) => {
@@ -1877,6 +1998,8 @@ describe("changing a party, its roles and its address", () => {
     expect(screen.getByText("não → sim")).toBeInTheDocument();
     expect(screen.getByText("CEP:")).toBeInTheDocument();
     expect(screen.getByText("Número:")).toBeInTheDocument();
+    expect(screen.getByText("Etiquetas:")).toBeInTheDocument();
+    expect(screen.getByText("Contatos:")).toBeInTheDocument();
     expect(screen.queryByText(/is_carrier|postal_code|street_number/)).not.toBeInTheDocument();
   });
 });
