@@ -1,9 +1,7 @@
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use conta_verde_application::{
-    ApplicationError, MAX_SEARCH_CHARS, NameSort, PartyKind, PartyQuery,
-};
+use conta_verde_application::{ApplicationError, PartyKind, PartyQuery};
 use conta_verde_domain::{DocumentCheck, Party, PartyDraft, PartyId};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -13,6 +11,7 @@ use crate::cursor::{decode_cursor, encode_cursor};
 use crate::error::ApiError;
 use crate::history::HistoryEntryResponse;
 use crate::json::{ApiJson, ApiQuery};
+use crate::list_params;
 use crate::{Ports, SharedState};
 
 #[derive(Deserialize)]
@@ -51,10 +50,7 @@ pub(crate) struct ListQuery {
 impl ListQuery {
     fn party_query(&self) -> Result<PartyQuery, ApiError> {
         let mut query = PartyQuery::default();
-        if let Some(text) = &self.q {
-            if text.chars().count() > MAX_SEARCH_CHARS {
-                return Err(ApiError::InvalidQuery("invalid q: at most 100 characters"));
-            }
+        if let Some(text) = list_params::search(self.q.as_deref())? {
             query = query.searching(text);
         }
         query = match self.kind.as_deref() {
@@ -67,15 +63,7 @@ impl ListQuery {
                 ));
             }
         };
-        Ok(match self.sort.as_deref() {
-            None | Some("name") => query,
-            Some("-name") => query.sorted(NameSort::NameDesc),
-            Some(_) => {
-                return Err(ApiError::InvalidQuery(
-                    "invalid sort: expected name or -name",
-                ));
-            }
-        })
+        Ok(query.sorted(list_params::sort(self.sort.as_deref())?))
     }
 }
 

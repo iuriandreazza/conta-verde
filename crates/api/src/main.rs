@@ -1,10 +1,11 @@
 use std::time::Duration;
 
 use conta_verde_api::{ApiConfig, Ports, Services, router};
-use conta_verde_application::{AuthService, PartyService, ProductService};
+use conta_verde_application::{AuthService, CostCenterService, PartyService, ProductService};
 use conta_verde_infrastructure::{
-    Argon2SecretService, BrasilApiCnpjRegistry, CachedCnpjRegistry, PostgresIdentityRepository,
-    PostgresPartyRepository, PostgresProductRepository, connect_and_migrate,
+    Argon2SecretService, BrasilApiCnpjRegistry, CachedCnpjRegistry, PostgresCostCenterRepository,
+    PostgresIdentityRepository, PostgresPartyRepository, PostgresProductRepository,
+    connect_and_migrate,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -17,6 +18,7 @@ impl Ports for PostgresPorts {
     type Identity = PostgresIdentityRepository;
     type Secrets = Argon2SecretService;
     type Products = PostgresProductRepository;
+    type CostCenters = PostgresCostCenterRepository;
 }
 
 const SESSION_LIFETIME: Duration = Duration::from_secs(30 * 24 * 60 * 60);
@@ -41,6 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         cnpj_registry_from_env()?,
     );
     let products = ProductService::new(PostgresProductRepository::new(pool.clone()));
+    let cost_centers = CostCenterService::new(PostgresCostCenterRepository::new(pool.clone()));
     let auth = AuthService::new(
         PostgresIdentityRepository::new(pool),
         Argon2SecretService::new()?,
@@ -54,6 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             Services {
                 parties,
                 products,
+                cost_centers,
                 auth,
             },
             config,

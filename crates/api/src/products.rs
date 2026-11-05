@@ -1,7 +1,7 @@
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use conta_verde_application::{ApplicationError, MAX_SEARCH_CHARS, NameSort, ProductQuery};
+use conta_verde_application::{ApplicationError, ProductQuery};
 use conta_verde_domain::{Product, ProductDraft, ProductId, ProductKind};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -11,6 +11,7 @@ use crate::cursor::{decode_cursor, encode_cursor};
 use crate::error::ApiError;
 use crate::history::HistoryEntryResponse;
 use crate::json::{ApiJson, ApiQuery};
+use crate::list_params;
 use crate::{Ports, SharedState};
 
 /// The body of both registering and changing a product: a change replaces every editable field.
@@ -97,10 +98,7 @@ pub(crate) struct ListQuery {
 impl ListQuery {
     fn product_query(&self) -> Result<ProductQuery, ApiError> {
         let mut query = ProductQuery::default();
-        if let Some(text) = &self.q {
-            if text.chars().count() > MAX_SEARCH_CHARS {
-                return Err(ApiError::InvalidQuery("invalid q: at most 100 characters"));
-            }
+        if let Some(text) = list_params::search(self.q.as_deref())? {
             query = query.searching(text);
         }
         query = match self.kind.as_deref() {
@@ -113,25 +111,10 @@ impl ListQuery {
                 ));
             }
         };
-        query = match self.active.as_deref() {
-            None => query,
-            Some("true") => query.with_active(true),
-            Some("false") => query.with_active(false),
-            Some(_) => {
-                return Err(ApiError::InvalidQuery(
-                    "invalid active: expected true or false",
-                ));
-            }
-        };
-        Ok(match self.sort.as_deref() {
-            None | Some("name") => query,
-            Some("-name") => query.sorted(NameSort::NameDesc),
-            Some(_) => {
-                return Err(ApiError::InvalidQuery(
-                    "invalid sort: expected name or -name",
-                ));
-            }
-        })
+        if let Some(active) = list_params::active(self.active.as_deref())? {
+            query = query.with_active(active);
+        }
+        Ok(query.sorted(list_params::sort(self.sort.as_deref())?))
     }
 }
 

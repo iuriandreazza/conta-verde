@@ -1,14 +1,15 @@
 //! Behavior every adapter must share, written once and run against each of them.
 
 use conta_verde_application::{
-    ApplicationError, AuthError, AuthService, CnpjRegistry, IdentityRepository, NameSort,
-    PartyKind, PartyQuery, PartyRepository, PartyService, ProductQuery, ProductRepository,
-    ProductService, RepositoryError, SecretService,
+    ApplicationError, AuthError, AuthService, CnpjRegistry, CostCenterQuery, CostCenterRepository,
+    CostCenterService, IdentityRepository, NameSort, PartyKind, PartyQuery, PartyRepository,
+    PartyService, ProductQuery, ProductRepository, ProductService, RepositoryError, SecretService,
 };
 use conta_verde_domain::{
-    AccountDraft, Actor, AuditAction, AuditEntity, AuditEntry, CompanyId, DocumentCheck,
-    DomainError, FieldChange, Party, PartyDraft, PartyId, Product, ProductDraft, ProductId,
-    ProductKind, UserId, creation_changes, document_check_changes, product_changes,
+    AccountDraft, Actor, AuditAction, AuditEntity, AuditEntry, CompanyId, CostCenter,
+    CostCenterDraft, CostCenterId, DocumentCheck, DomainError, FieldChange, Party, PartyDraft,
+    PartyId, Product, ProductDraft, ProductId, ProductKind, UserId, cost_center_changes,
+    cost_center_creation_changes, creation_changes, document_check_changes, product_changes,
     product_creation_changes,
 };
 use sqlx::PgPool;
@@ -1183,5 +1184,353 @@ pub async fn breaks_ties_between_equal_product_names<R: ProductRepository>(
     assert_eq!(
         descending,
         ascending.iter().rev().cloned().collect::<Vec<_>>()
+    );
+}
+
+// ---- cost centers
+
+fn cost_center_entry(
+    cost_center: &CostCenter,
+    action: AuditAction,
+    changes: Vec<FieldChange>,
+) -> AuditEntry {
+    AuditEntry {
+        company_id: cost_center.company_id(),
+        actor: actor(),
+        entity: AuditEntity::CostCenter,
+        entity_id: cost_center.id().as_uuid(),
+        action,
+        changes,
+    }
+}
+
+fn cost_center_draft(name: &str, active: bool) -> CostCenterDraft {
+    CostCenterDraft {
+        name: name.into(),
+        active,
+    }
+}
+
+fn new_cost_center(company: CompanyId, name: &str) -> CostCenter {
+    CostCenter::new(
+        CostCenterId::generate(),
+        company,
+        cost_center_draft(name, true),
+    )
+    .unwrap()
+}
+
+async fn cost_center_trail<R: CostCenterRepository>(
+    repository: &R,
+    company: CompanyId,
+    cost_center: &CostCenter,
+) -> usize {
+    repository
+        .history(company, cost_center.id())
+        .await
+        .unwrap()
+        .len()
+}
+
+/// A write is stored with its audit entry, scoped by company; one that is refused or misses leaves
+/// nothing in the trail, and an entry that describes something else is refused outright.
+pub async fn stores_cost_centers_with_their_trail<R: CostCenterRepository>(
+    repository: &R,
+    company: CompanyId,
+    other_company: CompanyId,
+) {
+    let store = new_cost_center(company, "Loja Centro");
+    let entry = cost_center_entry(
+        &store,
+        AuditAction::Created,
+        cost_center_creation_changes(&store),
+    );
+    repository.save(&store, &entry).await.unwrap();
+    assert_eq!(
+        repository.find(company, store.id()).await.unwrap(),
+        Some(store.clone())
+    );
+    assert_eq!(
+        repository.find(other_company, store.id()).await.unwrap(),
+        None
+    );
+    let history = repository.history(company, store.id()).await.unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].entry, entry);
+    assert!(
+        repository
+            .history(other_company, store.id())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // The same name in the same company, whatever its case, is refused: no row, no entry.
+    let twin = new_cost_center(company, "LOJA centro");
+    let entry = cost_center_entry(&twin, AuditAction::Created, vec![]);
+    assert_eq!(
+        repository.save(&twin, &entry).await,
+        Err(RepositoryError::DuplicateName)
+    );
+    assert_eq!(repository.find(company, twin.id()).await.unwrap(), None);
+    assert_eq!(cost_center_trail(repository, company, &twin).await, 0);
+    // Another company may use it.
+    let elsewhere = new_cost_center(other_company, "Loja Centro");
+    let entry = cost_center_entry(&elsewhere, AuditAction::Created, vec![]);
+    repository.save(&elsewhere, &entry).await.unwrap();
+
+    // An entry about another record, or another company, is refused and nothing is stored.
+    let stray = new_cost_center(company, "Estranho");
+    let wrong_record = cost_center_entry(&store, AuditAction::Created, vec![]);
+    assert!(repository.save(&stray, &wrong_record).await.is_err());
+    assert_eq!(repository.find(company, stray.id()).await.unwrap(), None);
+    let mut wrong_company = cost_center_entry(&stray, AuditAction::Created, vec![]);
+    wrong_company.company_id = other_company;
+    assert!(repository.save(&stray, &wrong_company).await.is_err());
+    assert_eq!(
+        cost_center_trail(repository, other_company, &stray).await,
+        0
+    );
+
+    // An update replaces the fields and adds an entry; changing only the case of its own name is
+    // not a clash.
+    let recased = store
+        .replaced_with(cost_center_draft("LOJA CENTRO", false))
+        .unwrap();
+    let entry = cost_center_entry(
+        &recased,
+        AuditAction::Updated,
+        cost_center_changes(&store, &recased),
+    );
+    repository.update(&recased, &entry).await.unwrap();
+    assert_eq!(
+        repository.find(company, store.id()).await.unwrap(),
+        Some(recased.clone())
+    );
+    assert_eq!(cost_center_trail(repository, company, &store).await, 2);
+
+    // An update that clashes with another cost center's name changes nothing and adds nothing.
+    let other = new_cost_center(company, "Projeto X");
+    let entry = cost_center_entry(&other, AuditAction::Created, vec![]);
+    repository.save(&other, &entry).await.unwrap();
+    let clashing = other
+        .replaced_with(cost_center_draft("loja centro", true))
+        .unwrap();
+    let entry = cost_center_entry(
+        &clashing,
+        AuditAction::Updated,
+        cost_center_changes(&other, &clashing),
+    );
+    assert_eq!(
+        repository.update(&clashing, &entry).await,
+        Err(RepositoryError::DuplicateName)
+    );
+    assert_eq!(
+        repository.find(company, other.id()).await.unwrap(),
+        Some(other.clone())
+    );
+    // Only the entry of its creation.
+    assert_eq!(cost_center_trail(repository, company, &other).await, 1);
+
+    // A name given up by a rename is free again.
+    let renamed = other
+        .replaced_with(cost_center_draft("Projeto Y", true))
+        .unwrap();
+    let entry = cost_center_entry(
+        &renamed,
+        AuditAction::Updated,
+        cost_center_changes(&other, &renamed),
+    );
+    repository.update(&renamed, &entry).await.unwrap();
+    let reuse = new_cost_center(company, "projeto x");
+    let entry = cost_center_entry(&reuse, AuditAction::Created, vec![]);
+    repository.save(&reuse, &entry).await.unwrap();
+
+    // Not in that company, or not at all: nothing is updated and no entry is left.
+    let foreign =
+        CostCenter::new(store.id(), other_company, cost_center_draft("Roubo", true)).unwrap();
+    let entry = cost_center_entry(&foreign, AuditAction::Updated, vec![]);
+    assert_eq!(
+        repository.update(&foreign, &entry).await,
+        Err(RepositoryError::NotFound)
+    );
+    assert_eq!(
+        cost_center_trail(repository, other_company, &store).await,
+        0
+    );
+    let unknown = new_cost_center(company, "Fantasma");
+    let entry = cost_center_entry(&unknown, AuditAction::Updated, vec![]);
+    assert_eq!(
+        repository.update(&unknown, &entry).await,
+        Err(RepositoryError::NotFound)
+    );
+    assert_eq!(cost_center_trail(repository, company, &unknown).await, 0);
+}
+
+/// An edit that changes nothing writes nothing, and the trail shows who changed what.
+pub async fn edits_cost_centers_and_records_only_changes<R: CostCenterRepository>(
+    service: &CostCenterService<R>,
+    company: CompanyId,
+    other_company: CompanyId,
+) {
+    let created = service
+        .register(company, &actor(), cost_center_draft("  Loja Centro ", true))
+        .await
+        .unwrap();
+    assert_eq!(created.name(), "Loja Centro");
+
+    // The same values are no change.
+    service
+        .update(
+            company,
+            &actor(),
+            created.id(),
+            cost_center_draft("Loja Centro", true),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        service.history(company, created.id()).await.unwrap().len(),
+        1
+    );
+
+    let updated = service
+        .update(
+            company,
+            &actor(),
+            created.id(),
+            cost_center_draft("Loja Norte", false),
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.name(), "Loja Norte");
+    assert!(!updated.is_active());
+    let history = service.history(company, created.id()).await.unwrap();
+    assert_eq!(history.len(), 2);
+    assert_eq!(history[1].entry.action, AuditAction::Updated);
+    let fields: Vec<(&str, Option<&str>, Option<&str>)> = history[1]
+        .entry
+        .changes
+        .iter()
+        .map(|change| {
+            (
+                change.field.as_str(),
+                change.from.as_deref(),
+                change.to.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        fields,
+        [
+            ("name", Some("Loja Centro"), Some("Loja Norte")),
+            ("active", Some("true"), Some("false"))
+        ]
+    );
+
+    // Other companies cannot touch or read it.
+    assert_eq!(
+        service
+            .update(
+                other_company,
+                &actor(),
+                created.id(),
+                cost_center_draft("X", true)
+            )
+            .await,
+        Err(ApplicationError::CostCenterNotFound)
+    );
+    assert_eq!(
+        service.history(other_company, created.id()).await,
+        Err(ApplicationError::CostCenterNotFound)
+    );
+    assert_eq!(
+        service
+            .register(company, &actor(), cost_center_draft("loja norte", true))
+            .await,
+        Err(ApplicationError::Repository(RepositoryError::DuplicateName))
+    );
+}
+
+async fn listed_cost_center_names<R: CostCenterRepository>(
+    service: &CostCenterService<R>,
+    company: CompanyId,
+    query: &CostCenterQuery,
+    page_size: usize,
+) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = service
+            .list(company, query, cursor.as_ref(), Some(page_size))
+            .await
+            .unwrap();
+        names.extend(page.items.iter().map(|item| item.name().to_owned()));
+        match page.next {
+            Some(next) => cursor = Some(next),
+            None => return names,
+        }
+    }
+}
+
+pub async fn filters_and_sorts_cost_centers<R: CostCenterRepository>(
+    service: &CostCenterService<R>,
+    company: CompanyId,
+    other_company: CompanyId,
+) {
+    for (name, active) in [
+        ("Alfa", true),
+        ("bravo", false),
+        ("Charlie 100%", true),
+        ("Delta_x", true),
+        ("echo", false),
+    ] {
+        service
+            .register(company, &actor(), cost_center_draft(name, active))
+            .await
+            .unwrap();
+    }
+    // Another company's cost center never shows up, and may reuse a name.
+    service
+        .register(other_company, &actor(), cost_center_draft("Alfa", true))
+        .await
+        .unwrap();
+
+    let all = CostCenterQuery::default();
+    let names = |query: CostCenterQuery| async move {
+        listed_cost_center_names(service, company, &query, 2).await
+    };
+    let ascending = ["Alfa", "bravo", "Charlie 100%", "Delta_x", "echo"];
+    assert_eq!(names(all.clone()).await, ascending);
+    let descending: Vec<&str> = ascending.iter().rev().copied().collect();
+    assert_eq!(
+        names(all.clone().sorted(NameSort::NameDesc)).await,
+        descending
+    );
+
+    // Inactive ones are listed unless the query says otherwise.
+    assert_eq!(
+        names(all.clone().with_active(true)).await,
+        ["Alfa", "Charlie 100%", "Delta_x"]
+    );
+    assert_eq!(
+        names(all.clone().with_active(false)).await,
+        ["bravo", "echo"]
+    );
+
+    assert_eq!(names(all.clone().searching("ALF")).await, ["Alfa"]);
+    assert_eq!(names(all.clone().searching("%")).await, ["Charlie 100%"]);
+    assert_eq!(names(all.clone().searching("_")).await, ["Delta_x"]);
+    assert!(names(all.clone().searching("nobody")).await.is_empty());
+    assert_eq!(names(all.clone().searching("al\0fa")).await, ["Alfa"]);
+    assert_eq!(names(all.clone().searching("  ")).await, ascending);
+
+    let active_with_a = all
+        .with_active(true)
+        .searching("a")
+        .sorted(NameSort::NameDesc);
+    assert_eq!(
+        names(active_with_a).await,
+        ["Delta_x", "Charlie 100%", "Alfa"]
     );
 }

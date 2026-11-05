@@ -1,9 +1,11 @@
 mod access;
 mod auth;
+mod cost_centers;
 mod cursor;
 mod error;
 mod history;
 mod json;
+mod list_params;
 mod parties;
 mod products;
 mod session;
@@ -13,8 +15,8 @@ use std::sync::Arc;
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use conta_verde_application::{
-    AuthService, CnpjRegistry, IdentityRepository, PartyRepository, PartyService,
-    ProductRepository, ProductService, SecretService,
+    AuthService, CnpjRegistry, CostCenterRepository, CostCenterService, IdentityRepository,
+    PartyRepository, PartyService, ProductRepository, ProductService, SecretService,
 };
 use serde::Serialize;
 
@@ -32,18 +34,21 @@ pub trait Ports: 'static {
     type Identity: IdentityRepository + 'static;
     type Secrets: SecretService + 'static;
     type Products: ProductRepository + 'static;
+    type CostCenters: CostCenterRepository + 'static;
 }
 
 /// The use cases the API serves.
 pub struct Services<X: Ports> {
     pub parties: PartyService<X::Parties, X::Registry>,
     pub products: ProductService<X::Products>,
+    pub cost_centers: CostCenterService<X::CostCenters>,
     pub auth: AuthService<X::Identity, X::Secrets>,
 }
 
 pub(crate) struct AppState<X: Ports> {
     parties: PartyService<X::Parties, X::Registry>,
     products: ProductService<X::Products>,
+    cost_centers: CostCenterService<X::CostCenters>,
     auth: AuthService<X::Identity, X::Secrets>,
     config: ApiConfig,
 }
@@ -55,6 +60,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
     let state = Arc::new(AppState {
         parties: services.parties,
         products: services.products,
+        cost_centers: services.cost_centers,
         auth: services.auth,
         config,
     });
@@ -88,6 +94,18 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
             "/companies/{company_id}/products/{product_id}/history",
             get(products::product_history::<X>),
         )
+        .route(
+            "/companies/{company_id}/cost-centers",
+            get(cost_centers::list_cost_centers::<X>).post(cost_centers::register_cost_center::<X>),
+        )
+        .route(
+            "/companies/{company_id}/cost-centers/{cost_center_id}",
+            put(cost_centers::update_cost_center::<X>),
+        )
+        .route(
+            "/companies/{company_id}/cost-centers/{cost_center_id}/history",
+            get(cost_centers::cost_center_history::<X>),
+        )
         .with_state(state)
 }
 
@@ -107,8 +125,8 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode, header};
     use conta_verde_infrastructure::{
-        Argon2SecretService, InMemoryCnpjRegistry, InMemoryIdentityRepository,
-        InMemoryPartyRepository, InMemoryProductRepository,
+        Argon2SecretService, InMemoryCnpjRegistry, InMemoryCostCenterRepository,
+        InMemoryIdentityRepository, InMemoryPartyRepository, InMemoryProductRepository,
     };
     use http_body_util::BodyExt;
     use serde_json::{Value, json};
@@ -144,6 +162,7 @@ mod tests {
         type Identity = InMemoryIdentityRepository;
         type Secrets = Argon2SecretService;
         type Products = InMemoryProductRepository;
+        type CostCenters = InMemoryCostCenterRepository;
     }
 
     /// Like `MemoryPorts`, with the CNPJ lookup switched off.
@@ -155,6 +174,7 @@ mod tests {
         type Identity = InMemoryIdentityRepository;
         type Secrets = Argon2SecretService;
         type Products = InMemoryProductRepository;
+        type CostCenters = InMemoryCostCenterRepository;
     }
 
     fn auth_service() -> AuthService<InMemoryIdentityRepository, Argon2SecretService> {
@@ -172,6 +192,7 @@ mod tests {
             Services {
                 parties,
                 products: ProductService::new(InMemoryProductRepository::default()),
+                cost_centers: CostCenterService::new(InMemoryCostCenterRepository::default()),
                 auth: auth_service(),
             },
             ApiConfig::default(),
@@ -591,6 +612,7 @@ mod tests {
             Services {
                 parties: PartyService::new(InMemoryPartyRepository::default(), registry),
                 products: ProductService::new(InMemoryProductRepository::default()),
+                cost_centers: CostCenterService::new(InMemoryCostCenterRepository::default()),
                 auth: auth_service(),
             },
             ApiConfig::default(),
@@ -1201,5 +1223,150 @@ mod tests {
                 .unwrap()
                 .contains("200 characters")
         );
+    }
+
+    fn cost_centers_uri(company_id: Uuid) -> String {
+        format!("/companies/{company_id}/cost-centers")
+    }
+
+    async fn post_cost_center(app: &Router, cookie: &str, company_id: Uuid, body: Value) -> Reply {
+        let request = json_request("POST", &cost_centers_uri(company_id), Some(cookie), body);
+        send(app, request).await
+    }
+
+    #[tokio::test]
+    async fn registers_changes_and_lists_cost_centers_with_their_history() {
+        let app = app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+
+        let created = post_cost_center(
+            &app,
+            &cookie,
+            company_id,
+            json!({ "name": "  Loja Centro " }),
+        )
+        .await;
+        assert_eq!(created.status, StatusCode::CREATED);
+        assert_eq!(created.body["name"], "Loja Centro");
+        assert_eq!(created.body["active"], true);
+        let id = created.body["id"].as_str().unwrap().to_owned();
+
+        // The same name in another case is the same cost center.
+        let duplicate =
+            post_cost_center(&app, &cookie, company_id, json!({ "name": "LOJA centro" })).await;
+        assert_eq!(duplicate.status, StatusCode::CONFLICT);
+
+        let uri = format!("{}/{id}", cost_centers_uri(company_id));
+        let changed = json!({ "name": "Loja Norte", "active": false });
+        let updated = send(
+            &app,
+            json_request("PUT", &uri, Some(&cookie), changed.clone()),
+        )
+        .await;
+        assert_eq!(updated.status, StatusCode::OK);
+        assert_eq!(updated.body["active"], false);
+        // The same body again changes nothing and adds nothing to the history.
+        send(&app, json_request("PUT", &uri, Some(&cookie), changed)).await;
+
+        let inactive = format!("{}?active=false&q=NORTE", cost_centers_uri(company_id));
+        let listed = send(&app, get_request(&inactive, Some(&cookie))).await;
+        assert_eq!(listed.body["items"][0]["name"], "Loja Norte");
+
+        let history = send(&app, get_request(&format!("{uri}/history"), Some(&cookie))).await;
+        let entries = history.body.as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0]["action"], "created");
+        assert_eq!(entries[0]["actor"]["name"], "Ana");
+        assert_eq!(
+            entries[1]["changes"],
+            json!([
+                { "field": "name", "from": "Loja Centro", "to": "Loja Norte" },
+                { "field": "active", "from": "true", "to": "false" },
+            ])
+        );
+
+        // Replacing must say whether it is active, or a deactivated one would come back.
+        let without = json_request("PUT", &uri, Some(&cookie), json!({ "name": "Loja Norte" }));
+        assert_eq!(
+            send(&app, without).await.status,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
+    #[tokio::test]
+    async fn cost_centers_stay_private_and_refusals_are_json() {
+        let app = app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let (stranger_cookie, stranger_company) = sign_up(&app, "bia@example.com").await;
+        let created = post_cost_center(&app, &cookie, company_id, json!({ "name": "Loja" })).await;
+        let id = created.body["id"].as_str().unwrap().to_owned();
+
+        // The same name is fine in another company; its routes cannot reach this one's.
+        let own = post_cost_center(
+            &app,
+            &stranger_cookie,
+            stranger_company,
+            json!({ "name": "Loja" }),
+        )
+        .await;
+        assert_eq!(own.status, StatusCode::CREATED);
+        let foreign = format!("{}/{id}", cost_centers_uri(stranger_company));
+        let put = json_request(
+            "PUT",
+            &foreign,
+            Some(&stranger_cookie),
+            json!({ "name": "X", "active": true }),
+        );
+        assert_eq!(send(&app, put).await.status, StatusCode::NOT_FOUND);
+        let history = get_request(&format!("{foreign}/history"), Some(&stranger_cookie));
+        assert_eq!(send(&app, history).await.status, StatusCode::NOT_FOUND);
+        let list = get_request(&cost_centers_uri(company_id), Some(&stranger_cookie));
+        assert_eq!(send(&app, list).await.status, StatusCode::NOT_FOUND);
+        let anonymous = get_request(&cost_centers_uri(company_id), None);
+        assert_eq!(send(&app, anonymous).await.status, StatusCode::UNAUTHORIZED);
+
+        let malformed = format!("{}/not-a-uuid", cost_centers_uri(company_id));
+        let put = json_request(
+            "PUT",
+            &malformed,
+            Some(&cookie),
+            json!({ "name": "X", "active": true }),
+        );
+        let reply = send(&app, put).await;
+        assert_eq!(reply.status, StatusCode::NOT_FOUND);
+        assert_eq!(reply.body["error"], "cost center not found");
+
+        for body in [
+            json!({}),
+            json!({ "name": "X", "surprise": 1 }),
+            json!({ "name": 5 }),
+        ] {
+            let reply = post_cost_center(&app, &cookie, company_id, body.clone()).await;
+            assert!(reply.status.is_client_error(), "{body}");
+            assert!(reply.body["error"].is_string(), "{body}");
+        }
+        let blank = post_cost_center(&app, &cookie, company_id, json!({ "name": "  " })).await;
+        assert_eq!(blank.status, StatusCode::UNPROCESSABLE_ENTITY);
+        let long = post_cost_center(
+            &app,
+            &cookie,
+            company_id,
+            json!({ "name": "x".repeat(201) }),
+        )
+        .await;
+        assert_eq!(long.status, StatusCode::UNPROCESSABLE_ENTITY);
+
+        let uri = cost_centers_uri(company_id);
+        for query in [
+            "active=yes",
+            "active=",
+            "sort=id",
+            "limit=abc",
+            "after=garbage",
+        ] {
+            let reply = send(&app, get_request(&format!("{uri}?{query}"), Some(&cookie))).await;
+            assert!(reply.status.is_client_error(), "{query}");
+            assert!(reply.body["error"].is_string(), "{query}");
+        }
     }
 }

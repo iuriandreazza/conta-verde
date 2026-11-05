@@ -1,6 +1,6 @@
 use uuid::Uuid;
 
-use crate::{CompanyId, DocumentCheck, Party, Product, UserId};
+use crate::{CompanyId, CostCenter, DocumentCheck, Party, Product, UserId};
 
 /// Who made a change. The name is a snapshot: history must keep reading the same after the user is
 /// renamed or removed. API keys will join as another variant ([ADR 0007]).
@@ -14,6 +14,7 @@ pub enum Actor {
 pub enum AuditEntity {
     Party,
     Product,
+    CostCenter,
 }
 
 impl AuditEntity {
@@ -21,6 +22,7 @@ impl AuditEntity {
         match self {
             Self::Party => "party",
             Self::Product => "product",
+            Self::CostCenter => "cost_center",
         }
     }
 }
@@ -103,6 +105,20 @@ impl Audited for Product {
     }
 }
 
+impl Audited for CostCenter {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::CostCenter
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.id().as_uuid()
+    }
+}
+
 impl AuditEntry {
     /// Whether this entry is about that record, in that record's company. Stores check it before
     /// writing, so a caller's mistake cannot put a row into another company's trail.
@@ -148,10 +164,35 @@ pub fn creation_changes(party: &Party) -> Vec<FieldChange> {
     changes
 }
 
-/// The fields of a product as text, in the order the trail lists them; `None` is "not set".
-fn product_fields(product: &Product) -> [(&'static str, Option<String>); 9] {
+/// The fields of a record as text, in the order the trail lists them; `None` is "not set".
+type Fields = Vec<(&'static str, Option<String>)>;
+
+/// Every field that is set: what a creation records.
+fn creation_from(fields: Fields) -> Vec<FieldChange> {
+    fields
+        .into_iter()
+        .filter_map(|(field, value)| value.map(|value| set(field, value)))
+        .collect()
+}
+
+/// The fields that differ between two versions of a record; empty when nothing changed, in which
+/// case nothing is written and nothing is recorded.
+fn changes_between(before: Fields, after: Fields) -> Vec<FieldChange> {
+    before
+        .into_iter()
+        .zip(after)
+        .filter(|((_, from), (_, to))| from != to)
+        .map(|((field, from), (_, to))| FieldChange {
+            field: field.to_owned(),
+            from,
+            to,
+        })
+        .collect()
+}
+
+fn product_fields(product: &Product) -> Fields {
     let amount = |amount: Option<crate::Amount>| amount.map(|value| value.to_string());
-    [
+    vec![
         ("kind", Some(product.kind().as_str().to_owned())),
         ("name", Some(product.name().to_owned())),
         ("sku", product.sku().map(str::to_owned)),
@@ -166,25 +207,27 @@ fn product_fields(product: &Product) -> [(&'static str, Option<String>); 9] {
 
 /// Every field a new product has set.
 pub fn product_creation_changes(product: &Product) -> Vec<FieldChange> {
-    product_fields(product)
-        .into_iter()
-        .filter_map(|(field, value)| value.map(|value| set(field, value)))
-        .collect()
+    creation_from(product_fields(product))
 }
 
-/// The fields that differ between two versions of a product; empty when nothing changed, in which
-/// case nothing is written and nothing is recorded.
 pub fn product_changes(before: &Product, after: &Product) -> Vec<FieldChange> {
-    product_fields(before)
-        .into_iter()
-        .zip(product_fields(after))
-        .filter(|((_, from), (_, to))| from != to)
-        .map(|((field, from), (_, to))| FieldChange {
-            field: field.to_owned(),
-            from,
-            to,
-        })
-        .collect()
+    changes_between(product_fields(before), product_fields(after))
+}
+
+fn cost_center_fields(cost_center: &CostCenter) -> Fields {
+    vec![
+        ("name", Some(cost_center.name().to_owned())),
+        ("active", Some(cost_center.is_active().to_string())),
+    ]
+}
+
+/// Every field a new cost center has set.
+pub fn cost_center_creation_changes(cost_center: &CostCenter) -> Vec<FieldChange> {
+    creation_from(cost_center_fields(cost_center))
+}
+
+pub fn cost_center_changes(before: &CostCenter, after: &CostCenter) -> Vec<FieldChange> {
+    changes_between(cost_center_fields(before), cost_center_fields(after))
 }
 
 /// The fields of the registry check that differ between two answers; empty when nothing changed.

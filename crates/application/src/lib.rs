@@ -1,6 +1,8 @@
 mod audit;
 mod auth_service;
 mod cnpj_registry;
+mod cost_center_repository;
+mod cost_center_service;
 mod error;
 mod identity_repository;
 mod list_query;
@@ -14,6 +16,8 @@ mod secret_service;
 pub use audit::ensure_audit_describes;
 pub use auth_service::{AuthService, Profile, SignedIn};
 pub use cnpj_registry::{CnpjLookupError, CnpjRegistry, RegistryEntry};
+pub use cost_center_repository::{CostCenterQuery, CostCenterRepository};
+pub use cost_center_service::{CostCenterPage, CostCenterService};
 pub use error::{ApplicationError, AuthError, RepositoryError};
 pub use identity_repository::{IdentityRepository, NewAccount, StoredCredentials};
 pub use list_query::{MAX_SEARCH_CHARS, NameSort};
