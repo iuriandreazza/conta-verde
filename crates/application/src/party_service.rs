@@ -3,7 +3,8 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use conta_verde_domain::{
-    CompanyId, Document, DocumentCheck, DomainError, Party, PartyDraft, PartyId,
+    Actor, AuditAction, AuditEntity, AuditEntry, AuditRecord, CompanyId, Document, DocumentCheck,
+    DomainError, FieldChange, Party, PartyDraft, PartyId, creation_changes, document_check_changes,
 };
 
 use crate::{
@@ -14,6 +15,22 @@ use crate::{
 const DEFAULT_PAGE_SIZE: usize = 50;
 const MAX_PAGE_SIZE: usize = 200;
 const DEFAULT_RECHECK_INTERVAL: Duration = Duration::from_secs(10);
+
+fn party_audit(
+    party: &Party,
+    actor: &Actor,
+    action: AuditAction,
+    changes: Vec<FieldChange>,
+) -> AuditEntry {
+    AuditEntry {
+        company_id: party.company_id(),
+        actor: actor.clone(),
+        entity: AuditEntity::Party,
+        entity_id: party.id().as_uuid(),
+        action,
+        changes,
+    }
+}
 
 fn check_from(answer: Result<RegistryEntry, CnpjLookupError>) -> DocumentCheck {
     match answer {
@@ -67,9 +84,12 @@ impl<R: PartyRepository, C: CnpjRegistry> PartyService<R, C> {
     /// can be missing) is stored as not found, and an unreachable registry as unverified, so a
     /// third-party limitation never stops data entry. With the lookup switched off nothing is
     /// asked and nothing is claimed about the CNPJ.
+    ///
+    /// The creation is recorded in the audit trail under `actor`, in the same write.
     pub async fn register(
         &self,
         company_id: CompanyId,
+        actor: &Actor,
         draft: PartyDraft,
     ) -> Result<Party, ApplicationError> {
         let mut party = Party::new(PartyId::generate(), company_id, draft)?;
@@ -77,16 +97,26 @@ impl<R: PartyRepository, C: CnpjRegistry> PartyService<R, C> {
             let check = check_from(self.registry.lookup(cnpj).await);
             party = party.with_document_check(check);
         }
-        self.repository.save(&party).await?;
+        let audit = party_audit(
+            &party,
+            actor,
+            AuditAction::Created,
+            creation_changes(&party),
+        );
+        self.repository.save(&party, &audit).await?;
         Ok(party)
     }
 
     /// Asks the registry again about the party's CNPJ and records the answer, so a party stored
     /// as unverified or not found (an outage, a lagging registry) can be re-checked later. The
     /// answer replaces the old one, whatever it was; like at registration, nothing blocks.
+    ///
+    /// A re-check that gets the same answer as before changes nothing, so nothing is written and
+    /// no audit entry is added: the trail lists changes, not attempts.
     pub async fn verify_document(
         &self,
         company_id: CompanyId,
+        actor: &Actor,
         party_id: PartyId,
     ) -> Result<Party, ApplicationError> {
         let party = self
@@ -106,9 +136,15 @@ impl<R: PartyRepository, C: CnpjRegistry> PartyService<R, C> {
             self.release_recheck(&cnpj_key);
             return Err(ApplicationError::LookupDisabled);
         }
-        let party = party.with_document_check(check_from(answer));
+        let new_check = check_from(answer);
+        let changes = document_check_changes(party.document_check(), &new_check);
+        let party = party.with_document_check(new_check);
+        if changes.is_empty() {
+            return Ok(party);
+        }
+        let audit = party_audit(&party, actor, AuditAction::Updated, changes);
         self.repository
-            .update_document_check(&party)
+            .update_document_check(&party, &audit)
             .await
             .map_err(|error| {
                 // Nothing was stored, so the user may try again right away.
@@ -120,6 +156,20 @@ impl<R: PartyRepository, C: CnpjRegistry> PartyService<R, C> {
                 }
             })?;
         Ok(party)
+    }
+
+    /// What was recorded about the party, oldest first.
+    pub async fn history(
+        &self,
+        company_id: CompanyId,
+        party_id: PartyId,
+    ) -> Result<Vec<AuditRecord>, ApplicationError> {
+        // A party of another company answers like an unknown one, never with its trail.
+        self.repository
+            .find(company_id, party_id)
+            .await?
+            .ok_or(ApplicationError::PartyNotFound)?;
+        Ok(self.repository.history(company_id, party_id).await?)
     }
 
     /// Lets one re-check per CNPJ through each interval, whichever party or company asks: the

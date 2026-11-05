@@ -50,6 +50,7 @@ Rules that are easy to break:
 - Use cases are generic over their port (`PartyService<R: PartyRepository>`), not `dyn`. Port methods return `impl Future + Send`.
 - Serde types belong in `api`. Domain types are not serialized directly.
 - Every business table has `company_id`, every repository method takes a `CompanyId`, and uniqueness is scoped by company (ADR 0004).
+- Every write to a business table carries an `AuditEntry` built by the use case (actor from `CompanyAccess`, field changes from `domain::audit`) and stored in the same transaction (ADR 0008). A new register needs its entity in `AuditEntity`, both adapters recording it, and a contract test that a refused write leaves no entry. Never audit account, session or membership writes, and never edit or delete `audit_log` rows (a trigger forbids it).
 - Money is exact decimal (`rust_decimal` / `NUMERIC`), never floats (ADR 0003).
 - SQL uses runtime `sqlx::query`, not `query!` macros. Do not add `query!` without also solving offline data for CI.
 - A new adapter or port method needs both adapters (Postgres and in-memory) to behave the same, including ordering.
@@ -62,6 +63,7 @@ Rules that are easy to break:
 - Secrets (Argon2, token generation and digests) sit behind the `SecretService` port; the `argon2` crate is optimized even in dev builds (workspace `Cargo.toml`), or tests would take seconds per login.
 - Migrations live in `crates/infrastructure/migrations/`. Do not edit one that has been merged to `main`; add a new one.
 - Editing an applied migration locally breaks your dev database checksum: `docker compose down -v` resets it.
+- Companies that have audit rows cannot be deleted in a dev database: `audit_log` references them and a trigger forbids deleting or updating its rows. Reset with `docker compose down -v` instead of `DELETE`.
 - Storage errors are logged server-side and returned to clients as a generic `internal error`. Keep it that way.
 - Documents are stored without punctuation and validated with check digits in `domain`: a CPF is 11 digits; a CNPJ is 14 characters whose first 12 may be uppercase letters (alphanumeric CNPJ, since July 2026). Never assume a document is numeric (no `inputMode="numeric"`, no digit-only parsing).
 - A CNPJ is also looked up in the federal registry (ADR 0017); a CPF never is. Nothing the registry says blocks a registration: `NotFound` stores the party as `NotFound` with a warning (its data lags, so new companies can be missing), an outage stores it as `Unverified`, and `CNPJ_LOOKUP=off` (`Disabled`) stores it as `NotApplicable` without nagging. The port takes a `Cnpj`, which only `Document::cnpj` can build. Tests must never call the real service: use `InMemoryCnpjRegistry` or the local fake in `brasil_api.rs`. The real BrasilAPI answers 429 to requests without a `User-Agent`, and to callers that exceed its rate limit.

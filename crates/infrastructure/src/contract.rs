@@ -4,7 +4,10 @@ use conta_verde_application::{
     ApplicationError, AuthError, AuthService, CnpjRegistry, IdentityRepository, PartyRepository,
     PartyService, RepositoryError, SecretService,
 };
-use conta_verde_domain::{AccountDraft, CompanyId, DocumentCheck, Party, PartyDraft, PartyId};
+use conta_verde_domain::{
+    AccountDraft, Actor, AuditAction, AuditEntity, AuditEntry, CompanyId, DocumentCheck, Party,
+    PartyDraft, PartyId, UserId, creation_changes, document_check_changes,
+};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -14,6 +17,15 @@ pub const ACTIVE_CNPJ: &str = "11.222.333/0001-81";
 pub const CLOSED_ALPHANUMERIC_CNPJ: &str = "12.ABC.345/01DE-35";
 /// Valid check digits, but unknown to the contract registry.
 pub const UNKNOWN_CNPJ: &str = "00.000.000/0001-91";
+
+/// The user every contract test acts as. Postgres keeps no foreign key on the actor, so the id
+/// need not belong to a stored user.
+pub fn actor() -> Actor {
+    Actor::User {
+        id: UserId::generate(),
+        name: "Ana Souza".into(),
+    }
+}
 
 /// A registry that knows the two companies the contract tests register, and no others.
 pub fn registry() -> InMemoryCnpjRegistry {
@@ -62,7 +74,7 @@ pub async fn keeps_what_the_registry_said<R: PartyRepository>(
         ("Sem documento", None),
     ] {
         service
-            .register(company, party_draft(name, document))
+            .register(company, &actor(), party_draft(name, document))
             .await
             .unwrap();
     }
@@ -98,11 +110,222 @@ pub async fn keeps_the_unverified_mark<R: PartyRepository>(
     company: CompanyId,
 ) {
     service
-        .register(company, party_draft("Padaria", Some(ACTIVE_CNPJ)))
+        .register(company, &actor(), party_draft("Padaria", Some(ACTIVE_CNPJ)))
         .await
         .unwrap();
     let listed = service.list(company, None, None).await.unwrap().items;
     assert_eq!(listed[0].document_check(), &DocumentCheck::Unverified);
+}
+
+pub fn created_entry(party: &Party) -> AuditEntry {
+    AuditEntry {
+        company_id: party.company_id(),
+        actor: actor(),
+        entity: AuditEntity::Party,
+        entity_id: party.id().as_uuid(),
+        action: AuditAction::Created,
+        changes: creation_changes(party),
+    }
+}
+
+/// An update entry for a party whose document check went from `before` to `after`.
+pub fn check_entry(before: &Party, after: &Party) -> AuditEntry {
+    AuditEntry {
+        company_id: after.company_id(),
+        actor: actor(),
+        entity: AuditEntity::Party,
+        entity_id: after.id().as_uuid(),
+        action: AuditAction::Updated,
+        changes: document_check_changes(before.document_check(), after.document_check()),
+    }
+}
+
+/// The audit trail is written together with the write it describes, in order, scoped by company,
+/// and never for a write that did not happen.
+pub async fn records_what_was_written<R: PartyRepository>(
+    repository: &R,
+    company: CompanyId,
+    other_company: CompanyId,
+) {
+    let unverified = Party::new(
+        PartyId::generate(),
+        company,
+        party_draft("Padaria", Some(ACTIVE_CNPJ)),
+    )
+    .unwrap()
+    .with_document_check(DocumentCheck::Unverified);
+    let created = created_entry(&unverified);
+    repository.save(&unverified, &created).await.unwrap();
+
+    let verified = unverified
+        .clone()
+        .with_document_check(DocumentCheck::Verified {
+            legal_name: "PADARIA CENTRAL LTDA".into(),
+            situation: "ATIVA".into(),
+        });
+    let rechecked = check_entry(&unverified, &verified);
+    repository
+        .update_document_check(&verified, &rechecked)
+        .await
+        .unwrap();
+
+    // Oldest first, with a growing sequence and a real time, carrying exactly what was written.
+    let history = repository.history(company, unverified.id()).await.unwrap();
+    assert_eq!(
+        history
+            .iter()
+            .map(|record| &record.entry)
+            .collect::<Vec<_>>(),
+        [&created, &rechecked]
+    );
+    assert!(history[0].sequence < history[1].sequence);
+    assert!(
+        history
+            .iter()
+            .all(|record| record.at_millis > 1_700_000_000_000)
+    );
+    assert!(history[0].at_millis <= history[1].at_millis);
+    assert_eq!(history[0].entry.action, AuditAction::Created);
+    assert_eq!(history[1].entry.action, AuditAction::Updated);
+    // The re-check lists only the fields that changed.
+    let changed: Vec<&str> = history[1]
+        .entry
+        .changes
+        .iter()
+        .map(|change| change.field.as_str())
+        .collect();
+    assert_eq!(
+        changed,
+        [
+            "document_check",
+            "registry_legal_name",
+            "registry_situation"
+        ]
+    );
+
+    // Scoped by company: the same party id read through another company shows nothing.
+    assert!(
+        repository
+            .history(other_company, unverified.id())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    // And another party has its own, separate trail.
+    assert!(
+        repository
+            .history(company, PartyId::generate())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// A write that is refused or misses leaves nothing in the trail, and a trail entry is never
+/// stored without its write. Postgres does it with a transaction, memory by recording last.
+pub async fn leaves_no_trace_of_a_write_that_did_not_happen<R: PartyRepository>(
+    repository: &R,
+    company: CompanyId,
+    other_company: CompanyId,
+) {
+    let first = Party::new(
+        PartyId::generate(),
+        company,
+        party_draft("Padaria", Some(ACTIVE_CNPJ)),
+    )
+    .unwrap();
+    repository
+        .save(&first, &created_entry(&first))
+        .await
+        .unwrap();
+
+    // The same document twice in one company is refused...
+    let duplicate = Party::new(
+        PartyId::generate(),
+        company,
+        party_draft("Padaria 2", Some(ACTIVE_CNPJ)),
+    )
+    .unwrap();
+    assert_eq!(
+        repository
+            .save(&duplicate, &created_entry(&duplicate))
+            .await,
+        Err(RepositoryError::DuplicateDocument)
+    );
+    // ...and the refused party left no entry behind.
+    assert!(
+        repository
+            .history(company, duplicate.id())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        repository.history(company, first.id()).await.unwrap().len(),
+        1
+    );
+
+    // An update through the wrong company misses, and leaves no entry either.
+    let wrong_company = Party::new(
+        first.id(),
+        other_company,
+        party_draft("Padaria", Some(ACTIVE_CNPJ)),
+    )
+    .unwrap()
+    .with_document_check(DocumentCheck::NotFound);
+    assert_eq!(
+        repository
+            .update_document_check(&wrong_company, &check_entry(&first, &wrong_company))
+            .await,
+        Err(RepositoryError::NotFound)
+    );
+    assert_eq!(
+        repository.history(company, first.id()).await.unwrap().len(),
+        1
+    );
+
+    // An entry that is not about this party (another company's trail, another record) is a
+    // caller's bug: refused, with neither the party nor an entry stored.
+    let stranger = Party::new(
+        PartyId::generate(),
+        company,
+        party_draft("Oficina", Some(CLOSED_ALPHANUMERIC_CNPJ)),
+    )
+    .unwrap();
+    let for_another_company = AuditEntry {
+        company_id: other_company,
+        ..created_entry(&stranger)
+    };
+    let for_another_record = AuditEntry {
+        entity_id: first.id().as_uuid(),
+        ..created_entry(&stranger)
+    };
+    for mismatched in [&for_another_company, &for_another_record] {
+        assert!(matches!(
+            repository.save(&stranger, mismatched).await,
+            Err(RepositoryError::Storage(_))
+        ));
+    }
+    assert_eq!(repository.find(company, stranger.id()).await.unwrap(), None);
+    assert!(
+        repository
+            .history(other_company, stranger.id())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    // The same guard protects the update.
+    let rechecked = first.clone().with_document_check(DocumentCheck::NotFound);
+    assert!(matches!(
+        repository
+            .update_document_check(&rechecked, &for_another_company)
+            .await,
+        Err(RepositoryError::Storage(_))
+    ));
+    assert_eq!(
+        repository.history(company, first.id()).await.unwrap().len(),
+        1
+    );
 }
 
 /// A party is found only inside its own company, and replacing its document check changes
@@ -119,7 +342,10 @@ pub async fn finds_parties_and_replaces_their_document_check<R: PartyRepository>
     )
     .unwrap()
     .with_document_check(DocumentCheck::Unverified);
-    repository.save(&party).await.unwrap();
+    repository
+        .save(&party, &created_entry(&party))
+        .await
+        .unwrap();
 
     assert_eq!(
         repository.find(company, party.id()).await.unwrap(),
@@ -138,7 +364,10 @@ pub async fn finds_parties_and_replaces_their_document_check<R: PartyRepository>
         legal_name: "PADARIA CENTRAL LTDA".into(),
         situation: "ATIVA".into(),
     });
-    repository.update_document_check(&verified).await.unwrap();
+    repository
+        .update_document_check(&verified, &check_entry(&party, &verified))
+        .await
+        .unwrap();
     assert_eq!(
         repository.find(company, party.id()).await.unwrap(),
         Some(verified.clone())
@@ -154,7 +383,9 @@ pub async fn finds_parties_and_replaces_their_document_check<R: PartyRepository>
     .unwrap()
     .with_document_check(DocumentCheck::NotFound);
     assert_eq!(
-        repository.update_document_check(&intruder).await,
+        repository
+            .update_document_check(&intruder, &check_entry(&party, &intruder))
+            .await,
         Err(RepositoryError::NotFound)
     );
     assert_eq!(
@@ -164,7 +395,10 @@ pub async fn finds_parties_and_replaces_their_document_check<R: PartyRepository>
 
     // Going back is allowed too: the latest answer wins, whatever it was.
     let not_found = party.with_document_check(DocumentCheck::NotFound);
-    repository.update_document_check(&not_found).await.unwrap();
+    repository
+        .update_document_check(&not_found, &check_entry(&verified, &not_found))
+        .await
+        .unwrap();
     assert_eq!(
         repository.find(company, not_found.id()).await.unwrap(),
         Some(not_found)
@@ -183,7 +417,7 @@ pub async fn pages_through_parties<R: PartyRepository, C: CnpjRegistry>(
             is_customer: true,
             is_supplier: false,
         };
-        service.register(company, draft).await.unwrap();
+        service.register(company, &actor(), draft).await.unwrap();
     }
 
     let mut pages = Vec::new();

@@ -55,6 +55,10 @@ where
             "/companies/{company_id}/parties/{party_id}/document-check",
             post(parties::verify_document::<R, C, I, S>),
         )
+        .route(
+            "/companies/{company_id}/parties/{party_id}/history",
+            get(parties::party_history::<R, C, I, S>),
+        )
         .with_state(state)
 }
 
@@ -563,6 +567,113 @@ mod tests {
         let reply = send(&app, json_request("POST", &uri, Some(&cookie), Value::Null)).await;
         assert_eq!(reply.status, StatusCode::NOT_FOUND);
         assert_eq!(reply.body["error"], "party not found");
+    }
+
+    fn history_uri(company_id: Uuid, party_id: impl std::fmt::Display) -> String {
+        format!("{}/{party_id}/history", parties_uri(company_id))
+    }
+
+    #[tokio::test]
+    async fn the_history_names_who_registered_the_party_and_what_they_set() {
+        let app = app();
+        let (cookie, company_id, party_id) =
+            party_of_a_new_user(&app, "ana@example.com", "11.222.333/0001-81").await;
+
+        let reply = send(
+            &app,
+            get_request(&history_uri(company_id, party_id), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::OK);
+        let entries = reply.body.as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        let entry = &entries[0];
+        assert_eq!(entry["action"], "created");
+        // The name is the one the user signed up with, taken from the session.
+        assert_eq!(entry["actor"]["kind"], "user");
+        assert_eq!(entry["actor"]["name"], "Ana");
+        assert!(entry["actor"]["id"].is_string());
+        assert!(entry["at"].as_i64().unwrap() > 1_700_000_000_000);
+        let fields: Vec<&str> = entry["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|change| change["field"].as_str().unwrap())
+            .collect();
+        assert!(fields.contains(&"name") && fields.contains(&"document"));
+        assert_eq!(entry["changes"][0]["from"], Value::Null);
+        assert_eq!(entry["changes"][0]["to"], "Padaria Central");
+    }
+
+    #[tokio::test]
+    async fn a_recheck_shows_up_in_the_history_under_whoever_made_it() {
+        let registry = InMemoryCnpjRegistry::unreachable();
+        let app = app_with_registry(registry.clone());
+        let (cookie, company_id, party_id) =
+            party_of_a_new_user(&app, "ana@example.com", "11.222.333/0001-81").await;
+
+        registry.recover();
+        registry.add_company("11222333000181", "PADARIA CENTRAL LTDA", "ATIVA");
+        let checked = send(
+            &app,
+            json_request(
+                "POST",
+                &document_check_uri(company_id, party_id),
+                Some(&cookie),
+                Value::Null,
+            ),
+        )
+        .await;
+        assert_eq!(checked.status, StatusCode::OK);
+
+        let reply = send(
+            &app,
+            get_request(&history_uri(company_id, party_id), Some(&cookie)),
+        )
+        .await;
+        let entries = reply.body.as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[1]["action"], "updated");
+        assert_eq!(entries[1]["changes"][0]["field"], "document_check");
+        assert_eq!(entries[1]["changes"][0]["from"], "unverified");
+        assert_eq!(entries[1]["changes"][0]["to"], "verified");
+        // Oldest first, and no installation-wide counter in the response.
+        assert_eq!(entries[0]["action"], "created");
+        assert!(entries[0].get("sequence").is_none());
+    }
+
+    #[tokio::test]
+    async fn the_history_needs_a_session_and_the_partys_own_company() {
+        let app = app();
+        let (cookie, company_id, party_id) =
+            party_of_a_new_user(&app, "ana@example.com", "11.222.333/0001-81").await;
+        let uri = history_uri(company_id, party_id);
+
+        let anonymous = send(&app, get_request(&uri, None)).await;
+        assert_eq!(anonymous.status, StatusCode::UNAUTHORIZED);
+
+        // Another user's company, and another company of the same user, both look like a miss.
+        let (stranger_cookie, stranger_company) = sign_up(&app, "bia@example.com").await;
+        let foreign = send(&app, get_request(&uri, Some(&stranger_cookie))).await;
+        assert_eq!(foreign.status, StatusCode::NOT_FOUND);
+        let through_own_company = send(
+            &app,
+            get_request(
+                &history_uri(stranger_company, party_id),
+                Some(&stranger_cookie),
+            ),
+        )
+        .await;
+        assert_eq!(through_own_company.status, StatusCode::NOT_FOUND);
+        assert_eq!(through_own_company.body["error"], "party not found");
+
+        let malformed = send(
+            &app,
+            get_request(&history_uri(company_id, "not-a-uuid"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(malformed.status, StatusCode::NOT_FOUND);
+        assert_eq!(malformed.body["error"], "party not found");
     }
 
     #[tokio::test]
