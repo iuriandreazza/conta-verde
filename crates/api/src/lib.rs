@@ -15,6 +15,7 @@ mod payment_methods;
 mod payment_terms;
 mod postal_codes;
 mod products;
+mod products_import;
 mod session;
 
 use std::sync::Arc;
@@ -123,6 +124,10 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         .route(
             "/companies/{company_id}/products",
             get(products::list_products::<X>).post(products::register_product::<X>),
+        )
+        .route(
+            "/companies/{company_id}/products/import",
+            post(products_import::import_products::<X>),
         )
         .route(
             "/companies/{company_id}/products/{product_id}",
@@ -1725,6 +1730,145 @@ mod tests {
 
     fn products_uri(company_id: Uuid) -> String {
         format!("/companies/{company_id}/products")
+    }
+
+    fn import_products_uri(company_id: Uuid, query: &str) -> String {
+        format!("/companies/{company_id}/products/import{query}")
+    }
+
+    #[tokio::test]
+    async fn imports_products_from_a_csv_file_with_brazilian_prices_kinds_and_a_default_kind() {
+        let app = app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let file = "Kind;Name;SKU;Unit;NCM;Sale_Price;Cost_Price;Minimum_Stock;Active\n\
+                    produto;Pão francês;pao-001;kg;1905.90.90;12,50;7;10;sim\n\
+                    ;Bolo de milho;;un;;18,9;;;\n\
+                    serviço;Entrega;ENT-1;un;;5;;;não\n";
+        let reply = send(
+            &app,
+            csv_request(&import_products_uri(company_id, ""), Some(&cookie), file),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert_eq!(reply.body["created"], 3);
+        assert_eq!(reply.body["refused"], json!([]));
+
+        let listed = send(&app, get_request(&products_uri(company_id), Some(&cookie))).await;
+        let items = listed.body["items"].as_array().unwrap();
+        let names: Vec<&str> = items.iter().map(|i| i["name"].as_str().unwrap()).collect();
+        assert_eq!(names, ["Bolo de milho", "Entrega", "Pão francês"]);
+        // A comma is read as the decimal point, exactly: no float on the way.
+        assert_eq!(items[2]["sale_price"], "12.5");
+        assert_eq!(items[0]["sale_price"], "18.9");
+        assert_eq!(items[2]["sku"], "PAO-001");
+        // A blank kind is a product and a blank active is on; a service is what it says.
+        assert_eq!(
+            (items[0]["kind"].clone(), items[0]["active"].clone()),
+            (json!("product"), json!(true))
+        );
+        assert_eq!(
+            (items[1]["kind"].clone(), items[1]["active"].clone()),
+            (json!("service"), json!(false))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_product_file_with_bad_rows_writes_nothing_and_a_registered_sku_is_skipped() {
+        let app = app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let uri = import_products_uri(company_id, "");
+        let bad = "name,unit,sku,sale_price,kind,active\n\
+                   Pão,kg,PAO-1,5,,\n\
+                   Bolo,un,PAO-1,5,,\n\
+                   Suco,,S-1,5,,\n\
+                   Chá,un,C-1,5,bebida,\n\
+                   Mate,un,M-1,5,,talvez\n\
+                   Doce,un,D-1,\"1.234,56\",,\n\
+                   Entrega,un,E-1,5,service,\n";
+        let reply = send(&app, csv_request(&uri, Some(&cookie), bad)).await;
+        assert_eq!(reply.status, StatusCode::OK);
+        assert_eq!(reply.body["created"], 0);
+        let rows: Vec<(u64, &str)> = reply.body["refused"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| (n["row"].as_u64().unwrap(), n["message"].as_str().unwrap()))
+            .collect();
+        assert_eq!(rows.len(), 5, "{rows:?}");
+        assert_eq!(rows[0], (3, "the same SKU as row 2"));
+        assert_eq!(
+            rows[1],
+            (4, "unit must have 1 to 6 letters or digits, like UN or KG")
+        );
+        assert_eq!(rows[2], (5, "kind must be product or service"));
+        assert_eq!(rows[3], (6, "active must be sim or não"));
+        assert_eq!(
+            rows[4],
+            (
+                7,
+                "sale price must be a decimal with up to 13 integer and 6 fractional digits, written like 10.50"
+            )
+        );
+        let listed = send(&app, get_request(&products_uri(company_id), Some(&cookie))).await;
+        assert!(listed.body["items"].as_array().unwrap().is_empty());
+
+        let good = "name,unit,sku\nPão,kg,PAO-1\nBolo,un,\n";
+        assert_eq!(
+            send(&app, csv_request(&uri, Some(&cookie), good))
+                .await
+                .body["created"],
+            2
+        );
+        let again = send(&app, csv_request(&uri, Some(&cookie), good)).await;
+        assert_eq!(again.body["created"], 1);
+        assert_eq!(
+            again.body["skipped"],
+            json!([{ "row": 2, "message": "a product with this SKU already exists" }])
+        );
+    }
+
+    #[tokio::test]
+    async fn a_product_file_needs_its_required_columns_and_a_session() {
+        let app = app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let (stranger, _) = sign_up(&app, "bia@example.com").await;
+        let uri = import_products_uri(company_id, "");
+        let reply = send(
+            &app,
+            csv_request(&uri, Some(&cookie), "name,sku\nPão,P-1\n"),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            reply.body["error"]
+                .as_str()
+                .unwrap()
+                .contains("no `unit` column")
+        );
+        let file = "name,unit\nPão,kg\n";
+        assert_eq!(
+            send(&app, csv_request(&uri, None, file)).await.status,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            send(&app, csv_request(&uri, Some(&stranger), file))
+                .await
+                .status,
+            StatusCode::NOT_FOUND
+        );
+        let dry = send(
+            &app,
+            csv_request(
+                &import_products_uri(company_id, "?dry_run=true"),
+                Some(&cookie),
+                file,
+            ),
+        )
+        .await;
+        assert_eq!(
+            (dry.body["valid"].clone(), dry.body["created"].clone()),
+            (json!(1), json!(0))
+        );
     }
 
     fn product_body() -> Value {

@@ -8,10 +8,11 @@ use conta_verde_domain::{
 };
 
 use crate::audit::audit_entry;
+use crate::import::import_rows;
 use crate::list_query::{clamp_limit, split_page};
 use crate::{
     ApplicationError, CnpjLookupError, CnpjRegistry, ImportReport, ImportRow, NameCursor,
-    PartyQuery, PartyRepository, RegistryEntry, RepositoryError, RowNote,
+    PartyQuery, PartyRepository, RegistryEntry, RepositoryError,
 };
 
 const DEFAULT_RECHECK_INTERVAL: Duration = Duration::from_secs(10);
@@ -109,63 +110,39 @@ impl<R: PartyRepository, C: CnpjRegistry> PartyService<R, C> {
         rows: Vec<ImportRow<PartyDraft>>,
         dry_run: bool,
     ) -> Result<ImportReport, ApplicationError> {
-        let mut report = ImportReport::default();
-        let mut parties = Vec::with_capacity(rows.len());
-        let mut first_row_of: HashMap<String, usize> = HashMap::new();
-        for ImportRow { row, draft } in rows {
-            let party = match Party::new(PartyId::generate(), company_id, draft) {
-                Ok(party) => party,
-                Err(error) => {
-                    report.refused.push(RowNote {
-                        row,
-                        message: error.to_string(),
-                    });
-                    continue;
-                }
-            };
-            if let Some(document) = party.document()
-                && let Some(first) = first_row_of.insert(document.as_str().to_owned(), row)
-            {
-                report.refused.push(RowNote {
-                    row,
-                    message: format!("the same document as row {first}"),
-                });
-                continue;
-            }
-            parties.push((row, party));
-        }
-        report.valid = parties.len();
-        if dry_run || !report.refused.is_empty() {
-            return Ok(report);
-        }
-
         let unchecked = if self.registry.is_enabled() {
             DocumentCheck::Unverified
         } else {
             DocumentCheck::NotApplicable
         };
-        for (row, party) in parties {
-            let party = if party.document().and_then(Document::cnpj).is_some() {
-                party.with_document_check(unchecked.clone())
-            } else {
+        let unchecked = &unchecked;
+        import_rows(
+            rows,
+            dry_run,
+            "document",
+            RepositoryError::DuplicateDocument,
+            |draft| Party::new(PartyId::generate(), company_id, draft),
+            |party| {
                 party
-            };
-            let audit = audit_entry(
-                &party,
-                actor,
-                AuditAction::Created,
-                creation_changes(&party),
-            );
-            match self.repository.save(&party, &audit).await {
-                Ok(()) => report.created += 1,
-                Err(RepositoryError::DuplicateDocument) => report.skipped.push(RowNote {
-                    row,
-                    message: RepositoryError::DuplicateDocument.to_string(),
-                }),
-                Err(error) => return Err(error.into()),
-            }
-        }
-        Ok(report)
+                    .document()
+                    .map(|document| document.as_str().to_owned())
+            },
+            |party| async move {
+                let party = if party.document().and_then(Document::cnpj).is_some() {
+                    party.with_document_check(unchecked.clone())
+                } else {
+                    party
+                };
+                let audit = audit_entry(
+                    &party,
+                    actor,
+                    AuditAction::Created,
+                    creation_changes(&party),
+                );
+                self.repository.save(&party, &audit).await
+            },
+        )
+        .await
     }
 
     /// Replaces every editable field of the party with the draft's. A document that changed is

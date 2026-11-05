@@ -4,13 +4,44 @@
 
 use std::collections::HashSet;
 
+use axum::body::{Body, Bytes};
+use axum::http::{HeaderMap, header};
 use conta_verde_application::{ImportReport, ImportRow, MAX_IMPORT_ROWS, RowNote};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::ApiError;
 
 /// The largest file accepted: 1000 rows of anything an ERP register holds fit in a fraction of it.
 pub(crate) const MAX_FILE_BYTES: usize = 1024 * 1024;
+
+/// The query of every import endpoint.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ImportQuery {
+    /// Check the file and say what would happen, without writing anything.
+    dry_run: Option<bool>,
+}
+
+impl ImportQuery {
+    pub(crate) fn dry_run(&self) -> bool {
+        self.dry_run.unwrap_or(false)
+    }
+}
+
+/// The file of the request, at most [`MAX_FILE_BYTES`]. A `Content-Length` past it is refused before
+/// the body is read, so a browser that is still uploading gets a clean 413, not a dropped line.
+pub(crate) async fn read_file(headers: &HeaderMap, body: Body) -> Result<Bytes, ApiError> {
+    let announced = headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<usize>().ok());
+    if announced.is_some_and(|length| length > MAX_FILE_BYTES) {
+        return Err(ApiError::FileTooLarge);
+    }
+    axum::body::to_bytes(body, MAX_FILE_BYTES)
+        .await
+        .map_err(|_| ApiError::FileTooLarge)
+}
 
 /// Why a file as a whole is refused. Each message says what to change.
 #[derive(Debug, PartialEq, Eq)]

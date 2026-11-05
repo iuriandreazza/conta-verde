@@ -12,7 +12,7 @@ tags: [adr, registers, import]
 A company arriving from a spreadsheet or another ERP has hundreds of customers and suppliers and a
 few hundred products to bring along. Typing them in one by one is the first thing that would send
 someone back. The Phase 1 item covers parties and products; this ADR sets the rules both follow
-and builds the parties side first, the products side reuses it.
+and builds the parties side first, the products side reuses it (both are in).
 
 Two things pull against each other: a person fixing a file wants **every** problem at once and
 wants to send the file again without fear, while the rows are written by use cases that each write
@@ -49,13 +49,23 @@ a row and its audit entry atomically ([ADR 0008](0008-audit-trail.md)).
   `|` (a comma or a semicolon would clash with the file's own). **Contacts have no column**: several
   people per party do not fit a row, and are added by hand.
 
+- **Products:** `name` and `unit` are required; `kind` (`product` or `service`, or `produto` and
+  `serviço`; blank is a product), `sku`, `ncm`, `sale_price`, `cost_price`, `minimum_stock` and
+  `active` (`sim` or `não`; blank is active) are optional. A price may use the comma Brazilian
+  spreadsheets write (`12,50` is read as `12.50`, exactly: no float on the way), and **only** that: a
+  cell with both a comma and a dot (`1.234,56`) is refused by the amount's own strict parsing,
+  because guessing which one is the thousands separator could change a price
+  ([ADR 0003](0003-money-as-decimal.md)). The key is the **SKU**, which the domain already
+  keeps in upper case, so `pao-1` and `PAO-1` are one; a product without a SKU cannot be recognized,
+  so sending the file twice repeats it, as for a party without a document.
+
 ### What an import does
 
-- `POST /companies/{id}/parties/import` takes the file as the request body; `?dry_run=true` only
+- `POST /companies/{id}/parties/import` and `/products/import` take the file as the request body; `?dry_run=true` only
   checks. The answer is `200` with `valid`, `created`, `skipped` and `refused`, the last two lists of
   `{row, message}`. A file that cannot be read at all is `422` (or `413` past the size).
 - **Every row is checked before any is written**, with the same rules as registering one, and a
-  document that repeats within the file is refused (`the same document as row 2`). If a single row is
+  document (or SKU) that repeats within the file is refused (`the same document as row 2`). If a single row is
   refused, **nothing is created**, and the report lists every refused row, including the ones that
   could not even be read (`customer must be sim or não`).
 - Then the rows are written **one by one**, each with its own `created` audit entry under the user
@@ -76,8 +86,10 @@ a row and its audit entry atomically ([ADR 0008](0008-audit-trail.md)).
 
 Reading text into a table is a format concern and lives in `api` (`csv_import.rs`, on the `csv`
 crate: hand-rolled quoting rules are a bug waiting for a customer's file). The use case,
-`PartyService::import`, takes rows that already are drafts and knows nothing of CSV. Both registers
-share `ImportRow`, `ImportReport` and the limits.
+`PartyService::import` and `ProductService::import`, take rows that already are drafts and know
+nothing of CSV. Both run the same pipeline (`import_rows`: build, refuse a repeated key, then save
+one by one and skip the registered), and share `ImportRow`, `ImportReport` and the limits, so a new
+register's import is its row mapping and its key.
 
 ## Consequences
 
@@ -95,5 +107,5 @@ share `ImportRow`, `ImportReport` and the limits.
 
 ## Revisit when
 
-Products are imported (the same rules, matching by SKU), roles exist and importing becomes a
-permission, files of thousands of rows are common, or people ask to update registers from a file.
+Roles exist and importing becomes a permission, another register is imported (categories, cost
+centers, payment terms: the same pipeline), files of thousands of rows are common, or people ask to update registers from a file.

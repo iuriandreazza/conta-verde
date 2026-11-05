@@ -134,6 +134,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn imports_products_and_records_each_creation() {
+        let service = ProductService::new(InMemoryProductRepository::default());
+        contract::imports_products_and_records_each_creation(
+            &service,
+            CompanyId::generate(),
+            CompanyId::generate(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
     async fn edits_products_and_records_only_changes() {
         let service = ProductService::new(InMemoryProductRepository::default());
         contract::edits_products_and_records_only_changes(

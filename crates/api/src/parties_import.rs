@@ -1,12 +1,13 @@
 use axum::Json;
 use axum::body::Body;
 use axum::extract::State;
-use axum::http::{HeaderMap, header};
+use axum::http::HeaderMap;
 use conta_verde_domain::{AddressDraft, PartyDraft};
-use serde::Deserialize;
 
 use crate::access::CompanyAccess;
-use crate::csv_import::{FileError, ImportResponse, MAX_FILE_BYTES, Record, read_table, yes_or_no};
+use crate::csv_import::{
+    FileError, ImportQuery, ImportResponse, Record, read_file, read_table, yes_or_no,
+};
 use crate::error::ApiError;
 use crate::json::ApiQuery;
 use crate::{Ports, SharedState};
@@ -40,13 +41,6 @@ const ADDRESS_COLUMNS: [&str; 7] = [
 ];
 /// Tags share a cell, and a comma or a semicolon would clash with the file's own separator.
 const TAG_SEPARATOR: char = '|';
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ImportQuery {
-    /// Check the file and say what would happen, without writing anything.
-    dry_run: Option<bool>,
-}
 
 /// A party as one row of the file. The columns have the names of the party's fields; the roles
 /// are `sim` or `não` (blank is no) and the tags are separated by `|`. Contacts have no column:
@@ -96,17 +90,7 @@ pub(crate) async fn import_parties<X: Ports>(
     headers: HeaderMap,
     body: Body,
 ) -> Result<Json<ImportResponse>, ApiError> {
-    // Said up front, so a browser that is still uploading gets a clean 413 and not a dropped line.
-    let announced = headers
-        .get(header::CONTENT_LENGTH)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<usize>().ok());
-    if announced.is_some_and(|length| length > MAX_FILE_BYTES) {
-        return Err(ApiError::FileTooLarge);
-    }
-    let bytes = axum::body::to_bytes(body, MAX_FILE_BYTES)
-        .await
-        .map_err(|_| ApiError::FileTooLarge)?;
+    let bytes = read_file(&headers, body).await?;
     let table = read_table(&bytes, COLUMNS, &["name"])?;
     if !ROLES.iter().any(|role| table.has_column(role)) {
         return Err(FileError::MissingRoleColumn.into());
@@ -115,7 +99,7 @@ pub(crate) async fn import_parties<X: Ports>(
 
     // A row that could not even be read does not stop the others from being checked, so that the
     // person gets every problem of the file at once; but nothing is written.
-    let dry_run = query.dry_run.unwrap_or(false);
+    let dry_run = query.dry_run();
     let report = state
         .parties
         .import(company_id, &actor, rows, dry_run || !refused.is_empty())
