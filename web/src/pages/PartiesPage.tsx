@@ -345,6 +345,7 @@ export function PartiesPage() {
           blocked={verifyingId !== null}
           error={formError}
           notice={registryNotice}
+          lookupAddress={(postalCode) => api.lookupPostalCode(companyId, postalCode)}
           onSubmit={(input) => void handleSubmit(input)}
           onCancel={() => {
             setEditing(null);

@@ -10,7 +10,7 @@ const DEFAULT_BASE_URL: &str = "https://brasilapi.com.br/api/cnpj/v1";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 // BrasilAPI answers 429 to any request without a User-Agent, even the first one, so a client that
 // does not identify itself never gets a lookup through.
-const USER_AGENT: &str = concat!(
+pub(crate) const USER_AGENT: &str = concat!(
     "conta-verde/",
     env!("CARGO_PKG_VERSION"),
     " (+",
@@ -34,15 +34,20 @@ impl BrasilApiCnpjRegistry {
     }
 
     pub fn with_endpoint(base_url: &str, timeout: Duration) -> Result<Self, reqwest::Error> {
-        let client = reqwest::Client::builder()
-            .timeout(timeout)
-            .user_agent(USER_AGENT)
-            .build()?;
         Ok(Self {
-            client,
+            client: client(timeout)?,
             base_url: base_url.trim_end_matches('/').to_owned(),
         })
     }
+}
+
+/// One client for every BrasilAPI adapter: a timeout, because data entry waits on the call, and
+/// the `User-Agent` the service insists on.
+pub(crate) fn client(timeout: Duration) -> Result<reqwest::Client, reqwest::Error> {
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .user_agent(USER_AGENT)
+        .build()
 }
 
 #[derive(Deserialize)]
@@ -90,7 +95,7 @@ impl CnpjRegistry for BrasilApiCnpjRegistry {
 
 /// Control characters and the invisible direction marks and overrides could scramble how the text
 /// reads next to other text (React escapes HTML, but not these), so they are dropped.
-fn bounded(text: &str, max_chars: usize) -> String {
+pub(crate) fn bounded(text: &str, max_chars: usize) -> String {
     let visible: String = text
         .chars()
         .filter(|c| {

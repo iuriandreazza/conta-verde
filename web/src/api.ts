@@ -69,6 +69,15 @@ export interface HistoryEntry {
   changes: { field: string; from: string | null; to: string | null }[];
 }
 
+/** What a postal code stands for, to fill an address in: the number and the complement stay the user's. */
+export interface PostalCodeEntry {
+  /** A city with one postal code for all of it has no street. */
+  street: string | null;
+  district: string | null;
+  city: string;
+  state: string;
+}
+
 export interface PartyPage {
   items: Party[];
   next_cursor: string | null;
@@ -412,6 +421,11 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(party),
     }),
+  /** Asks a third-party service, so it fails now and then: callers fall back to typing. */
+  lookupPostalCode: (companyId: string, postalCode: string) =>
+    request<PostalCodeEntry>(
+      `/companies/${companyId}/postal-codes/${postalCode.replace(/\D/g, "")}`,
+    ),
   partyHistory: (companyId: string, partyId: string) =>
     request<HistoryEntry[]>(`/companies/${companyId}/parties/${partyId}/history`),
   /** Asks the registry again about the party's CNPJ; resolves with the party and its new answer. */

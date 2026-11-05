@@ -17,6 +17,8 @@ mod payment_method_repository;
 mod payment_method_service;
 mod payment_term_repository;
 mod payment_term_service;
+mod postal_code_directory;
+mod postal_code_service;
 mod product_repository;
 mod product_service;
 mod secret_service;
@@ -40,6 +42,8 @@ pub use payment_method_repository::{PaymentMethodQuery, PaymentMethodRepository}
 pub use payment_method_service::{PaymentMethodPage, PaymentMethodService};
 pub use payment_term_repository::{PaymentTermQuery, PaymentTermRepository};
 pub use payment_term_service::{PaymentTermPage, PaymentTermService};
+pub use postal_code_directory::{PostalCodeDirectory, PostalCodeEntry, PostalCodeLookupError};
+pub use postal_code_service::PostalCodeService;
 pub use product_repository::{ProductQuery, ProductRepository};
 pub use product_service::{ProductPage, ProductService};
 pub use secret_service::{SecretError, SecretService};

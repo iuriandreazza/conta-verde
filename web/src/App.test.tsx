@@ -2003,3 +2003,104 @@ describe("changing a party, its roles and its address", () => {
     expect(screen.queryByText(/is_carrier|postal_code|street_number/)).not.toBeInTheDocument();
   });
 });
+
+describe("looking an address up by CEP", () => {
+  const page = { status: 200, body: { items: [party("Padaria")], next_cursor: null } };
+  const lookups = (fetchMock: ReturnType<typeof mockApi>) =>
+    fetchMock.mock.calls.filter(([url]) => String(url).includes("/postal-codes/"));
+
+  async function openTheForm() {
+    renderAt("/companies/c1/parties");
+    await screen.findByRole("table");
+    await userEvent.click(screen.getByRole("button", { name: "Alterar Padaria" }));
+  }
+
+  it("fills the address in when asked, keeps the number, and puts the cursor on it", async () => {
+    const fetchMock = mockApi((url) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (url.includes("/postal-codes/")) {
+        return {
+          status: 200,
+          body: { street: "Avenida Paulista", district: "Bela Vista", city: "São Paulo", state: "SP" },
+        };
+      }
+      return page;
+    });
+    await openTheForm();
+
+    // Nothing is asked until the person says so, and not before the CEP has eight digits.
+    const button = screen.getByRole("button", { name: "Buscar endereço" });
+    expect(button).toBeDisabled();
+    await userEvent.type(screen.getByLabelText("CEP"), "01310-10");
+    expect(button).toBeDisabled();
+    await userEvent.type(screen.getByLabelText("CEP"), "0");
+    expect(button).toBeEnabled();
+    expect(lookups(fetchMock)).toHaveLength(0);
+
+    await userEvent.type(screen.getByLabelText("Complemento"), "conj. 12");
+    await userEvent.click(button);
+
+    expect(await screen.findByText(/Endereço preenchido/)).toBeInTheDocument();
+    expect(String(lookups(fetchMock)[0][0])).toBe("/api/companies/c1/postal-codes/01310100");
+    expect(screen.getByLabelText("Logradouro")).toHaveValue("Avenida Paulista");
+    expect(screen.getByLabelText("Bairro")).toHaveValue("Bela Vista");
+    expect(screen.getByLabelText("Cidade")).toHaveValue("São Paulo");
+    expect(screen.getByLabelText("UF")).toHaveValue("SP");
+    // What only the person knows is left alone, and the cursor waits for the number.
+    expect(screen.getByLabelText("Complemento")).toHaveValue("conj. 12");
+    expect(screen.getByLabelText("Número")).toHaveFocus();
+  });
+
+  it("fills only the city and the state for a code without a street, and keeps what was typed", async () => {
+    mockApi((url) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (url.includes("/postal-codes/")) {
+        return { status: 200, body: { street: null, district: null, city: "Cidade Pequena", state: "PE" } };
+      }
+      return page;
+    });
+    await openTheForm();
+
+    await userEvent.type(screen.getByLabelText("Logradouro"), "Rua do Meio");
+    await userEvent.type(screen.getByLabelText("CEP"), "55555000");
+    await userEvent.click(screen.getByRole("button", { name: "Buscar endereço" }));
+
+    expect(await screen.findByText(/este CEP não tem rua/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Cidade")).toHaveValue("Cidade Pequena");
+    expect(screen.getByLabelText("UF")).toHaveValue("PE");
+    expect(screen.getByLabelText("Logradouro")).toHaveValue("Rua do Meio");
+  });
+
+  it("says what went wrong and leaves the fields to be typed", async () => {
+    let status = 404;
+    mockApi((url) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (url.includes("/postal-codes/")) {
+        return {
+          status,
+          body: {
+            error:
+              status === 404
+                ? "no address found for this postal code, or the service could not tell: check the number or fill the address in by hand"
+                : "the postal code service is not answering right now: fill the address in by hand",
+          },
+        };
+      }
+      return page;
+    });
+    await openTheForm();
+
+    await userEvent.type(screen.getByLabelText("CEP"), "99999-999");
+    await userEvent.click(screen.getByRole("button", { name: "Buscar endereço" }));
+    expect(await screen.findByText(/no address found for this postal code/)).toBeInTheDocument();
+
+    status = 503;
+    await userEvent.click(screen.getByRole("button", { name: "Buscar endereço" }));
+    await waitFor(() =>
+      expect(screen.getByText(/the postal code service is not answering/)).toBeInTheDocument(),
+    );
+    // The form still works by hand.
+    await userEvent.type(screen.getByLabelText("Logradouro"), "Rua A");
+    expect(screen.getByLabelText("Logradouro")).toHaveValue("Rua A");
+  });
+});

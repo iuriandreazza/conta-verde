@@ -43,7 +43,7 @@ pub struct Address {
 impl Address {
     pub fn new(draft: AddressDraft) -> Result<Self, DomainError> {
         Ok(Self {
-            postal_code: clean_postal_code(&draft.postal_code)?,
+            postal_code: PostalCode::parse(&draft.postal_code)?.0,
             street: required_text(&draft.street, MAX_STREET_CHARS, invalid("street"))?,
             number: optional_text(draft.number.as_deref(), MAX_NUMBER_CHARS, invalid("number"))?,
             complement: optional_text(
@@ -96,16 +96,27 @@ fn invalid(field: &'static str) -> DomainError {
     DomainError::InvalidAddressField(field)
 }
 
-/// Eight digits, written with or without the hyphen (`01310-100`).
-fn clean_postal_code(raw: &str) -> Result<String, DomainError> {
-    let code: String = raw
-        .chars()
-        .filter(|c| *c != '-' && !c.is_whitespace())
-        .collect();
-    if code.len() == POSTAL_CODE_LEN && code.bytes().all(|byte| byte.is_ascii_digit()) {
-        Ok(code)
-    } else {
-        Err(DomainError::InvalidPostalCode)
+/// A Brazilian postal code (CEP): eight digits, written with or without the hyphen (`01310-100`)
+/// and kept without it. Only the shape is checked; whether the CEP exists is a lookup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PostalCode(String);
+
+impl PostalCode {
+    pub fn parse(raw: &str) -> Result<Self, DomainError> {
+        let code: String = raw
+            .chars()
+            .filter(|c| *c != '-' && !c.is_whitespace())
+            .collect();
+        if code.len() == POSTAL_CODE_LEN && code.bytes().all(|byte| byte.is_ascii_digit()) {
+            Ok(Self(code))
+        } else {
+            Err(DomainError::InvalidPostalCode)
+        }
+    }
+
+    /// Eight digits, without the hyphen.
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 

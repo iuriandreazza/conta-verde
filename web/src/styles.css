@@ -1243,6 +1243,15 @@ tbody tr:last-child td {
   grid-column: span 6;
 }
 
+.address-fields > .lookup-action {
+  grid-column: span 2;
+  align-self: end;
+}
+
+.address-fields > .address-notice {
+  grid-column: span 6;
+}
+
 .address-fields > label.span-3 {
   grid-column: span 3;
 }

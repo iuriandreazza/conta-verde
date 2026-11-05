@@ -78,8 +78,7 @@ district are optional. The number is free text because "S/N" and "km 12" exist.
   the two roles optional when registering.
 - `parties.is_carrier` and `is_seller` have no default in the schema: every writer says them.
 - **Not here, and next:** contacts and tags are in [ADR 0023](0023-party-contacts-and-tags.md); the
-  CEP lookup is an external service and needs the same opt-in and rate-limit care as the CNPJ one,
-  so it gets its own ADR.
+  CEP lookup is in [ADR 0024](0024-postal-code-lookup.md).
 
 ## Revisit when
 

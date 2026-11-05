@@ -11,6 +11,7 @@ mod list_params;
 mod parties;
 mod payment_methods;
 mod payment_terms;
+mod postal_codes;
 mod products;
 mod session;
 
@@ -22,7 +23,8 @@ use conta_verde_application::{
     AuthService, BankAccountRepository, BankAccountService, CategoryRepository, CategoryService,
     CnpjRegistry, CostCenterRepository, CostCenterService, IdentityRepository, PartyRepository,
     PartyService, PaymentMethodRepository, PaymentMethodService, PaymentTermRepository,
-    PaymentTermService, ProductRepository, ProductService, SecretService,
+    PaymentTermService, PostalCodeDirectory, PostalCodeService, ProductRepository, ProductService,
+    SecretService,
 };
 use serde::Serialize;
 
@@ -45,6 +47,7 @@ pub trait Ports: 'static {
     type BankAccounts: BankAccountRepository + 'static;
     type PaymentMethods: PaymentMethodRepository + 'static;
     type PaymentTerms: PaymentTermRepository + 'static;
+    type PostalCodes: PostalCodeDirectory + 'static;
 }
 
 /// The use cases the API serves.
@@ -56,6 +59,7 @@ pub struct Services<X: Ports> {
     pub bank_accounts: BankAccountService<X::BankAccounts>,
     pub payment_methods: PaymentMethodService<X::PaymentMethods>,
     pub payment_terms: PaymentTermService<X::PaymentTerms>,
+    pub postal_codes: PostalCodeService<X::PostalCodes>,
     pub auth: AuthService<X::Identity, X::Secrets>,
 }
 
@@ -67,6 +71,7 @@ pub(crate) struct AppState<X: Ports> {
     bank_accounts: BankAccountService<X::BankAccounts>,
     payment_methods: PaymentMethodService<X::PaymentMethods>,
     payment_terms: PaymentTermService<X::PaymentTerms>,
+    postal_codes: PostalCodeService<X::PostalCodes>,
     auth: AuthService<X::Identity, X::Secrets>,
     config: ApiConfig,
 }
@@ -83,6 +88,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         bank_accounts: services.bank_accounts,
         payment_methods: services.payment_methods,
         payment_terms: services.payment_terms,
+        postal_codes: services.postal_codes,
         auth: services.auth,
         config,
     });
@@ -187,6 +193,10 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
             "/companies/{company_id}/payment-terms/{payment_term_id}/history",
             get(payment_terms::payment_term_history::<X>),
         )
+        .route(
+            "/companies/{company_id}/postal-codes/{code}",
+            get(postal_codes::find_postal_code::<X>),
+        )
         .with_state(state)
 }
 
@@ -205,11 +215,12 @@ mod tests {
 
     use axum::body::Body;
     use axum::http::{Request, StatusCode, header};
+    use conta_verde_application::PostalCodeEntry;
     use conta_verde_infrastructure::{
         Argon2SecretService, InMemoryBankAccountRepository, InMemoryCategoryRepository,
         InMemoryCnpjRegistry, InMemoryCostCenterRepository, InMemoryIdentityRepository,
         InMemoryPartyRepository, InMemoryPaymentMethodRepository, InMemoryPaymentTermRepository,
-        InMemoryProductRepository,
+        InMemoryPostalCodeDirectory, InMemoryProductRepository,
     };
     use http_body_util::BodyExt;
     use serde_json::{Value, json};
@@ -223,6 +234,29 @@ mod tests {
         InMemoryCnpjRegistry::default()
             .with_company("11222333000181", "PADARIA CENTRAL LTDA", "ATIVA")
             .with_company("12ABC34501DE35", "OFICINA ALFANUMERICA LTDA", "BAIXADA")
+    }
+
+    /// The directory knows one address, and a city with a single code for all of it.
+    fn known_postal_codes() -> InMemoryPostalCodeDirectory {
+        InMemoryPostalCodeDirectory::default()
+            .with_entry(
+                "01310100",
+                PostalCodeEntry {
+                    street: Some("Avenida Paulista".into()),
+                    district: Some("Bela Vista".into()),
+                    city: "São Paulo".into(),
+                    state: "SP".into(),
+                },
+            )
+            .with_entry(
+                "55555000",
+                PostalCodeEntry {
+                    street: None,
+                    district: None,
+                    city: "Cidade Pequena".into(),
+                    state: "PE".into(),
+                },
+            )
     }
 
     fn app() -> Router {
@@ -250,9 +284,10 @@ mod tests {
         type BankAccounts = InMemoryBankAccountRepository;
         type PaymentMethods = InMemoryPaymentMethodRepository;
         type PaymentTerms = InMemoryPaymentTermRepository;
+        type PostalCodes = InMemoryPostalCodeDirectory;
     }
 
-    /// Like `MemoryPorts`, with the CNPJ lookup switched off.
+    /// Like `MemoryPorts`, with the CNPJ and postal code lookups switched off.
     struct NoLookupPorts;
 
     impl Ports for NoLookupPorts {
@@ -266,6 +301,7 @@ mod tests {
         type BankAccounts = InMemoryBankAccountRepository;
         type PaymentMethods = InMemoryPaymentMethodRepository;
         type PaymentTerms = InMemoryPaymentTermRepository;
+        type PostalCodes = Option<InMemoryPostalCodeDirectory>;
     }
 
     fn auth_service() -> AuthService<InMemoryIdentityRepository, Argon2SecretService> {
@@ -279,6 +315,13 @@ mod tests {
     fn app_with_parties(
         parties: PartyService<InMemoryPartyRepository, InMemoryCnpjRegistry>,
     ) -> Router {
+        app_with(parties, known_postal_codes())
+    }
+
+    fn app_with(
+        parties: PartyService<InMemoryPartyRepository, InMemoryCnpjRegistry>,
+        postal_codes: InMemoryPostalCodeDirectory,
+    ) -> Router {
         router::<MemoryPorts>(
             Services {
                 parties,
@@ -290,6 +333,7 @@ mod tests {
                     InMemoryPaymentMethodRepository::default(),
                 ),
                 payment_terms: PaymentTermService::new(InMemoryPaymentTermRepository::default()),
+                postal_codes: PostalCodeService::new(postal_codes),
                 auth: auth_service(),
             },
             ApiConfig::default(),
@@ -804,6 +848,135 @@ mod tests {
         assert_eq!(send(&app, put).await.status, StatusCode::UNAUTHORIZED);
     }
 
+    fn postal_codes_uri(company_id: Uuid, code: &str) -> String {
+        format!("/companies/{company_id}/postal-codes/{code}")
+    }
+
+    #[tokio::test]
+    async fn finds_the_address_of_a_postal_code_with_or_without_the_hyphen() {
+        let app = app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let expected = json!({
+            "street": "Avenida Paulista",
+            "district": "Bela Vista",
+            "city": "São Paulo",
+            "state": "SP"
+        });
+        for code in ["01310-100", "01310100"] {
+            let reply = send(
+                &app,
+                get_request(&postal_codes_uri(company_id, code), Some(&cookie)),
+            )
+            .await;
+            assert_eq!(reply.status, StatusCode::OK, "{code}");
+            assert_eq!(reply.body, expected, "{code}");
+        }
+        // A city with one code for all of it has no street.
+        let reply = send(
+            &app,
+            get_request(&postal_codes_uri(company_id, "55555-000"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(reply.body["street"], Value::Null);
+        assert_eq!(reply.body["city"], "Cidade Pequena");
+    }
+
+    #[tokio::test]
+    async fn a_postal_code_lookup_needs_a_session_and_a_company_of_the_caller() {
+        let app = app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let (stranger, _) = sign_up(&app, "bia@example.com").await;
+        let uri = postal_codes_uri(company_id, "01310-100");
+        assert_eq!(
+            send(&app, get_request(&uri, None)).await.status,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            send(&app, get_request(&uri, Some(&stranger))).await.status,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            send(&app, get_request(&uri, Some(&cookie))).await.status,
+            StatusCode::OK
+        );
+    }
+
+    #[tokio::test]
+    async fn a_postal_code_that_is_not_eight_digits_is_refused_without_asking_the_directory() {
+        // An unreachable directory would answer 503: a 422 proves it was never asked.
+        let app = app_with(
+            PartyService::new(InMemoryPartyRepository::default(), known_companies()),
+            InMemoryPostalCodeDirectory::unreachable(),
+        );
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        for code in ["123", "0131010a", "013101000"] {
+            let reply = send(
+                &app,
+                get_request(&postal_codes_uri(company_id, code), Some(&cookie)),
+            )
+            .await;
+            assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "{code}");
+            assert!(reply.body["error"].as_str().unwrap().contains("CEP"));
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unknown_postal_code_is_a_404_and_an_unreachable_directory_a_503() {
+        let app = app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let reply = send(
+            &app,
+            get_request(&postal_codes_uri(company_id, "99999-999"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::NOT_FOUND);
+        assert!(
+            reply.body["error"]
+                .as_str()
+                .unwrap()
+                .contains("fill the address in by hand")
+        );
+
+        let down = app_with(
+            PartyService::new(InMemoryPartyRepository::default(), known_companies()),
+            InMemoryPostalCodeDirectory::unreachable(),
+        );
+        let (cookie, company_id) = sign_up(&down, "ana@example.com").await;
+        let reply = send(
+            &down,
+            get_request(&postal_codes_uri(company_id, "01310-100"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn a_postal_code_lookup_switched_off_is_a_409() {
+        let app = router::<NoLookupPorts>(
+            Services {
+                parties: PartyService::new(InMemoryPartyRepository::default(), None),
+                products: ProductService::new(InMemoryProductRepository::default()),
+                cost_centers: CostCenterService::new(InMemoryCostCenterRepository::default()),
+                categories: CategoryService::new(InMemoryCategoryRepository::default()),
+                bank_accounts: BankAccountService::new(InMemoryBankAccountRepository::default()),
+                payment_methods: PaymentMethodService::new(
+                    InMemoryPaymentMethodRepository::default(),
+                ),
+                payment_terms: PaymentTermService::new(InMemoryPaymentTermRepository::default()),
+                postal_codes: PostalCodeService::new(None),
+                auth: auth_service(),
+            },
+            ApiConfig::default(),
+        );
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let reply = send(
+            &app,
+            get_request(&postal_codes_uri(company_id, "01310-100"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::CONFLICT);
+    }
+
     async fn register_party(app: &Router, document: Option<&str>) -> Reply {
         let (cookie, company_id) = sign_up(app, "ana@example.com").await;
         let mut body = party_body();
@@ -992,6 +1165,7 @@ mod tests {
                     InMemoryPaymentMethodRepository::default(),
                 ),
                 payment_terms: PaymentTermService::new(InMemoryPaymentTermRepository::default()),
+                postal_codes: PostalCodeService::new(None),
                 auth: auth_service(),
             },
             ApiConfig::default(),
