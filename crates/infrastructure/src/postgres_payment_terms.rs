@@ -90,16 +90,18 @@ impl PaymentTermRepository for PostgresPaymentTermRepository {
         company_id: CompanyId,
         id: PaymentTermId,
     ) -> Result<Option<PaymentTerm>, RepositoryError> {
+        let mut tx = self.snapshot().await?;
         let row = sqlx::query(&format!(
             "{SELECT_PAYMENT_TERMS} WHERE company_id = $1 AND id = $2"
         ))
         .bind(company_id.as_uuid())
         .bind(id.as_uuid())
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await
         .map_err(storage_error)?;
         let Some(row) = row else { return Ok(None) };
-        let mut terms = self.with_installments(company_id, vec![row]).await?;
+        let mut terms = with_installments(&mut tx, company_id, vec![row]).await?;
+        tx.commit().await.map_err(storage_error)?;
         Ok(terms.pop())
     }
 
@@ -170,50 +172,65 @@ impl PaymentTermRepository for PostgresPaymentTermRepository {
         }
         push_name_keyset(&mut sql, query.sort(), after, limit);
 
+        let mut tx = self.snapshot().await?;
         let rows = sql
             .build()
-            .fetch_all(&self.pool)
+            .fetch_all(&mut *tx)
             .await
             .map_err(storage_error)?;
-        self.with_installments(company_id, rows).await
+        let terms = with_installments(&mut tx, company_id, rows).await?;
+        tx.commit().await.map_err(storage_error)?;
+        Ok(terms)
     }
 }
 
 impl PostgresPaymentTermRepository {
-    /// The terms of these rows, each with its installments in order: one query for all of them.
-    async fn with_installments(
-        &self,
-        company_id: CompanyId,
-        rows: Vec<PgRow>,
-    ) -> Result<Vec<PaymentTerm>, RepositoryError> {
-        let ids: Vec<Uuid> = rows
-            .iter()
-            .map(|row| row.try_get("id").map_err(storage_error))
-            .collect::<Result<_, _>>()?;
-        let installment_rows = sqlx::query(
-            "SELECT term_id, days, percent::text AS percent FROM payment_term_installments \
-             WHERE company_id = $1 AND term_id = ANY($2) ORDER BY term_id, position",
-        )
-        .bind(company_id.as_uuid())
-        .bind(&ids)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(storage_error)?;
-        let mut by_term: HashMap<Uuid, Vec<InstallmentDraft>> = HashMap::new();
-        for row in &installment_rows {
-            let term_id: Uuid = row.try_get("term_id").map_err(storage_error)?;
-            let days: i32 = row.try_get("days").map_err(storage_error)?;
-            by_term.entry(term_id).or_default().push(InstallmentDraft {
-                days: u32::try_from(days).map_err(|_| {
-                    RepositoryError::Storage(format!("stored installment with {days} days"))
-                })?,
-                percent: row.try_get("percent").map_err(storage_error)?,
-            });
-        }
-        rows.iter()
-            .map(|row| term_from_row(row, &mut by_term))
-            .collect()
+    /// A transaction that sees one moment of the database: a term is read in two statements (the
+    /// term, then its installments), and an edit committed between them would otherwise give a term
+    /// with the old name and the new installments, a state that never existed.
+    async fn snapshot(&self) -> Result<sqlx::Transaction<'static, Postgres>, RepositoryError> {
+        let mut tx = self.pool.begin().await.map_err(storage_error)?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+            .execute(&mut *tx)
+            .await
+            .map_err(storage_error)?;
+        Ok(tx)
     }
+}
+
+/// The terms of these rows, each with its installments in order: one query for all of them.
+async fn with_installments(
+    connection: &mut PgConnection,
+    company_id: CompanyId,
+    rows: Vec<PgRow>,
+) -> Result<Vec<PaymentTerm>, RepositoryError> {
+    let ids: Vec<Uuid> = rows
+        .iter()
+        .map(|row| row.try_get("id").map_err(storage_error))
+        .collect::<Result<_, _>>()?;
+    let installment_rows = sqlx::query(
+        "SELECT term_id, days, percent::text AS percent FROM payment_term_installments \
+         WHERE company_id = $1 AND term_id = ANY($2) ORDER BY term_id, position",
+    )
+    .bind(company_id.as_uuid())
+    .bind(&ids)
+    .fetch_all(&mut *connection)
+    .await
+    .map_err(storage_error)?;
+    let mut by_term: HashMap<Uuid, Vec<InstallmentDraft>> = HashMap::new();
+    for row in &installment_rows {
+        let term_id: Uuid = row.try_get("term_id").map_err(storage_error)?;
+        let days: i32 = row.try_get("days").map_err(storage_error)?;
+        by_term.entry(term_id).or_default().push(InstallmentDraft {
+            days: u32::try_from(days).map_err(|_| {
+                RepositoryError::Storage(format!("stored installment with {days} days"))
+            })?,
+            percent: row.try_get("percent").map_err(storage_error)?,
+        });
+    }
+    rows.iter()
+        .map(|row| term_from_row(row, &mut by_term))
+        .collect()
 }
 
 fn term_from_row(
@@ -327,6 +344,15 @@ mod tests {
             ),
             (
                 installment(1, 0, "100.01", mine).await,
+                "payment_term_installments_percent_valid",
+            ),
+            // More than two decimals is refused, not rounded to a valid share.
+            (
+                installment(1, 0, "33.333", mine).await,
+                "payment_term_installments_percent_valid",
+            ),
+            (
+                installment(1, 0, "100.004", mine).await,
                 "payment_term_installments_percent_valid",
             ),
             // The installment must be in its term's company.

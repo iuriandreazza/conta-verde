@@ -24,13 +24,16 @@ CREATE TABLE payment_term_installments (
     -- The order of the installments, from 1.
     position   SMALLINT     NOT NULL,
     days       INTEGER      NOT NULL,
-    -- Two decimals at most: the domain refuses more, it never rounds.
-    percent    NUMERIC(5, 2) NOT NULL,
+    -- Unconstrained scale on purpose: NUMERIC(5, 2) would round 33.333 to 33.33 on its own, and the
+    -- rule is that more than two decimals is refused, never rounded (the check below enforces it).
+    percent    NUMERIC      NOT NULL,
     PRIMARY KEY (term_id, position),
     CONSTRAINT payment_term_installments_term_fk FOREIGN KEY (company_id, term_id)
         REFERENCES payment_terms (company_id, id),
     CONSTRAINT payment_term_installments_one_per_day_key UNIQUE (term_id, days),
     CONSTRAINT payment_term_installments_position_valid CHECK (position BETWEEN 1 AND 24),
     CONSTRAINT payment_term_installments_days_valid CHECK (days BETWEEN 0 AND 3650),
-    CONSTRAINT payment_term_installments_percent_valid CHECK (percent > 0 AND percent <= 100)
+    CONSTRAINT payment_term_installments_percent_valid CHECK (
+        percent = round(percent, 2) AND percent > 0 AND percent <= 100
+    )
 );

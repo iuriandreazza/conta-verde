@@ -75,7 +75,7 @@ applied to and a **percentage** of the amount ("30/60/90", "50% now, 50% in 30 d
   installment cannot be in another company than its term. The installments are replaced as a whole
   inside the transaction that writes the term and its audit entry, so a refused edit (a duplicate
   name) leaves the old installments in place. The database refuses what a row can show (position
-  1 to 24, days 0 to 3650, percent above 0 and at most 100, the same day twice); **the sum and the
+  1 to 24, days 0 to 3650, percent above 0, at most 100 and with at most two decimals, the same day twice); **the sum and the
   order are the domain's alone**, so a write that bypasses the domain could store a term that does
   not add up.
 - **Audit:** the installments are one field in the trail, in a canonical text (`0:50,30:50`), so an

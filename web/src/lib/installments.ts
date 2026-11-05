@@ -22,12 +22,21 @@ function hundredthsToText(hundredths: number): string {
   return fraction === "00" ? String(whole) : `${whole}.${fraction.replace(/0$/, "")}`;
 }
 
-/** What a person typed (`33,33`) in hundredths of a percent, or `null` when it is not a share. */
+/**
+ * What a person typed (`33,33`) in hundredths of a percent, or `null` when it is not a share.
+ * Zeros after the second decimal (`33,330`) are the same number and the API accepts them.
+ */
 function toHundredths(typed: string): number | null {
   const text = toApiDecimal(typed);
-  const match = text === undefined ? null : /^(\d{1,3})(?:\.(\d{1,2}))?$/.exec(text);
+  const match = text === undefined ? null : /^(\d{1,3})(?:\.(\d{1,2})0*)?$/.exec(text);
   if (!match) return null;
   return Number(match[1]) * 100 + Number((match[2] ?? "").padEnd(2, "0"));
+}
+
+/** The position (from 0) of the first percentage that is not a valid share, or `null`. */
+export function firstInvalidShare(typed: string[]): number | null {
+  const index = typed.findIndex((text) => toHundredths(text) === null);
+  return index === -1 ? null : index;
 }
 
 /** The sum of the percentages typed, in hundredths, or `null` while one is not a valid share. */

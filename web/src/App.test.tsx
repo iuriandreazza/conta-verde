@@ -1523,13 +1523,15 @@ describe("payment terms", () => {
     });
     renderAt("/companies/c1/payment-terms");
 
-    const submit = await screen.findByRole("button", { name: "Adicionar" });
+    // The list's own "loading" status is gone once the empty state shows.
+    await screen.findByText("Nenhum prazo de pagamento ainda.");
+    const submit = screen.getByRole("button", { name: "Adicionar" });
     await userEvent.type(screen.getByLabelText("Nome"), "Entrada e 30");
     // One installment of 100% to begin with; a second starts 30 days later.
     await userEvent.click(screen.getByRole("button", { name: "Adicionar parcela" }));
     expect(screen.getByLabelText("Dias da parcela 2")).toHaveValue("30");
-    // The new installment has no percentage yet.
-    expect(screen.getByRole("status")).toHaveTextContent("Preencha a porcentagem");
+    // The new installment has no percentage yet, and the message names it.
+    expect(screen.getByRole("status")).toHaveTextContent("Preencha a porcentagem da parcela 2");
 
     await userEvent.clear(screen.getByLabelText("Porcentagem da parcela 1"));
     await userEvent.type(screen.getByLabelText("Porcentagem da parcela 1"), "40,5");
@@ -1556,7 +1558,8 @@ describe("payment terms", () => {
     mockApi((url) => (url === "/api/auth/me" ? { status: 200, body: profile } : page()));
     renderAt("/companies/c1/payment-terms");
 
-    await userEvent.click(await screen.findByRole("button", { name: "Adicionar parcela" }));
+    await screen.findByText("Nenhum prazo de pagamento ainda.");
+    await userEvent.click(screen.getByRole("button", { name: "Adicionar parcela" }));
     await userEvent.click(screen.getByRole("button", { name: "Adicionar parcela" }));
     await userEvent.click(screen.getByRole("button", { name: "Dividir igualmente" }));
     expect(screen.getByLabelText("Porcentagem da parcela 1")).toHaveValue("33,33");
@@ -1569,6 +1572,35 @@ describe("payment terms", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Passou 16,67% de 100%.");
     await userEvent.click(screen.getByRole("button", { name: "Remover parcela 3" }));
     expect(screen.queryByLabelText("Dias da parcela 3")).not.toBeInTheDocument();
+  });
+
+  it("takes zeros after the second decimal and refuses a third decimal that is not zero", async () => {
+    mockApi((url) => (url === "/api/auth/me" ? { status: 200, body: profile } : page()));
+    renderAt("/companies/c1/payment-terms");
+
+    await screen.findByText("Nenhum prazo de pagamento ainda.");
+    await userEvent.click(screen.getByRole("button", { name: "Adicionar parcela" }));
+    await userEvent.clear(screen.getByLabelText("Porcentagem da parcela 1"));
+    await userEvent.type(screen.getByLabelText("Porcentagem da parcela 1"), "33,330");
+    await userEvent.type(screen.getByLabelText("Porcentagem da parcela 2"), "66,67");
+    expect(screen.getByRole("status")).toHaveTextContent("Total: 100%.");
+
+    // 33.333 would be rounded by the database, so it is never sent as a share.
+    await userEvent.clear(screen.getByLabelText("Porcentagem da parcela 1"));
+    await userEvent.type(screen.getByLabelText("Porcentagem da parcela 1"), "33,333");
+    expect(screen.getByRole("status")).toHaveTextContent("Preencha a porcentagem da parcela 1");
+    expect(screen.getByRole("button", { name: "Adicionar" })).toBeDisabled();
+  });
+
+  it("leaves the days empty when the next one would pass the limit", async () => {
+    mockApi((url) => (url === "/api/auth/me" ? { status: 200, body: profile } : page()));
+    renderAt("/companies/c1/payment-terms");
+
+    await screen.findByText("Nenhum prazo de pagamento ainda.");
+    await userEvent.clear(screen.getByLabelText("Dias da parcela 1"));
+    await userEvent.type(screen.getByLabelText("Dias da parcela 1"), "3640");
+    await userEvent.click(screen.getByRole("button", { name: "Adicionar parcela" }));
+    expect(screen.getByLabelText("Dias da parcela 2")).toHaveValue("");
   });
 
   it("changes a term with its installments filled in, and shows what the API refused", async () => {

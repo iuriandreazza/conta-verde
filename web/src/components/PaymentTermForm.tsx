@@ -3,6 +3,7 @@ import type { PaymentTerm, PaymentTermInput } from "../api";
 import { toApiDecimal, toInputDecimal } from "../lib/decimal";
 import {
   WHOLE_IN_HUNDREDTHS,
+  firstInvalidShare,
   showHundredths,
   splitEvenly,
   sumOfPercents,
@@ -21,6 +22,7 @@ interface Row {
 
 const NEXT_DUE_STEP_DAYS = 30;
 const MAX_INSTALLMENTS = 24;
+const MAX_INSTALLMENT_DAYS = 3650;
 
 interface PaymentTermFormProps {
   /** The term being changed, or `null` to register one. */
@@ -55,10 +57,12 @@ export function PaymentTermForm({
   );
   const [fieldError, setFieldError] = useState<string | null>(null);
 
-  const total = sumOfPercents(rows.map((row) => row.percent));
+  const percents = rows.map((row) => row.percent);
+  const total = sumOfPercents(percents);
+  const invalidShare = firstInvalidShare(percents);
   const sumMessage =
     total === null
-      ? "Preencha a porcentagem de cada parcela, por exemplo 33,33."
+      ? `Preencha a porcentagem da parcela ${(invalidShare ?? 0) + 1}, por exemplo 33,33.`
       : total === WHOLE_IN_HUNDREDTHS
         ? "Total: 100%."
         : total < WHOLE_IN_HUNDREDTHS
@@ -66,14 +70,17 @@ export function PaymentTermForm({
           : `Passou ${showHundredths(total - WHOLE_IN_HUNDREDTHS)}% de 100%.`;
 
   function update(key: number, change: Partial<Row>) {
+    setFieldError(null);
     setRows((current) => current.map((row) => (row.key === key ? { ...row, ...change } : row)));
   }
 
   function addRow() {
     setRows((current) => {
       const last = current[current.length - 1];
-      const lastDays = last && /^\d+$/.test(last.days) ? Number(last.days) : null;
-      return [...current, newRow(lastDays === null ? "" : String(lastDays + NEXT_DUE_STEP_DAYS), "")];
+      const proposed = last && /^\d+$/.test(last.days) ? Number(last.days) + NEXT_DUE_STEP_DAYS : null;
+      // A proposal past the limit would only be refused: leave the days for the person to fill.
+      const days = proposed !== null && proposed <= MAX_INSTALLMENT_DAYS ? String(proposed) : "";
+      return [...current, newRow(days, "")];
     });
   }
 
