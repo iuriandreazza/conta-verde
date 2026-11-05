@@ -341,7 +341,6 @@ describe("App", () => {
 
   describe("the history of a party", () => {
     const created: HistoryEntry = {
-      sequence: 1,
       at: Date.UTC(2026, 10, 5, 12, 0),
       actor: { kind: "user", id: "u1", name: "Ana" },
       action: "created",
@@ -353,7 +352,6 @@ describe("App", () => {
       ],
     };
     const rechecked: HistoryEntry = {
-      sequence: 2,
       at: Date.UTC(2026, 10, 5, 13, 30),
       actor: { kind: "user", id: "u2", name: "Bia" },
       action: "updated",
@@ -429,6 +427,47 @@ describe("App", () => {
       await userEvent.click(screen.getByRole("button", { name: "Tentar de novo" }));
       expect(await screen.findByText(/cadastrou/)).toBeInTheDocument();
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("explains an empty history instead of showing nothing", async () => {
+      listWithHistory(() => ({ status: 200, body: [] }));
+      await userEvent.click(await screen.findByRole("button", { name: "Histórico de Padaria Central" }));
+      expect(await screen.findByText(/anterior ao histórico/)).toBeInTheDocument();
+    });
+
+    it("reloads an open history after the party is checked again", async () => {
+      const unverifiedParty = partyWithCheck({
+        status: "unverified",
+        legal_name: null,
+        situation: null,
+        needs_attention: true,
+      });
+      const verifiedParty = partyWithCheck({
+        status: "verified",
+        legal_name: "PADARIA CENTRAL LTDA",
+        situation: "ATIVA",
+        needs_attention: false,
+      });
+      let historyCalls = 0;
+      mockApi((url, init) => {
+        if (url === "/api/auth/me") return { status: 200, body: profile };
+        if (url.endsWith("/history")) {
+          historyCalls += 1;
+          return { status: 200, body: historyCalls === 1 ? [created] : [created, rechecked] };
+        }
+        if (init?.method === "POST") return { status: 200, body: verifiedParty };
+        return { status: 200, body: { items: [unverifiedParty], next_cursor: null } };
+      });
+      renderAt("/companies/c1/parties");
+
+      await userEvent.click(await screen.findByRole("button", { name: "Histórico de Padaria Central" }));
+      expect(await screen.findByText(/cadastrou/)).toBeInTheDocument();
+      expect(screen.queryByText(/alterou/)).not.toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole("button", { name: /Verificar de novo/ }));
+      // The open panel follows the re-check and now lists the change too.
+      expect(await screen.findByText(/alterou/)).toBeInTheDocument();
+      expect(historyCalls).toBe(2);
     });
 
     it("names the panel and ties the toggle to it", async () => {

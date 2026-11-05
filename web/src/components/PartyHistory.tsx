@@ -43,11 +43,17 @@ export function PartyHistory({ companyId, partyId }: { companyId: string; partyI
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
+    // A reply that arrives after the inputs changed (or the panel closed) must not be shown.
+    let current = true;
     setError(null);
+    setEntries(null);
     api
       .partyHistory(companyId, partyId)
-      .then((loaded) => setEntries([...loaded].reverse()))
-      .catch((failure: unknown) => setError(errorMessage(failure)));
+      .then((loaded) => current && setEntries([...loaded].reverse()))
+      .catch((failure: unknown) => current && setError(errorMessage(failure)));
+    return () => {
+      current = false;
+    };
   }, [companyId, partyId, attempt]);
 
   if (error) {
@@ -67,10 +73,19 @@ export function PartyHistory({ companyId, partyId }: { companyId: string; partyI
       </p>
     );
   }
+  if (entries.length === 0) {
+    // Parties created before the audit trail existed have no entries until they change.
+    return (
+      <p className="muted">
+        Sem registros: este cadastro é anterior ao histórico. As próximas alterações aparecerão aqui.
+      </p>
+    );
+  }
   return (
     <ol className="history">
-      {entries.map((entry) => (
-        <li key={entry.sequence}>
+      {entries.map((entry, index) => (
+        // The list is read-only and replaced as a whole, so the position is a stable key.
+        <li key={index}>
           <p className="history-head">
             <strong>{entry.actor.name}</strong> {entry.action === "created" ? "cadastrou" : "alterou"}
             <time dateTime={new Date(entry.at).toISOString()}>

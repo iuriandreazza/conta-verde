@@ -21,6 +21,19 @@ impl From<&Party> for PartyCursor {
     }
 }
 
+/// Adapters call this before a write: an entry that is not about the party being written (another
+/// company, another id) would put a row into the wrong trail, which is a caller's bug, so it is
+/// refused instead of stored.
+pub fn ensure_audit_describes(audit: &AuditEntry, party: &Party) -> Result<(), RepositoryError> {
+    if audit.describes(party) {
+        Ok(())
+    } else {
+        Err(RepositoryError::Storage(
+            "audit entry does not describe the party being written".to_owned(),
+        ))
+    }
+}
+
 /// Port implemented by storage adapters. Futures are `Send` so use cases can run on a multi-threaded runtime.
 ///
 /// Every write takes the audit entry that describes it and stores both **atomically** ([ADR 0008]):

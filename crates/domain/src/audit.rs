@@ -66,6 +66,16 @@ pub struct AuditEntry {
     pub changes: Vec<FieldChange>,
 }
 
+impl AuditEntry {
+    /// Whether this entry is about that party, in that party's company. Stores check it before
+    /// writing, so a caller's mistake cannot put a row into another company's trail.
+    pub fn describes(&self, party: &Party) -> bool {
+        self.entity == AuditEntity::Party
+            && self.company_id == party.company_id()
+            && self.entity_id == party.id().as_uuid()
+    }
+}
+
 /// An entry as read back. `sequence` orders records of the whole trail, also within the same
 /// millisecond; `at_millis` is milliseconds since the Unix epoch.
 #[derive(Debug, Clone, PartialEq, Eq)]

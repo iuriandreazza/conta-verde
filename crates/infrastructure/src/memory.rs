@@ -4,7 +4,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use conta_verde_application::{
     CnpjLookupError, CnpjRegistry, IdentityRepository, NewAccount, PartyCursor, PartyRepository,
-    RegistryEntry, RepositoryError, StoredCredentials,
+    RegistryEntry, RepositoryError, StoredCredentials, ensure_audit_describes,
 };
 use conta_verde_domain::{
     AuditEntity, AuditEntry, AuditRecord, Cnpj, Company, CompanyId, Email, Party, PartyId, User,
@@ -45,6 +45,7 @@ impl PartyState {
 
 impl PartyRepository for InMemoryPartyRepository {
     async fn save(&self, party: &Party, audit: &AuditEntry) -> Result<(), RepositoryError> {
+        ensure_audit_describes(audit, party)?;
         let mut state = self.state.lock().expect("repository lock poisoned");
         let duplicate = party.document().is_some()
             && state.parties.iter().any(|existing| {
@@ -77,6 +78,7 @@ impl PartyRepository for InMemoryPartyRepository {
         party: &Party,
         audit: &AuditEntry,
     ) -> Result<(), RepositoryError> {
+        ensure_audit_describes(audit, party)?;
         let mut state = self.state.lock().expect("repository lock poisoned");
         let stored = state
             .parties

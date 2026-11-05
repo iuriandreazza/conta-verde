@@ -1,5 +1,7 @@
 use crate::postgres_audit;
-use conta_verde_application::{PartyCursor, PartyRepository, RepositoryError};
+use conta_verde_application::{
+    PartyCursor, PartyRepository, RepositoryError, ensure_audit_describes,
+};
 use conta_verde_domain::{
     AuditEntity, AuditEntry, AuditRecord, CompanyId, DocumentCheck, Party, PartyDraft, PartyId,
 };
@@ -36,6 +38,7 @@ const SELECT_PARTIES: &str = "SELECT id, company_id, name, document, email, is_c
 
 impl PartyRepository for PostgresPartyRepository {
     async fn save(&self, party: &Party, audit: &AuditEntry) -> Result<(), RepositoryError> {
+        ensure_audit_describes(audit, party)?;
         // One transaction: if the party is refused (a duplicate document) or the audit row cannot
         // be written, the rollback leaves neither behind.
         let mut tx = self.pool.begin().await.map_err(storage_error)?;
@@ -93,6 +96,7 @@ impl PartyRepository for PostgresPartyRepository {
         party: &Party,
         audit: &AuditEntry,
     ) -> Result<(), RepositoryError> {
+        ensure_audit_describes(audit, party)?;
         let mut tx = self.pool.begin().await.map_err(storage_error)?;
         let result = sqlx::query(
             "UPDATE parties SET document_check = $3, registry_legal_name = $4, registry_situation = $5 \

@@ -157,10 +157,11 @@ where
     Ok(Json(PartyResponse::from(&party)))
 }
 
-/// What was recorded about a party, oldest first.
+/// What was recorded about a party, oldest first. The array order is the order of the trail; the
+/// store's own counter is not exposed, because it is shared by every company and would show how
+/// busy the installation is.
 #[derive(Serialize)]
 pub(crate) struct HistoryEntryResponse {
-    sequence: i64,
     /// Milliseconds since the Unix epoch; the client formats it in the user's time zone.
     at: i64,
     actor: ActorResponse,
@@ -187,7 +188,6 @@ impl From<&AuditRecord> for HistoryEntryResponse {
     fn from(record: &AuditRecord) -> Self {
         let Actor::User { id, name } = &record.entry.actor;
         Self {
-            sequence: record.sequence,
             at: record.at_millis,
             actor: ActorResponse {
                 kind: "user",

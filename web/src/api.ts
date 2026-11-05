@@ -36,7 +36,6 @@ export interface Party {
 
 /** One recorded change to a party (ADR 0008). The API lists them oldest first. */
 export interface HistoryEntry {
-  sequence: number;
   /** Milliseconds since the Unix epoch. */
   at: number;
   actor: { kind: "user"; id: string; name: string };

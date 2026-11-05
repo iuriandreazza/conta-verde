@@ -262,7 +262,7 @@ export function PartiesPage() {
                       <td colSpan={5} role="region" aria-label={`Histórico de ${party.name}`}>
                         <PartyHistory
                           // Remounted when the check changes, so an open history follows a re-check.
-                          key={`${party.document_check.status}-${party.document_check.situation}`}
+                          key={JSON.stringify(party.document_check)}
                           companyId={companyId}
                           partyId={party.id}
                         />

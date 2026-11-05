@@ -64,7 +64,20 @@ First slice (`feat/audit-trail`), covering parties. Where it differs from the de
   nothing, not even an entry: the trail records changes, not attempts.
 - **Append-only by trigger, not by grant.** The application connects with one database role, so "no update or delete grants"
   cannot be enforced; a trigger raises on `UPDATE`, `DELETE` and `TRUNCATE` of `audit_log`. It protects against bugs, not
-  against a superuser, who can drop the trigger.
+  against anything that can run arbitrary SQL as the application's role: that role creates the table through the migrations,
+  so it owns it and can disable or drop the trigger, as can a superuser. A separate migration role that owns the table, with
+  the runtime role holding only `INSERT` and `SELECT`, is the way to enforce what the ADR asks for.
+- Writes refuse an entry that does not describe the party being written (another company, another record), so a caller's
+  mistake cannot put a row into the wrong trail. The API does not expose the store's counter: it is shared by every company
+  and would show how busy the installation is.
+- **Parties created before the audit trail have no history** until they change; the panel says so. The first change then
+  appears as an "updated" entry without a "created" before it. There is no backfill.
+- **Personal data in an append-only table.** Creation entries keep the document and e-mail for good and nothing can erase
+  them, which an erasure request under LGPD would need. Every member of the company already sees those fields in the list, so
+  nothing new is exposed, but a policy (redaction by a privileged job, or keeping only changed field names) must come before
+  production use. Actor names are snapshots for the same reason.
+- A row whose action this binary does not know (written by a newer version, then rolled back) makes that party's history
+  fail with a server error instead of being skipped: hiding entries from an audit trail is worse. Migrations only go forward.
 - Order is `audit_log.sequence` (an identity column), not the timestamp, so rows written in the same millisecond keep a stable
   order. The sequence is assigned when the row is inserted, not when the transaction commits, so two concurrent writes can
   commit in the opposite order; for one party's trail (writes are rare and a CNPJ re-check is throttled) this does not matter,

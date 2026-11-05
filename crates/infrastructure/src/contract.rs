@@ -266,7 +266,6 @@ pub async fn leaves_no_trace_of_a_write_that_did_not_happen<R: PartyRepository>(
     );
 
     // An update through the wrong company misses, and leaves no entry either.
-    let intruder = first.clone().with_document_check(DocumentCheck::NotFound);
     let wrong_company = Party::new(
         first.id(),
         other_company,
@@ -276,10 +275,53 @@ pub async fn leaves_no_trace_of_a_write_that_did_not_happen<R: PartyRepository>(
     .with_document_check(DocumentCheck::NotFound);
     assert_eq!(
         repository
-            .update_document_check(&wrong_company, &check_entry(&first, &intruder))
+            .update_document_check(&wrong_company, &check_entry(&first, &wrong_company))
             .await,
         Err(RepositoryError::NotFound)
     );
+    assert_eq!(
+        repository.history(company, first.id()).await.unwrap().len(),
+        1
+    );
+
+    // An entry that is not about this party (another company's trail, another record) is a
+    // caller's bug: refused, with neither the party nor an entry stored.
+    let stranger = Party::new(
+        PartyId::generate(),
+        company,
+        party_draft("Oficina", Some(CLOSED_ALPHANUMERIC_CNPJ)),
+    )
+    .unwrap();
+    let for_another_company = AuditEntry {
+        company_id: other_company,
+        ..created_entry(&stranger)
+    };
+    let for_another_record = AuditEntry {
+        entity_id: first.id().as_uuid(),
+        ..created_entry(&stranger)
+    };
+    for mismatched in [&for_another_company, &for_another_record] {
+        assert!(matches!(
+            repository.save(&stranger, mismatched).await,
+            Err(RepositoryError::Storage(_))
+        ));
+    }
+    assert_eq!(repository.find(company, stranger.id()).await.unwrap(), None);
+    assert!(
+        repository
+            .history(other_company, stranger.id())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    // The same guard protects the update.
+    let rechecked = first.clone().with_document_check(DocumentCheck::NotFound);
+    assert!(matches!(
+        repository
+            .update_document_check(&rechecked, &for_another_company)
+            .await,
+        Err(RepositoryError::Storage(_))
+    ));
     assert_eq!(
         repository.history(company, first.id()).await.unwrap().len(),
         1

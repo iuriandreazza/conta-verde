@@ -637,7 +637,9 @@ mod tests {
         assert_eq!(entries[1]["changes"][0]["field"], "document_check");
         assert_eq!(entries[1]["changes"][0]["from"], "unverified");
         assert_eq!(entries[1]["changes"][0]["to"], "verified");
-        assert!(entries[0]["sequence"].as_i64() < entries[1]["sequence"].as_i64());
+        // Oldest first, and no installation-wide counter in the response.
+        assert_eq!(entries[0]["action"], "created");
+        assert!(entries[0].get("sequence").is_none());
     }
 
     #[tokio::test]
