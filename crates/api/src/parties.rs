@@ -4,8 +4,8 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use conta_verde_application::{
-    ApplicationError, CnpjRegistry, IdentityRepository, PartyCursor, PartyKind, PartyQuery,
-    PartyRepository, PartySort, SecretService,
+    ApplicationError, CnpjRegistry, IdentityRepository, PartyKind, PartyQuery, PartyRepository,
+    PartySort, SecretService,
 };
 use conta_verde_domain::{Actor, AuditRecord, DocumentCheck, Party, PartyDraft, PartyId};
 use serde::{Deserialize, Serialize};
@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::access::CompanyAccess;
+use crate::cursor::{decode_cursor, encode_cursor};
 use crate::error::ApiError;
 
 #[derive(Deserialize)]
@@ -286,46 +287,4 @@ where
         items: page.items.iter().map(PartyResponse::from).collect(),
         next_cursor: page.next.as_ref().map(encode_cursor),
     }))
-}
-
-// Clients treat the cursor as opaque. The id comes first because it has a fixed shape,
-// so a name containing the separator cannot confuse parsing.
-fn encode_cursor(cursor: &PartyCursor) -> String {
-    format!("{}|{}", cursor.id.as_uuid(), cursor.name)
-}
-
-fn decode_cursor(raw: &str) -> Result<PartyCursor, ApiError> {
-    let (id, name) = raw.split_once('|').ok_or(ApiError::InvalidCursor)?;
-    // No stored name holds a NUL, so a cursor that does was made up, and Postgres would fail on it.
-    if name.contains('\0') {
-        return Err(ApiError::InvalidCursor);
-    }
-    let id = Uuid::parse_str(id).map_err(|_| ApiError::InvalidCursor)?;
-    Ok(PartyCursor {
-        name: name.to_owned(),
-        id: PartyId::from_uuid(id),
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cursor_survives_separators_in_names() {
-        let original = PartyCursor {
-            name: "Ana | Filhos".into(),
-            id: PartyId::generate(),
-        };
-        let decoded = decode_cursor(&encode_cursor(&original)).unwrap();
-        assert_eq!(decoded, original);
-    }
-
-    #[test]
-    fn garbage_cursors_are_rejected() {
-        assert!(decode_cursor("nonsense").is_err());
-        assert!(decode_cursor("not-a-uuid|Ana").is_err());
-        let id = PartyId::generate().as_uuid();
-        assert!(decode_cursor(&format!("{id}|An\0a")).is_err());
-    }
 }

@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 conta-verde-domain.workspace = true
+uuid.workspace = true
 
 [lints]
 workspace = true

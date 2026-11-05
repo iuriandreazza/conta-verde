@@ -1,5 +1,6 @@
 mod access;
 mod auth;
+mod cursor;
 mod error;
 mod parties;
 mod session;

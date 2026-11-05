@@ -66,13 +66,34 @@ pub struct AuditEntry {
     pub changes: Vec<FieldChange>,
 }
 
+/// A record that has an audit trail: what kind it is, whose it is and which one.
+pub trait Audited {
+    fn audit_entity(&self) -> AuditEntity;
+    fn audit_company(&self) -> CompanyId;
+    fn audit_id(&self) -> Uuid;
+}
+
+impl Audited for Party {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::Party
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.id().as_uuid()
+    }
+}
+
 impl AuditEntry {
-    /// Whether this entry is about that party, in that party's company. Stores check it before
+    /// Whether this entry is about that record, in that record's company. Stores check it before
     /// writing, so a caller's mistake cannot put a row into another company's trail.
-    pub fn describes(&self, party: &Party) -> bool {
-        self.entity == AuditEntity::Party
-            && self.company_id == party.company_id()
-            && self.entity_id == party.id().as_uuid()
+    pub fn describes(&self, record: &impl Audited) -> bool {
+        self.entity == record.audit_entity()
+            && self.company_id == record.audit_company()
+            && self.entity_id == record.audit_id()
     }
 }
 

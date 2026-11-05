@@ -9,8 +9,8 @@ mod party;
 
 pub use account::{Account, AccountDraft, Company, User, validate_password};
 pub use audit::{
-    Actor, AuditAction, AuditEntity, AuditEntry, AuditRecord, FieldChange, creation_changes,
-    document_check_changes,
+    Actor, AuditAction, AuditEntity, AuditEntry, AuditRecord, Audited, FieldChange,
+    creation_changes, document_check_changes,
 };
 pub use document::{Cnpj, Document};
 pub use document_check::DocumentCheck;

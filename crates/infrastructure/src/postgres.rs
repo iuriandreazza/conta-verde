@@ -1,6 +1,6 @@
 use crate::postgres_audit;
 use conta_verde_application::{
-    PartyCursor, PartyKind, PartyQuery, PartyRepository, PartySort, RepositoryError,
+    NameCursor, PartyKind, PartyQuery, PartyRepository, PartySort, RepositoryError,
     ensure_audit_describes,
 };
 use conta_verde_domain::{
@@ -126,7 +126,7 @@ impl PartyRepository for PostgresPartyRepository {
         &self,
         company_id: CompanyId,
         query: &PartyQuery,
-        after: Option<&PartyCursor>,
+        after: Option<&NameCursor>,
         limit: usize,
     ) -> Result<Vec<Party>, RepositoryError> {
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
@@ -162,7 +162,7 @@ impl PartyRepository for PostgresPartyRepository {
             sql.push(format!(" AND (lower(name), id) {comparison} (lower("))
                 .push_bind(&cursor.name)
                 .push("), ")
-                .push_bind(cursor.id.as_uuid())
+                .push_bind(cursor.id)
                 .push(")");
         }
         sql.push(format!(

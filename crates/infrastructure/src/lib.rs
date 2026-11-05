@@ -3,6 +3,7 @@ mod cached_registry;
 #[cfg(test)]
 mod contract;
 mod memory;
+mod memory_audit;
 mod postgres;
 mod postgres_audit;
 mod postgres_identity;

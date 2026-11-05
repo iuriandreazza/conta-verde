@@ -2,22 +2,13 @@ use std::future::Future;
 
 use conta_verde_domain::{AuditEntry, AuditRecord, CompanyId, Party, PartyId};
 
-use crate::RepositoryError;
+use crate::{NameCursor, RepositoryError};
 
-/// Position of the last party of a page. Parties are ordered by name ignoring case, then by id
-/// (both reversed for [`PartySort::NameDesc`]), so the name and id of the last item are enough to
-/// resume right after it in either direction.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PartyCursor {
-    pub name: String,
-    pub id: PartyId,
-}
-
-impl From<&Party> for PartyCursor {
+impl From<&Party> for NameCursor {
     fn from(party: &Party) -> Self {
         Self {
             name: party.name().to_owned(),
-            id: party.id(),
+            id: party.id().as_uuid(),
         }
     }
 }
@@ -125,19 +116,6 @@ impl PartyQuery {
     }
 }
 
-/// Adapters call this before a write: an entry that is not about the party being written (another
-/// company, another id) would put a row into the wrong trail, which is a caller's bug, so it is
-/// refused instead of stored.
-pub fn ensure_audit_describes(audit: &AuditEntry, party: &Party) -> Result<(), RepositoryError> {
-    if audit.describes(party) {
-        Ok(())
-    } else {
-        Err(RepositoryError::Storage(
-            "audit entry does not describe the party being written".to_owned(),
-        ))
-    }
-}
-
 /// Port implemented by storage adapters. Futures are `Send` so use cases can run on a multi-threaded runtime.
 ///
 /// Every write takes the audit entry that describes it and stores both **atomically** ([ADR 0008]):
@@ -177,7 +155,7 @@ pub trait PartyRepository: Send + Sync {
         &self,
         company_id: CompanyId,
         query: &PartyQuery,
-        after: Option<&PartyCursor>,
+        after: Option<&NameCursor>,
         limit: usize,
     ) -> impl Future<Output = Result<Vec<Party>, RepositoryError>> + Send;
 }
