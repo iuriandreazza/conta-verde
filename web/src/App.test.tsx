@@ -1,9 +1,9 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, vi } from "vitest";
 import { App } from "./App";
-import type { DocumentCheck, HistoryEntry, Party, Profile } from "./api";
+import type { DocumentCheck, HistoryEntry, Party, Product, Profile } from "./api";
 import { AuthProvider } from "./auth";
 import { SOURCE_URL } from "./components/Footer";
 
@@ -690,5 +690,196 @@ describe("App", () => {
     await waitFor(() =>
       expect(screen.getByRole("alert")).toHaveTextContent("document is not a valid CPF or CNPJ"),
     );
+  });
+});
+
+describe("products and services", () => {
+  function product(name: string, overrides: Partial<Product> = {}): Product {
+    return {
+      id: `p-${name}`,
+      company_id: "c1",
+      kind: "product",
+      name,
+      sku: null,
+      unit: "UN",
+      ncm: null,
+      sale_price: null,
+      cost_price: null,
+      minimum_stock: null,
+      active: true,
+      ...overrides,
+    };
+  }
+
+  const page = (...items: Product[]) => ({ status: 200, body: { items, next_cursor: null } });
+  const bodyOf = (fetchMock: ReturnType<typeof mockApi>, method: string) => {
+    const call = fetchMock.mock.calls.find(([, init]) => init?.method === method);
+    return JSON.parse(String(call?.[1]?.body));
+  };
+
+  it("lists them with prices written the Brazilian way and reaches them from the parties page", async () => {
+    mockApi((url) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (url.includes("/products")) {
+        return page(
+          product("Pão francês", { sku: "PAO-1", sale_price: "1234.5", cost_price: "7", minimum_stock: "10" }),
+          product("Entrega", { kind: "service", active: false }),
+        );
+      }
+      return { status: 200, body: { items: [], next_cursor: null } };
+    });
+    renderAt("/companies/c1/parties");
+    await userEvent.click(await screen.findByRole("link", { name: "Produtos e serviços" }));
+
+    const row = (await screen.findByText("Pão francês")).closest("tr")!;
+    expect(row).toHaveTextContent("PAO-1");
+    expect(row).toHaveTextContent("R$ 1.234,50");
+    expect(row).toHaveTextContent("R$ 7,00");
+    expect(row).toHaveTextContent("Ativo");
+    const service = screen.getByText("Entrega").closest("tr")!;
+    expect(service).toHaveTextContent("Serviço");
+    expect(service).toHaveTextContent("Inativo");
+  });
+
+  it("sends prices as plain decimals, whatever way they were typed", async () => {
+    const fetchMock = mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "POST") return { status: 201, body: product("Bolo") };
+      return page();
+    });
+    renderAt("/companies/c1/products");
+
+    await userEvent.type(await screen.findByLabelText("Nome"), "Bolo");
+    await userEvent.type(screen.getByLabelText("SKU"), "bolo-1");
+    await userEvent.type(screen.getByLabelText("NCM"), "1905.90.90");
+    await userEvent.type(screen.getByLabelText("Preço de venda (R$)"), "1.234,50");
+    await userEvent.type(screen.getByLabelText("Preço de custo (R$)"), "7");
+    await userEvent.type(screen.getByLabelText("Estoque mínimo"), "2,5");
+    await userEvent.click(screen.getByRole("button", { name: "Adicionar" }));
+
+    expect(await screen.findByText("Bolo cadastrado.")).toBeInTheDocument();
+    expect(bodyOf(fetchMock, "POST")).toEqual({
+      kind: "product",
+      name: "Bolo",
+      sku: "bolo-1",
+      unit: "UN",
+      ncm: "1905.90.90",
+      sale_price: "1234.50",
+      cost_price: "7",
+      minimum_stock: "2.5",
+      active: true,
+    });
+  });
+
+  it("leaves out the NCM and the minimum stock of a service", async () => {
+    const fetchMock = mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "POST") return { status: 201, body: product("Entrega", { kind: "service" }) };
+      return page();
+    });
+    renderAt("/companies/c1/products");
+
+    await userEvent.selectOptions(await screen.findByLabelText("Tipo"), "service");
+    expect(screen.getByLabelText("NCM")).toBeDisabled();
+    expect(screen.getByLabelText("Estoque mínimo")).toBeDisabled();
+    await userEvent.type(screen.getByLabelText("Nome"), "Entrega");
+    await userEvent.click(screen.getByRole("button", { name: "Adicionar" }));
+
+    expect(await screen.findByText("Entrega cadastrado.")).toBeInTheDocument();
+    const sent = bodyOf(fetchMock, "POST");
+    expect(sent.kind).toBe("service");
+    expect(sent).not.toHaveProperty("ncm");
+    expect(sent).not.toHaveProperty("minimum_stock");
+  });
+
+  it("shows what the API refused, next to the form", async () => {
+    mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "POST") {
+        return { status: 422, body: { error: "sale price must be a decimal with up to 13 integer and 6 fractional digits, written like 10.50" } };
+      }
+      return page();
+    });
+    renderAt("/companies/c1/products");
+
+    await userEvent.type(await screen.findByLabelText("Nome"), "Bolo");
+    await userEvent.type(screen.getByLabelText("Preço de venda (R$)"), "abc");
+    await userEvent.click(screen.getByRole("button", { name: "Adicionar" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("sale price must be a decimal");
+  });
+
+  it("changes a product with the form filled in, and the kind stays as it was", async () => {
+    const bread = product("Pão", { sale_price: "12.5", minimum_stock: "3", sku: "PAO-1" });
+    const fetchMock = mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "PUT") return { status: 200, body: { ...bread, name: "Pão francês" } };
+      return page(bread);
+    });
+    renderAt("/companies/c1/products");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Alterar Pão" }));
+    expect(screen.getByRole("heading", { name: "Alterar Pão" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Tipo")).toBeDisabled();
+    expect(screen.getByLabelText("Preço de venda (R$)")).toHaveValue("12,5");
+    expect(screen.getByLabelText("SKU")).toHaveValue("PAO-1");
+
+    await userEvent.clear(screen.getByLabelText("Nome"));
+    await userEvent.type(screen.getByLabelText("Nome"), "Pão francês");
+    await userEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
+
+    expect(await screen.findByText("Pão francês atualizado.")).toBeInTheDocument();
+    const put = fetchMock.mock.calls.find(([, init]) => init?.method === "PUT")!;
+    expect(String(put[0])).toBe("/api/companies/c1/products/p-Pão");
+    expect(JSON.parse(String(put[1]?.body))).toMatchObject({
+      name: "Pão francês",
+      sale_price: "12.5",
+      minimum_stock: "3",
+      sku: "PAO-1",
+    });
+    // Back to registering.
+    expect(screen.getByRole("heading", { name: "Novo produto ou serviço" })).toBeInTheDocument();
+  });
+
+  it("asks for the active ones of a kind, matching a text, in the order chosen", async () => {
+    const fetchMock = mockApi((url) =>
+      url === "/api/auth/me" ? { status: 200, body: profile } : page(product("Pão")),
+    );
+    renderAt("/companies/c1/products");
+    await screen.findByText("Pão");
+
+    await userEvent.selectOptions(screen.getByLabelText("Mostrar"), "service");
+    await userEvent.selectOptions(screen.getByLabelText("Situação"), "true");
+    await userEvent.selectOptions(screen.getByLabelText("Ordem"), "-name");
+    await userEvent.type(screen.getByRole("searchbox", { name: "Buscar" }), "ent");
+
+    await waitFor(() => {
+      const urls = fetchMock.mock.calls.map(([url]) => String(url));
+      expect(urls).toContain("/api/companies/c1/products?q=ent&kind=service&active=true&sort=-name");
+    });
+  });
+
+  it("shows the history of a product with its prices written as money", async () => {
+    const bread = product("Pão");
+    const entry: HistoryEntry = {
+      at: Date.UTC(2026, 10, 5, 12, 0),
+      actor: { kind: "user", id: "u1", name: "Ana" },
+      action: "updated",
+      changes: [
+        { field: "sale_price", from: "12.5", to: "15" },
+        { field: "active", from: "true", to: "false" },
+      ],
+    };
+    mockApi((url) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (url.endsWith("/history")) return { status: 200, body: [entry] };
+      return page(bread);
+    });
+    renderAt("/companies/c1/products");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Histórico de Pão" }));
+    const region = await screen.findByRole("region", { name: "Histórico de Pão" });
+    expect(await within(region).findByText(/R\$ 12,50 → R\$ 15,00/)).toBeInTheDocument();
+    expect(within(region).getByText(/sim → não/)).toBeInTheDocument();
   });
 });

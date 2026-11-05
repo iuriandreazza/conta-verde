@@ -4,6 +4,7 @@ import { RequireAuth } from "./components/RequireAuth";
 import { AuthPage } from "./pages/AuthPage";
 import { CompaniesPage } from "./pages/CompaniesPage";
 import { PartiesPage } from "./pages/PartiesPage";
+import { ProductsPage } from "./pages/ProductsPage";
 
 export function App() {
   return (
@@ -14,6 +15,7 @@ export function App() {
         <Route element={<RequireAuth />}>
           <Route path="/" element={<CompaniesPage />} />
           <Route path="/companies/:companyId/parties" element={<PartiesPage />} />
+          <Route path="/companies/:companyId/products" element={<ProductsPage />} />
         </Route>
       </Route>
     </Routes>

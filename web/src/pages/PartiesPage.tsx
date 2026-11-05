@@ -1,9 +1,10 @@
-import { motion } from "motion/react";
 import { Fragment, useState, type FormEvent } from "react";
 import { useParams } from "react-router-dom";
 import { NO_FILTERS, api, errorMessage, type Party, type PartyFilters } from "../api";
 import { useAuth } from "../auth";
+import { CompanyNav } from "../components/CompanyNav";
 import { DocumentBadge } from "../components/DocumentBadge";
+import { ListRow } from "../components/ListRow";
 import { Notice, type NoticeTone } from "../components/Notice";
 import { Button } from "../components/Button";
 import { ChevronDownIcon } from "../components/icons/chevron-down";
@@ -14,9 +15,6 @@ import { UsersIcon } from "../components/icons/users";
 import { PartyHistory } from "../components/PartyHistory";
 import { Spinner } from "../components/Spinner";
 import { usePagedList } from "../lib/usePagedList";
-
-// Rows enter one after another, but never wait longer than the eighth for a long page.
-const MAX_STAGGERED_ROWS = 8;
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one
 // instance: the old list is dropped and a reply still in flight for another company lands on an
@@ -109,6 +107,7 @@ export function PartiesPage() {
   return (
     <>
       <h1>{companyName ?? "Clientes e fornecedores"}</h1>
+      <CompanyNav companyId={companyId} />
 
       <section className="card">
         <h2>Novo cliente ou fornecedor</h2>
@@ -230,18 +229,7 @@ export function PartiesPage() {
               <tbody>
                 {parties.map((party, index) => (
                   <Fragment key={party.id}>
-                  <motion.tr
-                    initial={{ opacity: 0, y: 8, backgroundColor: highlightColor(party, highlightedId, 1) }}
-                    animate={{
-                      opacity: 1,
-                      y: 0,
-                      backgroundColor: highlightColor(party, highlightedId, 0),
-                    }}
-                    transition={{
-                      delay: Math.min(index, MAX_STAGGERED_ROWS) * 0.03,
-                      duration: party.id === highlightedId ? 1.4 : 0.2,
-                    }}
-                  >
+                  <ListRow index={index} highlighted={party.id === highlightedId}>
                     <td>{party.name}</td>
                     <td>
                       {party.document ?? "—"} <DocumentBadge check={party.document_check} />
@@ -282,7 +270,7 @@ export function PartiesPage() {
                         Histórico
                       </Button>
                     </td>
-                  </motion.tr>
+                  </ListRow>
                   {historyOpenFor === party.id && (
                     <tr id={`history-${party.id}`}>
                       <td colSpan={5} role="region" aria-label={`Histórico de ${party.name}`}>
@@ -355,9 +343,4 @@ function registryNoticeFor(party: Party, after: "registering" | "rechecking"): R
         };
   }
   return null;
-}
-
-// A freshly added row flashes green and fades back to transparent.
-function highlightColor(party: Party, highlightedId: string | null, alpha: 0 | 1): string {
-  return `rgba(47, 178, 110, ${party.id === highlightedId ? alpha * 0.25 : 0})`;
 }
