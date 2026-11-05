@@ -1,5 +1,6 @@
 import { NavLink } from "react-router-dom";
 import { BoxIcon } from "./icons/box";
+import { CalendarDaysIcon } from "./icons/calendar-days";
 import { ChartLineIcon } from "./icons/chart-line";
 import { CreditCardIcon } from "./icons/credit-card";
 import { FolderTreeIcon } from "./icons/folder-tree";
@@ -39,6 +40,10 @@ export function CompanyNav({ companyId }: { companyId: string }) {
       <NavLink to={`${base}/payment-methods`}>
         <CreditCardIcon size={18} aria-hidden />
         Formas de pagamento
+      </NavLink>
+      <NavLink to={`${base}/payment-terms`}>
+        <CalendarDaysIcon size={18} aria-hidden />
+        Prazos de pagamento
       </NavLink>
     </nav>
   );

@@ -254,6 +254,40 @@ export interface PaymentMethodFilters {
 
 export const NO_PAYMENT_METHOD_FILTERS: PaymentMethodFilters = { q: "", kind: "", active: "", sort: "name" };
 
+/** Due `days` after the date the term is applied to, for `percent` of the amount (a decimal string). */
+export interface Installment {
+  days: number;
+  percent: string;
+}
+
+export interface PaymentTerm {
+  id: string;
+  company_id: string;
+  name: string;
+  /** In order of due date: the days increase, and the percentages add up to exactly 100. */
+  installments: Installment[];
+  active: boolean;
+}
+
+export interface PaymentTermPage {
+  items: PaymentTerm[];
+  next_cursor: string | null;
+}
+
+export interface PaymentTermInput {
+  name: string;
+  installments: Installment[];
+  active: boolean;
+}
+
+export interface PaymentTermFilters {
+  q: string;
+  active: "" | "true" | "false";
+  sort: "name" | "-name";
+}
+
+export const NO_PAYMENT_TERM_FILTERS: PaymentTermFilters = { q: "", active: "", sort: "name" };
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -414,6 +448,28 @@ export const api = {
     }),
   paymentMethodHistory: (companyId: string, id: string) =>
     request<HistoryEntry[]>(`/companies/${companyId}/payment-methods/${id}/history`),
+  listPaymentTerms: (
+    companyId: string,
+    filters: PaymentTermFilters = NO_PAYMENT_TERM_FILTERS,
+    after?: string,
+  ) => {
+    const params = new URLSearchParams();
+    if (filters.q) params.set("q", filters.q);
+    if (filters.active) params.set("active", filters.active);
+    if (filters.sort !== NO_PAYMENT_TERM_FILTERS.sort) params.set("sort", filters.sort);
+    if (after) params.set("after", after);
+    const query = params.size > 0 ? `?${params}` : "";
+    return request<PaymentTermPage>(`/companies/${companyId}/payment-terms${query}`);
+  },
+  createPaymentTerm: (companyId: string, input: PaymentTermInput) =>
+    post<PaymentTerm>(`/companies/${companyId}/payment-terms`, input),
+  updatePaymentTerm: (companyId: string, id: string, input: PaymentTermInput) =>
+    request<PaymentTerm>(`/companies/${companyId}/payment-terms/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  paymentTermHistory: (companyId: string, id: string) =>
+    request<HistoryEntry[]>(`/companies/${companyId}/payment-terms/${id}/history`),
   /** The whole tree, flat and unpaged. */
   listCategories: (companyId: string) =>
     request<{ items: Category[] }>(`/companies/${companyId}/categories`),
