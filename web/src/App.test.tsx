@@ -792,6 +792,27 @@ describe("products and services", () => {
     expect(sent).not.toHaveProperty("minimum_stock");
   });
 
+  it("asks what was meant by 1.234 instead of guessing, and sends nothing", async () => {
+    const fetchMock = mockApi((url) =>
+      url === "/api/auth/me" ? { status: 200, body: profile } : page(),
+    );
+    renderAt("/companies/c1/products");
+
+    await userEvent.type(await screen.findByLabelText("Nome"), "Bolo");
+    await userEvent.type(screen.getByLabelText("Preço de venda (R$)"), "1.234");
+    await userEvent.click(screen.getByRole("button", { name: "Adicionar" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("pode ser lido de dois jeitos");
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+
+    await userEvent.clear(screen.getByLabelText("Preço de venda (R$)"));
+    await userEvent.type(screen.getByLabelText("Preço de venda (R$)"), "1.234,00");
+    await userEvent.click(screen.getByRole("button", { name: "Adicionar" }));
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST")).toBe(true),
+    );
+  });
+
   it("shows what the API refused, next to the form", async () => {
     mockApi((url, init) => {
       if (url === "/api/auth/me") return { status: 200, body: profile };

@@ -56,7 +56,9 @@ One `products` table and one `Product` entity with `kind` (`product` or `service
   trail. Nothing downstream formats a number by hand.
 - The API answers a price sent as a JSON number with the usual JSON error. The web app converts
   what a Brazilian types (`1.234,56`) into the plain form before sending and formats the answer
-  with string operations; it never turns a price into a `Number`.
+  with string operations; it never turns a price into a `Number`. A number written with dots and
+  no comma that could be thousands (`1.234`) is refused until the person says which they meant,
+  since both readings are valid decimals and either would be stored silently.
 - Amounts are bound to Postgres as text and cast, and read back as text, which avoids a
   database feature for the decimal type.
 

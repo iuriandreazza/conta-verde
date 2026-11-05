@@ -1,10 +1,16 @@
 import { useState, type FormEvent } from "react";
 import type { Product, ProductInput, ProductKind } from "../api";
-import { toApiDecimal, toInputDecimal } from "../lib/decimal";
+import { isAmbiguousDecimal, toApiDecimal, toInputDecimal } from "../lib/decimal";
 import { Button } from "./Button";
 import { CheckIcon } from "./icons/check";
 import { PlusIcon } from "./icons/plus";
 import { Notice } from "./Notice";
+
+const AMOUNT_FIELDS = [
+  { name: "sale_price", label: "Preço de venda" },
+  { name: "cost_price", label: "Preço de custo" },
+  { name: "minimum_stock", label: "Estoque mínimo" },
+];
 
 interface ProductFormProps {
   /** The product being changed, or `null` to register a new one. */
@@ -22,6 +28,7 @@ interface ProductFormProps {
 export function ProductForm({ product, pending, error, onSubmit, onCancel }: ProductFormProps) {
   const [kind, setKind] = useState<ProductKind>(product?.kind ?? "product");
   const isProduct = kind === "product";
+  const [fieldError, setFieldError] = useState<string | null>(null);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -31,6 +38,16 @@ export function ProductForm({ product, pending, error, onSubmit, onCancel }: Pro
     const form = new FormData(event.currentTarget);
     const text = (name: string) => String(form.get(name) ?? "");
     const optional = (name: string) => text(name).trim() || undefined;
+    const ambiguous = AMOUNT_FIELDS.find(
+      ({ name }) => (name !== "minimum_stock" || isProduct) && isAmbiguousDecimal(text(name)),
+    );
+    if (ambiguous) {
+      setFieldError(
+        `${ambiguous.label}: "${text(ambiguous.name).trim()}" pode ser lido de dois jeitos. Use vírgula para os decimais (1,234) ou escreva o milhar com decimais (1.234,00).`,
+      );
+      return;
+    }
+    setFieldError(null);
     onSubmit({
       kind,
       name: text("name"),
@@ -128,7 +145,7 @@ export function ProductForm({ product, pending, error, onSubmit, onCancel }: Pro
       <label className="inline">
         <input name="active" type="checkbox" defaultChecked={product?.active ?? true} /> Ativo
       </label>
-      <Notice message={error} />
+      <Notice message={fieldError ?? error} />
       <div className="form-actions">
         <Button type="submit" icon={product === null ? PlusIcon : CheckIcon} pending={pending}>
           {product === null ? "Adicionar" : "Salvar alterações"}

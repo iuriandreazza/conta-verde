@@ -12,6 +12,16 @@ export function toApiDecimal(input: string): string | undefined {
   return text.includes(",") ? text.replace(/\./g, "").replace(",", ".") : text;
 }
 
+/**
+ * `1.234` is one thousand two hundred and thirty-four to a Brazilian and a little over one to the
+ * API, and either reading would be stored without a sound. A number written with dots and no
+ * comma that could be read as thousands is refused until the person says which one they meant.
+ * A leading zero (`0.001`) cannot be thousands, so it is a plain decimal.
+ */
+export function isAmbiguousDecimal(input: string): boolean {
+  return /^\s*[1-9]\d{0,2}(\.\d{3})+\s*$/.test(input);
+}
+
 /** The API's decimal as it is shown in a field to be edited: `12.5` as `12,5`. */
 export function toInputDecimal(value: string | null): string {
   return value === null ? "" : value.replace(".", ",");

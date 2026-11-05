@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { formatDecimal, formatMoney, toApiDecimal, toInputDecimal } from "./decimal";
+import {
+  formatDecimal,
+  formatMoney,
+  isAmbiguousDecimal,
+  toApiDecimal,
+  toInputDecimal,
+} from "./decimal";
 
 describe("decimal text", () => {
   it("turns what a Brazilian types into the plain decimal the API takes", () => {
@@ -10,6 +16,16 @@ describe("decimal text", () => {
     // Not a decimal: left alone, so the API says so.
     expect(toApiDecimal("1e3")).toBe("1e3");
     expect(toApiDecimal("-1,5")).toBe("-1.5");
+  });
+
+  it("refuses to guess whether 1.234 is a thousand or a little over one", () => {
+    for (const text of ["1.234", "12.345", "1.234.567", " 1.234 "]) {
+      expect(isAmbiguousDecimal(text), text).toBe(true);
+    }
+    // Written with a comma, or with a shape that cannot be thousands, it is clear.
+    for (const text of ["1.234,50", "1,234", "12.5", "0.001", "1.23", "1234", "10.5000", "1234.567"]) {
+      expect(isAmbiguousDecimal(text), text).toBe(false);
+    }
   });
 
   it("shows an edited value the way it is typed", () => {
