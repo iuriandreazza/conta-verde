@@ -3,7 +3,8 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useParams } from "react-router-dom";
 import { api, errorMessage, type Party } from "../api";
 import { useAuth } from "../auth";
-import { Alert } from "../components/Alert";
+import { DocumentBadge } from "../components/DocumentBadge";
+import { Notice, type NoticeTone } from "../components/Notice";
 import { Button } from "../components/Button";
 import { ChevronDownIcon } from "../components/icons/chevron-down";
 import { PlusIcon } from "../components/icons/plus";
@@ -27,6 +28,7 @@ export function PartiesPage() {
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [registryNotice, setRegistryNotice] = useState<RegistryNotice | null>(null);
 
   const companyName =
     session.status === "authenticated"
@@ -78,6 +80,7 @@ export function PartiesPage() {
     const optional = (name: string) => String(form.get(name) ?? "").trim() || undefined;
     setCreating(true);
     setFormError(null);
+    setRegistryNotice(null);
     try {
       const created = await api.createParty(companyId, {
         name: String(form.get("name") ?? ""),
@@ -88,6 +91,7 @@ export function PartiesPage() {
       });
       formElement.reset();
       setHighlightedId(created.id);
+      setRegistryNotice(registryNoticeFor(created));
       await loadFirstPage();
     } catch (failure) {
       setFormError(errorMessage(failure));
@@ -109,7 +113,13 @@ export function PartiesPage() {
           </label>
           <label>
             CPF ou CNPJ
-            <input name="document" inputMode="numeric" />
+            {/* No numeric keypad: a CNPJ may contain letters since July 2026. */}
+            <input
+              name="document"
+              autoCapitalize="characters"
+              autoComplete="off"
+              spellCheck={false}
+            />
           </label>
           <label>
             E-mail
@@ -124,7 +134,8 @@ export function PartiesPage() {
               <input name="is_supplier" type="checkbox" /> Fornecedor
             </label>
           </fieldset>
-          <Alert message={formError} />
+          <Notice message={formError} />
+          <Notice message={registryNotice?.message ?? null} tone={registryNotice?.tone} />
           <Button type="submit" icon={PlusIcon} pending={creating}>
             Adicionar
           </Button>
@@ -133,7 +144,7 @@ export function PartiesPage() {
 
       <section className="card">
         <h2>Cadastrados</h2>
-        <Alert message={error} />
+        <Notice message={error} />
         {loading ? (
           <p role="status" className="status">
             <Spinner /> Carregando…
@@ -176,7 +187,9 @@ export function PartiesPage() {
                     }}
                   >
                     <td>{party.name}</td>
-                    <td>{party.document ?? "—"}</td>
+                    <td>
+                      {party.document ?? "—"} <DocumentBadge check={party.document_check} />
+                    </td>
                     <td>{party.email ?? "—"}</td>
                     <td>
                       {[party.is_customer && "Cliente", party.is_supplier && "Fornecedor"]
@@ -203,6 +216,33 @@ export function PartiesPage() {
       </section>
     </>
   );
+}
+
+interface RegistryNotice {
+  message: string;
+  tone: NoticeTone;
+}
+
+// The party is already saved when this runs: the notice only reports what the registry said,
+// so a warning never asks the user to redo anything.
+function registryNoticeFor(party: Party): RegistryNotice | null {
+  const check = party.document_check;
+  if (check.status === "unverified") {
+    return {
+      tone: "warning",
+      message:
+        "Cadastrado, mas não foi possível consultar o CNPJ na Receita agora. Só os dígitos foram conferidos.",
+    };
+  }
+  if (check.status === "verified") {
+    return check.needs_attention
+      ? {
+          tone: "warning",
+          message: `Cadastrado. Atenção: ${check.legal_name} está com situação ${check.situation} na Receita.`,
+        }
+      : { tone: "success", message: `CNPJ verificado: ${check.legal_name}.` };
+  }
+  return null;
 }
 
 // A freshly added row flashes green and fades back to transparent.

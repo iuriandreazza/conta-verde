@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, vi } from "vitest";
 import { App } from "./App";
-import type { Party, Profile } from "./api";
+import type { DocumentCheck, Party, Profile } from "./api";
 import { AuthProvider } from "./auth";
 import { SOURCE_URL } from "./components/Footer";
 
@@ -21,7 +21,12 @@ function party(name: string): Party {
     email: null,
     is_customer: true,
     is_supplier: false,
+    document_check: { status: "not_applicable", legal_name: null, situation: null, needs_attention: false },
   };
+}
+
+function partyWithCheck(check: DocumentCheck): Party {
+  return { ...party("Padaria Central"), document: "12ABC34501DE35", document_check: check };
 }
 
 type Reply = { status: number; body?: unknown };
@@ -251,6 +256,71 @@ describe("App", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Sair" }));
     expect(await screen.findByRole("heading", { name: "Entrar" })).toBeInTheDocument();
+  });
+
+  describe("registering a CNPJ", () => {
+    // Registers a party whose document comes back with the given registry result, and returns
+    // the body that was sent to the API.
+    async function registerWith(check: DocumentCheck) {
+      const created = partyWithCheck(check);
+      let listed: Party[] = [];
+      const fetchMock = mockApi((url, init) => {
+        if (url === "/api/auth/me") return { status: 200, body: profile };
+        if (init?.method === "POST") {
+          listed = [created];
+          return { status: 201, body: created };
+        }
+        return { status: 200, body: { items: listed, next_cursor: null } };
+      });
+      renderAt("/companies/c1/parties");
+
+      await userEvent.type(await screen.findByLabelText("Nome"), "Padaria Central");
+      // Letters must be accepted: the CNPJ is alphanumeric since July 2026.
+      await userEvent.type(screen.getByLabelText("CPF ou CNPJ"), "12.ABC.345/01DE-35");
+      await userEvent.click(screen.getByRole("button", { name: "Adicionar" }));
+
+      const post = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
+      return JSON.parse(String(post?.[1]?.body));
+    }
+
+    it("sends the letters of an alphanumeric CNPJ and confirms an active company", async () => {
+      const sent = await registerWith({
+        status: "verified",
+        legal_name: "PADARIA CENTRAL LTDA",
+        situation: "ATIVA",
+        needs_attention: false,
+      });
+      expect(sent.document).toBe("12.ABC.345/01DE-35");
+      expect(await screen.findByText("CNPJ verificado: PADARIA CENTRAL LTDA.")).toBeInTheDocument();
+      expect(await screen.findByText("Verificado")).toBeInTheDocument();
+    });
+
+    it("warns, without blocking, when the company is not active", async () => {
+      await registerWith({
+        status: "verified",
+        legal_name: "PADARIA CENTRAL LTDA",
+        situation: "BAIXADA",
+        needs_attention: true,
+      });
+      expect(await screen.findByRole("status")).toHaveTextContent(
+        "Atenção: PADARIA CENTRAL LTDA está com situação BAIXADA na Receita.",
+      );
+      // The party was saved and is listed, with its situation as the badge.
+      expect(await screen.findByText("BAIXADA")).toBeInTheDocument();
+    });
+
+    it("says so when the registry could not be reached", async () => {
+      await registerWith({
+        status: "unverified",
+        legal_name: null,
+        situation: null,
+        needs_attention: true,
+      });
+      expect(await screen.findByRole("status")).toHaveTextContent(
+        "não foi possível consultar o CNPJ na Receita",
+      );
+      expect(await screen.findByText("Não verificado")).toBeInTheDocument();
+    });
   });
 
   it("shows the API message when a party is rejected", async () => {

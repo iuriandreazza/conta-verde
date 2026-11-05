@@ -3,8 +3,10 @@ use std::sync::Arc;
 use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
-use conta_verde_application::{IdentityRepository, PartyCursor, PartyRepository, SecretService};
-use conta_verde_domain::{Party, PartyDraft, PartyId};
+use conta_verde_application::{
+    CnpjRegistry, IdentityRepository, PartyCursor, PartyRepository, SecretService,
+};
+use conta_verde_domain::{DocumentCheck, Party, PartyDraft, PartyId};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -48,6 +50,40 @@ pub(crate) struct PartyResponse {
     email: Option<String>,
     is_customer: bool,
     is_supplier: bool,
+    document_check: DocumentCheckResponse,
+}
+
+/// What the federal registry said about a CNPJ. `needs_attention` is true when the registry was
+/// unreachable or the company is not active, so the UI never has to know the registry's wording.
+#[derive(Serialize)]
+struct DocumentCheckResponse {
+    status: &'static str,
+    legal_name: Option<String>,
+    situation: Option<String>,
+    needs_attention: bool,
+}
+
+impl From<&DocumentCheck> for DocumentCheckResponse {
+    fn from(check: &DocumentCheck) -> Self {
+        let (status, legal_name, situation) = match check {
+            DocumentCheck::NotApplicable => ("not_applicable", None, None),
+            DocumentCheck::Unverified => ("unverified", None, None),
+            DocumentCheck::Verified {
+                legal_name,
+                situation,
+            } => (
+                "verified",
+                Some(legal_name.clone()),
+                Some(situation.clone()),
+            ),
+        };
+        Self {
+            status,
+            legal_name,
+            situation,
+            needs_attention: check.needs_attention(),
+        }
+    }
 }
 
 impl From<&Party> for PartyResponse {
@@ -58,10 +94,11 @@ impl From<&Party> for PartyResponse {
             name: party.name().to_owned(),
             document: party
                 .document()
-                .map(|document| document.digits().to_owned()),
+                .map(|document| document.as_str().to_owned()),
             email: party.email().map(|email| email.as_str().to_owned()),
             is_customer: party.is_customer(),
             is_supplier: party.is_supplier(),
+            document_check: DocumentCheckResponse::from(party.document_check()),
         }
     }
 }
@@ -72,13 +109,14 @@ pub(crate) struct PartyPageResponse {
     next_cursor: Option<String>,
 }
 
-pub(crate) async fn register_party<R, I, S>(
-    State(state): State<Arc<AppState<R, I, S>>>,
+pub(crate) async fn register_party<R, C, I, S>(
+    State(state): State<Arc<AppState<R, C, I, S>>>,
     CompanyAccess(company_id): CompanyAccess,
     Json(request): Json<RegisterPartyRequest>,
 ) -> Result<(StatusCode, Json<PartyResponse>), ApiError>
 where
     R: PartyRepository,
+    C: CnpjRegistry,
     I: IdentityRepository,
     S: SecretService,
 {
@@ -86,13 +124,14 @@ where
     Ok((StatusCode::CREATED, Json(PartyResponse::from(&party))))
 }
 
-pub(crate) async fn list_parties<R, I, S>(
-    State(state): State<Arc<AppState<R, I, S>>>,
+pub(crate) async fn list_parties<R, C, I, S>(
+    State(state): State<Arc<AppState<R, C, I, S>>>,
     CompanyAccess(company_id): CompanyAccess,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<PartyPageResponse>, ApiError>
 where
     R: PartyRepository,
+    C: CnpjRegistry,
     I: IdentityRepository,
     S: SecretService,
 {

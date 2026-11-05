@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use axum::extract::{FromRequestParts, Path};
 use axum::http::request::Parts;
-use conta_verde_application::{AuthError, IdentityRepository, PartyRepository, SecretService};
+use conta_verde_application::{
+    AuthError, CnpjRegistry, IdentityRepository, PartyRepository, SecretService,
+};
 use conta_verde_domain::CompanyId;
 use uuid::Uuid;
 
@@ -17,9 +19,10 @@ use crate::session::require_token;
 /// cannot be written without choosing whether to check access.
 pub(crate) struct CompanyAccess(pub CompanyId);
 
-impl<R, I, S> FromRequestParts<Arc<AppState<R, I, S>>> for CompanyAccess
+impl<R, C, I, S> FromRequestParts<Arc<AppState<R, C, I, S>>> for CompanyAccess
 where
     R: PartyRepository + 'static,
+    C: CnpjRegistry + 'static,
     I: IdentityRepository + 'static,
     S: SecretService + 'static,
 {
@@ -27,7 +30,7 @@ where
 
     async fn from_request_parts(
         parts: &mut Parts,
-        state: &Arc<AppState<R, I, S>>,
+        state: &Arc<AppState<R, C, I, S>>,
     ) -> Result<Self, ApiError> {
         // Owned, because extracting the path below borrows `parts` mutably.
         let token = require_token(&parts.headers)?.to_owned();

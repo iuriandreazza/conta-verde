@@ -1,4 +1,4 @@
-use crate::{CompanyId, Document, DomainError, Email, PartyId};
+use crate::{CompanyId, Document, DocumentCheck, DomainError, Email, PartyId};
 
 /// Unvalidated input for registering a customer and/or supplier.
 #[derive(Debug, Clone)]
@@ -20,6 +20,7 @@ pub struct Party {
     email: Option<Email>,
     is_customer: bool,
     is_supplier: bool,
+    document_check: DocumentCheck,
 }
 
 impl Party {
@@ -42,7 +43,20 @@ impl Party {
             email,
             is_customer: draft.is_customer,
             is_supplier: draft.is_supplier,
+            document_check: DocumentCheck::NotApplicable,
         })
+    }
+
+    /// Records the outcome of looking the CNPJ up in the federal registry. Only a CNPJ is ever
+    /// looked up, so any other document keeps `NotApplicable`.
+    pub fn with_document_check(mut self, check: DocumentCheck) -> Self {
+        debug_assert!(
+            check == DocumentCheck::NotApplicable
+                || self.document.as_ref().and_then(Document::cnpj).is_some(),
+            "only a CNPJ can have a registry check"
+        );
+        self.document_check = check;
+        self
     }
 
     pub fn id(&self) -> PartyId {
@@ -72,6 +86,10 @@ impl Party {
     pub fn is_supplier(&self) -> bool {
         self.is_supplier
     }
+
+    pub fn document_check(&self) -> &DocumentCheck {
+        &self.document_check
+    }
 }
 
 #[cfg(test)]
@@ -96,7 +114,7 @@ mod tests {
     fn trims_name_and_normalizes_document() {
         let party = build(draft()).unwrap();
         assert_eq!(party.name(), "Padaria Central");
-        assert_eq!(party.document().unwrap().digits(), "11222333000181");
+        assert_eq!(party.document().unwrap().as_str(), "11222333000181");
     }
 
     #[test]

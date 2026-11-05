@@ -14,6 +14,15 @@ export interface Profile {
   companies: Company[];
 }
 
+/** What Receita Federal said about a CNPJ when the party was registered. */
+export interface DocumentCheck {
+  status: "not_applicable" | "verified" | "unverified";
+  legal_name: string | null;
+  situation: string | null;
+  /** The registry was unreachable or the company is not active. Never blocks registering. */
+  needs_attention: boolean;
+}
+
 export interface Party {
   id: string;
   company_id: string;
@@ -22,6 +31,7 @@ export interface Party {
   email: string | null;
   is_customer: boolean;
   is_supplier: boolean;
+  document_check: DocumentCheck;
 }
 
 export interface PartyPage {

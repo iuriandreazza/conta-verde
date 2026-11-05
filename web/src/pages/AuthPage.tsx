@@ -3,7 +3,7 @@ import { useState, type FormEvent } from "react";
 import { Link, Navigate } from "react-router-dom";
 import { errorMessage } from "../api";
 import { useAuth } from "../auth";
-import { Alert } from "../components/Alert";
+import { Notice } from "../components/Notice";
 import { Button } from "../components/Button";
 import { LogInIcon } from "../components/icons/login";
 import { UserPlusIcon } from "../components/icons/user-plus";
@@ -75,7 +75,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
           <input name="email" type="email" required autoComplete="email" />
         </label>
         <PasswordField registering={registering} />
-        <Alert message={error} />
+        <Notice message={error} />
         <Button type="submit" icon={registering ? UserPlusIcon : LogInIcon} pending={submitting}>
           {registering ? "Criar conta" : "Entrar"}
         </Button>

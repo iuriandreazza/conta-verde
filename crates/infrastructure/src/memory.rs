@@ -3,8 +3,8 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use conta_verde_application::{
-    IdentityRepository, NewAccount, PartyCursor, PartyRepository, RepositoryError,
-    StoredCredentials,
+    CnpjLookupError, CnpjRegistry, IdentityRepository, NewAccount, PartyCursor, PartyRepository,
+    RegistryEntry, RepositoryError, StoredCredentials,
 };
 use conta_verde_domain::{Company, CompanyId, Email, Party, User, UserId};
 use uuid::Uuid;
@@ -53,6 +53,47 @@ impl PartyRepository for InMemoryPartyRepository {
         owned.sort_by_cached_key(|party| sort_key(party.name(), party.id().as_uuid()));
         owned.truncate(limit);
         Ok(owned)
+    }
+}
+
+/// A registry that knows only the companies it was given. Used by tests and for running the API
+/// offline, where no CNPJ can be checked against Receita Federal.
+#[derive(Default)]
+pub struct InMemoryCnpjRegistry {
+    companies: HashMap<String, RegistryEntry>,
+    unreachable: bool,
+}
+
+impl InMemoryCnpjRegistry {
+    pub fn with_company(mut self, cnpj: &str, legal_name: &str, situation: &str) -> Self {
+        self.companies.insert(
+            cnpj.to_owned(),
+            RegistryEntry {
+                legal_name: legal_name.to_owned(),
+                situation: situation.to_owned(),
+            },
+        );
+        self
+    }
+
+    /// Every lookup fails as if the service were down.
+    pub fn unreachable() -> Self {
+        Self {
+            unreachable: true,
+            ..Self::default()
+        }
+    }
+}
+
+impl CnpjRegistry for InMemoryCnpjRegistry {
+    async fn lookup(&self, cnpj: &str) -> Result<RegistryEntry, CnpjLookupError> {
+        if self.unreachable {
+            return Err(CnpjLookupError::Unavailable);
+        }
+        self.companies
+            .get(cnpj)
+            .cloned()
+            .ok_or(CnpjLookupError::NotFound)
     }
 }
 
@@ -172,7 +213,7 @@ impl IdentityRepository for InMemoryIdentityRepository {
 #[cfg(test)]
 mod tests {
     use conta_verde_application::{ApplicationError, AuthService, PartyService};
-    use conta_verde_domain::PartyDraft;
+    use conta_verde_domain::{DocumentCheck, DomainError, PartyDraft};
 
     use super::*;
     use crate::{Argon2SecretService, contract};
@@ -189,7 +230,10 @@ mod tests {
 
     #[tokio::test]
     async fn registers_and_lists_only_the_companys_parties() {
-        let service = PartyService::new(InMemoryPartyRepository::default());
+        let service = PartyService::new(
+            InMemoryPartyRepository::default(),
+            InMemoryCnpjRegistry::default(),
+        );
         let company = CompanyId::generate();
         let other_company = CompanyId::generate();
 
@@ -216,7 +260,10 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_duplicate_document_within_a_company_only() {
-        let service = PartyService::new(InMemoryPartyRepository::default());
+        let service = PartyService::new(
+            InMemoryPartyRepository::default(),
+            InMemoryCnpjRegistry::default(),
+        );
         let company = CompanyId::generate();
         let document = Some("529.982.247-25");
 
@@ -238,13 +285,78 @@ mod tests {
 
     #[tokio::test]
     async fn pages_through_parties_in_name_order() {
-        let service = PartyService::new(InMemoryPartyRepository::default());
+        let service = PartyService::new(
+            InMemoryPartyRepository::default(),
+            InMemoryCnpjRegistry::default(),
+        );
         contract::pages_through_parties(&service, CompanyId::generate()).await;
     }
 
     #[tokio::test]
+    async fn keeps_what_the_registry_said() {
+        let service = PartyService::new(InMemoryPartyRepository::default(), contract::registry());
+        contract::keeps_what_the_registry_said(&service, CompanyId::generate()).await;
+    }
+
+    #[tokio::test]
+    async fn keeps_the_unverified_mark() {
+        let service = PartyService::new(
+            InMemoryPartyRepository::default(),
+            InMemoryCnpjRegistry::unreachable(),
+        );
+        contract::keeps_the_unverified_mark(&service, CompanyId::generate()).await;
+    }
+
+    #[tokio::test]
+    async fn rejects_a_cnpj_the_registry_does_not_know() {
+        let service = PartyService::new(InMemoryPartyRepository::default(), contract::registry());
+        // Valid check digits, but no such company in the registry.
+        let result = service
+            .register(
+                CompanyId::generate(),
+                draft("Fantasma", Some("00.000.000/0001-91")),
+            )
+            .await;
+        assert_eq!(
+            result.unwrap_err(),
+            ApplicationError::Domain(DomainError::DocumentNotRegistered)
+        );
+    }
+
+    #[tokio::test]
+    async fn never_looks_a_cpf_up() {
+        // If the CPF were sent to the registry it would come back unverified, not "not applicable".
+        let service = PartyService::new(
+            InMemoryPartyRepository::default(),
+            InMemoryCnpjRegistry::unreachable(),
+        );
+        let party = service
+            .register(CompanyId::generate(), draft("Ana", Some("529.982.247-25")))
+            .await
+            .unwrap();
+        assert_eq!(party.document_check(), &DocumentCheck::NotApplicable);
+    }
+
+    #[tokio::test]
+    async fn a_disabled_lookup_leaves_cnpjs_unverified() {
+        let registry: Option<InMemoryCnpjRegistry> = None;
+        let service = PartyService::new(InMemoryPartyRepository::default(), registry);
+        let party = service
+            .register(
+                CompanyId::generate(),
+                draft("Padaria", Some(contract::ACTIVE_CNPJ)),
+            )
+            .await
+            .unwrap();
+        assert_eq!(party.document_check(), &DocumentCheck::Unverified);
+    }
+
+    #[tokio::test]
     async fn clamps_the_page_size() {
-        let service = PartyService::new(InMemoryPartyRepository::default());
+        let service = PartyService::new(
+            InMemoryPartyRepository::default(),
+            InMemoryCnpjRegistry::default(),
+        );
         let company = CompanyId::generate();
         for name in ["Ana", "Bruno"] {
             service.register(company, draft(name, None)).await.unwrap();

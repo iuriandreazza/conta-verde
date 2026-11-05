@@ -3,7 +3,8 @@ use std::time::Duration;
 use conta_verde_api::{ApiConfig, router};
 use conta_verde_application::{AuthService, PartyService};
 use conta_verde_infrastructure::{
-    Argon2SecretService, PostgresIdentityRepository, PostgresPartyRepository, connect_and_migrate,
+    Argon2SecretService, BrasilApiCnpjRegistry, PostgresIdentityRepository,
+    PostgresPartyRepository, connect_and_migrate,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -23,7 +24,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
 
     let pool = connect_and_migrate(&database_url).await?;
-    let parties = PartyService::new(PostgresPartyRepository::new(pool.clone()));
+    let parties = PartyService::new(
+        PostgresPartyRepository::new(pool.clone()),
+        cnpj_registry_from_env()?,
+    );
     let auth = AuthService::new(
         PostgresIdentityRepository::new(pool),
         Argon2SecretService::new()?,
@@ -35,6 +39,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())
+}
+
+// `off` is for installations that must not send CNPJs to a third party or run without internet:
+// every CNPJ is then stored as unverified. Strict like `parse_flag`, so a typo is not read as "off".
+fn cnpj_registry_from_env()
+-> Result<Option<BrasilApiCnpjRegistry>, Box<dyn std::error::Error + Send + Sync>> {
+    match std::env::var("CNPJ_LOOKUP").as_deref() {
+        Err(_) | Ok("brasilapi") => {
+            tracing::info!("CNPJs are checked against BrasilAPI (Receita Federal open data)");
+            Ok(Some(BrasilApiCnpjRegistry::new()?))
+        }
+        Ok("off") => {
+            tracing::warn!("CNPJ lookup is off: CNPJs are validated by check digits only");
+            Ok(None)
+        }
+        Ok(other) => Err(format!("CNPJ_LOOKUP must be `brasilapi` or `off`, got `{other}`").into()),
+    }
 }
 
 // Strict on purpose: a typo such as `TRUE` must not silently turn off a security setting.
