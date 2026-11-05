@@ -53,6 +53,8 @@ export function Button({
 }: ButtonProps) {
   const iconRef = useRef<IconHandle>(null);
   const inactive = disabled || pending;
+  // Without an icon there would be nothing to show, so the words stay.
+  const iconAlone = iconOnly && Icon !== undefined;
 
   // The whole button is the hover target, not just the 16px icon inside it. Caller handlers still
   // run: they are called after the icon reacts instead of replacing it.
@@ -61,8 +63,8 @@ export function Button({
 
   return (
     <motion.button
-      className={cn("btn", `btn-${variant}`, iconOnly && "btn-icon", className)}
-      title={title ?? (iconOnly ? props["aria-label"] : undefined)}
+      className={cn("btn", `btn-${variant}`, iconAlone && "btn-icon", className)}
+      title={title ?? (iconAlone ? props["aria-label"] : undefined)}
       disabled={inactive}
       aria-busy={pending || undefined}
       whileHover={inactive ? undefined : { y: -1 }}
@@ -87,7 +89,7 @@ export function Button({
       {...props}
     >
       {pending ? <Spinner size={16} /> : Icon && <Icon ref={iconRef} size={16} aria-hidden />}
-      <span className={iconOnly ? "visually-hidden" : undefined}>{children}</span>
+      <span className={iconAlone ? "visually-hidden" : undefined}>{children}</span>
     </motion.button>
   );
 }

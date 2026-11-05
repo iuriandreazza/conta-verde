@@ -36,6 +36,15 @@ const KIND_ICONS: Record<BankAccount["kind"], AnimatedIcon> = {
   cash: CircleDollarSignIcon,
   card: CreditCardIcon,
 };
+
+function KindIcon({ kind, active }: { kind: BankAccount["kind"]; active: boolean }) {
+  const Icon = KIND_ICONS[kind];
+  return (
+    <span className={active ? "kind-icon" : "kind-icon is-inactive"} aria-hidden>
+      <Icon size={18} />
+    </span>
+  );
+}
 import { SquarePenIcon } from "../components/icons/square-pen";
 import { StatusBadge } from "../components/StatusBadge";
 
@@ -226,12 +235,7 @@ export function BankAccountsPage() {
                     <ListRow index={index} highlighted={account.id === highlightedId}>
                       <td>
                         <div className="account-cell">
-                          <span className={account.active ? "kind-icon" : "kind-icon is-inactive"} aria-hidden>
-                            {(() => {
-                              const KindIcon = KIND_ICONS[account.kind];
-                              return <KindIcon size={18} />;
-                            })()}
-                          </span>
+                          <KindIcon kind={account.kind} active={account.active} />
                           <div>
                             <div className="cell-title">{account.name}</div>
                             <div className="muted">{bankAccountKindLabel(account.kind)}</div>
@@ -244,7 +248,7 @@ export function BankAccountsPage() {
                         ) : (
                           <>
                             <span className="tabular">{account.bank_code}</span>
-                            {bankName(account.bank_code) && <div className="muted">{bankName(account.bank_code)}</div>}
+                            <div className="muted">{bankName(account.bank_code)}</div>
                           </>
                         )}
                       </td>
@@ -258,7 +262,6 @@ export function BankAccountsPage() {
                             icon={SquarePenIcon}
                             type="button"
                             variant="ghost"
-                            className="btn-small"
                             aria-label={`Alterar ${account.name}`}
                             disabled={saving}
                             onClick={() => {
@@ -274,7 +277,6 @@ export function BankAccountsPage() {
                           iconOnly
                           type="button"
                           variant="ghost"
-                          className="btn-small"
                           aria-label={`Histórico de ${account.name}`}
                           aria-expanded={historyOpenFor === account.id}
                           aria-controls={`history-${account.id}`}

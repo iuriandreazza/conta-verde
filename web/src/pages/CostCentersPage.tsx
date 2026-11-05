@@ -183,7 +183,6 @@ export function CostCentersPage() {
                             icon={SquarePenIcon}
                             type="button"
                             variant="ghost"
-                            className="btn-small"
                             aria-label={`Alterar ${costCenter.name}`}
                             disabled={saving}
                             onClick={() => {
@@ -199,7 +198,6 @@ export function CostCentersPage() {
                           iconOnly
                           type="button"
                           variant="ghost"
-                          className="btn-small"
                           aria-label={`Histórico de ${costCenter.name}`}
                           aria-expanded={historyOpenFor === costCenter.id}
                           aria-controls={`history-${costCenter.id}`}

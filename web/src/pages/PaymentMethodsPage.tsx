@@ -207,7 +207,6 @@ export function PaymentMethodsPage() {
                             icon={SquarePenIcon}
                             type="button"
                             variant="ghost"
-                            className="btn-small"
                             aria-label={`Alterar ${method.name}`}
                             disabled={saving}
                             onClick={() => {
@@ -223,7 +222,6 @@ export function PaymentMethodsPage() {
                           iconOnly
                           type="button"
                           variant="ghost"
-                          className="btn-small"
                           aria-label={`Histórico de ${method.name}`}
                           aria-expanded={historyOpenFor === method.id}
                           aria-controls={`history-${method.id}`}
