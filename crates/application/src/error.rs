@@ -12,6 +12,7 @@ pub enum RepositoryError {
     /// The name is taken by another record of the same kind and place (a cost center of the
     /// company, a category under the same parent), ignoring case.
     DuplicateName,
+    DuplicateMembership,
     /// The company already has a category for transfers between its accounts.
     DuplicateTransferCategory,
     /// The company already has an account with this bank, branch and number.
@@ -28,6 +29,8 @@ pub enum AuthError {
     InvalidCredentials,
     Unauthenticated,
     Forbidden,
+    /// A member of the company whose role does not reach what was asked.
+    NotAllowed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,6 +105,9 @@ impl fmt::Display for RepositoryError {
             Self::DuplicateEmail => f.write_str("an account with this email already exists"),
             Self::DuplicateSku => f.write_str("a product with this SKU already exists"),
             Self::DuplicateName => f.write_str("this name is already in use"),
+            Self::DuplicateMembership => {
+                f.write_str("this user is already a member of the company")
+            }
             Self::DuplicateBankAccount => {
                 f.write_str("a bank account with this bank, branch and number already exists")
             }
@@ -120,6 +126,7 @@ impl fmt::Display for AuthError {
             Self::InvalidCredentials => "invalid email or password",
             Self::Unauthenticated => "authentication required",
             Self::Forbidden => "company not found",
+            Self::NotAllowed => "your role in this company does not allow this",
         };
         f.write_str(message)
     }

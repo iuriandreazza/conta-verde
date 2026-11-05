@@ -21,7 +21,7 @@ is ticked and its exit criteria hold on `main`.
 ## Phase 1 — Identity, tenancy and registers (v0.2)
 
 Identity:
-- [ ] `users`, `companies`, `memberships` with roles; password hashing and sessions ([ADR 0007](adr/0007-authentication-and-authorization.md)) — tables, Argon2id and cookie sessions are in; roles are not
+- [x] `users`, `companies`, `memberships` with roles; password hashing and sessions ([ADR 0007](adr/0007-authentication-and-authorization.md)) — tables, Argon2id and cookie sessions; roles and what each may do ([ADR 0026](adr/0026-membership-roles-and-permissions.md))
 - [x] Enforce `company_id` from the session, not the URL; foreign keys from every business table to `companies` — the URL id must match a membership of the caller (`CompanyAccess`)
 - [ ] Invitations by e-mail; accountant role reserved for Phase 6
 - [ ] Audit trail on every write ([ADR 0008](adr/0008-audit-trail.md)) — in for parties (creation and CNPJ re-checks, with a history panel); each new register must write its entries too

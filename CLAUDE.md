@@ -67,8 +67,9 @@ Rules that are easy to break:
 
 ## Gotchas
 
-- Auth is cookie sessions (ADR 0007). Every `/companies/{company_id}/...` handler must take the `CompanyAccess` extractor (before any `Json`/`Query`); missing sessions get `401`, non-members and unknown companies both get `404`.
-- Not built yet: password reset, invitations, login rate limiting, roles. The API still binds to `127.0.0.1` by default and needs a TLS proxy plus `COOKIE_SECURE=true` before being exposed. Do not change the default bind address.
+- Auth is cookie sessions (ADR 0007). Every `/companies/{company_id}/...` handler must take the `CompanyAccess` extractor (before any `Json`/`Query`); missing sessions get `401`, non-members and unknown companies both get `404`, and a member whose role does not reach the route gets `403`.
+- What a role may do is decided by `CompanyAccess` from the **route**, not by the handler (ADR 0026): the area is the segment after `{company_id}` and the access is the method (`GET` reads, anything else writes). A new family of company routes needs its segment added to `area_of` in `access.rs`, or it is refused to everybody; the table is `Role::access_to` in the domain, and the web app reads `permissions` from `/auth/me` instead of knowing it.
+- Not built yet: password reset, invitations, login rate limiting. The API still binds to `127.0.0.1` by default and needs a TLS proxy plus `COOKIE_SECURE=true` before being exposed. Do not change the default bind address.
 - The foreign key `parties.company_id -> companies` fails on old dev databases holding orphan parties: `docker compose down -v` resets it.
 - Secrets (Argon2, token generation and digests) sit behind the `SecretService` port; the `argon2` crate is optimized even in dev builds (workspace `Cargo.toml`), or tests would take seconds per login.
 - Migrations live in `crates/infrastructure/migrations/`. Do not edit one that has been merged to `main`; add a new one.

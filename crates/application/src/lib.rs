@@ -25,7 +25,7 @@ mod product_service;
 mod secret_service;
 
 pub use audit::ensure_audit_describes;
-pub use auth_service::{AuthService, Profile, SignedIn};
+pub use auth_service::{AuthService, Member, Profile, SignedIn};
 pub use bank_account_repository::{BankAccountQuery, BankAccountRepository};
 pub use bank_account_service::{BankAccountPage, BankAccountService};
 pub use category_repository::{CategoryRepository, MAX_CATEGORIES};
@@ -34,7 +34,9 @@ pub use cnpj_registry::{CnpjLookupError, CnpjRegistry, RegistryEntry};
 pub use cost_center_repository::{CostCenterQuery, CostCenterRepository};
 pub use cost_center_service::{CostCenterPage, CostCenterService};
 pub use error::{ApplicationError, AuthError, RepositoryError};
-pub use identity_repository::{IdentityRepository, NewAccount, StoredCredentials};
+pub use identity_repository::{
+    CompanyMembership, IdentityRepository, NewAccount, StoredCredentials,
+};
 pub use import::{ImportReport, ImportRow, MAX_IMPORT_ROWS, RowNote};
 pub use list_query::{MAX_SEARCH_CHARS, NameSort};
 pub use name_cursor::NameCursor;

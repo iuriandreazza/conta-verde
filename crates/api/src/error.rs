@@ -63,7 +63,8 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
             | RepositoryError::DuplicateSku
             | RepositoryError::DuplicateName
             | RepositoryError::DuplicateTransferCategory
-            | RepositoryError::DuplicateBankAccount),
+            | RepositoryError::DuplicateBankAccount
+            | RepositoryError::DuplicateMembership),
         ) => (StatusCode::CONFLICT, error.to_string()),
         ApplicationError::Auth(error) => {
             let status = match error {
@@ -72,6 +73,8 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
                 }
                 // Same answer for "not yours" and "does not exist", so ids cannot be probed.
                 AuthError::Forbidden => StatusCode::NOT_FOUND,
+                // A member, but not of a role that reaches this: the company is theirs to see.
+                AuthError::NotAllowed => StatusCode::FORBIDDEN,
             };
             (status, error.to_string())
         }
