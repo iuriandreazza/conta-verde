@@ -49,3 +49,14 @@ where
 pub(crate) fn describe(rejection: &JsonRejection) -> (axum::http::StatusCode, String) {
     (rejection.status(), rejection.body_text())
 }
+
+/// The `active` of a body that registers or replaces. A missing one means `default` when
+/// registering, and is refused when replacing (`default` is `None`): a replacement without it
+/// would switch a deactivated record back on.
+pub(crate) fn active_or(
+    active: Option<bool>,
+    default: Option<bool>,
+    message: &'static str,
+) -> Result<bool, ApiError> {
+    active.or(default).ok_or(ApiError::InvalidField(message))
+}
