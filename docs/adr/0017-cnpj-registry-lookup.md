@@ -45,8 +45,11 @@ the last two numeric check digits (modulo 11, each character valued as its ASCII
   - `Disabled` (the operator set `CNPJ_LOOKUP=off`): nothing was asked, so the party is `NotApplicable` and not flagged. A
     deliberate choice is not an outage and must not nag on every registration.
 - `infrastructure`: `BrasilApiCnpjRegistry` (5 s timeout; legal name and situation are truncated, since the text comes from a
-  third party and is stored and listed with every party) and `CachedCnpjRegistry`, which remembers found companies for an
-  hour so retries and repeated suppliers do not spend the shared rate limit. Misses and outages are never cached. Transport
+  third party and is stored and listed with every party; control and direction characters are dropped, and an answer without a
+  name or a situation counts as unavailable) and `CachedCnpjRegistry`, which remembers found companies for an hour so retries
+  and repeated suppliers do not spend the shared rate limit, and acts as a circuit breaker: after a failure (rate limit, server
+  error, timeout) lookups answer "unavailable" at once for 30 seconds without calling the registry. Misses are never cached
+  and do not start the cooldown. Transport
   failures are logged with their cause by the adapter. The adapter sends a descriptive `User-Agent`: BrasilAPI answers `429`
   to requests without one, which only an end-to-end run against the real service revealed. `InMemoryCnpjRegistry` is a test double.
 - `api`: `CNPJ_LOOKUP=brasilapi` (default) or `off`; anything else fails at startup. Responses carry
@@ -58,12 +61,18 @@ the last two numeric check digits (modulo 11, each character valued as its ASCII
 - Tests never reach the real service: the adapter is tested against a local fake that mimics its statuses, and
   `11.222.333/0001-81`, the CNPJ used in examples, turns out to belong to a real company.
 - `parties` gains `document_check`, `registry_legal_name` and `registry_situation` (CHECK constraints keep them consistent).
-  Parties registered before this change with a CNPJ are marked `unverified`.
+  A further constraint only allows a verified, not found or unverified check on a 14-character document.
+  Parties registered before this change with a CNPJ are marked `unverified`, whatever `CNPJ_LOOKUP` says: on an installation
+  that runs with the lookup off they keep showing the "not verified" flag, and the lookup being off is also why they cannot be
+  re-checked there. This only affects development databases created before the lookup existed.
 - There is no re-verification yet: an `Unverified` party stays that way until someone edits it. A "verify again" action is the
   natural next step.
 - Rate limits are real (a handful of calls from one address were enough to trigger `429`) and are shared by everyone on the
   installation. Installations that register many CNPJs at once should expect `Unverified` rows, run their own mirror of the
-  open data, or add the Serpro adapter.
+  open data, or add the Serpro adapter. The cache and the circuit breaker soften this but do not stop abuse: there is no
+  per-user or per-company throttle, so any signed-in user looping over random CNPJs with valid check digits can use up the
+  quota until the cooldown kicks in, and everyone else's parties land as `Unverified`. A rate limiter in front of the API
+  is the real remedy. A duplicate CNPJ is only detected on insert, after the lookup, so it can still spend one call.
 - Nothing the registry says can stop a registration, so a typo that lands on a valid-but-unknown number is caught only by
   the warning, not by a refusal. The first design rejected unknown CNPJs; it was changed after noting that the open data lags.
   A `NotFound` or `Unverified` party stays so until someone edits it (see re-verification above).
