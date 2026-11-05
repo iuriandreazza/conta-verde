@@ -19,6 +19,15 @@ pub struct User {
 }
 
 impl User {
+    /// A new user, as people type one: the name must not be empty and the e-mail must be an address.
+    pub fn new(id: UserId, name: &str, email: &str) -> Result<Self, DomainError> {
+        Ok(Self {
+            id,
+            name: non_empty(name)?,
+            email: Email::parse(email)?,
+        })
+    }
+
     /// Rebuilds a user read from storage, where the data was validated when written.
     pub fn restore(id: UserId, name: String, email: Email) -> Self {
         Self { id, name, email }
@@ -71,11 +80,10 @@ impl Account {
         company_id: CompanyId,
         draft: AccountDraft,
     ) -> Result<Self, DomainError> {
-        let user_name = non_empty(&draft.user_name)?;
+        let user = User::new(user_id, &draft.user_name, &draft.email)?;
         let company_name = non_empty(&draft.company_name)?;
-        let email = Email::parse(&draft.email)?;
         Ok(Self {
-            user: User::restore(user_id, user_name, email),
+            user,
             company: Company::restore(company_id, company_name),
         })
     }
@@ -135,6 +143,21 @@ mod tests {
             ..draft()
         };
         assert_eq!(build(bad_email), Err(DomainError::InvalidEmail));
+    }
+
+    #[test]
+    fn a_user_on_its_own_is_checked_like_the_one_of_an_account() {
+        let user = User::new(UserId::generate(), " Bia ", " Bia@Example.COM ").unwrap();
+        assert_eq!(
+            (user.name(), user.email().as_str()),
+            ("Bia", "bia@example.com")
+        );
+        let id = UserId::generate();
+        assert_eq!(
+            User::new(id, "  ", "bia@example.com"),
+            Err(DomainError::EmptyName)
+        );
+        assert_eq!(User::new(id, "Bia", "bia"), Err(DomainError::InvalidEmail));
     }
 
     #[test]

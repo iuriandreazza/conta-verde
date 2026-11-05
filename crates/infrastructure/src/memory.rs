@@ -7,8 +7,8 @@ use crate::memory_list::{keyset_page, name_key};
 
 use conta_verde_application::{
     CnpjLookupError, CnpjRegistry, CompanyMembership, IdentityRepository, Member, NameCursor,
-    NewAccount, PartyQuery, PartyRepository, RegistryEntry, RepositoryError, StoredCredentials,
-    ensure_audit_describes,
+    NewAccount, NewUser, PartyQuery, PartyRepository, RegistryEntry, RepositoryError,
+    StoredCredentials, ensure_audit_describes,
 };
 use conta_verde_domain::{
     AuditEntity, AuditEntry, AuditRecord, Cnpj, Company, CompanyId, Email, Party, PartyId, Role,
@@ -236,6 +236,22 @@ impl IdentityRepository for InMemoryIdentityRepository {
         state
             .memberships
             .push((account.user.id(), account.company.id(), Role::Owner));
+        Ok(())
+    }
+
+    async fn register_user(&self, new_user: &NewUser) -> Result<(), RepositoryError> {
+        let mut state = self.state.lock().expect("repository lock poisoned");
+        if state
+            .users
+            .iter()
+            .any(|existing| existing.user.email() == new_user.user.email())
+        {
+            return Err(RepositoryError::DuplicateEmail);
+        }
+        state.users.push(StoredCredentials {
+            user: new_user.user.clone(),
+            password_hash: new_user.password_hash.clone(),
+        });
         Ok(())
     }
 
@@ -1122,6 +1138,11 @@ mod tests {
             Duration::from_secs(3600),
         );
         contract::runs_the_account_lifecycle(&auth).await;
+    }
+
+    #[tokio::test]
+    async fn registers_a_user_with_no_company() {
+        contract::registers_a_user_with_no_company(&InMemoryIdentityRepository::default()).await;
     }
 
     #[tokio::test]

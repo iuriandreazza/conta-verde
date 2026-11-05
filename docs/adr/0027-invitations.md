@@ -45,9 +45,10 @@ one, what its link may give to whoever holds it, and how the e-mail goes out
   link and the address can register it (if it is free) and accept. The link is therefore **as
   sensitive as the e-mail that carries it**, and so is **the server's log while it is the only
   carrier** (below). What the check does give: someone who only knows or guesses an address cannot
-  accept, since the 256-bit token comes only to the person who invites and to the mailbox. Real
-  protection, e-mail verification, or treating a sign-up made through the link as proof of the
-  mailbox, is for a later ADR.
+  accept, since the 256-bit token comes only to the person who invites and to the mailbox. A
+  sign-up **made through the link** (below) does rest on the mailbox: it needs the token and the
+  address the invitation names. An ordinary sign-up with that address still proves nothing, and
+  real e-mail verification is for a later ADR.
 - The one route that needs no session, the preview, shows what the link is for (the company, the
   address and the role) to whoever holds the token, so that someone without an account yet can see
   what they are asked to join.
@@ -83,15 +84,26 @@ them. The page a link leads to shows what the invitation is without a session, t
 or create an account **with that address** (the sign-in and sign-up pages return to the invitation
 afterwards, and only to an invitation: a crafted `next` goes nowhere else), then accepts.
 
+### Signing up through the link
+
+`POST /auth/register` takes either `company_name` (an ordinary sign-up, which makes a company) or
+`invitation`, the token (never both: `422`; neither: `422`). Through an invitation the account is
+made **with no company of its own**, joins the invited company in the invited role and is signed in
+at once, so the new person lands in that company. `MemberService::join` checks everything before it
+stores anything (the password, that the invitation is open, that the address is the one invited,
+`403` otherwise), then registers the user (`IdentityRepository::register_user`, a user with no
+company) and accepts as above. A refusal leaves no account and the invitation open; an address that
+already has an account is `409` and signs in instead. If the invitation is withdrawn in the instant
+between the check and the claim, or the membership cannot be written, the account exists with no
+company: in the second case the claim is given back, so signing in and accepting at the invitation's
+page works; in the first the person asks for a new invitation. The sign-up page reads the preview, hides the company name and fixes the address to the
+invited one; a link that no longer works leaves an ordinary sign-up, with the reason shown.
+
 ## Consequences
 
-- A person who has no account creates one first, and the sign-up asks for a company name, so
-  they end up with an empty company of their own beside the one they joined. The accept page says
-  the name can be their own. Joining straight from the invitation, without creating a company, is
-  the first thing to improve.
 - **An address can be squatted.** With no e-mail verification, someone who registers an address
-  before its owner does keeps the real person from signing up with it, and from accepting an
-  invitation sent to it (`403`). Without the token the squatter gains nothing else, but the
+  before its owner does keeps the real person from signing up with it (`409`), and from accepting
+  an invitation sent to it (`403`). Without the token the squatter gains nothing else, but the
   invitee is locked out until verification exists.
 - The names that go into the message (who invited, the company) are typed by people and are put on
   **one line** (every control character becomes a space), and an e-mail address with a control

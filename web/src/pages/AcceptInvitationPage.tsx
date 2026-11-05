@@ -102,10 +102,6 @@ export function AcceptInvitationPage() {
       ) : (
         <>
           <p>Entre, ou crie uma conta, com o e-mail do convite para aceitar.</p>
-          <p className="muted">
-            Se criar uma conta, o nome de empresa que ela pede pode ser o seu próprio: você participa
-            desta empresa do mesmo jeito.
-          </p>
           <div className="form-actions">
             <Link className="btn btn-primary" to={`/login?next=${next}`}>
               Entrar

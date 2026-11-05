@@ -1,10 +1,13 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use conta_verde_domain::{Actor, CompanyId, Email, Invitation, InvitationId, Role, User};
+use conta_verde_domain::{
+    Actor, CompanyId, Email, Invitation, InvitationId, Role, User, UserId, validate_password,
+};
 
 use crate::{
     ApplicationError, EmailMessage, EmailSender, IdentityRepository, InvitationRepository,
-    InvitationState, Member, NewInvitation, RepositoryError, SecretService, StoredInvitation,
+    InvitationState, Member, NewInvitation, NewUser, RepositoryError, SecretService,
+    StoredInvitation,
 };
 
 /// A company's invitation just made, and the link that accepts it.
@@ -214,6 +217,38 @@ where
             }
         }
         Ok(invitation.company_id())
+    }
+
+    /// Creates an account for the address an invitation was sent to, and makes it a member of the
+    /// invitation's company in its role, with **no company of its own**. The account must be for
+    /// that address: the token reached it by e-mail, so signing up through the link is the proof
+    /// of the mailbox that an ordinary sign-up lacks ([ADR 0027]). Everything is checked before
+    /// anything is stored (the password, the invitation, the address), so a refusal leaves no account
+    /// behind; an address that already has one is `DuplicateEmail`, and the person signs in instead.
+    pub async fn join(
+        &self,
+        token: &str,
+        name: &str,
+        email: &str,
+        password: &str,
+    ) -> Result<(User, CompanyId), ApplicationError> {
+        validate_password(password)?;
+        let stored = self.usable(token).await?;
+        let user = User::new(UserId::generate(), name, email)?;
+        if user.email() != stored.invitation.email() {
+            return Err(ApplicationError::InvitationForAnotherEmail);
+        }
+        let password_hash = self.secrets.hash_password(password).await?;
+        self.identities
+            .register_user(&NewUser {
+                user: user.clone(),
+                password_hash,
+            })
+            .await?;
+        // The invitation could be withdrawn in the instant since it was read: then the account
+        // exists and the person signs in to find no company, and asks for a new invitation.
+        let company_id = self.accept(token, &user).await?;
+        Ok((user, company_id))
     }
 
     /// The invitation a token leads to, if it can still be accepted. An unknown token and a token

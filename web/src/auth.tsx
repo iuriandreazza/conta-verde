@@ -9,7 +9,7 @@ type Session =
 interface AuthContextValue {
   session: Session;
   signIn: (email: string, password: string) => Promise<void>;
-  signUp: (registration: Registration) => Promise<void>;
+  signUp: (registration: Registration) => Promise<Profile>;
   signOut: () => Promise<void>;
   /** Reads the profile again, for when what the person belongs to changed (an accepted invitation). */
   refresh: () => Promise<void>;
@@ -46,6 +46,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signUp = useCallback(async (registration: Registration) => {
     const profile = await api.register(registration);
     setSession({ status: "authenticated", profile });
+    return profile;
   }, []);
 
   const signOut = useCallback(async () => {

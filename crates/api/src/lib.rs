@@ -1985,6 +1985,196 @@ mod tests {
         assert_eq!(members.body.as_array().unwrap().len(), 1);
     }
 
+    async fn register_with(app: &Router, body: Value) -> Reply {
+        send(app, json_request("POST", "/auth/register", None, body)).await
+    }
+
+    #[tokio::test]
+    async fn signing_up_through_an_invitation_joins_the_company_with_no_company_of_its_own() {
+        let (app, _, _) = app_with_mailbox();
+        let (ana, company_id) = sign_up(&app, "ana@example.com").await;
+        let invited = invite_as(&app, &ana, company_id, "bia@example.com", "sales").await;
+        let token = token_of(&invited.body["link"]);
+
+        let reply = register_with(
+            &app,
+            json!({ "name": "Bia", "email": "Bia@Example.com", "password": "correct horse", "invitation": token }),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.body);
+        // Signed in at once, a member of the invited company in its role, and of no other.
+        let companies = reply.body["companies"].as_array().unwrap();
+        assert_eq!(companies.len(), 1);
+        assert_eq!(companies[0]["id"], company_id.to_string());
+        assert_eq!(companies[0]["role"], "sales");
+        assert_eq!(reply.body["user"]["email"], "bia@example.com");
+        let cookie = reply
+            .set_cookie
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_owned();
+        let listed = send(&app, get_request(&parties_uri(company_id), Some(&cookie))).await;
+        assert_eq!(listed.status, StatusCode::OK);
+        let me = send(&app, get_request("/auth/me", Some(&cookie))).await;
+        assert_eq!(me.body["companies"].as_array().unwrap().len(), 1);
+        // She can sign in again with the password she chose, and the invitation is used up.
+        let login = send(
+            &app,
+            json_request(
+                "POST",
+                "/auth/login",
+                None,
+                json!({ "email": "bia@example.com", "password": "correct horse" }),
+            ),
+        )
+        .await;
+        assert_eq!(login.status, StatusCode::OK);
+        let again = register_with(
+            &app,
+            json!({ "name": "Cris", "email": "bia@example.com", "password": "correct horse", "invitation": token }),
+        )
+        .await;
+        assert_eq!(again.status, StatusCode::GONE);
+        let members = send(
+            &app,
+            get_request(&format!("/companies/{company_id}/members"), Some(&ana)),
+        )
+        .await;
+        assert_eq!(members.body.as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_sign_up_through_an_invitation_that_is_refused_leaves_no_account_and_the_invitation_open()
+     {
+        let (app, _, _) = app_with_mailbox();
+        let (ana, company_id) = sign_up(&app, "ana@example.com").await;
+        let (_, _) = sign_up(&app, "ja-tem-conta@example.com").await;
+        let token_for = |email: &str| {
+            let app = app.clone();
+            let ana = ana.clone();
+            let email = email.to_owned();
+            async move {
+                let invited = invite_as(&app, &ana, company_id, &email, "viewer").await;
+                token_of(&invited.body["link"])
+            }
+        };
+        let bia = token_for("bia@example.com").await;
+        let signs_up = |email: &str, password: &str, token: &str| {
+            register_with(
+                &app,
+                json!({ "name": "Alguém", "email": email, "password": password, "invitation": token }),
+            )
+        };
+        let preview = |token: &str| send(&app, get_request(&format!("/invitations/{token}"), None));
+
+        // Another address than the one invited: refused, and no account for it.
+        let wrong = signs_up("outra@example.com", "correct horse", &bia).await;
+        assert_eq!(wrong.status, StatusCode::FORBIDDEN);
+        assert!(
+            wrong.body["error"]
+                .as_str()
+                .unwrap()
+                .contains("another e-mail address")
+        );
+        let login = send(
+            &app,
+            json_request(
+                "POST",
+                "/auth/login",
+                None,
+                json!({ "email": "outra@example.com", "password": "correct horse" }),
+            ),
+        )
+        .await;
+        assert_eq!(login.status, StatusCode::UNAUTHORIZED);
+        // A weak password: refused before anything is stored, and the invitation is still there.
+        let weak = signs_up("bia@example.com", "short", &bia).await;
+        assert_eq!(weak.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(preview(&bia).await.status, StatusCode::OK);
+        // A link that does not exist.
+        assert_eq!(
+            signs_up("bia@example.com", "correct horse", "not-a-token")
+                .await
+                .status,
+            StatusCode::NOT_FOUND
+        );
+        // An address that already has an account is told so, and the invitation stays open.
+        let taken = token_for("ja-tem-conta@example.com").await;
+        let duplicate = signs_up("ja-tem-conta@example.com", "correct horse", &taken).await;
+        assert_eq!(duplicate.status, StatusCode::CONFLICT);
+        assert!(
+            duplicate.body["error"]
+                .as_str()
+                .unwrap()
+                .contains("already exists")
+        );
+        assert_eq!(preview(&taken).await.status, StatusCode::OK);
+        // A withdrawn one.
+        let id = send(&app, get_request(&invitations_uri(company_id), Some(&ana)))
+            .await
+            .body[0]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let revoke = json_request(
+            "DELETE",
+            &format!("{}/{id}", invitations_uri(company_id)),
+            Some(&ana),
+            Value::Null,
+        );
+        assert_eq!(send(&app, revoke).await.status, StatusCode::NO_CONTENT);
+        assert_eq!(
+            signs_up("bia@example.com", "correct horse", &bia)
+                .await
+                .status,
+            StatusCode::GONE
+        );
+        // None of this made Bia a member.
+        let members = send(
+            &app,
+            get_request(&format!("/companies/{company_id}/members"), Some(&ana)),
+        )
+        .await;
+        assert_eq!(members.body.as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_ordinary_sign_up_still_needs_a_company_name_and_an_invited_one_refuses_one() {
+        let (app, _, _) = app_with_mailbox();
+        let missing = register_with(
+            &app,
+            json!({ "name": "Ana", "email": "ana@example.com", "password": "correct horse" }),
+        )
+        .await;
+        assert_eq!(missing.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            missing.body["error"]
+                .as_str()
+                .unwrap()
+                .contains("company_name is required")
+        );
+
+        let (ana, company_id) = sign_up(&app, "dona@example.com").await;
+        let invited = invite_as(&app, &ana, company_id, "bia@example.com", "viewer").await;
+        let both = register_with(
+            &app,
+            json!({
+                "name": "Bia", "email": "bia@example.com", "password": "correct horse",
+                "company_name": "Minha empresa", "invitation": token_of(&invited.body["link"])
+            }),
+        )
+        .await;
+        assert_eq!(both.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            both.body["error"]
+                .as_str()
+                .unwrap()
+                .contains("company_name is not used")
+        );
+    }
+
     async fn register_party(app: &Router, document: Option<&str>) -> Reply {
         let (cookie, company_id) = sign_up(app, "ana@example.com").await;
         let mut body = party_body();

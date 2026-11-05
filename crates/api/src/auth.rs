@@ -17,7 +17,11 @@ pub(crate) struct RegisterRequest {
     name: String,
     email: String,
     password: String,
-    company_name: String,
+    /// The first company of the account. Left out when signing up through an invitation, which
+    /// brings the account into the invited company instead, and required otherwise.
+    company_name: Option<String>,
+    /// The token of an invitation's link, for the address the account is made for.
+    invitation: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -88,12 +92,33 @@ pub(crate) async fn register<X: Ports>(
     State(state): State<SharedState<X>>,
     ApiJson(request): ApiJson<RegisterRequest>,
 ) -> Result<(StatusCode, SetCookie, Json<ProfileResponse>), ApiError> {
-    let draft = AccountDraft {
-        user_name: request.name,
-        email: request.email,
-        company_name: request.company_name,
+    let signed_in = match request.invitation {
+        // Joining a company that was made by another: no company of one's own is made, and the
+        // address is the one the invitation was sent to ([ADR 0027]).
+        Some(token) => {
+            if request.company_name.is_some() {
+                return Err(ApiError::InvalidField(
+                    "company_name is not used when signing up through an invitation: the account joins the invited company",
+                ));
+            }
+            let (user, _) = state
+                .members
+                .join(&token, &request.name, &request.email, &request.password)
+                .await?;
+            state.auth.sign_in_new_member(user).await?
+        }
+        None => {
+            let company_name = request
+                .company_name
+                .ok_or(ApiError::InvalidField("company_name is required"))?;
+            let draft = AccountDraft {
+                user_name: request.name,
+                email: request.email,
+                company_name,
+            };
+            state.auth.register(draft, &request.password).await?
+        }
     };
-    let signed_in = state.auth.register(draft, &request.password).await?;
     Ok((
         StatusCode::CREATED,
         started(&state, &signed_in),
