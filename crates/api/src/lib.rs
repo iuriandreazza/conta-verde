@@ -524,6 +524,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn checking_again_with_the_lookup_off_is_a_409() {
+        let registry: Option<InMemoryCnpjRegistry> = None;
+        let app = router(
+            PartyService::new(InMemoryPartyRepository::default(), registry),
+            AuthService::new(
+                InMemoryIdentityRepository::default(),
+                Argon2SecretService::new().unwrap(),
+                Duration::from_secs(3600),
+            ),
+            ApiConfig::default(),
+        );
+        let (cookie, company_id, party_id) =
+            party_of_a_new_user(&app, "ana@example.com", "11.222.333/0001-81").await;
+        let reply = send(
+            &app,
+            json_request(
+                "POST",
+                &document_check_uri(company_id, party_id),
+                Some(&cookie),
+                Value::Null,
+            ),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::CONFLICT);
+        assert_eq!(
+            reply.body["error"],
+            "CNPJ lookup is switched off on this installation"
+        );
+    }
+
+    #[tokio::test]
     async fn a_malformed_party_id_gets_the_json_error_like_any_other_miss() {
         let app = app();
         let (cookie, company_id, _) =

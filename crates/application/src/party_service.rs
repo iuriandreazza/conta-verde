@@ -41,7 +41,7 @@ pub struct PartyService<R, C> {
     repository: R,
     registry: C,
     recheck_interval: Duration,
-    last_rechecks: Mutex<HashMap<PartyId, Instant>>,
+    last_rechecks: Mutex<HashMap<String, Instant>>,
 }
 
 impl<R: PartyRepository, C: CnpjRegistry> PartyService<R, C> {
@@ -54,7 +54,7 @@ impl<R: PartyRepository, C: CnpjRegistry> PartyService<R, C> {
         }
     }
 
-    /// How long a party must wait between two re-checks of its CNPJ.
+    /// How long must pass between two re-checks of the same CNPJ.
     pub fn with_recheck_interval(mut self, interval: Duration) -> Self {
         self.recheck_interval = interval;
         self
@@ -98,34 +98,50 @@ impl<R: PartyRepository, C: CnpjRegistry> PartyService<R, C> {
             .document()
             .and_then(Document::cnpj)
             .ok_or(DomainError::NoCnpjToVerify)?;
-        self.claim_recheck(party_id)?;
+        let cnpj_key = cnpj.as_str().to_owned();
+        self.claim_recheck(&cnpj_key)?;
         let answer = self.registry.refresh(cnpj).await;
         if answer == Err(CnpjLookupError::Disabled) {
+            // Nothing was asked, so nothing should hold the next attempt back.
+            self.release_recheck(&cnpj_key);
             return Err(ApplicationError::LookupDisabled);
         }
         let party = party.with_document_check(check_from(answer));
         self.repository
             .update_document_check(&party)
             .await
-            .map_err(|error| match error {
-                // The party vanished or changed company between the read and the write.
-                RepositoryError::NotFound => ApplicationError::PartyNotFound,
-                other => other.into(),
+            .map_err(|error| {
+                // Nothing was stored, so the user may try again right away.
+                self.release_recheck(&cnpj_key);
+                match error {
+                    // The party vanished or changed company between the read and the write.
+                    RepositoryError::NotFound => ApplicationError::PartyNotFound,
+                    other => other.into(),
+                }
             })?;
         Ok(party)
     }
 
-    /// Lets one re-check per party through each interval. A failed or unreachable check counts
-    /// too: the point is to keep a loop of requests from burning the registry's shared rate limit.
-    fn claim_recheck(&self, party_id: PartyId) -> Result<(), ApplicationError> {
+    /// Lets one re-check per CNPJ through each interval, whichever party or company asks: the
+    /// registry's rate limit is shared by the whole installation, and parties that share a CNPJ
+    /// would otherwise each cost a call. An answer that says the registry is unreachable counts
+    /// too, since the registry was asked.
+    fn claim_recheck(&self, cnpj: &str) -> Result<(), ApplicationError> {
         let mut last = self.last_rechecks.lock().expect("recheck lock poisoned");
         let interval = self.recheck_interval;
         last.retain(|_, at| at.elapsed() < interval);
-        if last.contains_key(&party_id) {
+        if last.contains_key(cnpj) {
             return Err(ApplicationError::RecheckTooSoon);
         }
-        last.insert(party_id, Instant::now());
+        last.insert(cnpj.to_owned(), Instant::now());
         Ok(())
+    }
+
+    fn release_recheck(&self, cnpj: &str) {
+        self.last_rechecks
+            .lock()
+            .expect("recheck lock poisoned")
+            .remove(cnpj);
     }
 
     pub async fn list(

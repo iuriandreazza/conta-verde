@@ -434,8 +434,34 @@ mod tests {
                 .unwrap_err(),
             ApplicationError::RecheckTooSoon
         );
-        // Another party is not held back by the first one.
+        // Another CNPJ is not held back by the first one.
         service.verify_document(company, second.id()).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn re_checks_are_spaced_out_per_cnpj_across_companies() {
+        // The rate limit is shared by the installation, so the same CNPJ registered in two companies
+        // must not cost two registry calls in a row.
+        let registry = InMemoryCnpjRegistry::unreachable();
+        let service = PartyService::new(InMemoryPartyRepository::default(), registry);
+        let (company_a, company_b) = (CompanyId::generate(), CompanyId::generate());
+        let in_a = service
+            .register(company_a, draft("Padaria", Some(contract::ACTIVE_CNPJ)))
+            .await
+            .unwrap();
+        let in_b = service
+            .register(company_b, draft("Padaria", Some(contract::ACTIVE_CNPJ)))
+            .await
+            .unwrap();
+
+        service.verify_document(company_a, in_a.id()).await.unwrap();
+        assert_eq!(
+            service
+                .verify_document(company_b, in_b.id())
+                .await
+                .unwrap_err(),
+            ApplicationError::RecheckTooSoon
+        );
     }
 
     #[tokio::test]
@@ -504,6 +530,17 @@ mod tests {
                 .unwrap_err(),
             ApplicationError::LookupDisabled
         );
+        // Nothing was asked, so the attempt did not use up the interval: it is refused the same
+        // way again, not with "too soon".
+        assert_eq!(
+            service
+                .verify_document(company, party.id())
+                .await
+                .unwrap_err(),
+            ApplicationError::LookupDisabled
+        );
+        let listed = service.list(company, None, None).await.unwrap().items;
+        assert_eq!(listed[0].document_check(), &DocumentCheck::NotApplicable);
     }
 
     #[tokio::test]

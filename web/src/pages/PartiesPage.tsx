@@ -159,7 +159,7 @@ export function PartiesPage() {
           </fieldset>
           <Notice message={formError} />
           <Notice message={registryNotice?.message ?? null} tone={registryNotice?.tone} />
-          <Button type="submit" icon={PlusIcon} pending={creating}>
+          <Button type="submit" icon={PlusIcon} pending={creating} disabled={verifyingId !== null}>
             Adicionar
           </Button>
         </form>
@@ -221,7 +221,7 @@ export function PartiesPage() {
                           aria-label={`Verificar de novo o CNPJ de ${party.name}`}
                           icon={RefreshCWIcon}
                           pending={verifyingId === party.id}
-                          disabled={verifyingId !== null}
+                          disabled={verifyingId !== null || creating}
                           onClick={() => void verifyAgain(party)}
                         >
                           Verificar de novo
@@ -288,7 +288,10 @@ function registryNoticeFor(party: Party, after: "registering" | "rechecking"): R
           tone: "warning",
           message: `${registering ? "Cadastrado. Atenção:" : `${party.name}:`} ${check.legal_name} está com situação ${check.situation} na Receita.`,
         }
-      : { tone: "success", message: `CNPJ verificado: ${check.legal_name}.` };
+      : {
+          tone: "success",
+          message: `${registering ? "" : `${party.name}: `}CNPJ verificado: ${check.legal_name}.`,
+        };
   }
   return null;
 }

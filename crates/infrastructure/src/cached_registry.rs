@@ -200,6 +200,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_refresh_with_nothing_remembered_passes_every_answer_through() {
+        let cached = CachedCnpjRegistry::new(
+            Scripted::new(vec![
+                Err(CnpjLookupError::Unavailable),
+                Err(CnpjLookupError::Disabled),
+                Err(CnpjLookupError::NotFound),
+            ]),
+            Duration::from_secs(60),
+        );
+        assert_eq!(refresh(&cached).await, Err(CnpjLookupError::Unavailable));
+        assert_eq!(refresh(&cached).await, Err(CnpjLookupError::Disabled));
+        assert_eq!(refresh(&cached).await, Err(CnpjLookupError::NotFound));
+    }
+
+    #[tokio::test]
     async fn an_expired_entry_is_asked_again() {
         let cached = CachedCnpjRegistry::new(
             Scripted::new(vec![Ok(padaria()), Ok(padaria())]),

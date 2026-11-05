@@ -375,7 +375,7 @@ describe("App", () => {
 
       await userEvent.click(await screen.findByRole("button", { name: /Verificar de novo/ }));
 
-      expect(await screen.findByText("CNPJ verificado: PADARIA CENTRAL LTDA.")).toBeInTheDocument();
+      expect(await screen.findByText("Padaria Central: CNPJ verificado: PADARIA CENTRAL LTDA.")).toBeInTheDocument();
       expect(await screen.findByText("Verificado")).toBeInTheDocument();
       expect(screen.queryByText("Não verificado")).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: /Verificar de novo/ })).not.toBeInTheDocument();
