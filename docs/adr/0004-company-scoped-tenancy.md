@@ -47,7 +47,11 @@ without `company_id` and is read-only for tenants.
 
 - Cross-company queries are impossible by construction in application code, which also
   simplifies the later move to row-level security.
-- Until authentication lands, any caller can read or write any company's data.
+- Since Phase 1 a company route gets its access check by declaring the `CompanyAccess` extractor before any body or query
+  extractor. The compiler does not force a handler to declare it, so reviewers must look for it on every new
+  `/companies/{company_id}` route.
+- Databases created in Phase 0 may hold parties of companies that do not exist, which makes the foreign-key migration fail;
+  `docker compose down -v` resets a development database.
 - Accountant views across companies are implemented as a loop over memberships, not as
   cross-tenant SQL.
 - Every index on a business table starts with `company_id`.

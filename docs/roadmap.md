@@ -21,11 +21,11 @@ is ticked and its exit criteria hold on `main`.
 ## Phase 1 — Identity, tenancy and registers (v0.2)
 
 Identity:
-- [ ] `users`, `companies`, `memberships` with roles; password hashing and sessions ([ADR 0007](adr/0007-authentication-and-authorization.md))
-- [ ] Enforce `company_id` from the session, not the URL; foreign keys from every business table to `companies`
+- [ ] `users`, `companies`, `memberships` with roles; password hashing and sessions ([ADR 0007](adr/0007-authentication-and-authorization.md)) — tables, Argon2id and cookie sessions are in; roles are not
+- [x] Enforce `company_id` from the session, not the URL; foreign keys from every business table to `companies` — the URL id must match a membership of the caller (`CompanyAccess`)
 - [ ] Invitations by e-mail; accountant role reserved for Phase 6
 - [ ] Audit trail on every write ([ADR 0008](adr/0008-audit-trail.md))
-- [ ] Pagination, sorting and filtering convention for list endpoints (parties first)
+- [ ] Pagination, sorting and filtering convention for list endpoints (parties first) — keyset pagination (`limit`, `after`, `{items, next_cursor}`) is in; sorting and filtering are not
 
 Registers:
 - [ ] Parties: addresses with CEP lookup, contacts, carrier and seller types, tags

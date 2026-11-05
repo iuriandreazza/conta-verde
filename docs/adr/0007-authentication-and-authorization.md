@@ -51,6 +51,20 @@ the same origin as the API in production but on a different port in development.
 - Password reset and e-mail verification depend on the e-mail notifier, so Phase 1 ships
   the SMTP adapter early.
 
+## Implementation notes
+
+First Phase 1 slice (`feat/auth-tenancy`). Where it differs from the decision above, the decision stays the target:
+
+- Implemented: Argon2id, sessions keyed by a SHA-256 digest of the token (the raw token only lives in the cookie),
+  HttpOnly + SameSite=Lax cookie (`Secure` via `COOKIE_SECURE=true`, since development is plain HTTP), logout deletes the row,
+  membership check on every `/companies/{company_id}` route.
+- Not yet: the CSRF token (for now SameSite=Lax plus JSON-only bodies is the defense), inactivity expiry (sessions last
+  an absolute 30 days), roles on memberships (a membership is owner-only), invitations, password reset, audit trail.
+- The SPA calls `/api/*` on its own origin through a proxy (Vite in development), so the dev port difference needs no CORS.
+- Login for an unknown or malformed email still verifies against a decoy hash, so response time does not reveal registered emails.
+  `POST /auth/register` does answer `409` for a registered email; closing that needs e-mail verification.
+- Concurrent Argon2 runs are capped at the CPU count, since each one holds about 19 MiB.
+
 ## Revisit when
 
 Users ask for SSO (OIDC adapter), two-factor authentication, or per-record permissions

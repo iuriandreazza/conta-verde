@@ -1,7 +1,13 @@
+mod auth_service;
 mod error;
+mod identity_repository;
 mod party_repository;
 mod party_service;
+mod secret_service;
 
-pub use error::{ApplicationError, RepositoryError};
-pub use party_repository::PartyRepository;
-pub use party_service::PartyService;
+pub use auth_service::{AuthService, Profile, SignedIn};
+pub use error::{ApplicationError, AuthError, RepositoryError};
+pub use identity_repository::{IdentityRepository, NewAccount, StoredCredentials};
+pub use party_repository::{PartyCursor, PartyRepository};
+pub use party_service::{PartyPage, PartyService};
+pub use secret_service::{SecretError, SecretService};

@@ -1,4 +1,4 @@
-use crate::{CompanyId, Document, DomainError, PartyId};
+use crate::{CompanyId, Document, DomainError, Email, PartyId};
 
 /// Unvalidated input for registering a customer and/or supplier.
 #[derive(Debug, Clone)]
@@ -17,7 +17,7 @@ pub struct Party {
     company_id: CompanyId,
     name: String,
     document: Option<Document>,
-    email: Option<String>,
+    email: Option<Email>,
     is_customer: bool,
     is_supplier: bool,
 }
@@ -32,7 +32,7 @@ impl Party {
             return Err(DomainError::MissingRole);
         }
         let document = draft.document.as_deref().map(Document::parse).transpose()?;
-        let email = draft.email.as_deref().map(parse_email).transpose()?;
+        let email = draft.email.as_deref().map(Email::parse).transpose()?;
 
         Ok(Self {
             id,
@@ -61,8 +61,8 @@ impl Party {
         self.document.as_ref()
     }
 
-    pub fn email(&self) -> Option<&str> {
-        self.email.as_deref()
+    pub fn email(&self) -> Option<&Email> {
+        self.email.as_ref()
     }
 
     pub fn is_customer(&self) -> bool {
@@ -71,14 +71,6 @@ impl Party {
 
     pub fn is_supplier(&self) -> bool {
         self.is_supplier
-    }
-}
-
-fn parse_email(raw: &str) -> Result<String, DomainError> {
-    let email = raw.trim();
-    match email.split_once('@') {
-        Some((local, domain)) if !local.is_empty() && domain.contains('.') => Ok(email.to_owned()),
-        _ => Err(DomainError::InvalidEmail),
     }
 }
 

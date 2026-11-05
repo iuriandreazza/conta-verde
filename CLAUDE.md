@@ -34,6 +34,7 @@ One crate per layer; dependencies point inwards and the compiler enforces it.
 
 Rules that are easy to break:
 - `api` must not import `sqlx`; anything database-related lives in `infrastructure`.
+- Adapter behavior is specified once in `crates/infrastructure/src/contract.rs` and run against both adapters; extend it when adding a port.
 - Use cases are generic over their port (`PartyService<R: PartyRepository>`), not `dyn`. Port methods return `impl Future + Send`.
 - Serde types belong in `api`. Domain types are not serialized directly.
 - Every business table has `company_id`, every repository method takes a `CompanyId`, and uniqueness is scoped by company (ADR 0004).
@@ -43,7 +44,10 @@ Rules that are easy to break:
 
 ## Gotchas
 
-- The API has **no authentication yet**; `company_id` comes from the URL. It binds to `127.0.0.1` by default. Do not change the default.
+- Auth is cookie sessions (ADR 0007). Every `/companies/{company_id}/...` handler must take the `CompanyAccess` extractor (before any `Json`/`Query`); missing sessions get `401`, non-members and unknown companies both get `404`.
+- Not built yet: password reset, invitations, login rate limiting, roles. The API still binds to `127.0.0.1` by default and needs a TLS proxy plus `COOKIE_SECURE=true` before being exposed. Do not change the default bind address.
+- The foreign key `parties.company_id -> companies` fails on old dev databases holding orphan parties: `docker compose down -v` resets it.
+- Secrets (Argon2, token generation and digests) sit behind the `SecretService` port; the `argon2` crate is optimized even in dev builds (workspace `Cargo.toml`), or tests would take seconds per login.
 - Migrations live in `crates/infrastructure/migrations/`. Do not edit one that has been merged to `main`; add a new one.
 - Editing an applied migration locally breaks your dev database checksum: `docker compose down -v` resets it.
 - Storage errors are logged server-side and returned to clients as a generic `internal error`. Keep it that way.
