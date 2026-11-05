@@ -1,8 +1,8 @@
 use uuid::Uuid;
 
 use crate::{
-    BankAccount, Category, CompanyId, CostCenter, DocumentCheck, Party, PaymentMethod, PaymentTerm,
-    Product, Tag, UserId,
+    BankAccount, Category, CompanyId, CostCenter, DocumentCheck, FinancialEntry, Party,
+    PaymentMethod, PaymentTerm, Product, Tag, UserId,
 };
 
 /// Who made a change. The name is a snapshot: history must keep reading the same after the user is
@@ -22,6 +22,7 @@ pub enum AuditEntity {
     BankAccount,
     PaymentMethod,
     PaymentTerm,
+    FinancialEntry,
 }
 
 impl AuditEntity {
@@ -34,6 +35,7 @@ impl AuditEntity {
             Self::BankAccount => "bank_account",
             Self::PaymentMethod => "payment_method",
             Self::PaymentTerm => "payment_term",
+            Self::FinancialEntry => "financial_entry",
         }
     }
 }
@@ -161,6 +163,20 @@ impl Audited for PaymentMethod {
 impl Audited for PaymentTerm {
     fn audit_entity(&self) -> AuditEntity {
         AuditEntity::PaymentTerm
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.id().as_uuid()
+    }
+}
+
+impl Audited for FinancialEntry {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::FinancialEntry
     }
 
     fn audit_company(&self) -> CompanyId {
@@ -406,6 +422,36 @@ pub fn payment_method_creation_changes(method: &PaymentMethod) -> Vec<FieldChang
 
 pub fn payment_method_changes(before: &PaymentMethod, after: &PaymentMethod) -> Vec<FieldChange> {
     changes_between(payment_method_fields(before), payment_method_fields(after))
+}
+
+fn entry_fields(entry: &FinancialEntry) -> Fields {
+    vec![
+        ("kind", Some(entry.kind().as_str().to_owned())),
+        ("description", Some(entry.description().to_owned())),
+        (
+            "party_id",
+            entry.party_id().map(|id| id.as_uuid().to_string()),
+        ),
+        (
+            "category_id",
+            Some(entry.category_id().as_uuid().to_string()),
+        ),
+        (
+            "cost_center_id",
+            entry.cost_center_id().map(|id| id.as_uuid().to_string()),
+        ),
+        ("competence_date", Some(entry.competence_date().to_string())),
+        ("installments", Some(entry.installments_text())),
+    ]
+}
+
+/// Every field a new entry has set.
+pub fn entry_creation_changes(entry: &FinancialEntry) -> Vec<FieldChange> {
+    creation_from(entry_fields(entry))
+}
+
+pub fn entry_changes(before: &FinancialEntry, after: &FinancialEntry) -> Vec<FieldChange> {
+    changes_between(entry_fields(before), entry_fields(after))
 }
 
 fn payment_term_fields(term: &PaymentTerm) -> Fields {

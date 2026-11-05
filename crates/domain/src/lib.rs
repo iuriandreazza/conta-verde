@@ -3,6 +3,7 @@ mod address;
 mod amount;
 mod audit;
 mod bank_account;
+mod calendar_date;
 mod category;
 mod contact;
 mod cost_center;
@@ -10,6 +11,7 @@ mod document;
 mod document_check;
 mod email;
 mod error;
+mod financial_entry;
 mod ids;
 mod invitation;
 mod name;
@@ -27,10 +29,12 @@ pub use audit::{
     Actor, AuditAction, AuditEntity, AuditEntry, AuditRecord, Audited, FieldChange,
     bank_account_changes, bank_account_creation_changes, category_changes,
     category_creation_changes, cost_center_changes, cost_center_creation_changes, creation_changes,
-    document_check_changes, party_changes, payment_method_changes, payment_method_creation_changes,
-    payment_term_changes, payment_term_creation_changes, product_changes, product_creation_changes,
+    document_check_changes, entry_changes, entry_creation_changes, party_changes,
+    payment_method_changes, payment_method_creation_changes, payment_term_changes,
+    payment_term_creation_changes, product_changes, product_creation_changes,
 };
 pub use bank_account::{BankAccount, BankAccountDraft, BankAccountKind};
+pub use calendar_date::CalendarDate;
 pub use category::{CashFlowGroup, Category, DreGroup, MAX_CATEGORY_LEVELS, default_template};
 pub use contact::{Contact, ContactDraft, MAX_CONTACTS};
 pub use cost_center::{CostCenter, CostCenterDraft};
@@ -38,9 +42,13 @@ pub use document::{Cnpj, Document};
 pub use document_check::DocumentCheck;
 pub use email::Email;
 pub use error::DomainError;
+pub use financial_entry::{
+    EntryInstallment, EntryInstallmentDraft, EntryKind, FinancialEntry, FinancialEntryDraft,
+    MAX_ENTRY_INSTALLMENTS,
+};
 pub use ids::{
-    BankAccountId, CategoryId, CompanyId, CostCenterId, InvitationId, PartyId, PaymentMethodId,
-    PaymentTermId, ProductId, UserId,
+    BankAccountId, CategoryId, CompanyId, CostCenterId, EntryId, InvitationId, PartyId,
+    PaymentMethodId, PaymentTermId, ProductId, UserId,
 };
 pub use invitation::Invitation;
 pub use party::{Party, PartyDraft};
