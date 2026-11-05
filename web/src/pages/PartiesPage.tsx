@@ -186,7 +186,6 @@ export function PartiesPage() {
                   <th>Nome</th>
                   <th>Documento</th>
                   <th>E-mail</th>
-                  <th>Cidade</th>
                   <th>Tipo</th>
                   <th>
                     <span className="visually-hidden">Ações</span>
@@ -197,7 +196,12 @@ export function PartiesPage() {
                 {parties.map((party, index) => (
                   <Fragment key={party.id}>
                   <ListRow index={index} highlighted={party.id === highlightedId}>
-                    <td>{party.name}</td>
+                    <td>
+                      {party.name}
+                      {party.address && (
+                        <div className="muted">{`${party.address.city}/${party.address.state}`}</div>
+                      )}
+                    </td>
                     <td>
                       {party.document ?? "—"} <DocumentBadge check={party.document_check} />
                       {party.document_check.needs_attention && (
@@ -216,7 +220,6 @@ export function PartiesPage() {
                       )}
                     </td>
                     <td>{party.email ?? "—"}</td>
-                    <td>{party.address ? `${party.address.city}/${party.address.state}` : "—"}</td>
                     <td>
                       {[
                         party.is_customer && "Cliente",
@@ -260,7 +263,7 @@ export function PartiesPage() {
                   </ListRow>
                   {historyOpenFor === party.id && (
                     <tr id={`history-${party.id}`}>
-                      <td colSpan={6} role="region" aria-label={`Histórico de ${party.name}`}>
+                      <td colSpan={5} role="region" aria-label={`Histórico de ${party.name}`}>
                         <PartyHistory
                           // Remounted when the party changes (a re-check, an edit), so an open
                           // history follows it.

@@ -446,6 +446,144 @@ mod tests {
         .await;
     }
 
+    /// A registry whose `refresh` answers only once told to, so a test can change the party while
+    /// the registry is being asked, the way a slow network would let a person do.
+    struct Gated {
+        gate: Arc<tokio::sync::Notify>,
+        looked_up: Result<RegistryEntry, CnpjLookupError>,
+        refreshed: Result<RegistryEntry, CnpjLookupError>,
+    }
+
+    impl CnpjRegistry for Gated {
+        async fn lookup(
+            &self,
+            _cnpj: conta_verde_domain::Cnpj<'_>,
+        ) -> Result<RegistryEntry, CnpjLookupError> {
+            self.looked_up.clone()
+        }
+
+        async fn refresh(
+            &self,
+            _cnpj: conta_verde_domain::Cnpj<'_>,
+        ) -> Result<RegistryEntry, CnpjLookupError> {
+            self.gate.notified().await;
+            self.refreshed.clone()
+        }
+    }
+
+    fn entry(legal_name: &str) -> RegistryEntry {
+        RegistryEntry {
+            legal_name: legal_name.into(),
+            situation: "ATIVA".into(),
+        }
+    }
+
+    fn gated(
+        looked_up: Result<RegistryEntry, CnpjLookupError>,
+        refreshed: Result<RegistryEntry, CnpjLookupError>,
+    ) -> (
+        PartyService<InMemoryPartyRepository, Gated>,
+        Arc<tokio::sync::Notify>,
+    ) {
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let registry = Gated {
+            gate: gate.clone(),
+            looked_up,
+            refreshed,
+        };
+        (
+            PartyService::new(InMemoryPartyRepository::default(), registry),
+            gate,
+        )
+    }
+
+    #[tokio::test]
+    async fn a_recheck_does_not_undo_an_edit_made_while_the_registry_was_asked() {
+        let (service, gate) = gated(Err(CnpjLookupError::Unavailable), Ok(entry("FROM REFRESH")));
+        let company = CompanyId::generate();
+        let actor = bia();
+        let party = service
+            .register(
+                company,
+                &actor,
+                draft("Padaria", Some(contract::ACTIVE_CNPJ)),
+            )
+            .await
+            .unwrap();
+        assert_eq!(party.document_check(), &DocumentCheck::Unverified);
+
+        let (rechecked, edited) = tokio::join!(
+            service.verify_document(company, &actor, party.id()),
+            async {
+                let edited = service
+                    .update(
+                        company,
+                        &actor,
+                        party.id(),
+                        draft("Padaria do Centro", Some(contract::ACTIVE_CNPJ)),
+                    )
+                    .await;
+                gate.notify_one();
+                edited
+            }
+        );
+        edited.unwrap();
+        let rechecked = rechecked.unwrap();
+        assert_eq!(rechecked.name(), "Padaria do Centro");
+        let stored = service
+            .list(company, &PartyQuery::default(), None, None)
+            .await
+            .unwrap()
+            .items;
+        assert_eq!(stored[0].name(), "Padaria do Centro");
+        assert!(
+            matches!(stored[0].document_check(), DocumentCheck::Verified { legal_name, .. } if legal_name == "FROM REFRESH")
+        );
+        // The trail has the registration, the edit and the re-check, each saying only its own change.
+        assert_eq!(service.history(company, party.id()).await.unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn an_answer_about_a_document_that_was_replaced_meanwhile_is_dropped() {
+        let (service, gate) = gated(Ok(entry("FROM LOOKUP")), Ok(entry("FROM REFRESH")));
+        let company = CompanyId::generate();
+        let actor = bia();
+        let party = service
+            .register(
+                company,
+                &actor,
+                draft("Padaria", Some(contract::ACTIVE_CNPJ)),
+            )
+            .await
+            .unwrap();
+
+        let (rechecked, edited) = tokio::join!(
+            service.verify_document(company, &actor, party.id()),
+            async {
+                let edited = service
+                    .update(
+                        company,
+                        &actor,
+                        party.id(),
+                        draft("Padaria", Some(contract::CLOSED_ALPHANUMERIC_CNPJ)),
+                    )
+                    .await;
+                gate.notify_one();
+                edited
+            }
+        );
+        edited.unwrap();
+        let rechecked = rechecked.unwrap();
+        // The party keeps the new document, with what the lookup said about it, not the refresh of
+        // the old one.
+        assert_eq!(rechecked.document().unwrap().as_str(), "12ABC34501DE35");
+        assert!(
+            matches!(rechecked.document_check(), DocumentCheck::Verified { legal_name, .. } if legal_name == "FROM LOOKUP")
+        );
+        // The registration and the edit; the dropped answer wrote nothing.
+        assert_eq!(service.history(company, party.id()).await.unwrap().len(), 2);
+    }
+
     fn bia() -> Actor {
         Actor::User {
             id: UserId::generate(),

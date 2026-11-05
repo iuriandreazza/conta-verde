@@ -1749,7 +1749,7 @@ describe("changing a party, its roles and its address", () => {
 
     await screen.findByRole("table");
     await userEvent.click(screen.getByRole("button", { name: "Alterar Padaria" }));
-    expect(screen.getByLabelText("CEP")).toHaveValue("01310100");
+    expect(screen.getByLabelText("CEP")).toHaveValue("01310-100");
     expect(screen.getByLabelText("UF")).toHaveValue("SP");
     for (const label of ["CEP", "Logradouro", "Número", "Cidade"]) {
       await userEvent.clear(screen.getByLabelText(label));

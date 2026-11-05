@@ -10,6 +10,9 @@ const STATES = [
   "PB", "PE", "PI", "PR", "RJ", "RN", "RO", "RR", "RS", "SC", "SE", "SP", "TO",
 ];
 
+/** The API keeps the CEP as eight digits; people write it as 01310-100. */
+const withHyphen = (postalCode: string) => postalCode.replace(/^(\d{5})(\d{3})$/, "$1-$2");
+
 interface PartyFormProps {
   /** The party being changed, or `null` to register one. */
   party: Party | null;
@@ -117,7 +120,7 @@ export function PartyForm({
           Vendedor
         </label>
       </fieldset>
-      <fieldset>
+      <fieldset className="address-fields">
         <legend>Endereço</legend>
         <label>
           CEP
@@ -127,18 +130,18 @@ export function PartyForm({
             autoComplete="off"
             placeholder="00000-000"
             maxLength={9}
-            defaultValue={address?.postal_code ?? ""}
+            defaultValue={address ? withHyphen(address.postal_code) : ""}
           />
         </label>
-        <label>
+        <label className="span-4">
           Logradouro
           <input name="street" maxLength={150} autoComplete="off" defaultValue={address?.street ?? ""} />
         </label>
-        <label>
+        <label className="span-2">
           Número
           <input name="number" maxLength={20} autoComplete="off" defaultValue={address?.number ?? ""} />
         </label>
-        <label>
+        <label className="span-3">
           Complemento
           <input
             name="complement"
@@ -147,15 +150,15 @@ export function PartyForm({
             defaultValue={address?.complement ?? ""}
           />
         </label>
-        <label>
+        <label className="span-3">
           Bairro
           <input name="district" maxLength={80} autoComplete="off" defaultValue={address?.district ?? ""} />
         </label>
-        <label>
+        <label className="span-4">
           Cidade
           <input name="city" maxLength={80} autoComplete="off" defaultValue={address?.city ?? ""} />
         </label>
-        <label>
+        <label className="span-2">
           UF
           <select name="state" defaultValue={address?.state ?? ""}>
             <option value=""></option>

@@ -161,6 +161,23 @@ impl<R: PartyRepository, C: CnpjRegistry> PartyService<R, C> {
             self.release_recheck(&cnpj_key);
             return Err(ApplicationError::LookupDisabled);
         }
+        // The registry can take seconds, and the write replaces the whole party: read it again, so
+        // an edit made meanwhile is not undone, and drop an answer about a document that is no
+        // longer the party's.
+        let party = self
+            .repository
+            .find(company_id, party_id)
+            .await?
+            .ok_or(ApplicationError::PartyNotFound)?;
+        if party
+            .document()
+            .and_then(Document::cnpj)
+            .map(|c| c.as_str())
+            != Some(cnpj_key.as_str())
+        {
+            self.release_recheck(&cnpj_key);
+            return Ok(party);
+        }
         let new_check = check_from(answer);
         let changes = document_check_changes(party.document_check(), &new_check);
         let party = party.with_document_check(new_check);

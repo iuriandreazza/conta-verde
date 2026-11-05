@@ -349,6 +349,9 @@ main {
 .form-card {
   position: sticky;
   top: 1.25rem;
+  /* A long form (the address) scrolls inside the card; sticky alone would leave its end below the screen. */
+  max-height: calc(100vh - 2.5rem);
+  overflow-y: auto;
 }
 
 .list-card {
@@ -1227,6 +1230,29 @@ tbody tr:last-child td {
 .installments {
   display: grid;
   gap: 0.6rem;
+}
+
+/* Street and number, complement and district, city and state share a line; the CEP takes its own. */
+.address-fields {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0.6rem 0.5rem;
+}
+
+.address-fields > label {
+  grid-column: span 6;
+}
+
+.address-fields > label.span-3 {
+  grid-column: span 3;
+}
+
+.address-fields > label.span-4 {
+  grid-column: span 4;
+}
+
+.address-fields > label.span-2 {
+  grid-column: span 2;
 }
 
 .installment-row {
