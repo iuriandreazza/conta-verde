@@ -2,7 +2,7 @@ use uuid::Uuid;
 
 use crate::{
     BankAccount, Category, CompanyId, CostCenter, DocumentCheck, Party, PaymentMethod, PaymentTerm,
-    Product, UserId,
+    Product, Tag, UserId,
 };
 
 /// Who made a change. The name is a snapshot: history must keep reading the same after the user is
@@ -257,12 +257,44 @@ fn party_fields(party: &Party) -> Fields {
         ("district", text(address.and_then(|a| a.district()))),
         ("city", text(address.map(|a| a.city()))),
         ("state", text(address.map(|a| a.state()))),
+        ("tags", tags_text(party)),
     ]
+}
+
+/// The tags on one line, which is unambiguous because a tag cannot hold a comma.
+fn tags_text(party: &Party) -> Option<String> {
+    let tags: Vec<&str> = party.tags().iter().map(Tag::as_str).collect();
+    (!tags.is_empty()).then(|| tags.join(", "))
+}
+
+/// The contacts as text for a person to read, one after the other. Whether two lists of contacts
+/// are the same is decided on the contacts themselves, never on this text: a name can hold the
+/// separator, so two different lists could read alike.
+fn contacts_text(party: &Party) -> Option<String> {
+    let lines: Vec<String> = party
+        .contacts()
+        .iter()
+        .map(|contact| {
+            let mut line = contact.name().to_owned();
+            if let Some(job_title) = contact.job_title() {
+                line.push_str(&format!(" ({job_title})"));
+            }
+            if let Some(email) = contact.email() {
+                line.push_str(&format!(" <{}>", email.as_str()));
+            }
+            if let Some(phone) = contact.phone() {
+                line.push_str(&format!(" {phone}"));
+            }
+            line
+        })
+        .collect();
+    (!lines.is_empty()).then(|| lines.join("; "))
 }
 
 /// Every field a new party has set, and what the registry said about its CNPJ.
 pub fn creation_changes(party: &Party) -> Vec<FieldChange> {
     let mut changes = creation_from(party_fields(party));
+    changes.extend(contacts_text(party).map(|contacts| set("contacts", contacts)));
     changes.extend(document_check_changes(
         &DocumentCheck::NotApplicable,
         party.document_check(),
@@ -270,10 +302,17 @@ pub fn creation_changes(party: &Party) -> Vec<FieldChange> {
     changes
 }
 
-/// What differs between two versions of a party: its fields, and the registry's answer when the
-/// document changed. Empty when nothing did.
+/// What differs between two versions of a party: its fields, its contacts, and the registry's
+/// answer when the document changed. Empty when nothing did.
 pub fn party_changes(before: &Party, after: &Party) -> Vec<FieldChange> {
     let mut changes = changes_between(party_fields(before), party_fields(after));
+    if before.contacts() != after.contacts() {
+        changes.push(FieldChange {
+            field: "contacts".to_owned(),
+            from: contacts_text(before),
+            to: contacts_text(after),
+        });
+    }
     changes.extend(document_check_changes(
         before.document_check(),
         after.document_check(),
@@ -440,7 +479,8 @@ pub fn document_check_changes(before: &DocumentCheck, after: &DocumentCheck) -> 
 mod tests {
     use super::*;
     use crate::{
-        AddressDraft, CompanyId, PartyDraft, PartyId, ProductDraft, ProductId, ProductKind,
+        AddressDraft, CompanyId, ContactDraft, PartyDraft, PartyId, ProductDraft, ProductId,
+        ProductKind,
     };
 
     fn party(document: Option<&str>) -> Party {
@@ -533,6 +573,105 @@ mod tests {
         assert_eq!(changes[1].from.as_deref(), Some("contato@padaria.example"));
         assert_eq!(changes[1].to, None);
         assert_eq!(changes[2].to.as_deref(), Some("true"));
+    }
+
+    fn contact(name: &str) -> ContactDraft {
+        ContactDraft {
+            name: name.into(),
+            ..ContactDraft::default()
+        }
+    }
+
+    #[test]
+    fn tags_and_contacts_are_recorded_as_a_line_each_and_only_when_they_change() {
+        let before = party(None);
+        let after = before
+            .replaced_with(PartyDraft {
+                name: "Padaria Central".into(),
+                email: Some("contato@padaria.example".into()),
+                is_customer: true,
+                tags: vec!["VIP".into(), "atacado".into()],
+                contacts: vec![
+                    ContactDraft {
+                        job_title: Some("Compras".into()),
+                        email: Some("ana@padaria.example".into()),
+                        phone: Some("(81) 99999-0000".into()),
+                        ..contact("Ana")
+                    },
+                    contact("Bruno"),
+                ],
+                ..PartyDraft::default()
+            })
+            .unwrap();
+        let changes = party_changes(&before, &after);
+        assert_eq!(fields(&changes), ["tags", "contacts"]);
+        assert_eq!(changes[0].from, None);
+        assert_eq!(changes[0].to.as_deref(), Some("atacado, vip"));
+        assert_eq!(
+            changes[1].to.as_deref(),
+            Some("Ana (Compras) <ana@padaria.example> (81) 99999-0000; Bruno")
+        );
+        assert!(
+            creation_changes(&after)
+                .iter()
+                .any(|change| change.field == "contacts")
+        );
+
+        // The same tags typed another way, and the same contacts, change nothing.
+        let same = after
+            .replaced_with(PartyDraft {
+                tags: vec!["vip".into(), " ATACADO".into()],
+                contacts: vec![
+                    ContactDraft {
+                        job_title: Some("Compras".into()),
+                        email: Some("ANA@padaria.example".into()),
+                        phone: Some("(81) 99999-0000".into()),
+                        ..contact("Ana")
+                    },
+                    contact("Bruno"),
+                ],
+                ..PartyDraft {
+                    name: "Padaria Central".into(),
+                    email: Some("contato@padaria.example".into()),
+                    is_customer: true,
+                    ..PartyDraft::default()
+                }
+            })
+            .unwrap();
+        assert!(party_changes(&after, &same).is_empty());
+
+        // The order of the contacts is part of what is stored.
+        let reordered = after
+            .replaced_with(PartyDraft {
+                contacts: vec![contact("Bruno"), contact("Ana")],
+                tags: vec!["atacado".into(), "vip".into()],
+                name: "Padaria Central".into(),
+                email: Some("contato@padaria.example".into()),
+                is_customer: true,
+                ..PartyDraft::default()
+            })
+            .unwrap();
+        assert_eq!(fields(&party_changes(&after, &reordered)), ["contacts"]);
+    }
+
+    #[test]
+    fn two_lists_of_contacts_that_read_alike_are_still_a_change() {
+        // "Ana; Bruno" as one name reads like the two contacts "Ana" and "Bruno".
+        let draft = |contacts: Vec<ContactDraft>| PartyDraft {
+            name: "Padaria Central".into(),
+            is_customer: true,
+            contacts,
+            ..PartyDraft::default()
+        };
+        let before = party(None)
+            .replaced_with(draft(vec![contact("Ana"), contact("Bruno")]))
+            .unwrap();
+        let after = before
+            .replaced_with(draft(vec![contact("Ana; Bruno")]))
+            .unwrap();
+        let changes = party_changes(&before, &after);
+        assert_eq!(fields(&changes), ["contacts"]);
+        assert_eq!(changes[0].from, changes[0].to);
     }
 
     #[test]

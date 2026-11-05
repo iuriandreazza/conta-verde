@@ -55,7 +55,7 @@ export function PartiesPage() {
     (applied, after) => api.listParties(companyId, applied, after),
     filters,
   );
-  const isFiltered = applied.q !== "" || applied.kind !== "";
+  const isFiltered = applied.q !== "" || applied.kind !== "" || applied.tag !== "";
 
   async function verifyAgain(party: Party) {
     if (verifyingId !== null) {
@@ -145,6 +145,17 @@ export function PartiesPage() {
             </select>
           </label>
           <label>
+            Etiqueta
+            <input
+              type="search"
+              value={filters.tag}
+              placeholder="Por exemplo vip"
+              autoComplete="off"
+              maxLength={30}
+              onChange={(event) => setFilters({ ...filters, tag: event.target.value })}
+            />
+          </label>
+          <label>
             Ordem
             <select
               value={filters.sort}
@@ -205,6 +216,21 @@ export function PartiesPage() {
                       {party.address && (
                         <div className="muted">{`${party.address.city}/${party.address.state}`}</div>
                       )}
+                      {party.tags.length > 0 && (
+                        <div className="tag-list">
+                          {party.tags.map((tag) => (
+                            <button
+                              key={tag}
+                              type="button"
+                              className="badge badge-muted"
+                              aria-label={`Filtrar pela etiqueta ${tag}`}
+                              onClick={() => setFilters({ ...filters, tag })}
+                            >
+                              {tag}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </td>
                     <td>
                       {party.document ?? "—"} <DocumentBadge check={party.document_check} />
@@ -223,7 +249,14 @@ export function PartiesPage() {
                         </Button>
                       )}
                     </td>
-                    <td>{party.email ?? "—"}</td>
+                    <td>
+                      {party.email ?? "—"}
+                      {party.contacts.length > 0 && (
+                        <div className="muted">
+                          {party.contacts.length === 1 ? "1 contato" : `${party.contacts.length} contatos`}
+                        </div>
+                      )}
+                    </td>
                     <td>
                       {[
                         party.is_customer && "Cliente",

@@ -38,6 +38,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0020](0020-app-shell-charts-and-sample-data.md) | Sidebar app shell, hand-drawn SVG charts and a sample-data boundary | accepted | 1, 2 |
 | [0021](0021-bank-accounts-payment-methods-and-terms.md) | Bank accounts, payment methods and payment terms | accepted | 1 |
 | [0022](0022-party-roles-address-and-editing.md) | Party roles, address and editing | accepted | 1 |
+| [0023](0023-party-contacts-and-tags.md) | Party contacts and tags | accepted | 1 |
 
 ## Template
 

@@ -40,6 +40,12 @@ pub enum DomainError {
     InvalidState,
     /// Names the field: an address has several free-text parts.
     InvalidAddressField(&'static str),
+    /// Names the field: a contact has a name and a job title.
+    InvalidContactField(&'static str),
+    InvalidPhone,
+    TooManyContacts,
+    InvalidTag,
+    TooManyTags,
 }
 
 impl fmt::Display for DomainError {
@@ -116,6 +122,18 @@ impl fmt::Display for DomainError {
                 f,
                 "address {field} is required, or too long or has null characters"
             ),
+            Self::InvalidContactField(field) => write!(
+                f,
+                "contact {field} is required, or too long or has null characters"
+            ),
+            Self::InvalidPhone => f.write_str(
+                "phone must have 8 to 15 digits, written with only spaces and the characters + - ( ) .",
+            ),
+            Self::TooManyContacts => f.write_str("a party has at most 20 contacts"),
+            Self::InvalidTag => f.write_str(
+                "a tag has 1 to 30 characters, with no commas or control characters",
+            ),
+            Self::TooManyTags => f.write_str("a party has at most 10 tags"),
             Self::KindCannotChange => f.write_str("the kind cannot change once registered"),
         }
     }

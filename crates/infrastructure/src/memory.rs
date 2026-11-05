@@ -399,6 +399,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn keeps_party_contacts_and_tags() {
+        let service = PartyService::new(InMemoryPartyRepository::default(), contract::registry());
+        contract::keeps_party_contacts_and_tags(
+            &service,
+            CompanyId::generate(),
+            CompanyId::generate(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
     async fn edits_parties_and_records_only_changes() {
         let service = PartyService::new(InMemoryPartyRepository::default(), contract::registry());
         contract::edits_parties_and_records_only_changes(

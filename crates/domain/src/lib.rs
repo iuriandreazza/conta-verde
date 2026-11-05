@@ -4,6 +4,7 @@ mod amount;
 mod audit;
 mod bank_account;
 mod category;
+mod contact;
 mod cost_center;
 mod document;
 mod document_check;
@@ -15,6 +16,7 @@ mod party;
 mod payment_method;
 mod payment_term;
 mod product;
+mod tag;
 
 pub use account::{Account, AccountDraft, Company, User, validate_password};
 pub use address::{Address, AddressDraft};
@@ -28,6 +30,7 @@ pub use audit::{
 };
 pub use bank_account::{BankAccount, BankAccountDraft, BankAccountKind};
 pub use category::{CashFlowGroup, Category, DreGroup, MAX_CATEGORY_LEVELS, default_template};
+pub use contact::{Contact, ContactDraft, MAX_CONTACTS};
 pub use cost_center::{CostCenter, CostCenterDraft};
 pub use document::{Cnpj, Document};
 pub use document_check::DocumentCheck;
@@ -44,3 +47,4 @@ pub use payment_term::{
     PaymentTermDraft, Percent,
 };
 pub use product::{Product, ProductDraft, ProductKind};
+pub use tag::{MAX_TAGS, Tag};

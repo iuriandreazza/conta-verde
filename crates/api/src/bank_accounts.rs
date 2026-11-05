@@ -10,7 +10,7 @@ use crate::access::CompanyAccess;
 use crate::cursor::{decode_cursor, encode_cursor};
 use crate::error::ApiError;
 use crate::history::HistoryEntryResponse;
-use crate::json::{ApiJson, ApiQuery, flag_or};
+use crate::json::{ApiJson, ApiQuery, field_or};
 use crate::list_params;
 use crate::{Ports, SharedState};
 
@@ -38,7 +38,7 @@ impl BankAccountRequest {
         let kind = BankAccountKind::parse(&self.kind).ok_or(ApiError::InvalidField(
             "invalid kind: expected checking, savings, cash or card",
         ))?;
-        let active = flag_or(
+        let active = field_or(
             self.active,
             default_active,
             "active is required when replacing a bank account",

@@ -34,6 +34,14 @@ export interface Address {
   state: string;
 }
 
+/** A person to talk to at a party. */
+export interface Contact {
+  name: string;
+  job_title: string | null;
+  email: string | null;
+  phone: string | null;
+}
+
 export interface Party {
   id: string;
   company_id: string;
@@ -45,6 +53,10 @@ export interface Party {
   is_carrier: boolean;
   is_seller: boolean;
   address: Address | null;
+  /** In the order they were given. */
+  contacts: Contact[];
+  /** Lower case, each once, alphabetical. */
+  tags: string[];
   document_check: DocumentCheck;
 }
 
@@ -67,11 +79,13 @@ export interface PartyFilters {
   /** Text found in the name, e-mail or document. */
   q: string;
   kind: "" | "customer" | "supplier" | "carrier" | "seller";
+  /** A tag the party carries, in any case. */
+  tag: string;
   /** A leading `-` means descending. */
   sort: "name" | "-name";
 }
 
-export const NO_FILTERS: PartyFilters = { q: "", kind: "", sort: "name" };
+export const NO_FILTERS: PartyFilters = { q: "", kind: "", tag: "", sort: "name" };
 
 export interface AddressInput {
   postal_code: string;
@@ -81,6 +95,13 @@ export interface AddressInput {
   district?: string;
   city: string;
   state: string;
+}
+
+export interface ContactInput {
+  name: string;
+  job_title?: string;
+  email?: string;
+  phone?: string;
 }
 
 /** The whole party, to register one or to replace one: what is left out is cleared. */
@@ -93,6 +114,8 @@ export interface PartyInput {
   is_carrier: boolean;
   is_seller: boolean;
   address?: AddressInput;
+  contacts: ContactInput[];
+  tags: string[];
 }
 
 export interface Registration {
@@ -376,6 +399,7 @@ export const api = {
     const params = new URLSearchParams();
     if (filters.q) params.set("q", filters.q);
     if (filters.kind) params.set("kind", filters.kind);
+    if (filters.tag) params.set("tag", filters.tag);
     if (filters.sort !== NO_FILTERS.sort) params.set("sort", filters.sort);
     if (after) params.set("after", after);
     const query = params.size > 0 ? `?${params}` : "";

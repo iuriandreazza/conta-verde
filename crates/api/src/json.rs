@@ -50,13 +50,14 @@ pub(crate) fn describe(rejection: &JsonRejection) -> (axum::http::StatusCode, St
     (rejection.status(), rejection.body_text())
 }
 
-/// A flag of a body that registers or replaces (`active`, a party's roles). A missing one means
-/// `default` when registering, and is refused when replacing (`default` is `None`): a replacement
-/// without it would silently switch a deactivated record back on, or drop a role.
-pub(crate) fn flag_or(
-    flag: Option<bool>,
-    default: Option<bool>,
+/// A field of a body that registers or replaces (`active`, a party's roles, its contacts). A
+/// missing one means `default` when registering, and is refused when replacing (`default` is
+/// `None`): a replacement without it would silently switch a deactivated record back on, or drop
+/// a role or a list.
+pub(crate) fn field_or<T>(
+    value: Option<T>,
+    default: Option<T>,
     message: &'static str,
-) -> Result<bool, ApiError> {
-    flag.or(default).ok_or(ApiError::InvalidField(message))
+) -> Result<T, ApiError> {
+    value.or(default).ok_or(ApiError::InvalidField(message))
 }

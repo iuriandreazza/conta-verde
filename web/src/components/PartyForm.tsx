@@ -1,5 +1,5 @@
-import type { FormEvent } from "react";
-import type { AddressInput, Party, PartyInput } from "../api";
+import { useRef, useState, type FormEvent } from "react";
+import type { AddressInput, Contact, Party, PartyInput } from "../api";
 import { Button } from "./Button";
 import { CheckIcon } from "./icons/check";
 import { PlusIcon } from "./icons/plus";
@@ -12,6 +12,25 @@ const STATES = [
 
 /** The API keeps the CEP as eight digits; people write it as 01310-100. */
 const withHyphen = (postalCode: string) => postalCode.replace(/^(\d{5})(\d{3})$/, "$1-$2");
+
+const MAX_CONTACTS = 20;
+
+/** A contact being typed: every field is text until the form is sent. */
+interface ContactRow {
+  key: number;
+  name: string;
+  job_title: string;
+  email: string;
+  phone: string;
+}
+
+const rowOf = (key: number, contact?: Contact): ContactRow => ({
+  key,
+  name: contact?.name ?? "",
+  job_title: contact?.job_title ?? "",
+  email: contact?.email ?? "",
+  phone: contact?.phone ?? "",
+});
 
 interface PartyFormProps {
   /** The party being changed, or `null` to register one. */
@@ -40,6 +59,15 @@ export function PartyForm({
   onSubmit,
   onCancel,
 }: PartyFormProps) {
+  const nextKey = useRef(0);
+  const [rows, setRows] = useState<ContactRow[]>(() =>
+    (party?.contacts ?? []).map((contact) => rowOf(nextKey.current++, contact)),
+  );
+
+  function update(key: number, change: Partial<ContactRow>) {
+    setRows((current) => current.map((row) => (row.key === key ? { ...row, ...change } : row)));
+  }
+
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (pending) {
@@ -61,6 +89,20 @@ export function PartyForm({
     // which part is missing.
     const hasAddress = Object.values(fields).some((value) => value !== undefined && value !== "");
     const address: AddressInput | undefined = hasAddress ? fields : undefined;
+    // A contact row left empty is no contact; one with only a phone goes as it is and the API
+    // says that the name is missing.
+    const contacts = rows
+      .filter((row) => [row.name, row.job_title, row.email, row.phone].some((value) => value.trim()))
+      .map((row) => ({
+        name: row.name.trim(),
+        job_title: row.job_title.trim() || undefined,
+        email: row.email.trim() || undefined,
+        phone: row.phone.trim() || undefined,
+      }));
+    const tags = text("tags")
+      .split(",")
+      .map((tag) => tag.trim())
+      .filter(Boolean);
     onSubmit({
       name: String(form.get("name") ?? ""),
       document: optional("document"),
@@ -70,6 +112,8 @@ export function PartyForm({
       is_carrier: form.get("is_carrier") === "on",
       is_seller: form.get("is_seller") === "on",
       address,
+      contacts,
+      tags,
     });
   }
 
@@ -169,6 +213,84 @@ export function PartyForm({
             ))}
           </select>
         </label>
+      </fieldset>
+      <label>
+        Etiquetas
+        <input
+          name="tags"
+          autoComplete="off"
+          placeholder="Separadas por vírgula, como vip, atacado"
+          defaultValue={party?.tags.join(", ") ?? ""}
+        />
+      </label>
+      <fieldset className="contacts">
+        <legend>Contatos</legend>
+        {rows.map((row, index) => (
+          <div className="contact-row" key={row.key}>
+            <label className="span-2">
+              Nome
+              <input
+                autoComplete="off"
+                maxLength={100}
+                aria-label={`Nome do contato ${index + 1}`}
+                value={row.name}
+                onChange={(event) => update(row.key, { name: event.target.value })}
+              />
+            </label>
+            <label>
+              Cargo
+              <input
+                autoComplete="off"
+                maxLength={80}
+                aria-label={`Cargo do contato ${index + 1}`}
+                value={row.job_title}
+                onChange={(event) => update(row.key, { job_title: event.target.value })}
+              />
+            </label>
+            <label>
+              Telefone
+              <input
+                type="tel"
+                autoComplete="off"
+                maxLength={30}
+                aria-label={`Telefone do contato ${index + 1}`}
+                value={row.phone}
+                onChange={(event) => update(row.key, { phone: event.target.value })}
+              />
+            </label>
+            <label className="span-2">
+              E-mail
+              <input
+                type="email"
+                autoComplete="off"
+                aria-label={`E-mail do contato ${index + 1}`}
+                value={row.email}
+                onChange={(event) => update(row.key, { email: event.target.value })}
+              />
+            </label>
+            <Button
+              type="button"
+              variant="ghost"
+              className="btn-small"
+              aria-label={`Remover contato ${index + 1}`}
+              onClick={() => setRows((current) => current.filter((item) => item.key !== row.key))}
+            >
+              Remover
+            </Button>
+          </div>
+        ))}
+        <div className="form-actions">
+          <Button
+            type="button"
+            variant="ghost"
+            className="btn-small"
+            icon={PlusIcon}
+            disabled={rows.length >= MAX_CONTACTS}
+            onClick={() => setRows((current) => [...current, rowOf(nextKey.current++)])}
+          >
+            Adicionar contato
+          </Button>
+        </div>
       </fieldset>
       <Notice message={error} />
       <Notice message={notice?.message ?? null} tone={notice?.tone} />

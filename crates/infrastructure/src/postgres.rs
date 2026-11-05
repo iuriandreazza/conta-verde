@@ -1,14 +1,17 @@
+use std::collections::HashMap;
+
 use crate::postgres_audit;
 use conta_verde_application::{
     NameCursor, NameSort, PartyKind, PartyQuery, PartyRepository, RepositoryError,
     ensure_audit_describes,
 };
 use conta_verde_domain::{
-    AddressDraft, AuditEntity, AuditEntry, AuditRecord, CompanyId, DocumentCheck, Party,
-    PartyDraft, PartyId,
+    AddressDraft, AuditEntity, AuditEntry, AuditRecord, CompanyId, ContactDraft, DocumentCheck,
+    Party, PartyDraft, PartyId,
 };
 use sqlx::postgres::PgRow;
-use sqlx::{PgPool, Postgres, QueryBuilder, Row};
+use sqlx::{PgConnection, PgPool, Postgres, QueryBuilder, Row};
+use uuid::Uuid;
 
 const DOCUMENT_UNIQUE_INDEX: &str = "parties_company_document_key";
 
@@ -49,6 +52,21 @@ pub(crate) fn push_name_keyset(
     .push_bind(i64::try_from(limit).unwrap_or(i64::MAX));
 }
 
+/// A transaction that sees one moment of the database. Records with children (a payment term's
+/// installments, a party's contacts and tags) are read in several statements, and a write
+/// committed between them would otherwise give a record that never existed: the old name with the
+/// new children.
+pub(crate) async fn snapshot(
+    pool: &PgPool,
+) -> Result<sqlx::Transaction<'static, Postgres>, RepositoryError> {
+    let mut tx = pool.begin().await.map_err(storage_error)?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        .execute(&mut *tx)
+        .await
+        .map_err(storage_error)?;
+    Ok(tx)
+}
+
 pub struct PostgresPartyRepository {
     pool: PgPool,
 }
@@ -84,6 +102,7 @@ impl PartyRepository for PostgresPartyRepository {
         .execute(&mut *tx)
         .await
         .map_err(duplicate_document_or_storage_error)?;
+        insert_children(&mut tx, party).await?;
         postgres_audit::insert(&mut tx, audit).await?;
         tx.commit().await.map_err(storage_error)
     }
@@ -101,15 +120,19 @@ impl PartyRepository for PostgresPartyRepository {
         company_id: CompanyId,
         id: PartyId,
     ) -> Result<Option<Party>, RepositoryError> {
+        let mut tx = snapshot(&self.pool).await?;
         let row = sqlx::query(&format!(
             "{SELECT_PARTIES} WHERE company_id = $1 AND id = $2"
         ))
         .bind(company_id.as_uuid())
         .bind(id.as_uuid())
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await
         .map_err(storage_error)?;
-        row.as_ref().map(party_from_row).transpose()
+        let Some(row) = row else { return Ok(None) };
+        let mut parties = with_children(&mut tx, company_id, vec![row]).await?;
+        tx.commit().await.map_err(storage_error)?;
+        Ok(parties.pop())
     }
 
     async fn update(&self, party: &Party, audit: &AuditEntry) -> Result<(), RepositoryError> {
@@ -134,6 +157,19 @@ impl PartyRepository for PostgresPartyRepository {
         if result.rows_affected() == 0 {
             return Err(RepositoryError::NotFound);
         }
+        // The contacts and the tags are replaced as a whole, inside the same transaction as the
+        // party and its audit entry: a refusal anywhere leaves the old ones in place.
+        for table in ["party_contacts", "party_tags"] {
+            sqlx::query(&format!(
+                "DELETE FROM {table} WHERE party_id = $1 AND company_id = $2"
+            ))
+            .bind(party.id().as_uuid())
+            .bind(party.company_id().as_uuid())
+            .execute(&mut *tx)
+            .await
+            .map_err(storage_error)?;
+        }
+        insert_children(&mut tx, party).await?;
         postgres_audit::insert(&mut tx, audit).await?;
         tx.commit().await.map_err(storage_error)
     }
@@ -156,6 +192,13 @@ impl PartyRepository for PostgresPartyRepository {
             Some(PartyKind::Seller) => sql.push(" AND is_seller"),
             None => &mut sql,
         };
+        if let Some(tag) = query.tag() {
+            sql.push(
+                " AND EXISTS (SELECT 1 FROM party_tags WHERE party_id = parties.id AND tag = ",
+            )
+            .push_bind(tag.as_str())
+            .push(")");
+        }
         if let Some(text) = query.search() {
             // `strpos` instead of `LIKE` so that `%` and `_` in the text mean themselves.
             sql.push(" AND (strpos(lower(name), lower(")
@@ -172,13 +215,116 @@ impl PartyRepository for PostgresPartyRepository {
         }
         push_name_keyset(&mut sql, query.sort(), after, limit);
 
+        let mut tx = snapshot(&self.pool).await?;
         let rows = sql
             .build()
-            .fetch_all(&self.pool)
+            .fetch_all(&mut *tx)
             .await
             .map_err(storage_error)?;
-        rows.iter().map(party_from_row).collect()
+        let parties = with_children(&mut tx, company_id, rows).await?;
+        tx.commit().await.map_err(storage_error)?;
+        Ok(parties)
     }
+}
+
+/// Writes the contacts, in order, and the tags of a party on the connection of the transaction that
+/// writes the party: they commit with it or not at all.
+async fn insert_children(
+    connection: &mut PgConnection,
+    party: &Party,
+) -> Result<(), RepositoryError> {
+    for (index, contact) in party.contacts().iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO party_contacts (company_id, party_id, position, name, job_title, email, \
+             phone) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(party.company_id().as_uuid())
+        .bind(party.id().as_uuid())
+        .bind(
+            i16::try_from(index + 1).map_err(|_| {
+                RepositoryError::Storage("a party has too many contacts".to_owned())
+            })?,
+        )
+        .bind(contact.name())
+        .bind(contact.job_title())
+        .bind(contact.email().map(|email| email.as_str()))
+        .bind(contact.phone())
+        .execute(&mut *connection)
+        .await
+        .map_err(storage_error)?;
+    }
+    for tag in party.tags() {
+        sqlx::query("INSERT INTO party_tags (company_id, party_id, tag) VALUES ($1, $2, $3)")
+            .bind(party.company_id().as_uuid())
+            .bind(party.id().as_uuid())
+            .bind(tag.as_str())
+            .execute(&mut *connection)
+            .await
+            .map_err(storage_error)?;
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct PartyChildren {
+    contacts: Vec<ContactDraft>,
+    tags: Vec<String>,
+}
+
+/// The parties of these rows, each with its contacts and tags: two queries for all of them.
+async fn with_children(
+    connection: &mut PgConnection,
+    company_id: CompanyId,
+    rows: Vec<PgRow>,
+) -> Result<Vec<Party>, RepositoryError> {
+    let ids: Vec<Uuid> = rows
+        .iter()
+        .map(|row| row.try_get("id").map_err(storage_error))
+        .collect::<Result<_, _>>()?;
+    let mut children: HashMap<Uuid, PartyChildren> = HashMap::new();
+    let contacts = sqlx::query(
+        "SELECT party_id, name, job_title, email, phone FROM party_contacts \
+         WHERE company_id = $1 AND party_id = ANY($2) ORDER BY party_id, position",
+    )
+    .bind(company_id.as_uuid())
+    .bind(&ids)
+    .fetch_all(&mut *connection)
+    .await
+    .map_err(storage_error)?;
+    for row in &contacts {
+        let party_id: Uuid = row.try_get("party_id").map_err(storage_error)?;
+        children
+            .entry(party_id)
+            .or_default()
+            .contacts
+            .push(ContactDraft {
+                name: row.try_get("name").map_err(storage_error)?,
+                job_title: row.try_get("job_title").map_err(storage_error)?,
+                email: row.try_get("email").map_err(storage_error)?,
+                phone: row.try_get("phone").map_err(storage_error)?,
+            });
+    }
+    let tags = sqlx::query(
+        "SELECT party_id, tag FROM party_tags \
+         WHERE company_id = $1 AND party_id = ANY($2) ORDER BY party_id, tag",
+    )
+    .bind(company_id.as_uuid())
+    .bind(&ids)
+    .fetch_all(&mut *connection)
+    .await
+    .map_err(storage_error)?;
+    for row in &tags {
+        let party_id: Uuid = row.try_get("party_id").map_err(storage_error)?;
+        children
+            .entry(party_id)
+            .or_default()
+            .tags
+            .push(row.try_get("tag").map_err(storage_error)?);
+    }
+    rows.iter()
+        .zip(ids)
+        .map(|(row, id)| party_from_row(row, children.remove(&id).unwrap_or_default()))
+        .collect()
 }
 
 type PartyQueryBuilder<'q> = sqlx::query::Query<'q, Postgres, sqlx::postgres::PgArguments>;
@@ -239,7 +385,7 @@ fn address_from_row(row: &PgRow) -> Result<Option<AddressDraft>, RepositoryError
     }))
 }
 
-fn party_from_row(row: &PgRow) -> Result<Party, RepositoryError> {
+fn party_from_row(row: &PgRow, children: PartyChildren) -> Result<Party, RepositoryError> {
     let draft = PartyDraft {
         name: row.try_get("name").map_err(storage_error)?,
         document: row.try_get("document").map_err(storage_error)?,
@@ -249,6 +395,8 @@ fn party_from_row(row: &PgRow) -> Result<Party, RepositoryError> {
         is_carrier: row.try_get("is_carrier").map_err(storage_error)?,
         is_seller: row.try_get("is_seller").map_err(storage_error)?,
         address: address_from_row(row)?,
+        contacts: children.contacts,
+        tags: children.tags,
     };
     let id = PartyId::from_uuid(row.try_get("id").map_err(storage_error)?);
     let company_id = CompanyId::from_uuid(row.try_get("company_id").map_err(storage_error)?);
@@ -375,6 +523,202 @@ mod tests {
         let other_company = contract::create_company(&pool).await;
         let service = PartyService::new(PostgresPartyRepository::new(pool), contract::registry());
         contract::edits_parties_and_records_only_changes(&service, company, other_company).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn keeps_party_contacts_and_tags() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let other_company = contract::create_company(&pool).await;
+        let service = PartyService::new(PostgresPartyRepository::new(pool), contract::registry());
+        contract::keeps_party_contacts_and_tags(&service, company, other_company).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn the_database_refuses_what_the_domain_would_in_contacts_and_tags() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let party = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO parties (id, company_id, name, is_customer, is_supplier, is_carrier, \
+             is_seller, document_check) VALUES ($1, $2, 'Teste', true, false, false, false, \
+             'not_applicable')",
+        )
+        .bind(party)
+        .bind(company.as_uuid())
+        .execute(&pool)
+        .await
+        .unwrap();
+        let refused_by = |result: Result<_, sqlx::Error>| match result {
+            Err(sqlx::Error::Database(db)) => db.constraint().map(str::to_owned),
+            _ => None,
+        };
+        let tag = |tag: String, company: Uuid| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query(
+                    "INSERT INTO party_tags (company_id, party_id, tag) VALUES ($1, $2, $3)",
+                )
+                .bind(company)
+                .bind(party)
+                .bind(tag)
+                .execute(&pool)
+                .await
+            }
+        };
+        let mine = company.as_uuid();
+        for refused in [
+            "".to_owned(),
+            "VIP".to_owned(),
+            " vip".to_owned(),
+            "vip\t".to_owned(),
+            "\n".to_owned(),
+            "a,b".to_owned(),
+            "a\u{1}b".to_owned(),
+            "a\u{85}b".to_owned(),
+            "a".repeat(31),
+        ] {
+            assert_eq!(
+                refused_by(tag(refused.clone(), mine).await).as_deref(),
+                Some("party_tags_tag_valid"),
+                "{refused:?}"
+            );
+        }
+        // What the domain accepts, the database accepts: accents and a space inside.
+        for accepted in [
+            "vip",
+            "distribuição",
+            "água mineral",
+            "istanbul",
+            &"a".repeat(30),
+        ] {
+            tag(accepted.to_owned(), mine).await.unwrap();
+        }
+        assert_eq!(
+            refused_by(tag("vip".into(), mine).await).as_deref(),
+            Some("party_tags_pkey")
+        );
+        // The tag must be in its party's company.
+        assert_eq!(
+            refused_by(tag("novo".into(), Uuid::new_v4()).await).as_deref(),
+            Some("party_tags_party_fk")
+        );
+
+        let contact = |position: i16,
+                       name: &'static str,
+                       job_title: Option<&'static str>,
+                       email: Option<&'static str>,
+                       phone: Option<&'static str>| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query(
+                    "INSERT INTO party_contacts (company_id, party_id, position, name, job_title, \
+                     email, phone) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                )
+                .bind(mine)
+                .bind(party)
+                .bind(position)
+                .bind(name)
+                .bind(job_title)
+                .bind(email)
+                .bind(phone)
+                .execute(&pool)
+                .await
+            }
+        };
+        let cases = [
+            (
+                contact(0, "Ana", None, None, None).await,
+                "party_contacts_position_valid",
+            ),
+            (
+                contact(21, "Ana", None, None, None).await,
+                "party_contacts_position_valid",
+            ),
+            (
+                contact(1, "", None, None, None).await,
+                "party_contacts_text_valid",
+            ),
+            (
+                contact(1, "\tAna", None, None, None).await,
+                "party_contacts_text_valid",
+            ),
+            (
+                contact(1, "Ana\n", None, None, None).await,
+                "party_contacts_text_valid",
+            ),
+            (
+                contact(1, "Ana", Some(" "), None, None).await,
+                "party_contacts_text_valid",
+            ),
+            (
+                contact(1, "Ana", Some(""), None, None).await,
+                "party_contacts_text_valid",
+            ),
+            (
+                contact(1, "Ana", None, Some("Ana@x.com"), None).await,
+                "party_contacts_email_valid",
+            ),
+            (
+                contact(1, "Ana", None, Some("ana"), None).await,
+                "party_contacts_email_valid",
+            ),
+            (
+                contact(1, "Ana", None, Some("@x.com"), None).await,
+                "party_contacts_email_valid",
+            ),
+            (
+                contact(1, "Ana", None, Some("ana@x"), None).await,
+                "party_contacts_email_valid",
+            ),
+            (
+                contact(1, "Ana", None, Some(" ana@x.com"), None).await,
+                "party_contacts_email_valid",
+            ),
+            (
+                contact(1, "Ana", None, None, Some("")).await,
+                "party_contacts_phone_valid",
+            ),
+            (
+                contact(1, "Ana", None, None, Some("1234567")).await,
+                "party_contacts_phone_valid",
+            ),
+            (
+                contact(1, "Ana", None, None, Some("1234567890123456")).await,
+                "party_contacts_phone_valid",
+            ),
+            (
+                contact(1, "Ana", None, None, Some("ligar 12345678")).await,
+                "party_contacts_phone_valid",
+            ),
+            (
+                contact(1, "Ana", None, None, Some(" 12345678")).await,
+                "party_contacts_phone_valid",
+            ),
+            (
+                contact(1, "Ana", None, None, Some("+55 (81) 99999-0000 0000 0000")).await,
+                "party_contacts_phone_valid",
+            ),
+        ];
+        for (result, constraint) in cases {
+            assert_eq!(refused_by(result).as_deref(), Some(constraint));
+        }
+        contact(
+            1,
+            "Ana",
+            Some("Compras"),
+            Some("ana@x.com"),
+            Some("(81) 99999-0000"),
+        )
+        .await
+        .unwrap();
+        contact(2, "Bruno", None, None, None).await.unwrap();
+        assert_eq!(
+            refused_by(contact(1, "Carla", None, None, None).await).as_deref(),
+            Some("party_contacts_pkey")
+        );
     }
 
     #[tokio::test]

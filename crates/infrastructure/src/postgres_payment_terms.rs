@@ -11,7 +11,7 @@ use sqlx::postgres::PgRow;
 use sqlx::{PgConnection, PgPool, Postgres, QueryBuilder, Row};
 use uuid::Uuid;
 
-use crate::postgres::{push_name_keyset, storage_error};
+use crate::postgres::{push_name_keyset, snapshot, storage_error};
 use crate::postgres_audit;
 
 const NAME_UNIQUE_INDEX: &str = "payment_terms_company_name_key";
@@ -90,7 +90,7 @@ impl PaymentTermRepository for PostgresPaymentTermRepository {
         company_id: CompanyId,
         id: PaymentTermId,
     ) -> Result<Option<PaymentTerm>, RepositoryError> {
-        let mut tx = self.snapshot().await?;
+        let mut tx = snapshot(&self.pool).await?;
         let row = sqlx::query(&format!(
             "{SELECT_PAYMENT_TERMS} WHERE company_id = $1 AND id = $2"
         ))
@@ -172,7 +172,7 @@ impl PaymentTermRepository for PostgresPaymentTermRepository {
         }
         push_name_keyset(&mut sql, query.sort(), after, limit);
 
-        let mut tx = self.snapshot().await?;
+        let mut tx = snapshot(&self.pool).await?;
         let rows = sql
             .build()
             .fetch_all(&mut *tx)
@@ -181,20 +181,6 @@ impl PaymentTermRepository for PostgresPaymentTermRepository {
         let terms = with_installments(&mut tx, company_id, rows).await?;
         tx.commit().await.map_err(storage_error)?;
         Ok(terms)
-    }
-}
-
-impl PostgresPaymentTermRepository {
-    /// A transaction that sees one moment of the database: a term is read in two statements (the
-    /// term, then its installments), and an edit committed between them would otherwise give a term
-    /// with the old name and the new installments, a state that never existed.
-    async fn snapshot(&self) -> Result<sqlx::Transaction<'static, Postgres>, RepositoryError> {
-        let mut tx = self.pool.begin().await.map_err(storage_error)?;
-        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-            .execute(&mut *tx)
-            .await
-            .map_err(storage_error)?;
-        Ok(tx)
     }
 }
 

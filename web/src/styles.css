@@ -1255,6 +1255,41 @@ tbody tr:last-child td {
   grid-column: span 2;
 }
 
+.contacts {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.contact-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.contact-row > label.span-2,
+.contact-row > button {
+  grid-column: span 2;
+}
+
+.contact-row > button {
+  justify-self: end;
+}
+
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.25rem;
+}
+
+.tag-list .badge {
+  margin-left: 0;
+  border: 0;
+  cursor: pointer;
+}
+
 .installment-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
