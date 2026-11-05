@@ -25,6 +25,10 @@ pub enum DomainError {
     MissingGroups,
     /// A subcategory takes its groups from its parent.
     GroupsAreInherited,
+    InvalidBankCode,
+    InvalidBranch,
+    InvalidAccountNumber,
+    CashAccountHasNoBank,
 }
 
 impl fmt::Display for DomainError {
@@ -68,9 +72,19 @@ impl fmt::Display for DomainError {
             Self::GroupsAreInherited => {
                 f.write_str("a subcategory takes its DRE and cash-flow groups from its parent")
             }
-            Self::KindCannotChange => {
-                f.write_str("a product cannot become a service, nor the other way around")
+            Self::InvalidBankCode => {
+                f.write_str("bank code must have 3 digits, or 8 for an institution without one")
             }
+            Self::InvalidBranch => {
+                f.write_str("branch must have at most 10 letters or digits, without spaces")
+            }
+            Self::InvalidAccountNumber => {
+                f.write_str("account number must have at most 20 letters or digits, without spaces")
+            }
+            Self::CashAccountHasNoBank => {
+                f.write_str("a cash account has no bank, branch or account number")
+            }
+            Self::KindCannotChange => f.write_str("the kind cannot change once registered"),
         }
     }
 }

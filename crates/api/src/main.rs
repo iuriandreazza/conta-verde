@@ -2,12 +2,14 @@ use std::time::Duration;
 
 use conta_verde_api::{ApiConfig, Ports, Services, router};
 use conta_verde_application::{
-    AuthService, CategoryService, CostCenterService, PartyService, ProductService,
+    AuthService, BankAccountService, CategoryService, CostCenterService, PartyService,
+    PaymentMethodService, ProductService,
 };
 use conta_verde_infrastructure::{
-    Argon2SecretService, BrasilApiCnpjRegistry, CachedCnpjRegistry, PostgresCategoryRepository,
-    PostgresCostCenterRepository, PostgresIdentityRepository, PostgresPartyRepository,
-    PostgresProductRepository, connect_and_migrate,
+    Argon2SecretService, BrasilApiCnpjRegistry, CachedCnpjRegistry, PostgresBankAccountRepository,
+    PostgresCategoryRepository, PostgresCostCenterRepository, PostgresIdentityRepository,
+    PostgresPartyRepository, PostgresPaymentMethodRepository, PostgresProductRepository,
+    connect_and_migrate,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -22,6 +24,8 @@ impl Ports for PostgresPorts {
     type Products = PostgresProductRepository;
     type CostCenters = PostgresCostCenterRepository;
     type Categories = PostgresCategoryRepository;
+    type BankAccounts = PostgresBankAccountRepository;
+    type PaymentMethods = PostgresPaymentMethodRepository;
 }
 
 const SESSION_LIFETIME: Duration = Duration::from_secs(30 * 24 * 60 * 60);
@@ -48,6 +52,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let products = ProductService::new(PostgresProductRepository::new(pool.clone()));
     let cost_centers = CostCenterService::new(PostgresCostCenterRepository::new(pool.clone()));
     let categories = CategoryService::new(PostgresCategoryRepository::new(pool.clone()));
+    let bank_accounts = BankAccountService::new(PostgresBankAccountRepository::new(pool.clone()));
+    let payment_methods =
+        PaymentMethodService::new(PostgresPaymentMethodRepository::new(pool.clone()));
     let auth = AuthService::new(
         PostgresIdentityRepository::new(pool),
         Argon2SecretService::new()?,
@@ -63,6 +70,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 products,
                 cost_centers,
                 categories,
+                bank_accounts,
+                payment_methods,
                 auth,
             },
             config,

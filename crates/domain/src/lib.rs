@@ -1,6 +1,7 @@
 mod account;
 mod amount;
 mod audit;
+mod bank_account;
 mod category;
 mod cost_center;
 mod document;
@@ -10,21 +11,28 @@ mod error;
 mod ids;
 mod name;
 mod party;
+mod payment_method;
 mod product;
 
 pub use account::{Account, AccountDraft, Company, User, validate_password};
 pub use amount::Amount;
 pub use audit::{
     Actor, AuditAction, AuditEntity, AuditEntry, AuditRecord, Audited, FieldChange,
-    category_changes, category_creation_changes, cost_center_changes, cost_center_creation_changes,
-    creation_changes, document_check_changes, product_changes, product_creation_changes,
+    bank_account_changes, bank_account_creation_changes, category_changes,
+    category_creation_changes, cost_center_changes, cost_center_creation_changes, creation_changes,
+    document_check_changes, payment_method_changes, payment_method_creation_changes,
+    product_changes, product_creation_changes,
 };
+pub use bank_account::{BankAccount, BankAccountDraft, BankAccountKind};
 pub use category::{CashFlowGroup, Category, DreGroup, MAX_CATEGORY_LEVELS, default_template};
 pub use cost_center::{CostCenter, CostCenterDraft};
 pub use document::{Cnpj, Document};
 pub use document_check::DocumentCheck;
 pub use email::Email;
 pub use error::DomainError;
-pub use ids::{CategoryId, CompanyId, CostCenterId, PartyId, ProductId, UserId};
+pub use ids::{
+    BankAccountId, CategoryId, CompanyId, CostCenterId, PartyId, PaymentMethodId, ProductId, UserId,
+};
 pub use party::{Party, PartyDraft};
+pub use payment_method::{PaymentMethod, PaymentMethodDraft, PaymentMethodKind};
 pub use product::{Product, ProductDraft, ProductKind};

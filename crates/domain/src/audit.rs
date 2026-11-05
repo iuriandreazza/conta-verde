@@ -1,6 +1,9 @@
 use uuid::Uuid;
 
-use crate::{Category, CompanyId, CostCenter, DocumentCheck, Party, Product, UserId};
+use crate::{
+    BankAccount, Category, CompanyId, CostCenter, DocumentCheck, Party, PaymentMethod, Product,
+    UserId,
+};
 
 /// Who made a change. The name is a snapshot: history must keep reading the same after the user is
 /// renamed or removed. API keys will join as another variant ([ADR 0007]).
@@ -16,6 +19,8 @@ pub enum AuditEntity {
     Product,
     CostCenter,
     Category,
+    BankAccount,
+    PaymentMethod,
 }
 
 impl AuditEntity {
@@ -25,6 +30,8 @@ impl AuditEntity {
             Self::Product => "product",
             Self::CostCenter => "cost_center",
             Self::Category => "category",
+            Self::BankAccount => "bank_account",
+            Self::PaymentMethod => "payment_method",
         }
     }
 }
@@ -110,6 +117,34 @@ impl Audited for Product {
 impl Audited for Category {
     fn audit_entity(&self) -> AuditEntity {
         AuditEntity::Category
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.id().as_uuid()
+    }
+}
+
+impl Audited for BankAccount {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::BankAccount
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.id().as_uuid()
+    }
+}
+
+impl Audited for PaymentMethod {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::PaymentMethod
     }
 
     fn audit_company(&self) -> CompanyId {
@@ -255,6 +290,43 @@ pub fn category_creation_changes(category: &Category) -> Vec<FieldChange> {
 
 pub fn category_changes(before: &Category, after: &Category) -> Vec<FieldChange> {
     changes_between(category_fields(before), category_fields(after))
+}
+
+fn bank_account_fields(account: &BankAccount) -> Fields {
+    vec![
+        ("kind", Some(account.kind().as_str().to_owned())),
+        ("name", Some(account.name().to_owned())),
+        ("bank_code", account.bank_code().map(str::to_owned)),
+        ("branch", account.branch().map(str::to_owned)),
+        ("number", account.number().map(str::to_owned)),
+        ("active", Some(account.is_active().to_string())),
+    ]
+}
+
+/// Every field a new bank account has set.
+pub fn bank_account_creation_changes(account: &BankAccount) -> Vec<FieldChange> {
+    creation_from(bank_account_fields(account))
+}
+
+pub fn bank_account_changes(before: &BankAccount, after: &BankAccount) -> Vec<FieldChange> {
+    changes_between(bank_account_fields(before), bank_account_fields(after))
+}
+
+fn payment_method_fields(method: &PaymentMethod) -> Fields {
+    vec![
+        ("kind", Some(method.kind().as_str().to_owned())),
+        ("name", Some(method.name().to_owned())),
+        ("active", Some(method.is_active().to_string())),
+    ]
+}
+
+/// Every field a new payment method has set.
+pub fn payment_method_creation_changes(method: &PaymentMethod) -> Vec<FieldChange> {
+    creation_from(payment_method_fields(method))
+}
+
+pub fn payment_method_changes(before: &PaymentMethod, after: &PaymentMethod) -> Vec<FieldChange> {
+    changes_between(payment_method_fields(before), payment_method_fields(after))
 }
 
 fn cost_center_fields(cost_center: &CostCenter) -> Fields {

@@ -1,5 +1,6 @@
 mod access;
 mod auth;
+mod bank_accounts;
 mod categories;
 mod cost_centers;
 mod cursor;
@@ -8,6 +9,7 @@ mod history;
 mod json;
 mod list_params;
 mod parties;
+mod payment_methods;
 mod products;
 mod session;
 
@@ -16,9 +18,10 @@ use std::sync::Arc;
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use conta_verde_application::{
-    AuthService, CategoryRepository, CategoryService, CnpjRegistry, CostCenterRepository,
-    CostCenterService, IdentityRepository, PartyRepository, PartyService, ProductRepository,
-    ProductService, SecretService,
+    AuthService, BankAccountRepository, BankAccountService, CategoryRepository, CategoryService,
+    CnpjRegistry, CostCenterRepository, CostCenterService, IdentityRepository, PartyRepository,
+    PartyService, PaymentMethodRepository, PaymentMethodService, ProductRepository, ProductService,
+    SecretService,
 };
 use serde::Serialize;
 
@@ -38,6 +41,8 @@ pub trait Ports: 'static {
     type Products: ProductRepository + 'static;
     type CostCenters: CostCenterRepository + 'static;
     type Categories: CategoryRepository + 'static;
+    type BankAccounts: BankAccountRepository + 'static;
+    type PaymentMethods: PaymentMethodRepository + 'static;
 }
 
 /// The use cases the API serves.
@@ -46,6 +51,8 @@ pub struct Services<X: Ports> {
     pub products: ProductService<X::Products>,
     pub cost_centers: CostCenterService<X::CostCenters>,
     pub categories: CategoryService<X::Categories>,
+    pub bank_accounts: BankAccountService<X::BankAccounts>,
+    pub payment_methods: PaymentMethodService<X::PaymentMethods>,
     pub auth: AuthService<X::Identity, X::Secrets>,
 }
 
@@ -54,6 +61,8 @@ pub(crate) struct AppState<X: Ports> {
     products: ProductService<X::Products>,
     cost_centers: CostCenterService<X::CostCenters>,
     categories: CategoryService<X::Categories>,
+    bank_accounts: BankAccountService<X::BankAccounts>,
+    payment_methods: PaymentMethodService<X::PaymentMethods>,
     auth: AuthService<X::Identity, X::Secrets>,
     config: ApiConfig,
 }
@@ -67,6 +76,8 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         products: services.products,
         cost_centers: services.cost_centers,
         categories: services.categories,
+        bank_accounts: services.bank_accounts,
+        payment_methods: services.payment_methods,
         auth: services.auth,
         config,
     });
@@ -128,6 +139,32 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
             "/companies/{company_id}/categories/{category_id}/history",
             get(categories::category_history::<X>),
         )
+        .route(
+            "/companies/{company_id}/bank-accounts",
+            get(bank_accounts::list_bank_accounts::<X>)
+                .post(bank_accounts::register_bank_account::<X>),
+        )
+        .route(
+            "/companies/{company_id}/bank-accounts/{bank_account_id}",
+            put(bank_accounts::update_bank_account::<X>),
+        )
+        .route(
+            "/companies/{company_id}/bank-accounts/{bank_account_id}/history",
+            get(bank_accounts::bank_account_history::<X>),
+        )
+        .route(
+            "/companies/{company_id}/payment-methods",
+            get(payment_methods::list_payment_methods::<X>)
+                .post(payment_methods::register_payment_method::<X>),
+        )
+        .route(
+            "/companies/{company_id}/payment-methods/{payment_method_id}",
+            put(payment_methods::update_payment_method::<X>),
+        )
+        .route(
+            "/companies/{company_id}/payment-methods/{payment_method_id}/history",
+            get(payment_methods::payment_method_history::<X>),
+        )
         .with_state(state)
 }
 
@@ -147,9 +184,9 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode, header};
     use conta_verde_infrastructure::{
-        Argon2SecretService, InMemoryCategoryRepository, InMemoryCnpjRegistry,
-        InMemoryCostCenterRepository, InMemoryIdentityRepository, InMemoryPartyRepository,
-        InMemoryProductRepository,
+        Argon2SecretService, InMemoryBankAccountRepository, InMemoryCategoryRepository,
+        InMemoryCnpjRegistry, InMemoryCostCenterRepository, InMemoryIdentityRepository,
+        InMemoryPartyRepository, InMemoryPaymentMethodRepository, InMemoryProductRepository,
     };
     use http_body_util::BodyExt;
     use serde_json::{Value, json};
@@ -187,6 +224,8 @@ mod tests {
         type Products = InMemoryProductRepository;
         type CostCenters = InMemoryCostCenterRepository;
         type Categories = InMemoryCategoryRepository;
+        type BankAccounts = InMemoryBankAccountRepository;
+        type PaymentMethods = InMemoryPaymentMethodRepository;
     }
 
     /// Like `MemoryPorts`, with the CNPJ lookup switched off.
@@ -200,6 +239,8 @@ mod tests {
         type Products = InMemoryProductRepository;
         type CostCenters = InMemoryCostCenterRepository;
         type Categories = InMemoryCategoryRepository;
+        type BankAccounts = InMemoryBankAccountRepository;
+        type PaymentMethods = InMemoryPaymentMethodRepository;
     }
 
     fn auth_service() -> AuthService<InMemoryIdentityRepository, Argon2SecretService> {
@@ -219,6 +260,10 @@ mod tests {
                 products: ProductService::new(InMemoryProductRepository::default()),
                 cost_centers: CostCenterService::new(InMemoryCostCenterRepository::default()),
                 categories: CategoryService::new(InMemoryCategoryRepository::default()),
+                bank_accounts: BankAccountService::new(InMemoryBankAccountRepository::default()),
+                payment_methods: PaymentMethodService::new(
+                    InMemoryPaymentMethodRepository::default(),
+                ),
                 auth: auth_service(),
             },
             ApiConfig::default(),
@@ -640,6 +685,10 @@ mod tests {
                 products: ProductService::new(InMemoryProductRepository::default()),
                 cost_centers: CostCenterService::new(InMemoryCostCenterRepository::default()),
                 categories: CategoryService::new(InMemoryCategoryRepository::default()),
+                bank_accounts: BankAccountService::new(InMemoryBankAccountRepository::default()),
+                payment_methods: PaymentMethodService::new(
+                    InMemoryPaymentMethodRepository::default(),
+                ),
                 auth: auth_service(),
             },
             ApiConfig::default(),
@@ -1687,5 +1736,256 @@ mod tests {
             assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{query}");
             assert!(reply.body["error"].is_string(), "{query}");
         }
+    }
+
+    fn bank_accounts_uri(company_id: Uuid) -> String {
+        format!("/companies/{company_id}/bank-accounts")
+    }
+
+    async fn post_to(app: &Router, uri: &str, cookie: &str, body: Value) -> Reply {
+        send(app, json_request("POST", uri, Some(cookie), body)).await
+    }
+
+    #[tokio::test]
+    async fn registers_and_changes_bank_accounts_stored_in_one_form() {
+        let app = app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let uri = bank_accounts_uri(company_id);
+
+        let created = post_to(
+            &app,
+            &uri,
+            &cookie,
+            json!({ "kind": "checking", "name": " Conta da loja ", "bank_code": "341", "branch": "12.34", "number": "56789-x" }),
+        )
+        .await;
+        assert_eq!(created.status, StatusCode::CREATED);
+        assert_eq!(created.body["name"], "Conta da loja");
+        assert_eq!(created.body["branch"], "1234");
+        assert_eq!(created.body["number"], "56789X");
+        assert_eq!(created.body["active"], true);
+        let id = created.body["id"].as_str().unwrap().to_owned();
+
+        // The same bank, branch and number is the same account, however it is written.
+        let same = json!({ "kind": "savings", "name": "Outra", "bank_code": "341", "branch": "1234", "number": "56789 X" });
+        assert_eq!(
+            post_to(&app, &uri, &cookie, same).await.status,
+            StatusCode::CONFLICT
+        );
+        let same_name = json!({ "kind": "cash", "name": "CONTA DA LOJA" });
+        assert_eq!(
+            post_to(&app, &uri, &cookie, same_name).await.status,
+            StatusCode::CONFLICT
+        );
+        // Cash takes no bank.
+        let cash = json!({ "kind": "cash", "name": "Caixa", "number": "1" });
+        assert_eq!(
+            post_to(&app, &uri, &cookie, cash).await.status,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+
+        let account_uri = format!("{uri}/{id}");
+        let changed = json!({ "kind": "checking", "name": "Conta da loja", "bank_code": "341", "branch": "1234", "number": "99999", "active": false });
+        let updated = send(
+            &app,
+            json_request("PUT", &account_uri, Some(&cookie), changed.clone()),
+        )
+        .await;
+        assert_eq!(updated.status, StatusCode::OK);
+        assert_eq!(updated.body["number"], "99999");
+        // The same body again changes nothing and adds nothing to the history.
+        send(
+            &app,
+            json_request("PUT", &account_uri, Some(&cookie), changed),
+        )
+        .await;
+        // The kind is fixed, and `active` has to be said when replacing.
+        let other_kind = json!({ "kind": "savings", "name": "Conta da loja", "active": true });
+        let reply = send(
+            &app,
+            json_request("PUT", &account_uri, Some(&cookie), other_kind),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
+        let without_active = json!({ "kind": "checking", "name": "Conta da loja" });
+        let reply = send(
+            &app,
+            json_request("PUT", &account_uri, Some(&cookie), without_active),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
+
+        let found = send(
+            &app,
+            get_request(
+                &format!("{uri}?kind=checking&active=false&q=99-9"),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(found.body["items"][0]["name"], "Conta da loja");
+        let history = send(
+            &app,
+            get_request(&format!("{account_uri}/history"), Some(&cookie)),
+        )
+        .await;
+        let entries = history.body.as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            entries[1]["changes"],
+            json!([
+                { "field": "number", "from": "56789X", "to": "99999" },
+                { "field": "active", "from": "true", "to": "false" },
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn bank_accounts_and_payment_methods_stay_private_and_refusals_are_json() {
+        let app = app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let (stranger_cookie, stranger_company) = sign_up(&app, "bia@example.com").await;
+        for (path, body) in [
+            (
+                "bank-accounts",
+                json!({ "kind": "checking", "name": "Conta" }),
+            ),
+            ("payment-methods", json!({ "kind": "pix", "name": "Pix" })),
+        ] {
+            let uri = format!("/companies/{company_id}/{path}");
+            let created = post_to(&app, &uri, &cookie, body.clone()).await;
+            assert_eq!(created.status, StatusCode::CREATED, "{path}");
+            let id = created.body["id"].as_str().unwrap().to_owned();
+
+            // Another company has its own, and cannot reach this one's.
+            let theirs = format!("/companies/{stranger_company}/{path}");
+            assert_eq!(
+                post_to(&app, &theirs, &stranger_cookie, body.clone())
+                    .await
+                    .status,
+                StatusCode::CREATED
+            );
+            let mut replacement = body.clone();
+            replacement["active"] = json!(true);
+            let put = json_request(
+                "PUT",
+                &format!("{theirs}/{id}"),
+                Some(&stranger_cookie),
+                replacement.clone(),
+            );
+            assert_eq!(
+                send(&app, put).await.status,
+                StatusCode::NOT_FOUND,
+                "{path}"
+            );
+            let history = get_request(&format!("{theirs}/{id}/history"), Some(&stranger_cookie));
+            assert_eq!(
+                send(&app, history).await.status,
+                StatusCode::NOT_FOUND,
+                "{path}"
+            );
+            assert_eq!(
+                send(&app, get_request(&uri, Some(&stranger_cookie)))
+                    .await
+                    .status,
+                StatusCode::NOT_FOUND
+            );
+            assert_eq!(
+                send(&app, get_request(&uri, None)).await.status,
+                StatusCode::UNAUTHORIZED
+            );
+
+            let malformed = json_request(
+                "PUT",
+                &format!("{uri}/not-a-uuid"),
+                Some(&cookie),
+                replacement,
+            );
+            let reply = send(&app, malformed).await;
+            assert_eq!(reply.status, StatusCode::NOT_FOUND, "{path}");
+            assert!(reply.body["error"].as_str().unwrap().ends_with("not found"));
+
+            // Every refusal has the API's own shape.
+            for bad in [
+                json!({}),
+                json!({ "kind": "gadget", "name": "X" }),
+                json!({ "kind": "pix", "name": "X", "surprise": 1 }),
+                json!({ "kind": 5, "name": "X" }),
+            ] {
+                let reply = post_to(&app, &uri, &cookie, bad.clone()).await;
+                assert!(reply.status.is_client_error(), "{path} {bad}");
+                assert!(reply.body["error"].is_string(), "{path} {bad}");
+            }
+            let long = json!({ "kind": "pix", "name": "x".repeat(201) });
+            assert_eq!(
+                post_to(&app, &uri, &cookie, long).await.status,
+                StatusCode::UNPROCESSABLE_ENTITY
+            );
+            for query in [
+                "kind=gadget",
+                "kind=",
+                "active=yes",
+                "sort=id",
+                "limit=abc",
+                "after=garbage",
+            ] {
+                let reply = send(&app, get_request(&format!("{uri}?{query}"), Some(&cookie))).await;
+                assert!(reply.status.is_client_error(), "{path} {query}");
+                assert!(reply.body["error"].is_string(), "{path} {query}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn registers_changes_and_lists_payment_methods() {
+        let app = app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let uri = format!("/companies/{company_id}/payment-methods");
+
+        let created = post_to(
+            &app,
+            &uri,
+            &cookie,
+            json!({ "kind": "credit_card", "name": " Visa " }),
+        )
+        .await;
+        assert_eq!(created.body["name"], "Visa");
+        assert_eq!(created.body["kind"], "credit_card");
+        assert_eq!(
+            post_to(
+                &app,
+                &uri,
+                &cookie,
+                json!({ "kind": "pix", "name": "VISA" })
+            )
+            .await
+            .status,
+            StatusCode::CONFLICT
+        );
+        let id = created.body["id"].as_str().unwrap();
+
+        // The kind may change with the rest, unlike an account's.
+        let change = json!({ "kind": "debit_card", "name": "Visa débito", "active": false });
+        let updated = send(
+            &app,
+            json_request("PUT", &format!("{uri}/{id}"), Some(&cookie), change),
+        )
+        .await;
+        assert_eq!(updated.body["kind"], "debit_card");
+        let listed = send(
+            &app,
+            get_request(
+                &format!("{uri}?kind=debit_card&active=false&sort=-name"),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(listed.body["items"][0]["name"], "Visa débito");
+        let history = send(
+            &app,
+            get_request(&format!("{uri}/{id}/history"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(history.body.as_array().unwrap().len(), 2);
     }
 }
