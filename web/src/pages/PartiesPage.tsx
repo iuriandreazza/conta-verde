@@ -91,8 +91,11 @@ export function PartiesPage() {
       } else {
         const updated = await api.updateParty(companyId, editing.id, input);
         // In place: the list keeps its page and its filters, but a party that stopped being of the
-        // kind shown no longer belongs in it.
-        const stillShown = (item: Party) => applied.kind === "" || item[`is_${applied.kind}` as const];
+        // kind shown, or lost the tag shown, no longer belongs in it.
+        const tag = applied.tag.trim().toLowerCase();
+        const stillShown = (item: Party) =>
+          (applied.kind === "" || item[`is_${applied.kind}` as const]) &&
+          (tag === "" || item.tags.includes(tag));
         setParties((current) =>
           current.flatMap((item) => (item.id !== updated.id ? [item] : stillShown(updated) ? [updated] : [])),
         );

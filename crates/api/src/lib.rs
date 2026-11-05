@@ -729,6 +729,9 @@ mod tests {
         }
         let reply = send(&app, get_request(&format!("{uri}?tag=a,b"), Some(&cookie))).await;
         assert_eq!(reply.status, StatusCode::BAD_REQUEST);
+        // A blank tag is no filter, like a blank search.
+        let reply = send(&app, get_request(&format!("{uri}?tag=%20"), Some(&cookie))).await;
+        assert_eq!(reply.status, StatusCode::OK);
 
         let mut bad_address = complete.clone();
         bad_address["address"] = address_body();

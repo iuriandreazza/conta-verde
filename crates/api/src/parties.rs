@@ -146,7 +146,8 @@ impl ListQuery {
                 ));
             }
         };
-        if let Some(tag) = self.tag.as_deref() {
+        // Blank text means no filter, as for the search.
+        if let Some(tag) = self.tag.as_deref().filter(|tag| !tag.trim().is_empty()) {
             let tag = Tag::parse(tag).map_err(|_| {
                 ApiError::InvalidQuery("invalid tag: 1 to 30 characters, with no commas")
             })?;

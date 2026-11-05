@@ -1924,6 +1924,25 @@ describe("changing a party, its roles and its address", () => {
     );
   });
 
+  it("drops a party from a list of one tag when the change removes the tag", async () => {
+    const tagged: Party = { ...party("Padaria"), tags: ["vip"] };
+    mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "PUT") return { status: 200, body: party("Padaria") };
+      return page(tagged, { ...party("Zeca"), tags: ["vip"] });
+    });
+    renderAt("/companies/c1/parties");
+
+    await screen.findByRole("table");
+    await userEvent.type(screen.getByLabelText("Etiqueta"), "VIP");
+    await userEvent.click(await screen.findByRole("button", { name: "Alterar Padaria" }));
+    await userEvent.clear(screen.getByLabelText("Etiquetas"));
+    await userEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
+
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Alterar Padaria" })).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Alterar Zeca" })).toBeInTheDocument();
+  });
+
   it("cancels a change and goes back to registering", async () => {
     mockApi((url) => (url === "/api/auth/me" ? { status: 200, body: profile } : page(party("Padaria"))));
     renderAt("/companies/c1/parties");
