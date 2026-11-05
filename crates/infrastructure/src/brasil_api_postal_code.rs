@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use conta_verde_application::{PostalCodeDirectory, PostalCodeEntry, PostalCodeLookupError};
-use conta_verde_domain::PostalCode;
+use conta_verde_domain::{PostalCode, is_state};
 use reqwest::StatusCode;
 use serde::Deserialize;
 
@@ -15,7 +15,7 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_STREET_CHARS: usize = 150;
 const MAX_DISTRICT_CHARS: usize = 80;
 const MAX_CITY_CHARS: usize = 80;
-const STATE_CHARS: usize = 2;
+const MAX_STATE_CHARS: usize = 2;
 
 /// Looks postal codes up on BrasilAPI, which asks the Correios and other public sources. It is run
 /// by volunteers, not by the government: it has no uptime guarantee, and it is slow when its
@@ -62,12 +62,13 @@ impl PostalCodeDirectory for BrasilApiPostalCodeDirectory {
                     unavailable(code, format_args!("unexpected response body: {error}"))
                 })?;
                 let city = bounded(&body.city, MAX_CITY_CHARS);
-                let state = bounded(&body.state, STATE_CHARS + 1).to_ascii_uppercase();
-                // A 200 without a city or a two-letter state is not an answer to fill a form with.
-                if city.is_empty() || state.chars().count() != STATE_CHARS {
+                let state = bounded(&body.state, MAX_STATE_CHARS + 1).to_ascii_uppercase();
+                // A 200 without a city, or with a state that is not one of the 27, is not an answer
+                // to fill a form with: the select would end up blank under a "filled" message.
+                if city.is_empty() || !is_state(&state) {
                     return Err(unavailable(
                         code,
-                        format_args!("answered without a city or a state"),
+                        format_args!("answered without a city or a known state"),
                     ));
                 }
                 let optional = |text: Option<String>, max: usize| {
@@ -115,6 +116,7 @@ mod tests {
     const RATE_LIMITED: &str = "50000-003";
     const NO_CITY: &str = "50000-004";
     const BAD_STATE: &str = "50000-005";
+    const UNKNOWN_STATE: &str = "50000-009";
     const UNREADABLE_BODY: &str = "50000-006";
     const SCRAMBLED_TEXT: &str = "50000-007";
     const HUGE_TEXT: &str = "50000-008";
@@ -169,6 +171,7 @@ mod tests {
             c if c == stored(NO_STREET) => found(json!(""), "Recife", "pe"),
             c if c == stored(NO_CITY) => found(json!("Rua A"), " ", "PE"),
             c if c == stored(BAD_STATE) => found(json!("Rua A"), "Recife", "Pernambuco"),
+            c if c == stored(UNKNOWN_STATE) => found(json!("Rua A"), "Recife", "ZZ"),
             c if c == stored(SCRAMBLED_TEXT) => found(json!("Rua\u{202E}\u{7} A"), "Recife", "PE"),
             c if c == stored(HUGE_TEXT) => found(json!("X".repeat(5_000)), "Recife", "PE"),
             c if c == stored(MISSING) => (
@@ -232,6 +235,7 @@ mod tests {
             UNREADABLE_BODY,
             NO_CITY,
             BAD_STATE,
+            UNKNOWN_STATE,
             "99999-999",
         ] {
             assert_eq!(

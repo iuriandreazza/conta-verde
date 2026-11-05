@@ -19,7 +19,7 @@ mod product;
 mod tag;
 
 pub use account::{Account, AccountDraft, Company, User, validate_password};
-pub use address::{Address, AddressDraft, PostalCode};
+pub use address::{Address, AddressDraft, PostalCode, is_state};
 pub use amount::Amount;
 pub use audit::{
     Actor, AuditAction, AuditEntity, AuditEntry, AuditRecord, Audited, FieldChange,

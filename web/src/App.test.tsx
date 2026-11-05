@@ -2066,6 +2066,8 @@ describe("looking an address up by CEP", () => {
     await userEvent.click(screen.getByRole("button", { name: "Buscar endereço" }));
 
     expect(await screen.findByText(/este CEP não tem rua/)).toBeInTheDocument();
+    // The code is shown tidied, as it was asked.
+    expect(screen.getByLabelText("CEP")).toHaveValue("55555-000");
     expect(screen.getByLabelText("Cidade")).toHaveValue("Cidade Pequena");
     expect(screen.getByLabelText("UF")).toHaveValue("PE");
     expect(screen.getByLabelText("Logradouro")).toHaveValue("Rua do Meio");
@@ -2131,6 +2133,11 @@ describe("looking an address up by CEP", () => {
     await userEvent.click(screen.getByRole("button", { name: "Buscar endereço" }));
     await waitFor(() =>
       expect(screen.getByText(/the postal code service is not answering/)).toBeInTheDocument(),
+    );
+    // Editing the code clears what the last lookup said about the old one.
+    await userEvent.clear(screen.getByLabelText("CEP"));
+    await waitFor(() =>
+      expect(screen.queryByText(/the postal code service is not answering/)).not.toBeInTheDocument(),
     );
     // The form still works by hand.
     await userEvent.type(screen.getByLabelText("Logradouro"), "Rua A");

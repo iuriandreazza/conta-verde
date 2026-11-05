@@ -79,6 +79,9 @@ party to know about, one `User-Agent` and one set of limits.
   any signed-in user can use up the quota by looping over codes. A rate limiter in front of the API
   is the real remedy, as in ADR 0017.
 - The CSV import (next) does **not** look addresses up: a row either has its address or not.
+- The adapter reads the upstream body whole before bounding its fields, like the CNPJ one; the
+  5 s timeout covers reading it, and the host is fixed. A size cap is worth adding to both if
+  the host ever stops being trusted.
 
 ## Revisit when
 

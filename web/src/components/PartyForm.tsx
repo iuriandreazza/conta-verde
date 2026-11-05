@@ -123,6 +123,8 @@ export function PartyForm({
       fill("district", entry.district);
       fill("city", entry.city);
       fill("state", entry.state);
+      // The code that was asked, tidied: a stray letter in the field would be refused on saving.
+      setPostalCode(withHyphen(digitsOf(asked)));
       const next = elements?.namedItem(entry.street ? "number" : "street");
       if (next instanceof HTMLInputElement) {
         next.focus();
@@ -247,7 +249,11 @@ export function PartyForm({
             placeholder="00000-000"
             maxLength={9}
             value={postalCode}
-            onChange={(event) => setPostalCode(event.target.value)}
+            onChange={(event) => {
+              setPostalCode(event.target.value);
+              // What the last lookup said was about the old code.
+              setLookupNotice(null);
+            }}
           />
         </label>
         <div className="lookup-action">

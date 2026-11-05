@@ -120,6 +120,11 @@ impl PostalCode {
     }
 }
 
+/// Whether the text is one of the 27 state abbreviations, in upper case.
+pub fn is_state(abbreviation: &str) -> bool {
+    STATES.contains(&abbreviation)
+}
+
 fn clean_state(raw: &str) -> Result<String, DomainError> {
     let state = raw.trim().to_ascii_uppercase();
     if STATES.contains(&state.as_str()) {
