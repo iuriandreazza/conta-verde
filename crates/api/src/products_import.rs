@@ -26,28 +26,41 @@ const COLUMNS: &[&str] = &[
 fn kind_of(cell: Option<&str>) -> Result<ProductKind, String> {
     match cell.map(str::to_lowercase).as_deref() {
         None | Some("product" | "produto") => Ok(ProductKind::Product),
-        Some("service" | "serviço" | "servico") => Ok(ProductKind::Service),
+        // The last is "serviço" with the cedilla written apart, as macOS saves it.
+        Some("service" | "serviço" | "servico" | "servic\u{327}o") => Ok(ProductKind::Service),
         Some(_) => Err("kind must be product or service".to_owned()),
     }
 }
 
-/// A price as a spreadsheet writes it in Brazil, `12,50`, becomes `12.50`. Only that: a cell with
-/// both a comma and a dot (`1.234,56`) is left as it is and refused by the amount's own strict
-/// parsing, since guessing which one is the thousands separator could change a price. A comma
-/// followed by exactly three digits (`1,234`) is ambiguous the same way, a thousand in a spreadsheet
-/// from another locale and a decimal in this one, so it is left alone too and refused: the person
-/// writes `1234` or `1,2340`, whichever is meant.
-fn decimal(cell: Option<&str>) -> Option<String> {
-    cell.map(|text| {
-        let ambiguous = text.split_once(',').is_some_and(|(_, after)| {
-            after.len() == 3 && after.bytes().all(|b| b.is_ascii_digit())
-        });
-        if text.contains(',') && !text.contains('.') && !ambiguous {
-            text.replace(',', ".")
-        } else {
-            text.to_owned()
-        }
-    })
+/// A price or a quantity as a spreadsheet writes it in Brazil, `12,50`, becomes `12.50`. Only that
+/// is converted, and a cell that could mean two amounts is refused instead of guessed:
+///
+/// - both a comma and a dot (`1.234,56`) is left as it is for the amount's strict parsing to refuse;
+/// - one separator followed by exactly three digits, after one to three digits that do not start
+///   with a zero (`1.234`, `1,234`), is a thousand in one locale and a decimal in another. `0,250`
+///   cannot be a thousand, so it is a decimal. The person writes `1234`, or `1,2340` for the other.
+fn decimal(column: &str, cell: Option<&str>) -> Result<Option<String>, String> {
+    let Some(text) = cell else { return Ok(None) };
+    let ambiguous = ['.', ','].iter().any(|separator| {
+        text.matches(*separator).count() == 1
+            && text.split_once(*separator).is_some_and(|(before, after)| {
+                after.len() == 3
+                    && after.bytes().all(|b| b.is_ascii_digit())
+                    && (1..=3).contains(&before.len())
+                    && !before.starts_with('0')
+                    && before.bytes().all(|b| b.is_ascii_digit())
+            })
+    });
+    if ambiguous {
+        return Err(format!(
+            "{column} `{text}` is ambiguous, a thousand or a decimal: write 1234, or {text}0 for the other"
+        ));
+    }
+    Ok(Some(if text.contains(',') && !text.contains('.') {
+        text.replace(',', ".")
+    } else {
+        text.to_owned()
+    }))
 }
 
 /// A product as one row of the file. The columns have the names of the product's fields; `kind`
@@ -64,9 +77,9 @@ fn product_from_record(record: &Record<'_>) -> Result<ProductDraft, String> {
         sku: text("sku"),
         unit: text("unit").unwrap_or_default(),
         ncm: text("ncm"),
-        sale_price: decimal(record.get("sale_price")),
-        cost_price: decimal(record.get("cost_price")),
-        minimum_stock: decimal(record.get("minimum_stock")),
+        sale_price: decimal("sale_price", record.get("sale_price"))?,
+        cost_price: decimal("cost_price", record.get("cost_price"))?,
+        minimum_stock: decimal("minimum_stock", record.get("minimum_stock"))?,
         active,
     })
 }
@@ -100,19 +113,28 @@ mod tests {
 
     #[test]
     fn a_decimal_comma_becomes_a_dot_and_nothing_ambiguous_is_guessed() {
-        let read = |text: &str| decimal(Some(text)).unwrap();
-        assert_eq!(read("12,50"), "12.50");
-        assert_eq!(read("5,5"), "5.5");
-        assert_eq!(read("12.50"), "12.50");
-        assert_eq!(read("1500"), "1500");
-        // These are refused by the amount's strict parsing, never guessed at.
-        for ambiguous in ["1.234,56", "1,234", "1,234,567", "12,5,0", "1,500"] {
+        let read = |text: &str| decimal("sale_price", Some(text));
+        assert_eq!(read("12,50"), Ok(Some("12.50".into())));
+        assert_eq!(read("5,5"), Ok(Some("5.5".into())));
+        assert_eq!(read("12.50"), Ok(Some("12.50".into())));
+        assert_eq!(read("1500"), Ok(Some("1500".into())));
+        // A zero in front cannot be a thousand, so it is a decimal.
+        assert_eq!(read("0,250"), Ok(Some("0.250".into())));
+        assert_eq!(read("0.250"), Ok(Some("0.250".into())));
+        assert_eq!(read("1,2340"), Ok(Some("1.2340".into())));
+        // A thousand or a decimal: refused, said so, never guessed.
+        for ambiguous in ["1.234", "1,234", "12.500", "999,999"] {
+            let error = read(ambiguous).unwrap_err();
+            assert!(error.contains("ambiguous"), "{ambiguous}: {error}");
+        }
+        // These go on to the amount's strict parsing, which refuses them.
+        for refused in ["1.234,56", "1,234,567", "12,5,0", "1.234.567"] {
+            let text = read(refused).unwrap().unwrap();
             assert!(
-                conta_verde_domain::Amount::parse(&read(ambiguous)).is_none(),
-                "{ambiguous}"
+                conta_verde_domain::Amount::parse(&text).is_none(),
+                "{refused}"
             );
         }
-        assert!(conta_verde_domain::Amount::parse(&read("1,2340")).is_some());
-        assert_eq!(decimal(None), None);
+        assert_eq!(decimal("sale_price", None), Ok(None));
     }
 }

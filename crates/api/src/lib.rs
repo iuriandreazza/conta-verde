@@ -1784,6 +1784,7 @@ mod tests {
                    Chá,un,C-1,5,bebida,\n\
                    Mate,un,M-1,5,,talvez\n\
                    Doce,un,D-1,\"1.234,56\",,\n\
+                   Pudim,un,PU-1,1.234,,\n\
                    Entrega,un,E-1,5,service,\n";
         let reply = send(&app, csv_request(&uri, Some(&cookie), bad)).await;
         assert_eq!(reply.status, StatusCode::OK);
@@ -1794,7 +1795,7 @@ mod tests {
             .iter()
             .map(|n| (n["row"].as_u64().unwrap(), n["message"].as_str().unwrap()))
             .collect();
-        assert_eq!(rows.len(), 5, "{rows:?}");
+        assert_eq!(rows.len(), 6, "{rows:?}");
         assert_eq!(rows[0], (3, "the same SKU as row 2"));
         assert_eq!(
             rows[1],
@@ -1809,6 +1810,8 @@ mod tests {
                 "sale price must be a decimal with up to 13 integer and 6 fractional digits, written like 10.50"
             )
         );
+        assert_eq!(rows[5].0, 8);
+        assert!(rows[5].1.contains("`1.234` is ambiguous"), "{}", rows[5].1);
         let listed = send(&app, get_request(&products_uri(company_id), Some(&cookie))).await;
         assert!(listed.body["items"].as_array().unwrap().is_empty());
 
@@ -1818,6 +1821,15 @@ mod tests {
                 .await
                 .body["created"],
             2
+        );
+        // A file with no `active` column makes every product active.
+        let listed = send(&app, get_request(&products_uri(company_id), Some(&cookie))).await;
+        assert!(
+            listed.body["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|item| item["active"] == true)
         );
         let again = send(&app, csv_request(&uri, Some(&cookie), good)).await;
         assert_eq!(again.body["created"], 1);
