@@ -296,6 +296,10 @@ fn encode_cursor(cursor: &PartyCursor) -> String {
 
 fn decode_cursor(raw: &str) -> Result<PartyCursor, ApiError> {
     let (id, name) = raw.split_once('|').ok_or(ApiError::InvalidCursor)?;
+    // No stored name holds a NUL, so a cursor that does was made up, and Postgres would fail on it.
+    if name.contains('\0') {
+        return Err(ApiError::InvalidCursor);
+    }
     let id = Uuid::parse_str(id).map_err(|_| ApiError::InvalidCursor)?;
     Ok(PartyCursor {
         name: name.to_owned(),
@@ -321,5 +325,7 @@ mod tests {
     fn garbage_cursors_are_rejected() {
         assert!(decode_cursor("nonsense").is_err());
         assert!(decode_cursor("not-a-uuid|Ana").is_err());
+        let id = PartyId::generate().as_uuid();
+        assert!(decode_cursor(&format!("{id}|An\0a")).is_err());
     }
 }

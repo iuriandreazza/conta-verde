@@ -532,6 +532,8 @@ pub async fn filters_and_sorts_parties<R: PartyRepository, C: CnpjRegistry>(
         ["Under_score Ltda"]
     );
     assert!(names(all.clone().searching("nobody")).await.is_empty());
+    // Control characters (a NUL would be a storage error) are dropped rather than searched for.
+    assert_eq!(names(all.clone().searching("an\0a")).await, ["Ana Souza"]);
     // Blank text is no search.
     assert_eq!(names(all.clone().searching("   ")).await, ascending);
 

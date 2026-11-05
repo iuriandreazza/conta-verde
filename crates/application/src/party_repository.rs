@@ -56,8 +56,10 @@ impl PartyQuery {
     pub const MAX_SEARCH_CHARS: usize = 100;
 
     /// Matches a name or an e-mail anywhere in it, ignoring case, and a document ignoring its
-    /// punctuation. Blank text means no search.
+    /// punctuation. Blank text means no search. Control characters are dropped: nobody types
+    /// them into a search box, and a NUL is a storage error in Postgres, not a search.
     pub fn searching(mut self, text: &str) -> Self {
+        let text: String = text.chars().filter(|c| !c.is_control()).collect();
         let text = text.trim();
         self.search = (!text.is_empty()).then(|| text.to_owned());
         let needle: String = text
@@ -189,6 +191,11 @@ mod tests {
         assert_eq!(PartyQuery::default().searching("  \t ").search(), None);
         assert_eq!(
             PartyQuery::default().searching("  Ana ").search(),
+            Some("Ana")
+        );
+        assert_eq!(PartyQuery::default().searching("\0\n").search(), None);
+        assert_eq!(
+            PartyQuery::default().searching("An\0a").search(),
             Some("Ana")
         );
     }
