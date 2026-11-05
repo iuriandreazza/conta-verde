@@ -1,5 +1,12 @@
 import { useRef, useState, type FormEvent } from "react";
-import type { AddressInput, Contact, Party, PartyInput } from "../api";
+import {
+  errorMessage,
+  type AddressInput,
+  type Contact,
+  type Party,
+  type PartyInput,
+  type PostalCodeEntry,
+} from "../api";
 import { Button } from "./Button";
 import { CheckIcon } from "./icons/check";
 import { PlusIcon } from "./icons/plus";
@@ -12,6 +19,7 @@ const STATES = [
 
 /** The API keeps the CEP as eight digits; people write it as 01310-100. */
 const withHyphen = (postalCode: string) => postalCode.replace(/^(\d{5})(\d{3})$/, "$1-$2");
+const digitsOf = (text: string) => text.replace(/\D/g, "");
 
 const MAX_CONTACTS = 20;
 
@@ -43,6 +51,8 @@ interface PartyFormProps {
   notice: { message: string; tone: NoticeTone } | null;
   onSubmit: (input: PartyInput) => void;
   onCancel: () => void;
+  /** Finds the address of a postal code; it asks a third party, so it may fail. */
+  lookupAddress: (postalCode: string) => Promise<PostalCodeEntry>;
 }
 
 /**
@@ -58,7 +68,20 @@ export function PartyForm({
   notice,
   onSubmit,
   onCancel,
+  lookupAddress,
 }: PartyFormProps) {
+  const formRef = useRef<HTMLFormElement>(null);
+  // Controlled, unlike the other fields, because the lookup button waits for eight digits.
+  const [postalCode, setPostalCode] = useState(
+    party?.address ? withHyphen(party.address.postal_code) : "",
+  );
+  // The CEP as it is now, for a lookup that finishes after the person has changed it.
+  const currentPostalCode = useRef(postalCode);
+  currentPostalCode.current = postalCode;
+  const [lookingUp, setLookingUp] = useState(false);
+  const [lookupNotice, setLookupNotice] = useState<{ message: string; tone: NoticeTone } | null>(
+    null,
+  );
   const nextKey = useRef(0);
   const [rows, setRows] = useState<ContactRow[]>(() =>
     (party?.contacts ?? []).map((contact) => rowOf(nextKey.current++, contact)),
@@ -75,6 +98,48 @@ export function PartyForm({
 
   function update(key: number, change: Partial<ContactRow>) {
     setRows((current) => current.map((row) => (row.key === key ? { ...row, ...change } : row)));
+  }
+
+  // The user asked for the address, so what the service knows replaces what is typed; the number
+  // and the complement are never touched.
+  async function lookUp() {
+    setLookingUp(true);
+    setLookupNotice(null);
+    try {
+      const asked = postalCode;
+      const entry = await lookupAddress(asked);
+      // An answer about another CEP than the one shown would fill in an address that is not its.
+      if (digitsOf(currentPostalCode.current) !== digitsOf(asked)) {
+        return;
+      }
+      const elements = formRef.current?.elements;
+      const fill = (name: string, value: string | null) => {
+        const field = elements?.namedItem(name);
+        if (value && (field instanceof HTMLInputElement || field instanceof HTMLSelectElement)) {
+          field.value = value;
+        }
+      };
+      fill("street", entry.street);
+      fill("district", entry.district);
+      fill("city", entry.city);
+      fill("state", entry.state);
+      // The code that was asked, tidied: a stray letter in the field would be refused on saving.
+      setPostalCode(withHyphen(digitsOf(asked)));
+      const next = elements?.namedItem(entry.street ? "number" : "street");
+      if (next instanceof HTMLInputElement) {
+        next.focus();
+      }
+      setLookupNotice({
+        tone: "success",
+        message: entry.street
+          ? "Endereço preenchido. Confira e informe o número."
+          : "Cidade e UF preenchidas: este CEP não tem rua. Informe o logradouro.",
+      });
+    } catch (failure) {
+      setLookupNotice({ tone: "warning", message: errorMessage(failure) });
+    } finally {
+      setLookingUp(false);
+    }
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -128,7 +193,7 @@ export function PartyForm({
 
   const address = party?.address;
   return (
-    <form onSubmit={handleSubmit}>
+    <form ref={formRef} onSubmit={handleSubmit}>
       <label>
         Nome
         <input
@@ -175,7 +240,7 @@ export function PartyForm({
       </fieldset>
       <fieldset className="address-fields">
         <legend>Endereço</legend>
-        <label>
+        <label className="span-4">
           CEP
           <input
             name="postal_code"
@@ -183,9 +248,31 @@ export function PartyForm({
             autoComplete="off"
             placeholder="00000-000"
             maxLength={9}
-            defaultValue={address ? withHyphen(address.postal_code) : ""}
+            value={postalCode}
+            onChange={(event) => {
+              setPostalCode(event.target.value);
+              // What the last lookup said was about the old code.
+              setLookupNotice(null);
+            }}
           />
         </label>
+        <div className="lookup-action">
+          <Button
+            type="button"
+            variant="ghost"
+            className="btn-small"
+            pending={lookingUp}
+            disabled={digitsOf(postalCode).length !== 8}
+            onClick={() => void lookUp()}
+          >
+            Buscar endereço
+          </Button>
+        </div>
+        {lookupNotice && (
+          <div className="address-notice">
+            <Notice message={lookupNotice.message} tone={lookupNotice.tone} />
+          </div>
+        )}
         <label className="span-4">
           Logradouro
           <input name="street" maxLength={150} autoComplete="off" defaultValue={address?.street ?? ""} />

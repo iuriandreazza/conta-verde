@@ -3,13 +3,13 @@ use std::time::Duration;
 use conta_verde_api::{ApiConfig, Ports, Services, router};
 use conta_verde_application::{
     AuthService, BankAccountService, CategoryService, CostCenterService, PartyService,
-    PaymentMethodService, PaymentTermService, ProductService,
+    PaymentMethodService, PaymentTermService, PostalCodeService, ProductService,
 };
 use conta_verde_infrastructure::{
-    Argon2SecretService, BrasilApiCnpjRegistry, CachedCnpjRegistry, PostgresBankAccountRepository,
-    PostgresCategoryRepository, PostgresCostCenterRepository, PostgresIdentityRepository,
-    PostgresPartyRepository, PostgresPaymentMethodRepository, PostgresPaymentTermRepository,
-    PostgresProductRepository, connect_and_migrate,
+    Argon2SecretService, BrasilApiCnpjRegistry, BrasilApiPostalCodeDirectory, CachedCnpjRegistry,
+    PostgresBankAccountRepository, PostgresCategoryRepository, PostgresCostCenterRepository,
+    PostgresIdentityRepository, PostgresPartyRepository, PostgresPaymentMethodRepository,
+    PostgresPaymentTermRepository, PostgresProductRepository, connect_and_migrate,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -27,6 +27,7 @@ impl Ports for PostgresPorts {
     type BankAccounts = PostgresBankAccountRepository;
     type PaymentMethods = PostgresPaymentMethodRepository;
     type PaymentTerms = PostgresPaymentTermRepository;
+    type PostalCodes = Option<BrasilApiPostalCodeDirectory>;
 }
 
 const SESSION_LIFETIME: Duration = Duration::from_secs(30 * 24 * 60 * 60);
@@ -57,6 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let payment_methods =
         PaymentMethodService::new(PostgresPaymentMethodRepository::new(pool.clone()));
     let payment_terms = PaymentTermService::new(PostgresPaymentTermRepository::new(pool.clone()));
+    let postal_codes = PostalCodeService::new(postal_code_directory_from_env()?);
     let auth = AuthService::new(
         PostgresIdentityRepository::new(pool),
         Argon2SecretService::new()?,
@@ -75,6 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 bank_accounts,
                 payment_methods,
                 payment_terms,
+                postal_codes,
                 auth,
             },
             config,
@@ -92,7 +95,7 @@ fn cnpj_registry_from_env() -> Result<
     Box<dyn std::error::Error + Send + Sync>,
 > {
     let setting = std::env::var("CNPJ_LOOKUP").ok();
-    if !cnpj_lookup_enabled(setting.as_deref())? {
+    if !lookup_enabled("CNPJ_LOOKUP", setting.as_deref())? {
         tracing::warn!("CNPJ lookup is off: CNPJs are validated by check digits only");
         return Ok(None);
     }
@@ -103,14 +106,26 @@ fn cnpj_registry_from_env() -> Result<
     )))
 }
 
-// `off` is for installations that must not send CNPJs to a third party or run without internet.
-// Strict like `parse_flag`, so a typo is not read as "off".
-fn cnpj_lookup_enabled(setting: Option<&str>) -> Result<bool, String> {
+/// `None` when the lookup is switched off. Only a postal code is sent to the third party.
+fn postal_code_directory_from_env()
+-> Result<Option<BrasilApiPostalCodeDirectory>, Box<dyn std::error::Error + Send + Sync>> {
+    let setting = std::env::var("CEP_LOOKUP").ok();
+    if !lookup_enabled("CEP_LOOKUP", setting.as_deref())? {
+        tracing::warn!("CEP lookup is off: addresses are filled in by hand");
+        return Ok(None);
+    }
+    tracing::info!("postal codes are looked up on BrasilAPI (Correios and other public sources)");
+    Ok(Some(BrasilApiPostalCodeDirectory::new()?))
+}
+
+// `off` is for installations that must not send a CNPJ or a postal code to a third party, or run
+// without internet. Strict like `parse_flag`, so a typo is not read as "off".
+fn lookup_enabled(name: &str, setting: Option<&str>) -> Result<bool, String> {
     match setting {
         None | Some("brasilapi") => Ok(true),
         Some("off") => Ok(false),
         Some(other) => Err(format!(
-            "CNPJ_LOOKUP must be `brasilapi` or `off`, got `{other}`"
+            "{name} must be `brasilapi` or `off`, got `{other}`"
         )),
     }
 }
@@ -154,15 +169,17 @@ mod tests {
 
     #[test]
     fn the_lookup_is_on_by_default_and_off_only_when_asked() {
-        assert_eq!(cnpj_lookup_enabled(None), Ok(true));
-        assert_eq!(cnpj_lookup_enabled(Some("brasilapi")), Ok(true));
-        assert_eq!(cnpj_lookup_enabled(Some("off")), Ok(false));
+        assert_eq!(lookup_enabled("CNPJ_LOOKUP", None), Ok(true));
+        assert_eq!(lookup_enabled("CNPJ_LOOKUP", Some("brasilapi")), Ok(true));
+        assert_eq!(lookup_enabled("CNPJ_LOOKUP", Some("off")), Ok(false));
     }
 
     #[test]
     fn a_typo_is_an_error_not_a_silent_off() {
         for typo in ["OFF", "false", "", "brasil-api"] {
-            assert!(cnpj_lookup_enabled(Some(typo)).is_err(), "{typo}");
+            let error = lookup_enabled("CEP_LOOKUP", Some(typo)).unwrap_err();
+            // The message names the setting that was wrong.
+            assert!(error.starts_with("CEP_LOOKUP must be"), "{typo}");
         }
     }
 }

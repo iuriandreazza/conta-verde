@@ -63,6 +63,12 @@ pub enum ApplicationError {
     LookupDisabled,
     /// The party's CNPJ was re-checked a moment ago; the registry has a shared rate limit.
     RecheckTooSoon,
+    /// The postal code service has no address for it, or could not tell (its 404 covers both).
+    PostalCodeNotFound,
+    /// The postal code service did not give a usable answer: network, timeout, rate limit, error.
+    PostalCodeLookupUnavailable,
+    /// The operator switched the postal code lookup off, so there is nothing to ask.
+    PostalCodeLookupDisabled,
 }
 
 impl From<SecretError> for ApplicationError {
@@ -147,6 +153,16 @@ impl fmt::Display for ApplicationError {
             Self::LookupDisabled => f.write_str("CNPJ lookup is switched off on this installation"),
             Self::RecheckTooSoon => {
                 f.write_str("this CNPJ was checked a moment ago, try again in a few seconds")
+            }
+            Self::PostalCodeNotFound => f.write_str(
+                "no address found for this postal code, or the service could not tell: \
+                 check the number or fill the address in by hand",
+            ),
+            Self::PostalCodeLookupUnavailable => f.write_str(
+                "the postal code service is not answering right now: fill the address in by hand",
+            ),
+            Self::PostalCodeLookupDisabled => {
+                f.write_str("postal code lookup is switched off on this installation")
             }
         }
     }

@@ -1,4 +1,5 @@
 mod brasil_api;
+mod brasil_api_postal_code;
 mod cached_registry;
 #[cfg(test)]
 mod contract;
@@ -10,6 +11,7 @@ mod memory_cost_centers;
 mod memory_list;
 mod memory_payment_methods;
 mod memory_payment_terms;
+mod memory_postal_codes;
 mod memory_products;
 mod postgres;
 mod postgres_audit;
@@ -23,6 +25,7 @@ mod postgres_products;
 mod secrets;
 
 pub use brasil_api::BrasilApiCnpjRegistry;
+pub use brasil_api_postal_code::BrasilApiPostalCodeDirectory;
 pub use cached_registry::CachedCnpjRegistry;
 pub use memory::{InMemoryCnpjRegistry, InMemoryIdentityRepository, InMemoryPartyRepository};
 pub use memory_bank_accounts::InMemoryBankAccountRepository;
@@ -30,6 +33,7 @@ pub use memory_categories::InMemoryCategoryRepository;
 pub use memory_cost_centers::InMemoryCostCenterRepository;
 pub use memory_payment_methods::InMemoryPaymentMethodRepository;
 pub use memory_payment_terms::InMemoryPaymentTermRepository;
+pub use memory_postal_codes::InMemoryPostalCodeDirectory;
 pub use memory_products::InMemoryProductRepository;
 pub use postgres::{PostgresPartyRepository, connect_and_migrate};
 pub use postgres_bank_accounts::PostgresBankAccountRepository;
