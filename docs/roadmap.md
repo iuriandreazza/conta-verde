@@ -23,7 +23,7 @@ is ticked and its exit criteria hold on `main`.
 Identity:
 - [x] `users`, `companies`, `memberships` with roles; password hashing and sessions ([ADR 0007](adr/0007-authentication-and-authorization.md)) — tables, Argon2id and cookie sessions; roles and what each may do ([ADR 0026](adr/0026-membership-roles-and-permissions.md))
 - [x] Enforce `company_id` from the session, not the URL; foreign keys from every business table to `companies` — the URL id must match a membership of the caller (`CompanyAccess`)
-- [ ] Invitations by e-mail; accountant role reserved for Phase 6
+- [ ] Invitations by e-mail; accountant role reserved for Phase 6 ([ADR 0027](adr/0027-invitations.md)) — invite, accept, withdraw and the members page are in, and the message is logged; the SMTP adapter is next
 - [ ] Audit trail on every write ([ADR 0008](adr/0008-audit-trail.md)) — in for parties (creation and CNPJ re-checks, with a history panel); each new register must write its entries too
 - [x] Pagination, sorting and filtering convention for list endpoints (parties first) ([ADR 0018](adr/0018-list-endpoints-search-filter-sort.md)) — `limit`, `after`, `q`, a named filter per attribute and `sort`; each new register's list follows it
 

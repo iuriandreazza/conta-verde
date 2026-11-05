@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use conta_verde_application::{
-    CompanyMembership, IdentityRepository, NewAccount, RepositoryError, StoredCredentials,
+    CompanyMembership, IdentityRepository, Member, NewAccount, RepositoryError, StoredCredentials,
 };
 use conta_verde_domain::{Company, CompanyId, Email, Role, User, UserId};
 use sqlx::postgres::PgRow;
@@ -100,6 +100,26 @@ impl IdentityRepository for PostgresIdentityRepository {
                         CompanyId::from_uuid(row.try_get("id").map_err(storage_error)?),
                         row.try_get("name").map_err(storage_error)?,
                     ),
+                    role: role_from_row(row)?,
+                })
+            })
+            .collect()
+    }
+
+    async fn members_of(&self, company_id: CompanyId) -> Result<Vec<Member>, RepositoryError> {
+        let rows = sqlx::query(
+            "SELECT u.id, u.name, u.email, m.role FROM memberships m \
+             JOIN users u ON u.id = m.user_id \
+             WHERE m.company_id = $1 ORDER BY lower(u.name), u.id",
+        )
+        .bind(company_id.as_uuid())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        rows.iter()
+            .map(|row| {
+                Ok(Member {
+                    user: user_from_row(row)?,
                     role: role_from_row(row)?,
                 })
             })

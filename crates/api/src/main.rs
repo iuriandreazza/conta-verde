@@ -2,14 +2,15 @@ use std::time::Duration;
 
 use conta_verde_api::{ApiConfig, Ports, Services, router};
 use conta_verde_application::{
-    AuthService, BankAccountService, CategoryService, CostCenterService, PartyService,
-    PaymentMethodService, PaymentTermService, PostalCodeService, ProductService,
+    AuthService, BankAccountService, CategoryService, CostCenterService, MemberService,
+    PartyService, PaymentMethodService, PaymentTermService, PostalCodeService, ProductService,
 };
 use conta_verde_infrastructure::{
     Argon2SecretService, BrasilApiCnpjRegistry, BrasilApiPostalCodeDirectory, CachedCnpjRegistry,
-    PostgresBankAccountRepository, PostgresCategoryRepository, PostgresCostCenterRepository,
-    PostgresIdentityRepository, PostgresPartyRepository, PostgresPaymentMethodRepository,
-    PostgresPaymentTermRepository, PostgresProductRepository, connect_and_migrate,
+    LogEmailSender, PostgresBankAccountRepository, PostgresCategoryRepository,
+    PostgresCostCenterRepository, PostgresIdentityRepository, PostgresInvitationRepository,
+    PostgresPartyRepository, PostgresPaymentMethodRepository, PostgresPaymentTermRepository,
+    PostgresProductRepository, connect_and_migrate,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -28,9 +29,12 @@ impl Ports for PostgresPorts {
     type PaymentMethods = PostgresPaymentMethodRepository;
     type PaymentTerms = PostgresPaymentTermRepository;
     type PostalCodes = Option<BrasilApiPostalCodeDirectory>;
+    type Invitations = PostgresInvitationRepository;
+    type Emails = LogEmailSender;
 }
 
 const SESSION_LIFETIME: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+const INVITATION_LIFETIME: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 const CNPJ_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 
 #[tokio::main]
@@ -59,6 +63,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         PaymentMethodService::new(PostgresPaymentMethodRepository::new(pool.clone()));
     let payment_terms = PaymentTermService::new(PostgresPaymentTermRepository::new(pool.clone()));
     let postal_codes = PostalCodeService::new(postal_code_directory_from_env()?);
+    // Invitation links lead to the web app, which is where the person accepts.
+    let public_url =
+        std::env::var("PUBLIC_URL").unwrap_or_else(|_| "http://localhost:5173".to_owned());
+    let members = MemberService::new(
+        PostgresInvitationRepository::new(pool.clone()),
+        PostgresIdentityRepository::new(pool.clone()),
+        // No mail server yet: the message and its link go to the log ([ADR 0027]).
+        LogEmailSender,
+        Argon2SecretService::new()?,
+        INVITATION_LIFETIME,
+        &public_url,
+    );
     let auth = AuthService::new(
         PostgresIdentityRepository::new(pool),
         Argon2SecretService::new()?,
@@ -78,6 +94,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 payment_methods,
                 payment_terms,
                 postal_codes,
+                members,
                 auth,
             },
             config,

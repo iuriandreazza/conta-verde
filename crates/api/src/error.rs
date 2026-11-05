@@ -64,7 +64,8 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
             | RepositoryError::DuplicateName
             | RepositoryError::DuplicateTransferCategory
             | RepositoryError::DuplicateBankAccount
-            | RepositoryError::DuplicateMembership),
+            | RepositoryError::DuplicateMembership
+            | RepositoryError::DuplicateInvitation),
         ) => (StatusCode::CONFLICT, error.to_string()),
         ApplicationError::Auth(error) => {
             let status = match error {
@@ -98,6 +99,10 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
         ApplicationError::LookupDisabled | ApplicationError::PostalCodeLookupDisabled => {
             (StatusCode::CONFLICT, error.to_string())
         }
+        ApplicationError::InvitationNotFound => (StatusCode::NOT_FOUND, error.to_string()),
+        // It existed and cannot be used any more: the link was used, withdrawn or has expired.
+        ApplicationError::InvitationNoLongerValid => (StatusCode::GONE, error.to_string()),
+        ApplicationError::InvitationForAnotherEmail => (StatusCode::FORBIDDEN, error.to_string()),
         ApplicationError::PostalCodeNotFound => (StatusCode::NOT_FOUND, error.to_string()),
         ApplicationError::PostalCodeLookupUnavailable => {
             (StatusCode::SERVICE_UNAVAILABLE, error.to_string())

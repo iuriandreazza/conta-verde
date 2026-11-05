@@ -1,6 +1,6 @@
 import { motion, useAnimationControls } from "motion/react";
 import { useState, type FormEvent } from "react";
-import { Link, Navigate } from "react-router-dom";
+import { Link, Navigate, useSearchParams } from "react-router-dom";
 import { errorMessage } from "../api";
 import { useAuth } from "../auth";
 import { Notice } from "../components/Notice";
@@ -9,15 +9,30 @@ import { LogInIcon } from "../components/icons/login";
 import { UserPlusIcon } from "../components/icons/user-plus";
 import { PasswordField } from "../components/PasswordField";
 
+/**
+ * Where to go after signing in, when the page was opened from a link that needs an account: only an
+ * invitation's page, so a crafted `next` cannot send anyone anywhere else.
+ */
+function nextAfterSignIn(raw: string | null): string {
+  return raw !== null && /^\/invitations\/[A-Za-z0-9_-]+$/.test(raw) ? raw : "/";
+}
+
+/** The other of the two pages keeps the way back to where the person was going. */
+function withNext(path: string, next: string): string {
+  return next === "/" ? path : `${path}?next=${encodeURIComponent(next)}`;
+}
+
 export function AuthPage({ mode }: { mode: "login" | "register" }) {
   const { session, signIn, signUp } = useAuth();
+  const [params] = useSearchParams();
+  const next = nextAfterSignIn(params.get("next"));
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const shake = useAnimationControls();
   const registering = mode === "register";
 
   if (session.status === "authenticated") {
-    return <Navigate to="/" replace />;
+    return <Navigate to={next} replace />;
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -82,11 +97,11 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
       <p>
         {registering ? (
           <>
-            Já tem conta? <Link to="/login">Entrar</Link>
+            Já tem conta? <Link to={withNext("/login", next)}>Entrar</Link>
           </>
         ) : (
           <>
-            Primeira vez aqui? <Link to="/register">Criar conta</Link>
+            Primeira vez aqui? <Link to={withNext("/register", next)}>Criar conta</Link>
           </>
         )}
       </p>

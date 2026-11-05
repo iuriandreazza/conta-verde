@@ -93,7 +93,9 @@ export function Layout() {
             {companies.length > 1 && <Link to="/">Trocar de empresa</Link>}
           </div>
         )}
-        {companyId && <CompanyNav companyId={companyId} />}
+        {companyId && (
+          <CompanyNav companyId={companyId} canSeeMembers={company?.permissions.members !== undefined} />
+        )}
         <div className="sidebar-user">
           <span className="avatar" aria-hidden>
             {userName.trim().charAt(0).toUpperCase()}

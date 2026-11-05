@@ -46,6 +46,7 @@ pub enum DomainError {
     TooManyContacts,
     InvalidTag,
     TooManyTags,
+    OwnerCannotBeInvited,
 }
 
 impl fmt::Display for DomainError {
@@ -134,6 +135,9 @@ impl fmt::Display for DomainError {
                 "a tag has 1 to 30 characters, with no commas or control characters",
             ),
             Self::TooManyTags => f.write_str("a party has at most 10 tags"),
+            Self::OwnerCannotBeInvited => {
+                f.write_str("nobody is invited as an owner: creating a company is what makes one")
+            }
             Self::KindCannotChange => f.write_str("the kind cannot change once registered"),
         }
     }

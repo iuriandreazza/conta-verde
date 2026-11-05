@@ -18,6 +18,39 @@ export interface Company {
   permissions: Partial<Record<Area, "read" | "write">>;
 }
 
+/** Someone who belongs to a company, and what they are there. */
+export interface Member {
+  user_id: string;
+  name: string;
+  email: string;
+  role: Role;
+}
+
+/** An offer to join a company that nobody has accepted or withdrawn. Times are milliseconds since the epoch. */
+export interface Invitation {
+  id: string;
+  email: string;
+  role: Role;
+  created_at: number;
+  expires_at: number;
+  expired: boolean;
+}
+
+/** An invitation just made: the link that accepts it exists only in this answer. */
+export interface Invited extends Invitation {
+  link: string;
+  /** Whether the e-mail with the link went out; the invitation exists either way. */
+  emailed: boolean;
+}
+
+/** What a link leads to, shown before the person accepts. */
+export interface InvitationPreview {
+  company_name: string;
+  email: string;
+  role: Role;
+  expires_at: number;
+}
+
 export interface Profile {
   user: User;
   companies: Company[];
@@ -463,6 +496,18 @@ export const api = {
       `/companies/${companyId}/products/import${dryRun ? "?dry_run=true" : ""}`,
       { method: "POST", headers: { "Content-Type": "text/csv" }, body: file },
     ),
+  listMembers: (companyId: string) => request<Member[]>(`/companies/${companyId}/members`),
+  listInvitations: (companyId: string) =>
+    request<Invitation[]>(`/companies/${companyId}/invitations`),
+  invite: (companyId: string, email: string, role: Role) =>
+    post<Invited>(`/companies/${companyId}/invitations`, { email, role }),
+  revokeInvitation: (companyId: string, invitationId: string) =>
+    request<void>(`/companies/${companyId}/invitations/${invitationId}`, { method: "DELETE" }),
+  /** Needs no session: the person may not have an account yet. */
+  previewInvitation: (token: string) =>
+    request<InvitationPreview>(`/invitations/${encodeURIComponent(token)}`),
+  acceptInvitation: (token: string) =>
+    post<{ company_id: string }>(`/invitations/${encodeURIComponent(token)}/accept`),
   partyHistory: (companyId: string, partyId: string) =>
     request<HistoryEntry[]>(`/companies/${companyId}/parties/${partyId}/history`),
   /** Asks the registry again about the party's CNPJ; resolves with the party and its new answer. */

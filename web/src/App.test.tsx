@@ -2357,3 +2357,234 @@ describe("importing products from a CSV file", () => {
     expect(await screen.findByRole("button", { name: "Alterar Pão francês" })).toBeInTheDocument();
   });
 });
+
+describe("members and invitations", () => {
+  const ana = { user_id: "u1", name: "Ana", email: "ana@example.com", role: "owner" } as const;
+  const open = {
+    id: "i1",
+    email: "bia@example.com",
+    role: "sales",
+    created_at: Date.UTC(2026, 10, 5),
+    expires_at: Date.UTC(2026, 10, 12),
+    expired: false,
+  } as const;
+
+  const sent = (fetchMock: ReturnType<typeof mockApi>, method: string) =>
+    fetchMock.mock.calls.filter(([, init]) => init?.method === method);
+
+  it("shows the members link only to a role that reaches members", async () => {
+    const viewer: Profile = {
+      ...profile,
+      companies: [{ id: "c1", name: "Padaria", role: "viewer", permissions: { parties: "read" } }],
+    };
+    mockApi((url) =>
+      url === "/api/auth/me"
+        ? { status: 200, body: viewer }
+        : { status: 200, body: { items: [], next_cursor: null } },
+    );
+    renderAt("/companies/c1/parties");
+    await screen.findByRole("heading", { name: "Clientes e fornecedores" });
+    expect(screen.queryByRole("link", { name: "Membros" })).not.toBeInTheDocument();
+  });
+
+  it("lists who belongs and the open invitations, and says when one expired", async () => {
+    mockApi((url) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (url.endsWith("/members")) return { status: 200, body: [ana] };
+      return { status: 200, body: [open, { ...open, id: "i2", email: "cris@example.com", expired: true }] };
+    });
+    renderAt("/companies/c1/members");
+
+    expect(await screen.findByRole("link", { name: "Membros" })).toBeInTheDocument();
+    expect(await screen.findByText("ana@example.com")).toBeInTheDocument();
+    expect(screen.getAllByText("Dono").length).toBeGreaterThan(0);
+    expect(screen.getByText("bia@example.com")).toBeInTheDocument();
+    const openInvitations = screen.getByRole("region", { name: "Convites em aberto" });
+    expect(within(openInvitations).getAllByText("Vendas")).toHaveLength(2);
+    expect(screen.getByText("Expirado")).toBeInTheDocument();
+  });
+
+  it("invites with the chosen role and shows the link once, saying if the e-mail did not go out", async () => {
+    let invitations: unknown[] = [];
+    const fetchMock = mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (url.endsWith("/members")) return { status: 200, body: [ana] };
+      if (init?.method === "POST") {
+        invitations = [open];
+        return {
+          status: 201,
+          body: { ...open, link: "https://erp.example/invitations/abc123", emailed: false },
+        };
+      }
+      return { status: 200, body: invitations };
+    });
+    renderAt("/companies/c1/members");
+
+    await userEvent.type(await screen.findByLabelText("E-mail"), "bia@example.com");
+    await userEvent.selectOptions(screen.getByLabelText("Papel"), "sales");
+    expect(screen.getByText(/Cadastra clientes e fornecedores; só consulta o resto/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Convidar" }));
+
+    expect(await screen.findByText(/o e-mail não foi enviado/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Link do convite")).toHaveValue("https://erp.example/invitations/abc123");
+    expect(JSON.parse(String(sent(fetchMock, "POST")[0][1]?.body))).toEqual({
+      email: "bia@example.com",
+      role: "sales",
+    });
+    // The list shows it now, and the e-mail field is empty again.
+    expect(await screen.findByRole("button", { name: "Retirar o convite de bia@example.com" })).toBeInTheDocument();
+    expect(screen.getByLabelText("E-mail")).toHaveValue("");
+  });
+
+  it("shows why an invitation was refused and keeps what was typed", async () => {
+    mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "POST") {
+        return { status: 409, body: { error: "this e-mail address already has an open invitation to the company" } };
+      }
+      return { status: 200, body: url.endsWith("/members") ? [ana] : [] };
+    });
+    renderAt("/companies/c1/members");
+
+    await userEvent.type(await screen.findByLabelText("E-mail"), "bia@example.com");
+    await userEvent.click(screen.getByRole("button", { name: "Convidar" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("already has an open invitation");
+    expect(screen.getByLabelText("E-mail")).toHaveValue("bia@example.com");
+  });
+
+  it("withdraws an invitation and takes it off the list", async () => {
+    let invitations: unknown[] = [open];
+    const fetchMock = mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "DELETE") {
+        invitations = [];
+        return { status: 204 };
+      }
+      return { status: 200, body: url.endsWith("/members") ? [ana] : invitations };
+    });
+    renderAt("/companies/c1/members");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Retirar o convite de bia@example.com" }));
+
+    await waitFor(() => expect(screen.getByText("Nenhum convite em aberto.")).toBeInTheDocument());
+    expect(String(sent(fetchMock, "DELETE")[0][0])).toBe("/api/companies/c1/invitations/i1");
+  });
+
+  describe("the page a link leads to", () => {
+    const preview = { company_name: "Mercearia", email: "bia@example.com", role: "sales", expires_at: Date.UTC(2026, 10, 12) };
+    const signedOut = (url: string): Reply =>
+      url === "/api/auth/me" ? { status: 401, body: { error: "authentication required" } } : { status: 200, body: preview };
+
+    it("says what the invitation is without a session, and sends the person to sign in or sign up and come back", async () => {
+      mockApi(signedOut);
+      renderAt("/invitations/abc123");
+
+      expect(await screen.findByRole("heading", { name: "Convite para Mercearia" })).toBeInTheDocument();
+      expect(screen.getByText("Vendas")).toBeInTheDocument();
+      expect(screen.getAllByText("bia@example.com").length).toBeGreaterThan(0);
+      expect(screen.getByRole("link", { name: "Entrar" })).toHaveAttribute("href", "/login?next=%2Finvitations%2Fabc123");
+      expect(screen.getByRole("link", { name: "Criar conta" })).toHaveAttribute("href", "/register?next=%2Finvitations%2Fabc123");
+    });
+
+    it("comes back to the invitation after signing in, and only to an invitation", async () => {
+      const fetchMock = mockApi((url, init) => {
+        if (url === "/api/auth/login") return { status: 200, body: profile };
+        if (url === "/api/auth/me") return { status: 401, body: { error: "authentication required" } };
+        void init;
+        return { status: 200, body: preview };
+      });
+      renderAt("/login?next=%2Finvitations%2Fabc123");
+      await userEvent.type(await screen.findByLabelText("E-mail"), "bia@example.com");
+      await userEvent.type(screen.getByLabelText("Senha"), "correct horse");
+      await userEvent.click(screen.getByRole("button", { name: "Entrar" }));
+      expect(await screen.findByRole("heading", { name: "Convite para Mercearia" })).toBeInTheDocument();
+      expect(fetchMock).toHaveBeenCalled();
+    });
+
+    it("ignores a next that is not an invitation", async () => {
+      mockApi((url) =>
+        url === "/api/auth/login"
+          ? { status: 200, body: profile }
+          : url === "/api/auth/me"
+            ? { status: 401, body: { error: "authentication required" } }
+            : { status: 200, body: { items: [], next_cursor: null } },
+      );
+      renderAt("/login?next=https%3A%2F%2Fevil.example%2F");
+      await userEvent.type(await screen.findByLabelText("E-mail"), "ana@example.com");
+      await userEvent.type(screen.getByLabelText("Senha"), "correct horse");
+      await userEvent.click(screen.getByRole("button", { name: "Entrar" }));
+      // The single company is opened, as for any sign-in: nowhere else.
+      expect(await screen.findByRole("heading", { name: "Painel" })).toBeInTheDocument();
+    });
+
+    it("accepts as the signed-in user, reads the profile again and opens the company", async () => {
+      let accepted = false;
+      const fetchMock = mockApi((url, init) => {
+        if (url === "/api/auth/me") {
+          return {
+            status: 200,
+            body: accepted
+              ? {
+                  ...profile,
+                  companies: [
+                    ...profile.companies,
+                    { id: "c2", name: "Mercearia", role: "sales", permissions: { parties: "write" } },
+                  ],
+                }
+              : profile,
+          };
+        }
+        if (url.endsWith("/accept") && init?.method === "POST") {
+          accepted = true;
+          return { status: 200, body: { company_id: "c2" } };
+        }
+        return { status: 200, body: preview };
+      });
+      renderAt("/invitations/abc123");
+
+      await userEvent.click(await screen.findByRole("button", { name: "Aceitar convite" }));
+
+      expect(await screen.findByRole("heading", { name: "Painel" })).toBeInTheDocument();
+      expect(screen.getByText("Mercearia")).toBeInTheDocument();
+      const posts = fetchMock.mock.calls.filter(([, init]) => init?.method === "POST");
+      expect(String(posts[0][0])).toBe("/api/invitations/abc123/accept");
+    });
+
+    it("tells a signed-in user whose address is another one to sign in with the right one, and shows the refusal", async () => {
+      mockApi((url, init) => {
+        if (url === "/api/auth/me") return { status: 200, body: profile };
+        if (init?.method === "POST") {
+          return { status: 403, body: { error: "this invitation was sent to another e-mail address: sign in with that one" } };
+        }
+        return { status: 200, body: preview };
+      });
+      renderAt("/invitations/abc123");
+
+      expect(await screen.findByText(/saia e entre com o e-mail do convite/)).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Aceitar convite" }));
+      expect(await screen.findByRole("alert")).toHaveTextContent("sent to another e-mail address");
+    });
+
+    it("explains a link that was used, withdrawn or has expired, and one that does not exist", async () => {
+      mockApi((url) =>
+        url === "/api/auth/me"
+          ? { status: 200, body: profile }
+          : { status: 410, body: { error: "this invitation was already used or withdrawn, or has expired: ask for a new one" } },
+      );
+      renderAt("/invitations/abc123");
+      expect(await screen.findByRole("heading", { name: "Convite indisponível" })).toBeInTheDocument();
+      expect(screen.getByText(/ask for a new one/)).toBeInTheDocument();
+    });
+
+    it("says an unknown link was not found", async () => {
+      mockApi((url) =>
+        url === "/api/auth/me"
+          ? { status: 200, body: profile }
+          : { status: 404, body: { error: "invitation not found" } },
+      );
+      renderAt("/invitations/nope");
+      expect(await screen.findByRole("heading", { name: "Convite não encontrado" })).toBeInTheDocument();
+    });
+  });
+});

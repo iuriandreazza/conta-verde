@@ -9,7 +9,8 @@ use conta_verde_application::{
     SecretService,
 };
 use conta_verde_application::{
-    ImportRow, NewAccount, PaymentTermQuery, PaymentTermRepository, PaymentTermService,
+    ImportRow, InvitationRepository, Invited, MemberService, NewAccount, PaymentTermQuery,
+    PaymentTermRepository, PaymentTermService,
 };
 use conta_verde_domain::{
     Account, AccountDraft, Actor, AddressDraft, AuditAction, AuditEntity, AuditEntry, BankAccount,
@@ -27,7 +28,7 @@ use conta_verde_domain::{InstallmentDraft, payment_term_changes, payment_term_cr
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::InMemoryCnpjRegistry;
+use crate::{InMemoryCnpjRegistry, InMemoryEmailSender};
 
 pub const ACTIVE_CNPJ: &str = "11.222.333/0001-81";
 pub const CLOSED_ALPHANUMERIC_CNPJ: &str = "12.ABC.345/01DE-35";
@@ -1393,6 +1394,222 @@ pub async fn memberships_carry_a_role<I: IdentityRepository>(identities: &I) {
         found,
         [("Oficina Bia", Role::Owner), ("Padaria Ana", Role::Sales)]
     );
+}
+
+/// Inviting, accepting and withdrawing: who may be invited, that a link works once, for the address it
+/// was sent to, until it is withdrawn or expires, and that an expired one makes way for a new one.
+/// `short_lived` is a service whose invitations last a few milliseconds.
+pub async fn runs_the_invitation_lifecycle<I, M, S>(
+    auth: &AuthService<M, S>,
+    service: &MemberService<I, M, InMemoryEmailSender, S>,
+    short_lived: &MemberService<I, M, InMemoryEmailSender, S>,
+    emails: &InMemoryEmailSender,
+) where
+    I: InvitationRepository,
+    M: IdentityRepository,
+    S: SecretService,
+{
+    let register = |name: &str, email: &str| {
+        let draft = AccountDraft {
+            user_name: name.into(),
+            email: email.into(),
+            company_name: format!("Empresa de {name}"),
+        };
+        async move { auth.register(draft, "correct horse").await.unwrap().profile }
+    };
+    let unique = Uuid::new_v4();
+    let ana = register("Ana", &format!("ana-{unique}@example.com")).await;
+    let bia_email = format!("bia-{unique}@example.com");
+    let bia = register("Bia", &bia_email).await;
+    let cris = register("Cris", &format!("cris-{unique}@example.com")).await;
+    let company = ana.memberships[0].company.id();
+    let ana_actor = Actor::User {
+        id: ana.user.id(),
+        name: "Ana".into(),
+    };
+    let token_of = |link: &str| link.rsplit('/').next().unwrap().to_owned();
+
+    let members = service.members(company).await.unwrap();
+    assert_eq!(members.len(), 1);
+    assert_eq!(
+        (members[0].user.name(), members[0].role),
+        ("Ana", Role::Owner)
+    );
+
+    // Nobody is invited as an owner, with a malformed address, or when already a member.
+    let refused = |result: Result<Invited, ApplicationError>| result.unwrap_err();
+    assert_eq!(
+        refused(
+            service
+                .invite(company, &ana_actor, &bia_email, Role::Owner)
+                .await
+        ),
+        ApplicationError::Domain(DomainError::OwnerCannotBeInvited)
+    );
+    assert_eq!(
+        refused(
+            service
+                .invite(company, &ana_actor, "not-an-email", Role::Sales)
+                .await
+        ),
+        ApplicationError::Domain(DomainError::InvalidEmail)
+    );
+    assert_eq!(
+        refused(
+            service
+                .invite(company, &ana_actor, ana.user.email().as_str(), Role::Sales)
+                .await
+        ),
+        ApplicationError::Repository(RepositoryError::DuplicateMembership)
+    );
+    assert!(emails.sent().is_empty());
+
+    // A valid invitation is stored, e-mailed with its link, and listed without it.
+    let invited = service
+        .invite(company, &ana_actor, &bia_email.to_uppercase(), Role::Sales)
+        .await
+        .unwrap();
+    assert!(invited.emailed);
+    assert!(invited.link.contains("/invitations/"));
+    let sent = emails.sent();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].to.as_str(), bia_email);
+    assert!(sent[0].body.contains(&invited.link));
+    assert!(sent[0].subject.contains("Ana") && sent[0].subject.contains("Empresa de Ana"));
+    let open = service.open_invitations(company).await.unwrap();
+    assert_eq!(open.len(), 1);
+    assert_eq!(
+        (open[0].email().as_str(), open[0].role()),
+        (bia_email.as_str(), Role::Sales)
+    );
+    assert_eq!(
+        refused(
+            service
+                .invite(company, &ana_actor, &bia_email, Role::Viewer)
+                .await
+        ),
+        ApplicationError::Repository(RepositoryError::DuplicateInvitation)
+    );
+
+    // The link says what it leads to, to anyone who holds it; an invented one leads nowhere.
+    let token = token_of(&invited.link);
+    let preview = service.preview(&token).await.unwrap();
+    assert_eq!(
+        (
+            preview.company_name.as_str(),
+            preview.email.as_str(),
+            preview.role
+        ),
+        ("Empresa de Ana", bia_email.as_str(), Role::Sales)
+    );
+    assert_eq!(
+        service.preview("not-a-token").await.unwrap_err(),
+        ApplicationError::InvitationNotFound
+    );
+
+    // Only the address it was sent to accepts it, and a refusal leaves it open.
+    assert_eq!(
+        service.accept(&token, &cris.user).await.unwrap_err(),
+        ApplicationError::InvitationForAnotherEmail
+    );
+    assert_eq!(service.open_invitations(company).await.unwrap().len(), 1);
+    assert_eq!(service.accept(&token, &bia.user).await.unwrap(), company);
+    let members = service.members(company).await.unwrap();
+    let found: Vec<(&str, Role)> = members.iter().map(|m| (m.user.name(), m.role)).collect();
+    assert_eq!(found, [("Ana", Role::Owner), ("Bia", Role::Sales)]);
+    assert!(service.open_invitations(company).await.unwrap().is_empty());
+    // Once only.
+    assert_eq!(
+        service.accept(&token, &bia.user).await.unwrap_err(),
+        ApplicationError::InvitationNoLongerValid
+    );
+    assert_eq!(
+        service.preview(&token).await.unwrap_err(),
+        ApplicationError::InvitationNoLongerValid
+    );
+    assert_eq!(
+        refused(
+            service
+                .invite(company, &ana_actor, &bia_email, Role::Viewer)
+                .await
+        ),
+        ApplicationError::Repository(RepositoryError::DuplicateMembership)
+    );
+
+    // A withdrawn invitation's link stops working, and only its own company can withdraw it.
+    let dani_email = format!("dani-{unique}@example.com");
+    let invited = service
+        .invite(company, &ana_actor, &dani_email, Role::Viewer)
+        .await
+        .unwrap();
+    let id = service.open_invitations(company).await.unwrap()[0].id();
+    assert_eq!(
+        service
+            .revoke(cris.memberships[0].company.id(), id)
+            .await
+            .unwrap_err(),
+        ApplicationError::InvitationNotFound
+    );
+    service.revoke(company, id).await.unwrap();
+    assert!(service.open_invitations(company).await.unwrap().is_empty());
+    assert_eq!(
+        service.preview(&token_of(&invited.link)).await.unwrap_err(),
+        ApplicationError::InvitationNoLongerValid
+    );
+    assert_eq!(
+        service.revoke(company, id).await.unwrap_err(),
+        ApplicationError::InvitationNotFound
+    );
+    // ... and it can be sent again.
+    service
+        .invite(company, &ana_actor, &dani_email, Role::Viewer)
+        .await
+        .unwrap();
+
+    // An expired invitation is no longer valid, is still listed to the person who sent it, and
+    // makes way for a new one to the same address.
+    let eva_email = format!("eva-{unique}@example.com");
+    let short = short_lived
+        .invite(company, &ana_actor, &eva_email, Role::Stock)
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    assert_eq!(
+        short_lived
+            .preview(&token_of(&short.link))
+            .await
+            .unwrap_err(),
+        ApplicationError::InvitationNoLongerValid
+    );
+    assert!(
+        service
+            .open_invitations(company)
+            .await
+            .unwrap()
+            .iter()
+            .any(|invitation| invitation.email().as_str() == eva_email)
+    );
+    let again = service
+        .invite(company, &ana_actor, &eva_email, Role::Stock)
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .preview(&token_of(&again.link))
+            .await
+            .unwrap()
+            .email
+            .as_str(),
+        eva_email
+    );
+    let evas = service
+        .open_invitations(company)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|invitation| invitation.email().as_str() == eva_email)
+        .count();
+    assert_eq!(evas, 1);
 }
 
 /// Expects an `AuthService` whose sessions last zero seconds.

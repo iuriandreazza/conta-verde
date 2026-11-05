@@ -9,6 +9,7 @@ mod error;
 mod history;
 mod json;
 mod list_params;
+mod members;
 mod parties;
 mod parties_import;
 mod payment_methods;
@@ -20,14 +21,14 @@ mod session;
 
 use std::sync::Arc;
 
-use axum::routing::{get, post, put};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use conta_verde_application::{
     AuthService, BankAccountRepository, BankAccountService, CategoryRepository, CategoryService,
-    CnpjRegistry, CostCenterRepository, CostCenterService, IdentityRepository, PartyRepository,
-    PartyService, PaymentMethodRepository, PaymentMethodService, PaymentTermRepository,
-    PaymentTermService, PostalCodeDirectory, PostalCodeService, ProductRepository, ProductService,
-    SecretService,
+    CnpjRegistry, CostCenterRepository, CostCenterService, EmailSender, IdentityRepository,
+    InvitationRepository, MemberService, PartyRepository, PartyService, PaymentMethodRepository,
+    PaymentMethodService, PaymentTermRepository, PaymentTermService, PostalCodeDirectory,
+    PostalCodeService, ProductRepository, ProductService, SecretService,
 };
 use serde::Serialize;
 
@@ -51,6 +52,8 @@ pub trait Ports: 'static {
     type PaymentMethods: PaymentMethodRepository + 'static;
     type PaymentTerms: PaymentTermRepository + 'static;
     type PostalCodes: PostalCodeDirectory + 'static;
+    type Invitations: InvitationRepository + 'static;
+    type Emails: EmailSender + 'static;
 }
 
 /// The use cases the API serves.
@@ -63,6 +66,7 @@ pub struct Services<X: Ports> {
     pub payment_methods: PaymentMethodService<X::PaymentMethods>,
     pub payment_terms: PaymentTermService<X::PaymentTerms>,
     pub postal_codes: PostalCodeService<X::PostalCodes>,
+    pub members: MemberService<X::Invitations, X::Identity, X::Emails, X::Secrets>,
     pub auth: AuthService<X::Identity, X::Secrets>,
 }
 
@@ -75,6 +79,7 @@ pub(crate) struct AppState<X: Ports> {
     payment_methods: PaymentMethodService<X::PaymentMethods>,
     payment_terms: PaymentTermService<X::PaymentTerms>,
     postal_codes: PostalCodeService<X::PostalCodes>,
+    members: MemberService<X::Invitations, X::Identity, X::Emails, X::Secrets>,
     auth: AuthService<X::Identity, X::Secrets>,
     config: ApiConfig,
 }
@@ -92,6 +97,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         payment_methods: services.payment_methods,
         payment_terms: services.payment_terms,
         postal_codes: services.postal_codes,
+        members: services.members,
         auth: services.auth,
         config,
     });
@@ -205,6 +211,26 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
             get(payment_terms::payment_term_history::<X>),
         )
         .route(
+            "/companies/{company_id}/members",
+            get(members::list_members::<X>),
+        )
+        .route(
+            "/companies/{company_id}/invitations",
+            get(members::list_invitations::<X>).post(members::invite::<X>),
+        )
+        .route(
+            "/companies/{company_id}/invitations/{invitation_id}",
+            delete(members::revoke_invitation::<X>),
+        )
+        .route(
+            "/invitations/{token}",
+            get(members::preview_invitation::<X>),
+        )
+        .route(
+            "/invitations/{token}/accept",
+            post(members::accept_invitation::<X>),
+        )
+        .route(
             "/companies/{company_id}/postal-codes/{code}",
             get(postal_codes::find_postal_code::<X>),
         )
@@ -229,8 +255,9 @@ mod tests {
     use conta_verde_application::PostalCodeEntry;
     use conta_verde_infrastructure::{
         Argon2SecretService, InMemoryBankAccountRepository, InMemoryCategoryRepository,
-        InMemoryCnpjRegistry, InMemoryCostCenterRepository, InMemoryIdentityRepository,
-        InMemoryPartyRepository, InMemoryPaymentMethodRepository, InMemoryPaymentTermRepository,
+        InMemoryCnpjRegistry, InMemoryCostCenterRepository, InMemoryEmailSender,
+        InMemoryIdentityRepository, InMemoryInvitationRepository, InMemoryPartyRepository,
+        InMemoryPaymentMethodRepository, InMemoryPaymentTermRepository,
         InMemoryPostalCodeDirectory, InMemoryProductRepository,
     };
     use http_body_util::BodyExt;
@@ -296,6 +323,8 @@ mod tests {
         type PaymentMethods = InMemoryPaymentMethodRepository;
         type PaymentTerms = InMemoryPaymentTermRepository;
         type PostalCodes = InMemoryPostalCodeDirectory;
+        type Invitations = InMemoryInvitationRepository;
+        type Emails = InMemoryEmailSender;
     }
 
     /// Like `MemoryPorts`, with the CNPJ and postal code lookups switched off.
@@ -313,6 +342,39 @@ mod tests {
         type PaymentMethods = InMemoryPaymentMethodRepository;
         type PaymentTerms = InMemoryPaymentTermRepository;
         type PostalCodes = Option<InMemoryPostalCodeDirectory>;
+        type Invitations = InMemoryInvitationRepository;
+        type Emails = InMemoryEmailSender;
+    }
+
+    type TestMembers = MemberService<
+        InMemoryInvitationRepository,
+        InMemoryIdentityRepository,
+        InMemoryEmailSender,
+        Argon2SecretService,
+    >;
+
+    /// The members service over the identities a test keeps a handle to, so what is accepted shows up
+    /// in what the app knows, and the e-mails it sends can be read.
+    fn members_over(
+        identities: &InMemoryIdentityRepository,
+        emails: &InMemoryEmailSender,
+    ) -> TestMembers {
+        MemberService::new(
+            InMemoryInvitationRepository::new(identities.clone()),
+            identities.clone(),
+            emails.clone(),
+            Argon2SecretService::new().unwrap(),
+            Duration::from_secs(7 * 86_400),
+            "https://erp.example",
+        )
+    }
+
+    /// One that shares nothing with the app's identities: for the tests that never invite.
+    fn standalone_members() -> TestMembers {
+        members_over(
+            &InMemoryIdentityRepository::default(),
+            &InMemoryEmailSender::default(),
+        )
     }
 
     fn auth_service() -> AuthService<InMemoryIdentityRepository, Argon2SecretService> {
@@ -333,13 +395,14 @@ mod tests {
         parties: PartyService<InMemoryPartyRepository, InMemoryCnpjRegistry>,
         postal_codes: InMemoryPostalCodeDirectory,
     ) -> Router {
-        app_with_auth(parties, postal_codes, auth_service())
+        app_with_auth(parties, postal_codes, auth_service(), standalone_members())
     }
 
     fn app_with_auth(
         parties: PartyService<InMemoryPartyRepository, InMemoryCnpjRegistry>,
         postal_codes: InMemoryPostalCodeDirectory,
         auth: AuthService<InMemoryIdentityRepository, Argon2SecretService>,
+        members: TestMembers,
     ) -> Router {
         router::<MemoryPorts>(
             Services {
@@ -353,6 +416,7 @@ mod tests {
                 ),
                 payment_terms: PaymentTermService::new(InMemoryPaymentTermRepository::default()),
                 postal_codes: PostalCodeService::new(postal_codes),
+                members,
                 auth,
             },
             ApiConfig::default(),
@@ -983,6 +1047,7 @@ mod tests {
                 ),
                 payment_terms: PaymentTermService::new(InMemoryPaymentTermRepository::default()),
                 postal_codes: PostalCodeService::new(None),
+                members: standalone_members(),
                 auth: auth_service(),
             },
             ApiConfig::default(),
@@ -1227,7 +1292,14 @@ mod tests {
     /// An app whose identities the test keeps a handle to, to give members the roles that no route
     /// hands out yet.
     fn app_with_identities() -> (Router, InMemoryIdentityRepository) {
+        let (app, identities, _) = app_with_mailbox();
+        (app, identities)
+    }
+
+    /// Like `app_with_identities`, and the mailbox the app sends its e-mails to.
+    fn app_with_mailbox() -> (Router, InMemoryIdentityRepository, InMemoryEmailSender) {
         let identities = InMemoryIdentityRepository::default();
+        let emails = InMemoryEmailSender::default();
         let auth = AuthService::new(
             identities.clone(),
             Argon2SecretService::new().unwrap(),
@@ -1238,8 +1310,9 @@ mod tests {
                 .with_recheck_interval(Duration::ZERO),
             known_postal_codes(),
             auth,
+            members_over(&identities, &emails),
         );
-        (app, identities)
+        (app, identities, emails)
     }
 
     /// The cookie of a new user who is a member of `company_id` with `role`.
@@ -1555,6 +1628,363 @@ mod tests {
         assert_eq!(reply.status, StatusCode::NOT_FOUND);
     }
 
+    fn invitations_uri(company_id: Uuid) -> String {
+        format!("/companies/{company_id}/invitations")
+    }
+
+    fn token_of(link: &Value) -> String {
+        link.as_str()
+            .unwrap()
+            .rsplit('/')
+            .next()
+            .unwrap()
+            .to_owned()
+    }
+
+    async fn invite_as(
+        app: &Router,
+        cookie: &str,
+        company_id: Uuid,
+        email: &str,
+        role: &str,
+    ) -> Reply {
+        send(
+            app,
+            json_request(
+                "POST",
+                &invitations_uri(company_id),
+                Some(cookie),
+                json!({ "email": email, "role": role }),
+            ),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn an_owner_invites_a_person_who_accepts_with_their_own_account_and_gets_the_role() {
+        let (app, _, mailbox) = app_with_mailbox();
+        let (ana, company_id) = sign_up(&app, "ana@example.com").await;
+        let (bia, bia_company) = sign_up(&app, "bia@example.com").await;
+        let (cris, _) = sign_up(&app, "cris@example.com").await;
+
+        let invited = invite_as(&app, &ana, company_id, "Bia@Example.com", "sales").await;
+        assert_eq!(invited.status, StatusCode::CREATED, "{}", invited.body);
+        assert_eq!(invited.body["role"], "sales");
+        assert_eq!(invited.body["email"], "bia@example.com");
+        assert_eq!(invited.body["emailed"], true);
+        assert_eq!(invited.body["expired"], false);
+        assert!(
+            invited.body["link"]
+                .as_str()
+                .unwrap()
+                .starts_with("https://erp.example/invitations/")
+        );
+        let sent = mailbox.sent();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].to.as_str(), "bia@example.com");
+        assert!(
+            sent[0]
+                .body
+                .contains(invited.body["link"].as_str().unwrap())
+        );
+
+        // The invitation is listed, without the link; the company has one member so far.
+        let listed = send(&app, get_request(&invitations_uri(company_id), Some(&ana))).await;
+        assert_eq!(listed.body.as_array().unwrap().len(), 1);
+        assert!(listed.body[0].get("link").is_none());
+        let members = send(
+            &app,
+            get_request(&format!("/companies/{company_id}/members"), Some(&ana)),
+        )
+        .await;
+        assert_eq!(
+            members.body,
+            json!([{
+                "user_id": members.body[0]["user_id"], "name": "Ana", "email": "ana@example.com", "role": "owner"
+            }])
+        );
+
+        // The link says what it leads to, without a session.
+        let token = token_of(&invited.body["link"]);
+        let preview = send(&app, get_request(&format!("/invitations/{token}"), None)).await;
+        assert_eq!(preview.status, StatusCode::OK);
+        assert_eq!(preview.body["company_name"], "Padaria");
+        assert_eq!(preview.body["email"], "bia@example.com");
+        assert_eq!(preview.body["role"], "sales");
+
+        // Accepting needs a session, and the session of the address it was sent to.
+        let accept = |cookie: Option<&str>| {
+            json_request(
+                "POST",
+                &format!("/invitations/{token}/accept"),
+                cookie,
+                Value::Null,
+            )
+        };
+        assert_eq!(
+            send(&app, accept(None)).await.status,
+            StatusCode::UNAUTHORIZED
+        );
+        let wrong = send(&app, accept(Some(&cris))).await;
+        assert_eq!(wrong.status, StatusCode::FORBIDDEN);
+        assert!(
+            wrong.body["error"]
+                .as_str()
+                .unwrap()
+                .contains("another e-mail address")
+        );
+        let accepted = send(&app, accept(Some(&bia))).await;
+        assert_eq!(accepted.status, StatusCode::OK, "{}", accepted.body);
+        assert_eq!(accepted.body["company_id"], company_id.to_string());
+
+        // Bia now belongs to the company, in the role, and what the role allows applies at once.
+        let me = send(&app, get_request("/auth/me", Some(&bia))).await;
+        let companies = me.body["companies"].as_array().unwrap();
+        assert_eq!(companies.len(), 2);
+        let joined = companies
+            .iter()
+            .find(|c| c["id"] == company_id.to_string())
+            .unwrap();
+        assert_eq!(joined["role"], "sales");
+        let own = companies
+            .iter()
+            .find(|c| c["id"] == bia_company.to_string())
+            .unwrap();
+        assert_eq!(own["role"], "owner");
+        let base = format!("/companies/{company_id}");
+        let new_party = send(
+            &app,
+            json_request("POST", &format!("{base}/parties"), Some(&bia), party_body()),
+        )
+        .await;
+        assert_eq!(new_party.status, StatusCode::CREATED);
+        let new_product = send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{base}/products"),
+                Some(&bia),
+                product_body(),
+            ),
+        )
+        .await;
+        assert_eq!(new_product.status, StatusCode::FORBIDDEN);
+        let members = send(&app, get_request(&format!("{base}/members"), Some(&ana))).await;
+        assert_eq!(members.body.as_array().unwrap().len(), 2);
+        assert!(
+            send(&app, get_request(&invitations_uri(company_id), Some(&ana)))
+                .await
+                .body
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+
+        // The link works once.
+        assert_eq!(
+            send(&app, accept(Some(&bia))).await.status,
+            StatusCode::GONE
+        );
+        assert_eq!(
+            send(&app, get_request(&format!("/invitations/{token}"), None))
+                .await
+                .status,
+            StatusCode::GONE
+        );
+        assert_eq!(
+            send(&app, get_request("/invitations/not-a-token", None))
+                .await
+                .status,
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn only_the_roles_that_reach_members_may_see_or_invite_and_what_is_refused_is_said() {
+        use conta_verde_domain::Role;
+
+        let (app, identities, _) = app_with_mailbox();
+        let (owner, company_id) = sign_up(&app, "dona@example.com").await;
+        let base = format!("/companies/{company_id}");
+
+        // A viewer and a sales person see nothing of who belongs, and invite nobody.
+        for role in [
+            Role::Viewer,
+            Role::Sales,
+            Role::Stock,
+            Role::Accountant,
+            Role::Financial,
+        ] {
+            let cookie = member_with_role(&app, &identities, company_id, role).await;
+            assert_eq!(
+                send(&app, get_request(&format!("{base}/members"), Some(&cookie)))
+                    .await
+                    .status,
+                StatusCode::FORBIDDEN,
+                "{role:?}"
+            );
+            assert_eq!(
+                send(
+                    &app,
+                    get_request(&invitations_uri(company_id), Some(&cookie))
+                )
+                .await
+                .status,
+                StatusCode::FORBIDDEN,
+                "{role:?}"
+            );
+            assert_eq!(
+                invite_as(&app, &cookie, company_id, "x@example.com", "viewer")
+                    .await
+                    .status,
+                StatusCode::FORBIDDEN,
+                "{role:?}"
+            );
+        }
+        // An admin does both.
+        let admin = member_with_role(&app, &identities, company_id, Role::Admin).await;
+        assert_eq!(
+            send(&app, get_request(&format!("{base}/members"), Some(&admin)))
+                .await
+                .status,
+            StatusCode::OK
+        );
+        assert_eq!(
+            invite_as(&app, &admin, company_id, "x@example.com", "viewer")
+                .await
+                .status,
+            StatusCode::CREATED
+        );
+
+        // Nobody is invited as an owner, in a role that does not exist, with a bad address, twice, or
+        // when already a member.
+        let refused = |reply: Reply, status: StatusCode, said: &str| {
+            assert_eq!(reply.status, status, "{said}: {}", reply.body);
+            assert!(
+                reply.body["error"].as_str().unwrap().contains(said),
+                "{said}: {}",
+                reply.body
+            );
+        };
+        refused(
+            invite_as(&app, &owner, company_id, "y@example.com", "owner").await,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "nobody is invited as an owner",
+        );
+        refused(
+            invite_as(&app, &owner, company_id, "y@example.com", "boss").await,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "role must be",
+        );
+        refused(
+            invite_as(&app, &owner, company_id, "not-an-email", "viewer").await,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "email is not valid",
+        );
+        refused(
+            invite_as(&app, &owner, company_id, "X@example.com", "sales").await,
+            StatusCode::CONFLICT,
+            "already has an open invitation",
+        );
+        refused(
+            invite_as(&app, &owner, company_id, "dona@example.com", "sales").await,
+            StatusCode::CONFLICT,
+            "already a member",
+        );
+        let typo = send(
+            &app,
+            json_request(
+                "POST",
+                &invitations_uri(company_id),
+                Some(&owner),
+                json!({"email": "z@example.com", "role": "viewer", "roles": []}),
+            ),
+        )
+        .await;
+        assert!(typo.status.is_client_error());
+    }
+
+    #[tokio::test]
+    async fn a_withdrawn_invitation_stops_working_and_only_its_company_can_withdraw_it() {
+        let (app, _, _) = app_with_mailbox();
+        let (ana, company_id) = sign_up(&app, "ana@example.com").await;
+        let (outsider, outsider_company) = sign_up(&app, "fora@example.com").await;
+        let (bia, _) = sign_up(&app, "bia@example.com").await;
+
+        let invited = invite_as(&app, &ana, company_id, "bia@example.com", "viewer").await;
+        let id = invited.body["id"].as_str().unwrap().to_owned();
+        let token = token_of(&invited.body["link"]);
+        let one = format!("{}/{id}", invitations_uri(company_id));
+
+        // Another company's owner cannot see or withdraw it: it is not found for them.
+        assert_eq!(
+            send(
+                &app,
+                json_request("DELETE", &one, Some(&outsider), Value::Null)
+            )
+            .await
+            .status,
+            StatusCode::NOT_FOUND
+        );
+        let theirs = format!("{}/{id}", invitations_uri(outsider_company));
+        assert_eq!(
+            send(
+                &app,
+                json_request("DELETE", &theirs, Some(&outsider), Value::Null)
+            )
+            .await
+            .status,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            send(
+                &app,
+                json_request(
+                    "DELETE",
+                    &format!("{}/not-an-id", invitations_uri(company_id)),
+                    Some(&ana),
+                    Value::Null
+                )
+            )
+            .await
+            .status,
+            StatusCode::NOT_FOUND
+        );
+
+        assert_eq!(
+            send(&app, json_request("DELETE", &one, Some(&ana), Value::Null))
+                .await
+                .status,
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(
+            send(&app, json_request("DELETE", &one, Some(&ana), Value::Null))
+                .await
+                .status,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            send(&app, get_request(&format!("/invitations/{token}"), None))
+                .await
+                .status,
+            StatusCode::GONE
+        );
+        let accept = json_request(
+            "POST",
+            &format!("/invitations/{token}/accept"),
+            Some(&bia),
+            Value::Null,
+        );
+        assert_eq!(send(&app, accept).await.status, StatusCode::GONE);
+        // Bia is not a member: a withdrawn link gave her nothing.
+        let members = send(
+            &app,
+            get_request(&format!("/companies/{company_id}/members"), Some(&ana)),
+        )
+        .await;
+        assert_eq!(members.body.as_array().unwrap().len(), 1);
+    }
+
     async fn register_party(app: &Router, document: Option<&str>) -> Reply {
         let (cookie, company_id) = sign_up(app, "ana@example.com").await;
         let mut body = party_body();
@@ -1744,6 +2174,7 @@ mod tests {
                 ),
                 payment_terms: PaymentTermService::new(InMemoryPaymentTermRepository::default()),
                 postal_codes: PostalCodeService::new(None),
+                members: standalone_members(),
                 auth: auth_service(),
             },
             ApiConfig::default(),

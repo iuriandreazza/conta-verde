@@ -13,6 +13,7 @@ pub enum RepositoryError {
     /// company, a category under the same parent), ignoring case.
     DuplicateName,
     DuplicateMembership,
+    DuplicateInvitation,
     /// The company already has a category for transfers between its accounts.
     DuplicateTransferCategory,
     /// The company already has an account with this bank, branch and number.
@@ -62,6 +63,12 @@ pub enum ApplicationError {
     PaymentMethodNotFound,
     /// No cost center with this id in the company (another company's looks the same).
     CostCenterNotFound,
+    /// No invitation behind this token or id (another company's id looks the same).
+    InvitationNotFound,
+    /// The invitation was accepted, withdrawn or has expired.
+    InvitationNoLongerValid,
+    /// The signed-in user is not the address the invitation was sent to.
+    InvitationForAnotherEmail,
     /// The operator switched the CNPJ lookup off, so there is nothing to ask.
     LookupDisabled,
     /// The party's CNPJ was re-checked a moment ago; the registry has a shared rate limit.
@@ -107,6 +114,9 @@ impl fmt::Display for RepositoryError {
             Self::DuplicateName => f.write_str("this name is already in use"),
             Self::DuplicateMembership => {
                 f.write_str("this user is already a member of the company")
+            }
+            Self::DuplicateInvitation => {
+                f.write_str("this e-mail address already has an open invitation to the company")
             }
             Self::DuplicateBankAccount => {
                 f.write_str("a bank account with this bank, branch and number already exists")
@@ -157,6 +167,13 @@ impl fmt::Display for ApplicationError {
                 "the default categories can only be applied to a company without categories",
             ),
             Self::CategoryLimitReached => f.write_str("a company can have at most 1000 categories"),
+            Self::InvitationNotFound => f.write_str("invitation not found"),
+            Self::InvitationNoLongerValid => f.write_str(
+                "this invitation was already used or withdrawn, or has expired: ask for a new one",
+            ),
+            Self::InvitationForAnotherEmail => f.write_str(
+                "this invitation was sent to another e-mail address: sign in with that one",
+            ),
             Self::LookupDisabled => f.write_str("CNPJ lookup is switched off on this installation"),
             Self::RecheckTooSoon => {
                 f.write_str("this CNPJ was checked a moment ago, try again in a few seconds")

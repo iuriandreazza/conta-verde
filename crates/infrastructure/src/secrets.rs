@@ -72,11 +72,11 @@ impl SecretService for Argon2SecretService {
         known && matches
     }
 
-    fn new_session_token(&self) -> String {
+    fn new_token(&self) -> String {
         hex(&rand::random::<[u8; SESSION_TOKEN_BYTES]>())
     }
 
-    fn digest_session_token(&self, token: &str) -> String {
+    fn digest_token(&self, token: &str) -> String {
         hex(&Sha256::digest(token.as_bytes()))
     }
 }
@@ -116,13 +116,10 @@ mod tests {
     #[test]
     fn tokens_are_unique_and_digests_are_stable() {
         let secrets = Argon2SecretService::new().unwrap();
-        let first = secrets.new_session_token();
-        assert_ne!(first, secrets.new_session_token());
+        let first = secrets.new_token();
+        assert_ne!(first, secrets.new_token());
         assert_eq!(first.len(), SESSION_TOKEN_BYTES * 2);
-        assert_eq!(
-            secrets.digest_session_token(&first),
-            secrets.digest_session_token(&first)
-        );
-        assert_ne!(secrets.digest_session_token(&first), first);
+        assert_eq!(secrets.digest_token(&first), secrets.digest_token(&first));
+        assert_ne!(secrets.digest_token(&first), first);
     }
 }
