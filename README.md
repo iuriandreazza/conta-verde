@@ -60,7 +60,8 @@ when someone presses "Buscar endereço" in the party form; `CEP_LOOKUP=off` swit
 
 To send e-mail for real, set `SMTP_URL` and `SMTP_FROM` (see `.env.example`); without them messages are only written to the
 log and the web app shows an invitation's link to pass on. A mail server on the internet needs TLS (`smtps://` or
-`?tls=required`), or the password and the message travel in the clear ([ADR 0014](docs/adr/0014-notifications.md)).
+`?tls=required`): a URL with a password that does not encrypt is refused unless the server is localhost, since the password
+and the message would travel in the clear ([ADR 0014](docs/adr/0014-notifications.md)).
 
 The server listens on `127.0.0.1:3000` by default. Set `BIND_ADDR` to change it, and keep it private
 until it sits behind a TLS proxy (set `COOKIE_SECURE=true` there).

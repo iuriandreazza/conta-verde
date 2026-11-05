@@ -130,9 +130,15 @@ impl EmailSender for ConfiguredEmailSender {
 /// is a mistake, and stops the server instead of silently not sending.
 fn email_sender_from_env() -> Result<ConfiguredEmailSender, Box<dyn std::error::Error + Send + Sync>>
 {
+    // `SMTP_URL=` in an env file or a compose file means "none", not "an empty server".
+    let setting = |name: &str| {
+        std::env::var(name)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+    };
     email_sender(
-        std::env::var("SMTP_URL").ok().as_deref(),
-        std::env::var("SMTP_FROM").ok().as_deref(),
+        setting("SMTP_URL").as_deref(),
+        setting("SMTP_FROM").as_deref(),
     )
 }
 
@@ -260,7 +266,6 @@ mod tests {
         for (url, from) in [
             (Some("smtp://localhost:1025"), None),
             (None, Some(FROM)),
-            (Some(""), Some(FROM)),
             (Some("not a url"), Some(FROM)),
             (Some("smtp://localhost:1025"), Some("not an address")),
         ] {
