@@ -24,66 +24,69 @@ pub struct ApiConfig {
     pub cookie_secure: bool,
 }
 
-pub(crate) struct AppState<R, C, I, S, P> {
-    parties: PartyService<R, C>,
-    products: ProductService<P>,
-    auth: AuthService<I, S>,
+/// The adapters the use cases run on, named once so that a handler has one type parameter however
+/// many registers there are. Generic rather than `dyn`, like the use cases themselves.
+pub trait Ports: 'static {
+    type Parties: PartyRepository + 'static;
+    type Registry: CnpjRegistry + 'static;
+    type Identity: IdentityRepository + 'static;
+    type Secrets: SecretService + 'static;
+    type Products: ProductRepository + 'static;
+}
+
+/// The use cases the API serves.
+pub struct Services<X: Ports> {
+    pub parties: PartyService<X::Parties, X::Registry>,
+    pub products: ProductService<X::Products>,
+    pub auth: AuthService<X::Identity, X::Secrets>,
+}
+
+pub(crate) struct AppState<X: Ports> {
+    parties: PartyService<X::Parties, X::Registry>,
+    products: ProductService<X::Products>,
+    auth: AuthService<X::Identity, X::Secrets>,
     config: ApiConfig,
 }
 
-/// What every handler receives; the five type parameters are the ports the use cases run on.
-pub(crate) type SharedState<R, C, I, S, P> = Arc<AppState<R, C, I, S, P>>;
+/// What every handler receives.
+pub(crate) type SharedState<X> = Arc<AppState<X>>;
 
-pub fn router<R, C, I, S, P>(
-    parties: PartyService<R, C>,
-    products: ProductService<P>,
-    auth: AuthService<I, S>,
-    config: ApiConfig,
-) -> Router
-where
-    R: PartyRepository + 'static,
-    C: CnpjRegistry + 'static,
-    I: IdentityRepository + 'static,
-    S: SecretService + 'static,
-    P: ProductRepository + 'static,
-{
+pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
     let state = Arc::new(AppState {
-        parties,
-        products,
-        auth,
+        parties: services.parties,
+        products: services.products,
+        auth: services.auth,
         config,
     });
     Router::new()
         .route("/health", get(health))
-        .route("/auth/register", post(auth::register::<R, C, I, S, P>))
-        .route("/auth/login", post(auth::login::<R, C, I, S, P>))
-        .route("/auth/logout", post(auth::logout::<R, C, I, S, P>))
-        .route("/auth/me", get(auth::me::<R, C, I, S, P>))
+        .route("/auth/register", post(auth::register::<X>))
+        .route("/auth/login", post(auth::login::<X>))
+        .route("/auth/logout", post(auth::logout::<X>))
+        .route("/auth/me", get(auth::me::<X>))
         .route(
             "/companies/{company_id}/parties",
-            get(parties::list_parties::<R, C, I, S, P>)
-                .post(parties::register_party::<R, C, I, S, P>),
+            get(parties::list_parties::<X>).post(parties::register_party::<X>),
         )
         .route(
             "/companies/{company_id}/parties/{party_id}/document-check",
-            post(parties::verify_document::<R, C, I, S, P>),
+            post(parties::verify_document::<X>),
         )
         .route(
             "/companies/{company_id}/parties/{party_id}/history",
-            get(parties::party_history::<R, C, I, S, P>),
+            get(parties::party_history::<X>),
         )
         .route(
             "/companies/{company_id}/products",
-            get(products::list_products::<R, C, I, S, P>)
-                .post(products::register_product::<R, C, I, S, P>),
+            get(products::list_products::<X>).post(products::register_product::<X>),
         )
         .route(
             "/companies/{company_id}/products/{product_id}",
-            put(products::update_product::<R, C, I, S, P>),
+            put(products::update_product::<X>),
         )
         .route(
             "/companies/{company_id}/products/{product_id}/history",
-            get(products::product_history::<R, C, I, S, P>),
+            get(products::product_history::<X>),
         )
         .with_state(state)
 }
@@ -133,17 +136,44 @@ mod tests {
         )
     }
 
+    struct MemoryPorts;
+
+    impl Ports for MemoryPorts {
+        type Parties = InMemoryPartyRepository;
+        type Registry = InMemoryCnpjRegistry;
+        type Identity = InMemoryIdentityRepository;
+        type Secrets = Argon2SecretService;
+        type Products = InMemoryProductRepository;
+    }
+
+    /// Like `MemoryPorts`, with the CNPJ lookup switched off.
+    struct NoLookupPorts;
+
+    impl Ports for NoLookupPorts {
+        type Parties = InMemoryPartyRepository;
+        type Registry = Option<InMemoryCnpjRegistry>;
+        type Identity = InMemoryIdentityRepository;
+        type Secrets = Argon2SecretService;
+        type Products = InMemoryProductRepository;
+    }
+
+    fn auth_service() -> AuthService<InMemoryIdentityRepository, Argon2SecretService> {
+        AuthService::new(
+            InMemoryIdentityRepository::default(),
+            Argon2SecretService::new().unwrap(),
+            Duration::from_secs(3600),
+        )
+    }
+
     fn app_with_parties(
         parties: PartyService<InMemoryPartyRepository, InMemoryCnpjRegistry>,
     ) -> Router {
-        router(
-            parties,
-            ProductService::new(InMemoryProductRepository::default()),
-            AuthService::new(
-                InMemoryIdentityRepository::default(),
-                Argon2SecretService::new().unwrap(),
-                Duration::from_secs(3600),
-            ),
+        router::<MemoryPorts>(
+            Services {
+                parties,
+                products: ProductService::new(InMemoryProductRepository::default()),
+                auth: auth_service(),
+            },
             ApiConfig::default(),
         )
     }
@@ -557,14 +587,12 @@ mod tests {
     #[tokio::test]
     async fn checking_again_with_the_lookup_off_is_a_409() {
         let registry: Option<InMemoryCnpjRegistry> = None;
-        let app = router(
-            PartyService::new(InMemoryPartyRepository::default(), registry),
-            ProductService::new(InMemoryProductRepository::default()),
-            AuthService::new(
-                InMemoryIdentityRepository::default(),
-                Argon2SecretService::new().unwrap(),
-                Duration::from_secs(3600),
-            ),
+        let app = router::<NoLookupPorts>(
+            Services {
+                parties: PartyService::new(InMemoryPartyRepository::default(), registry),
+                products: ProductService::new(InMemoryProductRepository::default()),
+                auth: auth_service(),
+            },
             ApiConfig::default(),
         );
         let (cookie, company_id, party_id) =

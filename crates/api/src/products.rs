@@ -1,20 +1,17 @@
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use conta_verde_application::{
-    ApplicationError, CnpjRegistry, IdentityRepository, MAX_SEARCH_CHARS, NameSort,
-    PartyRepository, ProductQuery, ProductRepository, SecretService,
-};
+use conta_verde_application::{ApplicationError, MAX_SEARCH_CHARS, NameSort, ProductQuery};
 use conta_verde_domain::{Product, ProductDraft, ProductId, ProductKind};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::SharedState;
 use crate::access::CompanyAccess;
 use crate::cursor::{decode_cursor, encode_cursor};
 use crate::error::ApiError;
 use crate::history::HistoryEntryResponse;
 use crate::json::{ApiJson, ApiQuery};
+use crate::{Ports, SharedState};
 
 /// The body of both registering and changing a product: a change replaces every editable field.
 /// Prices and the minimum stock are strings, never JSON numbers, so no precision is lost.
@@ -186,19 +183,11 @@ fn parse_product_id(raw: &str) -> Result<ProductId, ApiError> {
         .map_err(|_| ApplicationError::ProductNotFound.into())
 }
 
-pub(crate) async fn list_products<R, C, I, S, P>(
-    State(state): State<SharedState<R, C, I, S, P>>,
+pub(crate) async fn list_products<X: Ports>(
+    State(state): State<SharedState<X>>,
     CompanyAccess(company_id, _): CompanyAccess,
     ApiQuery(query): ApiQuery<ListQuery>,
-) -> Result<Json<ProductPageResponse>, ApiError>
-where
-    R: PartyRepository,
-    C: CnpjRegistry,
-    I: IdentityRepository,
-    S: SecretService,
-    P: ProductRepository,
-    P: ProductRepository,
-{
+) -> Result<Json<ProductPageResponse>, ApiError> {
     let filter = query.product_query()?;
     let after = query.after.as_deref().map(decode_cursor).transpose()?;
     let page = state
@@ -211,19 +200,11 @@ where
     }))
 }
 
-pub(crate) async fn register_product<R, C, I, S, P>(
-    State(state): State<SharedState<R, C, I, S, P>>,
+pub(crate) async fn register_product<X: Ports>(
+    State(state): State<SharedState<X>>,
     CompanyAccess(company_id, actor): CompanyAccess,
     ApiJson(request): ApiJson<ProductRequest>,
-) -> Result<(StatusCode, Json<ProductResponse>), ApiError>
-where
-    R: PartyRepository,
-    C: CnpjRegistry,
-    I: IdentityRepository,
-    S: SecretService,
-    P: ProductRepository,
-    P: ProductRepository,
-{
+) -> Result<(StatusCode, Json<ProductResponse>), ApiError> {
     let product = state
         .products
         .register(company_id, &actor, request.into_draft(Some(true))?)
@@ -232,20 +213,12 @@ where
 }
 
 /// Replaces every editable field. Nothing is written, and nothing is recorded, when nothing changes.
-pub(crate) async fn update_product<R, C, I, S, P>(
-    State(state): State<SharedState<R, C, I, S, P>>,
+pub(crate) async fn update_product<X: Ports>(
+    State(state): State<SharedState<X>>,
     CompanyAccess(company_id, actor): CompanyAccess,
     Path((_, product_id)): Path<(Uuid, String)>,
     ApiJson(request): ApiJson<ProductRequest>,
-) -> Result<Json<ProductResponse>, ApiError>
-where
-    R: PartyRepository,
-    C: CnpjRegistry,
-    I: IdentityRepository,
-    S: SecretService,
-    P: ProductRepository,
-    P: ProductRepository,
-{
+) -> Result<Json<ProductResponse>, ApiError> {
     let product_id = parse_product_id(&product_id)?;
     let product = state
         .products
@@ -255,19 +228,11 @@ where
 }
 
 /// What was recorded about a product, oldest first.
-pub(crate) async fn product_history<R, C, I, S, P>(
-    State(state): State<SharedState<R, C, I, S, P>>,
+pub(crate) async fn product_history<X: Ports>(
+    State(state): State<SharedState<X>>,
     CompanyAccess(company_id, _): CompanyAccess,
     Path((_, product_id)): Path<(Uuid, String)>,
-) -> Result<Json<Vec<HistoryEntryResponse>>, ApiError>
-where
-    R: PartyRepository,
-    C: CnpjRegistry,
-    I: IdentityRepository,
-    S: SecretService,
-    P: ProductRepository,
-    P: ProductRepository,
-{
+) -> Result<Json<Vec<HistoryEntryResponse>>, ApiError> {
     let product_id = parse_product_id(&product_id)?;
     let history = state.products.history(company_id, product_id).await?;
     Ok(Json(
