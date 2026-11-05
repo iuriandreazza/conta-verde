@@ -82,6 +82,14 @@ do not change; the Portuguese labels live in the web app. `transfers` and `trans
   whole, and a company has dozens of categories, not thousands. It is the one list that does not follow
   [ADR 0018](0018-list-endpoints-search-filter-sort.md)'s paging.
 
+- At most 1000 categories per company, checked when one is created, so that the whole-tree list is always complete.
+- The rules about the neighbours of a category (no active subcategory left under an inactive one, the limit, whether the company
+  has any category yet) are checked by the use case from the list it just read, not by the database. Two requests at the same
+  moment can slip past them; the database still refuses duplicate names, a second transfer category, a parent in another company
+  and a malformed row. A constraint trigger is the fix if it ever matters.
+- Subcategory names show in the web app as the screen-reader text "Subcategoria de X", under an indented name; the page is a
+  table, not an ARIA tree, which would owe the user arrow-key navigation.
+
 **Cost centers** are a flat register: a name, unique per company ignoring case, and an active flag, listed as ADR 0018 says.
 They are not a tree for now.
 
