@@ -1,12 +1,26 @@
 //! Behavior every adapter must share, written once and run against each of them.
 
 use conta_verde_application::{
-    ApplicationError, AuthError, AuthService, IdentityRepository, PartyRepository, PartyService,
-    RepositoryError, SecretService,
+    ApplicationError, AuthError, AuthService, CnpjRegistry, IdentityRepository, PartyRepository,
+    PartyService, RepositoryError, SecretService,
 };
-use conta_verde_domain::{AccountDraft, CompanyId, PartyDraft};
+use conta_verde_domain::{AccountDraft, CompanyId, DocumentCheck, PartyDraft};
 use sqlx::PgPool;
 use uuid::Uuid;
+
+use crate::InMemoryCnpjRegistry;
+
+pub const ACTIVE_CNPJ: &str = "11.222.333/0001-81";
+pub const CLOSED_ALPHANUMERIC_CNPJ: &str = "12.ABC.345/01DE-35";
+/// Valid check digits, but unknown to the contract registry.
+pub const UNKNOWN_CNPJ: &str = "00.000.000/0001-91";
+
+/// A registry that knows the two companies the contract tests register, and no others.
+pub fn registry() -> InMemoryCnpjRegistry {
+    InMemoryCnpjRegistry::default()
+        .with_company("11222333000181", "PADARIA CENTRAL LTDA", "ATIVA")
+        .with_company("12ABC34501DE35", "OFICINA ALFANUMERICA LTDA", "BAIXADA")
+}
 
 pub async fn test_pool() -> PgPool {
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
@@ -24,8 +38,75 @@ pub async fn create_company(pool: &PgPool) -> CompanyId {
     id
 }
 
-pub async fn pages_through_parties<R: PartyRepository>(
-    service: &PartyService<R>,
+fn party_draft(name: &str, document: Option<&str>) -> PartyDraft {
+    PartyDraft {
+        name: name.into(),
+        document: document.map(Into::into),
+        email: None,
+        is_customer: true,
+        is_supplier: false,
+    }
+}
+
+/// The registry's answer is stored with the party and comes back unchanged. Expects a service
+/// built with `registry()`.
+pub async fn keeps_what_the_registry_said<R: PartyRepository>(
+    service: &PartyService<R, InMemoryCnpjRegistry>,
+    company: CompanyId,
+) {
+    for (name, document) in [
+        ("Padaria", Some(ACTIVE_CNPJ)),
+        ("Oficina", Some(CLOSED_ALPHANUMERIC_CNPJ)),
+        ("Fantasma", Some(UNKNOWN_CNPJ)),
+        ("Ana", Some("529.982.247-25")),
+        ("Sem documento", None),
+    ] {
+        service
+            .register(company, party_draft(name, document))
+            .await
+            .unwrap();
+    }
+
+    let listed = service.list(company, None, None).await.unwrap().items;
+    let checks: Vec<(&str, DocumentCheck)> = listed
+        .iter()
+        .map(|party| (party.name(), party.document_check().clone()))
+        .collect();
+    let verified = |name: &str, situation: &str| DocumentCheck::Verified {
+        legal_name: name.into(),
+        situation: situation.into(),
+    };
+    assert_eq!(
+        checks,
+        [
+            ("Ana", DocumentCheck::NotApplicable),
+            ("Fantasma", DocumentCheck::NotFound),
+            ("Oficina", verified("OFICINA ALFANUMERICA LTDA", "BAIXADA")),
+            ("Padaria", verified("PADARIA CENTRAL LTDA", "ATIVA")),
+            ("Sem documento", DocumentCheck::NotApplicable),
+        ]
+    );
+    assert_eq!(
+        listed[2].document().map(|document| document.as_str()),
+        Some("12ABC34501DE35")
+    );
+}
+
+/// A CNPJ stored while the registry was down stays marked as unverified.
+pub async fn keeps_the_unverified_mark<R: PartyRepository>(
+    service: &PartyService<R, InMemoryCnpjRegistry>,
+    company: CompanyId,
+) {
+    service
+        .register(company, party_draft("Padaria", Some(ACTIVE_CNPJ)))
+        .await
+        .unwrap();
+    let listed = service.list(company, None, None).await.unwrap().items;
+    assert_eq!(listed[0].document_check(), &DocumentCheck::Unverified);
+}
+
+pub async fn pages_through_parties<R: PartyRepository, C: CnpjRegistry>(
+    service: &PartyService<R, C>,
     company: CompanyId,
 ) {
     for name in ["delta", "Alfa", "charlie", "Bravo", "echo"] {

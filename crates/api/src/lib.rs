@@ -9,7 +9,7 @@ use std::sync::Arc;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use conta_verde_application::{
-    AuthService, IdentityRepository, PartyRepository, PartyService, SecretService,
+    AuthService, CnpjRegistry, IdentityRepository, PartyRepository, PartyService, SecretService,
 };
 use serde::Serialize;
 
@@ -19,19 +19,20 @@ pub struct ApiConfig {
     pub cookie_secure: bool,
 }
 
-pub(crate) struct AppState<R, I, S> {
-    parties: PartyService<R>,
+pub(crate) struct AppState<R, C, I, S> {
+    parties: PartyService<R, C>,
     auth: AuthService<I, S>,
     config: ApiConfig,
 }
 
-pub fn router<R, I, S>(
-    parties: PartyService<R>,
+pub fn router<R, C, I, S>(
+    parties: PartyService<R, C>,
     auth: AuthService<I, S>,
     config: ApiConfig,
 ) -> Router
 where
     R: PartyRepository + 'static,
+    C: CnpjRegistry + 'static,
     I: IdentityRepository + 'static,
     S: SecretService + 'static,
 {
@@ -42,13 +43,13 @@ where
     });
     Router::new()
         .route("/health", get(health))
-        .route("/auth/register", post(auth::register::<R, I, S>))
-        .route("/auth/login", post(auth::login::<R, I, S>))
-        .route("/auth/logout", post(auth::logout::<R, I, S>))
-        .route("/auth/me", get(auth::me::<R, I, S>))
+        .route("/auth/register", post(auth::register::<R, C, I, S>))
+        .route("/auth/login", post(auth::login::<R, C, I, S>))
+        .route("/auth/logout", post(auth::logout::<R, C, I, S>))
+        .route("/auth/me", get(auth::me::<R, C, I, S>))
         .route(
             "/companies/{company_id}/parties",
-            get(parties::list_parties::<R, I, S>).post(parties::register_party::<R, I, S>),
+            get(parties::list_parties::<R, C, I, S>).post(parties::register_party::<R, C, I, S>),
         )
         .with_state(state)
 }
@@ -69,7 +70,8 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode, header};
     use conta_verde_infrastructure::{
-        Argon2SecretService, InMemoryIdentityRepository, InMemoryPartyRepository,
+        Argon2SecretService, InMemoryCnpjRegistry, InMemoryIdentityRepository,
+        InMemoryPartyRepository,
     };
     use http_body_util::BodyExt;
     use serde_json::{Value, json};
@@ -78,9 +80,20 @@ mod tests {
 
     use super::*;
 
+    /// The registry knows the one company the tests register, and a closed alphanumeric one.
+    fn known_companies() -> InMemoryCnpjRegistry {
+        InMemoryCnpjRegistry::default()
+            .with_company("11222333000181", "PADARIA CENTRAL LTDA", "ATIVA")
+            .with_company("12ABC34501DE35", "OFICINA ALFANUMERICA LTDA", "BAIXADA")
+    }
+
     fn app() -> Router {
+        app_with_registry(known_companies())
+    }
+
+    fn app_with_registry(registry: InMemoryCnpjRegistry) -> Router {
         router(
-            PartyService::new(InMemoryPartyRepository::default()),
+            PartyService::new(InMemoryPartyRepository::default(), registry),
             AuthService::new(
                 InMemoryIdentityRepository::default(),
                 Argon2SecretService::new().unwrap(),
@@ -320,6 +333,70 @@ mod tests {
         assert_eq!(listed.status, StatusCode::OK);
         assert_eq!(listed.body["items"].as_array().unwrap().len(), 1);
         assert!(listed.body["next_cursor"].is_null());
+    }
+
+    async fn register_party(app: &Router, document: Option<&str>) -> Reply {
+        let (cookie, company_id) = sign_up(app, "ana@example.com").await;
+        let mut body = party_body();
+        body["document"] = document.map_or(Value::Null, Value::from);
+        send(
+            app,
+            json_request("POST", &parties_uri(company_id), Some(&cookie), body),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn a_known_cnpj_is_verified_against_the_registry() {
+        let reply = register_party(&app(), Some("11.222.333/0001-81")).await;
+        assert_eq!(reply.status, StatusCode::CREATED);
+        assert_eq!(
+            reply.body["document_check"],
+            json!({
+                "status": "verified",
+                "legal_name": "PADARIA CENTRAL LTDA",
+                "situation": "ATIVA",
+                "needs_attention": false
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn an_inactive_company_is_accepted_with_a_warning() {
+        let reply = register_party(&app(), Some("12.ABC.345/01DE-35")).await;
+        assert_eq!(reply.status, StatusCode::CREATED);
+        assert_eq!(reply.body["document"], "12ABC34501DE35");
+        assert_eq!(reply.body["document_check"]["situation"], "BAIXADA");
+        assert_eq!(reply.body["document_check"]["needs_attention"], true);
+    }
+
+    #[tokio::test]
+    async fn a_cnpj_missing_from_the_registry_is_accepted_with_a_warning() {
+        // Valid check digits, but unknown to the registry, whose data lags: a new company must
+        // still be registrable.
+        let reply = register_party(&app(), Some("00.000.000/0001-91")).await;
+        assert_eq!(reply.status, StatusCode::CREATED);
+        assert_eq!(reply.body["document"], "00000000000191");
+        assert_eq!(reply.body["document_check"]["status"], "not_found");
+        assert_eq!(reply.body["document_check"]["needs_attention"], true);
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_registry_does_not_stop_data_entry() {
+        let app = app_with_registry(InMemoryCnpjRegistry::unreachable());
+        let reply = register_party(&app, Some("11.222.333/0001-81")).await;
+        assert_eq!(reply.status, StatusCode::CREATED);
+        assert_eq!(reply.body["document_check"]["status"], "unverified");
+        assert_eq!(reply.body["document_check"]["needs_attention"], true);
+    }
+
+    #[tokio::test]
+    async fn a_cpf_is_validated_by_its_digits_only() {
+        let app = app_with_registry(InMemoryCnpjRegistry::unreachable());
+        let reply = register_party(&app, Some("529.982.247-25")).await;
+        assert_eq!(reply.status, StatusCode::CREATED);
+        assert_eq!(reply.body["document_check"]["status"], "not_applicable");
+        assert_eq!(reply.body["document_check"]["needs_attention"], false);
     }
 
     #[tokio::test]

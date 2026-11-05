@@ -9,6 +9,8 @@
   --page: #f3f7f4;
   --danger: #b3261e;
   --danger-soft: #fdecea;
+  --warning: #8a5a00;
+  --warning-soft: #fff4d6;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   color: var(--ink);
 }
@@ -261,16 +263,63 @@ fieldset {
   outline-color: #fff;
 }
 
-.alert {
+.notice {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   margin: 0;
   padding: 0.5rem 0.7rem;
   border-radius: 0.4rem;
+  font-size: 0.9rem;
+}
+
+.notice-error {
   background: var(--danger-soft);
   color: var(--danger);
-  font-size: 0.9rem;
+}
+
+.notice-warning {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.notice-success {
+  background: var(--green-soft);
+  color: var(--green-dark);
+}
+
+.badge {
+  display: inline-block;
+  margin-left: 0.35rem;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.badge-ok {
+  background: var(--green-soft);
+  color: var(--green-dark);
+}
+
+.badge-warning {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.badge-muted {
+  background: #eceff1;
+  color: var(--muted);
 }
 
 .status {
@@ -360,7 +409,7 @@ td {
 
 /* The vendored icons wrap their SVG in a block <div>; keep it inline next to text. */
 .btn > div,
-.alert > div {
+.notice > div {
   display: inline-flex;
 }
 

@@ -4,7 +4,7 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
 use conta_verde_application::{
-    IdentityRepository, PartyRepository, Profile, SecretService, SignedIn,
+    CnpjRegistry, IdentityRepository, PartyRepository, Profile, SecretService, SignedIn,
 };
 use conta_verde_domain::AccountDraft;
 use serde::{Deserialize, Serialize};
@@ -69,12 +69,13 @@ impl From<&Profile> for ProfileResponse {
 
 type SetCookie = [(header::HeaderName, String); 1];
 
-pub(crate) async fn register<R, I, S>(
-    State(state): State<Arc<AppState<R, I, S>>>,
+pub(crate) async fn register<R, C, I, S>(
+    State(state): State<Arc<AppState<R, C, I, S>>>,
     Json(request): Json<RegisterRequest>,
 ) -> Result<(StatusCode, SetCookie, Json<ProfileResponse>), ApiError>
 where
     R: PartyRepository,
+    C: CnpjRegistry,
     I: IdentityRepository,
     S: SecretService,
 {
@@ -91,12 +92,13 @@ where
     ))
 }
 
-pub(crate) async fn login<R, I, S>(
-    State(state): State<Arc<AppState<R, I, S>>>,
+pub(crate) async fn login<R, C, I, S>(
+    State(state): State<Arc<AppState<R, C, I, S>>>,
     Json(request): Json<LoginRequest>,
 ) -> Result<(SetCookie, Json<ProfileResponse>), ApiError>
 where
     R: PartyRepository,
+    C: CnpjRegistry,
     I: IdentityRepository,
     S: SecretService,
 {
@@ -104,12 +106,13 @@ where
     Ok((started(&state, &signed_in), body(&signed_in)))
 }
 
-pub(crate) async fn logout<R, I, S>(
-    State(state): State<Arc<AppState<R, I, S>>>,
+pub(crate) async fn logout<R, C, I, S>(
+    State(state): State<Arc<AppState<R, C, I, S>>>,
     headers: HeaderMap,
 ) -> Result<(StatusCode, SetCookie), ApiError>
 where
     R: PartyRepository,
+    C: CnpjRegistry,
     I: IdentityRepository,
     S: SecretService,
 {
@@ -125,12 +128,13 @@ where
     ))
 }
 
-pub(crate) async fn me<R, I, S>(
-    State(state): State<Arc<AppState<R, I, S>>>,
+pub(crate) async fn me<R, C, I, S>(
+    State(state): State<Arc<AppState<R, C, I, S>>>,
     headers: HeaderMap,
 ) -> Result<Json<ProfileResponse>, ApiError>
 where
     R: PartyRepository,
+    C: CnpjRegistry,
     I: IdentityRepository,
     S: SecretService,
 {
@@ -139,9 +143,10 @@ where
     Ok(Json(ProfileResponse::from(&profile)))
 }
 
-fn started<R, I, S>(state: &AppState<R, I, S>, signed_in: &SignedIn) -> SetCookie
+fn started<R, C, I, S>(state: &AppState<R, C, I, S>, signed_in: &SignedIn) -> SetCookie
 where
     R: PartyRepository,
+    C: CnpjRegistry,
     I: IdentityRepository,
     S: SecretService,
 {

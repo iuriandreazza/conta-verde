@@ -3,11 +3,13 @@ use std::time::Duration;
 use conta_verde_api::{ApiConfig, router};
 use conta_verde_application::{AuthService, PartyService};
 use conta_verde_infrastructure::{
-    Argon2SecretService, PostgresIdentityRepository, PostgresPartyRepository, connect_and_migrate,
+    Argon2SecretService, BrasilApiCnpjRegistry, CachedCnpjRegistry, PostgresIdentityRepository,
+    PostgresPartyRepository, connect_and_migrate,
 };
 use tracing_subscriber::EnvFilter;
 
 const SESSION_LIFETIME: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+const CNPJ_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -23,7 +25,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
 
     let pool = connect_and_migrate(&database_url).await?;
-    let parties = PartyService::new(PostgresPartyRepository::new(pool.clone()));
+    let parties = PartyService::new(
+        PostgresPartyRepository::new(pool.clone()),
+        cnpj_registry_from_env()?,
+    );
     let auth = AuthService::new(
         PostgresIdentityRepository::new(pool),
         Argon2SecretService::new()?,
@@ -35,6 +40,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())
+}
+
+/// `None` when the lookup is switched off. A company the registry already answered for is
+/// remembered for an hour, which keeps retries and repeated suppliers off the shared rate limit.
+fn cnpj_registry_from_env() -> Result<
+    Option<CachedCnpjRegistry<BrasilApiCnpjRegistry>>,
+    Box<dyn std::error::Error + Send + Sync>,
+> {
+    let setting = std::env::var("CNPJ_LOOKUP").ok();
+    if !cnpj_lookup_enabled(setting.as_deref())? {
+        tracing::warn!("CNPJ lookup is off: CNPJs are validated by check digits only");
+        return Ok(None);
+    }
+    tracing::info!("CNPJs are checked against BrasilAPI (Receita Federal open data)");
+    Ok(Some(CachedCnpjRegistry::new(
+        BrasilApiCnpjRegistry::new()?,
+        CNPJ_CACHE_TTL,
+    )))
+}
+
+// `off` is for installations that must not send CNPJs to a third party or run without internet.
+// Strict like `parse_flag`, so a typo is not read as "off".
+fn cnpj_lookup_enabled(setting: Option<&str>) -> Result<bool, String> {
+    match setting {
+        None | Some("brasilapi") => Ok(true),
+        Some("off") => Ok(false),
+        Some(other) => Err(format!(
+            "CNPJ_LOOKUP must be `brasilapi` or `off`, got `{other}`"
+        )),
+    }
 }
 
 // Strict on purpose: a typo such as `TRUE` must not silently turn off a security setting.
@@ -68,4 +103,23 @@ async fn shutdown_signal() {
         () = terminate => {},
     }
     tracing::info!("shutting down");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_lookup_is_on_by_default_and_off_only_when_asked() {
+        assert_eq!(cnpj_lookup_enabled(None), Ok(true));
+        assert_eq!(cnpj_lookup_enabled(Some("brasilapi")), Ok(true));
+        assert_eq!(cnpj_lookup_enabled(Some("off")), Ok(false));
+    }
+
+    #[test]
+    fn a_typo_is_an_error_not_a_silent_off() {
+        for typo in ["OFF", "false", "", "brasil-api"] {
+            assert!(cnpj_lookup_enabled(Some(typo)).is_err(), "{typo}");
+        }
+    }
 }

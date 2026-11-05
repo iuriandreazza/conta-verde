@@ -48,6 +48,10 @@ pnpm check                            # Rust fmt, clippy and tests; web typechec
 cargo test --workspace -- --ignored   # needs the database from docker compose
 ```
 
+By default every CNPJ you register (never a CPF) is sent to [BrasilAPI](https://brasilapi.com.br), a free third-party
+service, to confirm the company exists. Set `CNPJ_LOOKUP=off` to keep it all local; see
+[ADR 0017](docs/adr/0017-cnpj-registry-lookup.md).
+
 The server listens on `127.0.0.1:3000` by default. Set `BIND_ADDR` to change it, and keep it private
 until it sits behind a TLS proxy (set `COOKIE_SECURE=true` there).
 
