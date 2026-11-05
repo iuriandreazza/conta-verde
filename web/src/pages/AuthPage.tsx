@@ -1,12 +1,20 @@
+import { motion, useAnimationControls } from "motion/react";
 import { useState, type FormEvent } from "react";
 import { Link, Navigate } from "react-router-dom";
 import { errorMessage } from "../api";
 import { useAuth } from "../auth";
+import { Alert } from "../components/Alert";
+import { Button } from "../components/Button";
+import { LogInIcon } from "../components/icons/login";
+import { UserPlusIcon } from "../components/icons/user-plus";
+import { LogoMark } from "../components/Logo";
+import { PasswordField } from "../components/PasswordField";
 
 export function AuthPage({ mode }: { mode: "login" | "register" }) {
   const { session, signIn, signUp } = useAuth();
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const shake = useAnimationControls();
   const registering = mode === "register";
 
   if (session.status === "authenticated") {
@@ -32,15 +40,24 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
       }
     } catch (failure) {
       setError(errorMessage(failure));
+      void shake.start({ x: [0, -8, 8, -5, 5, 0], transition: { duration: 0.4 } });
     } finally {
       setSubmitting(false);
     }
   }
 
   return (
-    <section className="card narrow">
+    <motion.section
+      className="card narrow"
+      initial={{ opacity: 0, y: 16, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{ type: "spring", stiffness: 260, damping: 24 }}
+    >
+      <div className="auth-logo">
+        <LogoMark size={56} animated />
+      </div>
       <h1>{registering ? "Crie sua conta" : "Entrar"}</h1>
-      <form onSubmit={handleSubmit}>
+      <motion.form onSubmit={handleSubmit} animate={shake}>
         {registering && (
           <>
             <label>
@@ -57,21 +74,12 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
           E-mail
           <input name="email" type="email" required autoComplete="email" />
         </label>
-        <label>
-          Senha
-          <input
-            name="password"
-            type="password"
-            required
-            minLength={registering ? 8 : undefined}
-            autoComplete={registering ? "new-password" : "current-password"}
-          />
-        </label>
-        {error && <p role="alert" className="error">{error}</p>}
-        <button type="submit" disabled={submitting}>
+        <PasswordField registering={registering} />
+        <Alert message={error} />
+        <Button type="submit" icon={registering ? UserPlusIcon : LogInIcon} pending={submitting}>
           {registering ? "Criar conta" : "Entrar"}
-        </button>
-      </form>
+        </Button>
+      </motion.form>
       <p>
         {registering ? (
           <>
@@ -83,6 +91,6 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
           </>
         )}
       </p>
-    </section>
+    </motion.section>
   );
 }

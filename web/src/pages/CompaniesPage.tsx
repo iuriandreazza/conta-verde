@@ -1,5 +1,7 @@
+import { motion } from "motion/react";
 import { Link, Navigate } from "react-router-dom";
 import { useAuth } from "../auth";
+import { BriefcaseBusinessIcon } from "../components/icons/briefcase-business";
 
 export function CompaniesPage() {
   const { session } = useAuth();
@@ -14,13 +16,23 @@ export function CompaniesPage() {
   }
 
   return (
-    <section className="card narrow">
+    <section className="narrow-wide">
       <h1>Escolha uma empresa</h1>
-      <ul className="plain-list">
-        {companies.map((company) => (
-          <li key={company.id}>
-            <Link to={`/companies/${company.id}/parties`}>{company.name}</Link>
-          </li>
+      <ul className="plain-list company-list">
+        {companies.map((company, index) => (
+          <motion.li
+            key={company.id}
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: index * 0.05, type: "spring", stiffness: 300, damping: 26 }}
+            whileHover={{ y: -2 }}
+            whileTap={{ scale: 0.98 }}
+          >
+            <Link to={`/companies/${company.id}/parties`} className="company-card">
+              <BriefcaseBusinessIcon size={22} aria-hidden />
+              <span>{company.name}</span>
+            </Link>
+          </motion.li>
         ))}
       </ul>
     </section>

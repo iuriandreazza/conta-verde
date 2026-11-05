@@ -56,6 +56,24 @@ describe("App", () => {
     expect(await screen.findByRole("heading", { name: "Entrar" })).toBeInTheDocument();
   });
 
+  it("shows the password only while the toggle is pressed", async () => {
+    mockApi(() => ({ status: 401 }));
+    renderAt("/login");
+
+    const password = await screen.findByLabelText("Senha");
+    expect(password).toHaveAttribute("type", "password");
+
+    await userEvent.click(screen.getByRole("button", { name: "Mostrar senha" }));
+    expect(password).toHaveAttribute("type", "text");
+    expect(screen.getByRole("button", { name: "Ocultar senha" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Ocultar senha" }));
+    expect(password).toHaveAttribute("type", "password");
+  });
+
   it("always links to the source code in the footer", async () => {
     mockApi(() => ({ status: 401 }));
     renderAt("/login");

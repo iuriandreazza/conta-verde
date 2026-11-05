@@ -1,40 +1,52 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { motion } from "motion/react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useParams } from "react-router-dom";
 import { api, errorMessage, type Party } from "../api";
 import { useAuth } from "../auth";
+import { Alert } from "../components/Alert";
+import { Button } from "../components/Button";
+import { ChevronDownIcon } from "../components/icons/chevron-down";
+import { PlusIcon } from "../components/icons/plus";
+import { UsersIcon } from "../components/icons/users";
+import { Spinner } from "../components/Spinner";
+
+// Rows enter one after another, but never wait longer than the eighth for a long page.
+const MAX_STAGGERED_ROWS = 8;
 
 export function PartiesPage() {
   const { companyId = "" } = useParams();
+  // Keyed by company: switching company remounts the page, which drops the old list and
+  // makes any reply still in flight for the previous company land on an unmounted component.
+  return <CompanyParties key={companyId} companyId={companyId} />;
+}
+
+function CompanyParties({ companyId }: { companyId: string }) {
   const { session } = useAuth();
   const [parties, setParties] = useState<Party[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
-
-  // A slow reply for a company the user has already left must not overwrite the current list.
-  const currentCompany = useRef(companyId);
-  currentCompany.current = companyId;
 
   const companyName =
     session.status === "authenticated"
       ? session.profile.companies.find((company) => company.id === companyId)?.name
       : undefined;
 
+  // Only the very first load shows the spinner; refreshing after an insert keeps the rows on screen.
   const loadFirstPage = useCallback(async () => {
-    setLoading(true);
     setError(null);
     try {
       const page = await api.listParties(companyId);
-      if (currentCompany.current !== companyId) return;
       setParties(page.items);
       setNextCursor(page.next_cursor);
     } catch (failure) {
-      if (currentCompany.current === companyId) setError(errorMessage(failure));
+      setError(errorMessage(failure));
     } finally {
-      if (currentCompany.current === companyId) setLoading(false);
+      setLoading(false);
     }
   }, [companyId]);
 
@@ -50,11 +62,10 @@ export function PartiesPage() {
     setError(null);
     try {
       const page = await api.listParties(companyId, nextCursor);
-      if (currentCompany.current !== companyId) return;
       setParties((current) => [...current, ...page.items]);
       setNextCursor(page.next_cursor);
     } catch (failure) {
-      if (currentCompany.current === companyId) setError(errorMessage(failure));
+      setError(errorMessage(failure));
     } finally {
       setLoadingMore(false);
     }
@@ -71,7 +82,7 @@ export function PartiesPage() {
     setCreating(true);
     setFormError(null);
     try {
-      await api.createParty(companyId, {
+      const created = await api.createParty(companyId, {
         name: String(form.get("name") ?? ""),
         document: optional("document"),
         email: optional("email"),
@@ -79,6 +90,7 @@ export function PartiesPage() {
         is_supplier: form.get("is_supplier") === "on",
       });
       formElement.reset();
+      setHighlightedId(created.id);
       await loadFirstPage();
     } catch (failure) {
       setFormError(errorMessage(failure));
@@ -115,20 +127,26 @@ export function PartiesPage() {
               <input name="is_supplier" type="checkbox" /> Fornecedor
             </label>
           </fieldset>
-          {formError && <p role="alert" className="error">{formError}</p>}
-          <button type="submit" disabled={creating}>
+          <Alert message={formError} />
+          <Button type="submit" icon={PlusIcon} pending={creating}>
             Adicionar
-          </button>
+          </Button>
         </form>
       </section>
 
       <section className="card">
         <h2>Cadastrados</h2>
-        {error && <p role="alert" className="error">{error}</p>}
+        <Alert message={error} />
         {loading ? (
-          <p role="status">Carregando…</p>
+          <p role="status" className="status">
+            <Spinner /> Carregando…
+          </p>
         ) : parties.length === 0 && !error ? (
-          <p>Nenhum cadastro ainda.</p>
+          <div className="empty">
+            <UsersIcon size={40} aria-hidden />
+            <p>Nenhum cadastro ainda.</p>
+            <p className="muted">Use o formulário acima para adicionar o primeiro.</p>
+          </div>
         ) : (
           <table>
             <thead>
@@ -140,8 +158,20 @@ export function PartiesPage() {
               </tr>
             </thead>
             <tbody>
-              {parties.map((party) => (
-                <tr key={party.id}>
+              {parties.map((party, index) => (
+                <motion.tr
+                  key={party.id}
+                  initial={{ opacity: 0, y: 8, backgroundColor: highlightColor(party, highlightedId, 1) }}
+                  animate={{
+                    opacity: 1,
+                    y: 0,
+                    backgroundColor: highlightColor(party, highlightedId, 0),
+                  }}
+                  transition={{
+                    delay: Math.min(index, MAX_STAGGERED_ROWS) * 0.03,
+                    duration: party.id === highlightedId ? 1.4 : 0.2,
+                  }}
+                >
                   <td>{party.name}</td>
                   <td>{party.document ?? "—"}</td>
                   <td>{party.email ?? "—"}</td>
@@ -150,17 +180,28 @@ export function PartiesPage() {
                       .filter(Boolean)
                       .join(" · ")}
                   </td>
-                </tr>
+                </motion.tr>
               ))}
             </tbody>
           </table>
         )}
         {nextCursor !== null && (
-          <button type="button" disabled={loadingMore} onClick={() => void loadMore()}>
+          <Button
+            type="button"
+            variant="ghost"
+            icon={ChevronDownIcon}
+            pending={loadingMore}
+            onClick={() => void loadMore()}
+          >
             Carregar mais
-          </button>
+          </Button>
         )}
       </section>
     </>
   );
+}
+
+// A freshly added row flashes green and fades back to transparent.
+function highlightColor(party: Party, highlightedId: string | null, alpha: 0 | 1): string {
+  return `rgba(47, 178, 110, ${party.id === highlightedId ? alpha * 0.25 : 0})`;
 }

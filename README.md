@@ -1,15 +1,19 @@
+<p align="center">
+  <img src="web/public/favicon.svg" alt="conta-verde logo" width="72" height="72">
+</p>
+
 # conta-verde
 
 An open-source ERP for small businesses, inspired by cloud ERPs such as Conta Azul.
 Not affiliated with or endorsed by any commercial product.
 
-> Status: early foundation (v0.1). See the [macro plan](docs/macro-plan.md) for scope and releases,
+> Status: early development (v0.2 in progress). See the [macro plan](docs/macro-plan.md) for scope and releases,
 > the [roadmap](docs/roadmap.md) for progress per phase, and the [architecture decisions](docs/adr/README.md).
-> The API has no authentication yet, so do not expose it to untrusted networks.
+> Accounts and sessions exist, but the API still binds to loopback only and needs a TLS proxy before it is exposed.
 
 ## Quick start
 
-Requirements: Rust (stable), Docker.
+Requirements: Rust (stable), Docker, Node and pnpm.
 
 ```bash
 cp .env.example .env
@@ -18,31 +22,38 @@ export $(cat .env | xargs)
 cargo run -p conta-verde-api
 ```
 
-Register and list a customer or supplier:
+In another terminal, start the web app (it proxies `/api` to the API) and open http://localhost:5173:
 
 ```bash
-curl -X POST localhost:3000/companies/$(uuidgen)/parties \
-  -H 'content-type: application/json' \
+pnpm install
+pnpm --filter conta-verde-web dev
+```
+
+Create an account in the browser, or from the command line (the session lives in the cookie jar):
+
+```bash
+curl -c jar -X POST localhost:3000/auth/register -H 'content-type: application/json' \
+  -d '{"name":"Ana","email":"ana@example.com","password":"correct horse","company_name":"Padaria"}'
+curl -b jar localhost:3000/auth/me   # shows your company id
+curl -b jar -X POST localhost:3000/companies/<company id>/parties -H 'content-type: application/json' \
   -d '{"name":"Padaria Central","document":"11.222.333/0001-81","is_customer":true,"is_supplier":false}'
 ```
 
 ## Development
 
-Install the git hooks once (needs Node and pnpm). The pre-commit hook runs the same checks as CI, except the database tests:
+The pre-commit hook (installed by `pnpm install`) runs the same checks as CI, except the database tests:
 
 ```bash
-pnpm install
-```
-
-```bash
-pnpm check                            # fmt, clippy and tests
+pnpm check                            # Rust fmt, clippy and tests; web typecheck and tests
 cargo test --workspace -- --ignored   # needs the database from docker compose
 ```
 
-The server listens on `127.0.0.1:3000` by default. Set `BIND_ADDR` to change it, and keep it private until authentication exists.
+The server listens on `127.0.0.1:3000` by default. Set `BIND_ADDR` to change it, and keep it private
+until it sits behind a TLS proxy (set `COOKIE_SECURE=true` there).
 
 The code is organized in layers, one crate each: `domain`, `application`, `infrastructure`, `api`
-([ADR 0002](docs/adr/0002-layered-cargo-workspace.md)).
+([ADR 0002](docs/adr/0002-layered-cargo-workspace.md)). The web app lives in `web/`
+([ADR 0005](docs/adr/0005-spa-frontend.md)).
 
 ## License
 
