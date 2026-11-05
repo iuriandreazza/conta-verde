@@ -115,4 +115,7 @@ export const api = {
   },
   createParty: (companyId: string, party: NewParty) =>
     post<Party>(`/companies/${companyId}/parties`, party),
+  /** Asks the registry again about the party's CNPJ; resolves with the party and its new answer. */
+  verifyDocument: (companyId: string, partyId: string) =>
+    post<Party>(`/companies/${companyId}/parties/${partyId}/document-check`),
 };

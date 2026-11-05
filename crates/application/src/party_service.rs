@@ -1,11 +1,34 @@
-use conta_verde_domain::{Cnpj, CompanyId, Document, DocumentCheck, Party, PartyDraft, PartyId};
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+use conta_verde_domain::{
+    CompanyId, Document, DocumentCheck, DomainError, Party, PartyDraft, PartyId,
+};
 
 use crate::{
     ApplicationError, CnpjLookupError, CnpjRegistry, PartyCursor, PartyRepository, RegistryEntry,
+    RepositoryError,
 };
 
 const DEFAULT_PAGE_SIZE: usize = 50;
 const MAX_PAGE_SIZE: usize = 200;
+const DEFAULT_RECHECK_INTERVAL: Duration = Duration::from_secs(10);
+
+fn check_from(answer: Result<RegistryEntry, CnpjLookupError>) -> DocumentCheck {
+    match answer {
+        Ok(RegistryEntry {
+            legal_name,
+            situation,
+        }) => DocumentCheck::Verified {
+            legal_name,
+            situation,
+        },
+        Err(CnpjLookupError::NotFound) => DocumentCheck::NotFound,
+        Err(CnpjLookupError::Unavailable) => DocumentCheck::Unverified,
+        Err(CnpjLookupError::Disabled) => DocumentCheck::NotApplicable,
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct PartyPage {
@@ -17,6 +40,8 @@ pub struct PartyPage {
 pub struct PartyService<R, C> {
     repository: R,
     registry: C,
+    recheck_interval: Duration,
+    last_rechecks: Mutex<HashMap<String, Instant>>,
 }
 
 impl<R: PartyRepository, C: CnpjRegistry> PartyService<R, C> {
@@ -24,7 +49,15 @@ impl<R: PartyRepository, C: CnpjRegistry> PartyService<R, C> {
         Self {
             repository,
             registry,
+            recheck_interval: DEFAULT_RECHECK_INTERVAL,
+            last_rechecks: Mutex::default(),
         }
+    }
+
+    /// How long must pass between two re-checks of the same CNPJ.
+    pub fn with_recheck_interval(mut self, interval: Duration) -> Self {
+        self.recheck_interval = interval;
+        self
     }
 
     /// Validates the draft, checks a CNPJ against the federal registry and stores the party.
@@ -41,26 +74,74 @@ impl<R: PartyRepository, C: CnpjRegistry> PartyService<R, C> {
     ) -> Result<Party, ApplicationError> {
         let mut party = Party::new(PartyId::generate(), company_id, draft)?;
         if let Some(cnpj) = party.document().and_then(Document::cnpj) {
-            let check = self.check_cnpj(cnpj).await;
+            let check = check_from(self.registry.lookup(cnpj).await);
             party = party.with_document_check(check);
         }
         self.repository.save(&party).await?;
         Ok(party)
     }
 
-    async fn check_cnpj(&self, cnpj: Cnpj<'_>) -> DocumentCheck {
-        match self.registry.lookup(cnpj).await {
-            Ok(RegistryEntry {
-                legal_name,
-                situation,
-            }) => DocumentCheck::Verified {
-                legal_name,
-                situation,
-            },
-            Err(CnpjLookupError::NotFound) => DocumentCheck::NotFound,
-            Err(CnpjLookupError::Unavailable) => DocumentCheck::Unverified,
-            Err(CnpjLookupError::Disabled) => DocumentCheck::NotApplicable,
+    /// Asks the registry again about the party's CNPJ and records the answer, so a party stored
+    /// as unverified or not found (an outage, a lagging registry) can be re-checked later. The
+    /// answer replaces the old one, whatever it was; like at registration, nothing blocks.
+    pub async fn verify_document(
+        &self,
+        company_id: CompanyId,
+        party_id: PartyId,
+    ) -> Result<Party, ApplicationError> {
+        let party = self
+            .repository
+            .find(company_id, party_id)
+            .await?
+            .ok_or(ApplicationError::PartyNotFound)?;
+        let cnpj = party
+            .document()
+            .and_then(Document::cnpj)
+            .ok_or(DomainError::NoCnpjToVerify)?;
+        let cnpj_key = cnpj.as_str().to_owned();
+        self.claim_recheck(&cnpj_key)?;
+        let answer = self.registry.refresh(cnpj).await;
+        if answer == Err(CnpjLookupError::Disabled) {
+            // Nothing was asked, so nothing should hold the next attempt back.
+            self.release_recheck(&cnpj_key);
+            return Err(ApplicationError::LookupDisabled);
         }
+        let party = party.with_document_check(check_from(answer));
+        self.repository
+            .update_document_check(&party)
+            .await
+            .map_err(|error| {
+                // Nothing was stored, so the user may try again right away.
+                self.release_recheck(&cnpj_key);
+                match error {
+                    // The party vanished or changed company between the read and the write.
+                    RepositoryError::NotFound => ApplicationError::PartyNotFound,
+                    other => other.into(),
+                }
+            })?;
+        Ok(party)
+    }
+
+    /// Lets one re-check per CNPJ through each interval, whichever party or company asks: the
+    /// registry's rate limit is shared by the whole installation, and parties that share a CNPJ
+    /// would otherwise each cost a call. An answer that says the registry is unreachable counts
+    /// too, since the registry was asked.
+    fn claim_recheck(&self, cnpj: &str) -> Result<(), ApplicationError> {
+        let mut last = self.last_rechecks.lock().expect("recheck lock poisoned");
+        let interval = self.recheck_interval;
+        last.retain(|_, at| at.elapsed() < interval);
+        if last.contains_key(cnpj) {
+            return Err(ApplicationError::RecheckTooSoon);
+        }
+        last.insert(cnpj.to_owned(), Instant::now());
+        Ok(())
+    }
+
+    fn release_recheck(&self, cnpj: &str) {
+        self.last_rechecks
+            .lock()
+            .expect("recheck lock poisoned")
+            .remove(cnpj);
     }
 
     pub async fn list(

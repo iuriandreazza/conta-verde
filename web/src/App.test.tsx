@@ -339,6 +339,80 @@ describe("App", () => {
     });
   });
 
+  describe("checking a CNPJ again", () => {
+    const unverified: DocumentCheck = {
+      status: "unverified",
+      legal_name: null,
+      situation: null,
+      needs_attention: true,
+    };
+
+    // Lists one unverified party; `answer` is what the re-check endpoint replies.
+    function listWithAnUnverifiedParty(answer: (party: Party) => Reply) {
+      const listed = partyWithCheck(unverified);
+      const fetchMock = mockApi((url, init) => {
+        if (url === "/api/auth/me") return { status: 200, body: profile };
+        if (init?.method === "POST") return answer(listed);
+        return { status: 200, body: { items: [listed], next_cursor: null } };
+      });
+      renderAt("/companies/c1/parties");
+      return { listed, fetchMock };
+    }
+
+    it("replaces the old answer and hides the button once the company is verified", async () => {
+      const { listed, fetchMock } = listWithAnUnverifiedParty((party) => ({
+        status: 200,
+        body: {
+          ...party,
+          document_check: {
+            status: "verified",
+            legal_name: "PADARIA CENTRAL LTDA",
+            situation: "ATIVA",
+            needs_attention: false,
+          },
+        },
+      }));
+
+      await userEvent.click(await screen.findByRole("button", { name: /Verificar de novo/ }));
+
+      expect(await screen.findByText("Padaria Central: CNPJ verificado: PADARIA CENTRAL LTDA.")).toBeInTheDocument();
+      expect(await screen.findByText("Verificado")).toBeInTheDocument();
+      expect(screen.queryByText("Não verificado")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /Verificar de novo/ })).not.toBeInTheDocument();
+      const post = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
+      expect(String(post?.[0])).toBe(`/api/companies/c1/parties/${listed.id}/document-check`);
+    });
+
+    it("names the party in each button, so rows can be told apart", async () => {
+      listWithAnUnverifiedParty((party) => ({ status: 200, body: party }));
+      expect(
+        await screen.findByRole("button", {
+          name: "Verificar de novo o CNPJ de Padaria Central",
+        }),
+      ).toBeInTheDocument();
+    });
+
+    it("keeps the button and says so when the registry is still unreachable", async () => {
+      listWithAnUnverifiedParty((party) => ({ status: 200, body: party }));
+
+      await userEvent.click(await screen.findByRole("button", { name: /Verificar de novo/ }));
+
+      expect(await screen.findByRole("status")).toHaveTextContent("a Receita continua indisponível");
+      expect(screen.getByRole("button", { name: /Verificar de novo/ })).toBeInTheDocument();
+    });
+
+    it("shows the API's reason when the check is refused", async () => {
+      listWithAnUnverifiedParty(() => ({
+        status: 409,
+        body: { error: "CNPJ lookup is switched off on this installation" },
+      }));
+
+      await userEvent.click(await screen.findByRole("button", { name: /Verificar de novo/ }));
+
+      expect(await screen.findByRole("alert")).toHaveTextContent("CNPJ lookup is switched off");
+    });
+  });
+
   it("shows the API message when a party is rejected", async () => {
     mockApi((url, init) => {
       if (url === "/api/auth/me") return { status: 200, body: profile };

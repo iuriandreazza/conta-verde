@@ -59,6 +59,40 @@ impl PartyRepository for PostgresPartyRepository {
         Ok(())
     }
 
+    async fn find(
+        &self,
+        company_id: CompanyId,
+        id: PartyId,
+    ) -> Result<Option<Party>, RepositoryError> {
+        let row = sqlx::query(&format!("{SELECT_PARTIES} AND id = $2"))
+            .bind(company_id.as_uuid())
+            .bind(id.as_uuid())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(storage_error)?;
+        row.as_ref().map(party_from_row).transpose()
+    }
+
+    async fn update_document_check(&self, party: &Party) -> Result<(), RepositoryError> {
+        let result = sqlx::query(
+            "UPDATE parties SET document_check = $3, registry_legal_name = $4, registry_situation = $5 \
+             WHERE id = $1 AND company_id = $2",
+        )
+        .bind(party.id().as_uuid())
+        .bind(party.company_id().as_uuid())
+        .bind(check_kind(party.document_check()))
+        .bind(registry_legal_name(party.document_check()))
+        .bind(registry_situation(party.document_check()))
+        .execute(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        // Matching no row means the party is not in that company: report it, do not pretend.
+        if result.rows_affected() == 0 {
+            return Err(RepositoryError::NotFound);
+        }
+        Ok(())
+    }
+
     async fn list_by_company(
         &self,
         company_id: CompanyId,
@@ -271,6 +305,21 @@ mod tests {
         // A CNPJ may carry any of them, including the status added by the second migration.
         insert(Some("11222333000181"), "not_found").await.unwrap();
         insert(Some("12ABC34501DE35"), "unverified").await.unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn finds_parties_and_replaces_their_document_check() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let other_company = contract::create_company(&pool).await;
+        let repository = PostgresPartyRepository::new(pool);
+        contract::finds_parties_and_replaces_their_document_check(
+            &repository,
+            company,
+            other_company,
+        )
+        .await;
     }
 
     #[tokio::test]

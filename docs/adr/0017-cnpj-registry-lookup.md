@@ -65,8 +65,14 @@ the last two numeric check digits (modulo 11, each character valued as its ASCII
   Parties registered before this change with a CNPJ are marked `unverified`, whatever `CNPJ_LOOKUP` says: on an installation
   that runs with the lookup off they keep showing the "not verified" flag, and the lookup being off is also why they cannot be
   re-checked there. This only affects development databases created before the lookup existed.
-- There is no re-verification yet: an `Unverified` party stays that way until someone edits it. A "verify again" action is the
-  natural next step.
+- A flagged party can be checked again: `POST /companies/{company_id}/parties/{party_id}/document-check` asks the registry
+  again and replaces the stored answer, whatever it was (so an `Unverified` party can become `Verified`, and a `Verified` one
+  can turn `NotFound`). The UI offers "Verificar de novo" on every flagged row. It answers `404` for a party outside the
+  company, `422` for a party without a CNPJ, `409` when the lookup is switched off and `429` when the same CNPJ was checked
+  less than 10 seconds ago, whichever party or company asked (the registry's rate limit is shared by the whole installation).
+  A refused or failed attempt that asked nothing or stored nothing does not count. A re-check always asks the registry
+  (`CnpjRegistry::refresh`) and updates the cache of found companies: a fresh answer replaces the remembered one, an
+  authoritative "not found" drops it, and an outage leaves it alone. Nothing re-checks flagged parties in the background.
 - Rate limits are real (a handful of calls from one address were enough to trigger `429`) and are shared by everyone on the
   installation. Installations that register many CNPJs at once should expect `Unverified` rows, run their own mirror of the
   open data, or add the Serpro adapter. The cache and the circuit breaker soften this but do not stop abuse: there is no
@@ -75,10 +81,10 @@ the last two numeric check digits (modulo 11, each character valued as its ASCII
   is the real remedy. A duplicate CNPJ is only detected on insert, after the lookup, so it can still spend one call.
 - Nothing the registry says can stop a registration, so a typo that lands on a valid-but-unknown number is caught only by
   the warning, not by a refusal. The first design rejected unknown CNPJs; it was changed after noting that the open data lags.
-  A `NotFound` or `Unverified` party stays so until someone edits it (see re-verification above).
+  Re-checking (above) is manual: nothing re-checks flagged parties in the background yet.
 - Alphanumeric CNPJs are stored uppercase without punctuation. The web app no longer uses a numeric keypad for the document field.
 
 ## Revisit when
 
-A free official endpoint appears, BrasilAPI changes its terms, or re-verification and bulk import (CSV) land and need caching
-or batching.
+A free official endpoint appears, BrasilAPI changes its terms, or background re-checking and bulk import (CSV) land and need
+caching or batching.

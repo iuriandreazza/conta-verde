@@ -29,6 +29,15 @@ pub trait CnpjRegistry: Send + Sync {
         &self,
         cnpj: Cnpj<'_>,
     ) -> impl Future<Output = Result<RegistryEntry, CnpjLookupError>> + Send;
+
+    /// Like `lookup`, but never answered from a cache: used when the user asks to check again and
+    /// expects fresh data. Registries without a cache need not override it.
+    fn refresh(
+        &self,
+        cnpj: Cnpj<'_>,
+    ) -> impl Future<Output = Result<RegistryEntry, CnpjLookupError>> + Send {
+        self.lookup(cnpj)
+    }
 }
 
 /// `None` means the operator switched the lookup off.
@@ -36,6 +45,13 @@ impl<T: CnpjRegistry> CnpjRegistry for Option<T> {
     async fn lookup(&self, cnpj: Cnpj<'_>) -> Result<RegistryEntry, CnpjLookupError> {
         match self {
             Some(registry) => registry.lookup(cnpj).await,
+            None => Err(CnpjLookupError::Disabled),
+        }
+    }
+
+    async fn refresh(&self, cnpj: Cnpj<'_>) -> Result<RegistryEntry, CnpjLookupError> {
+        match self {
+            Some(registry) => registry.refresh(cnpj).await,
             None => Err(CnpjLookupError::Disabled),
         }
     }

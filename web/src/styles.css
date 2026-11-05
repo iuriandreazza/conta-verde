@@ -230,6 +230,12 @@ fieldset {
   box-shadow: 0 3px 10px rgb(23 96 60 / 0.3);
 }
 
+.btn-small {
+  margin-left: 0.5rem;
+  padding: 0.15rem 0.55rem;
+  font-size: 0.8rem;
+}
+
 .btn-ghost {
   background: transparent;
   color: var(--green-dark);

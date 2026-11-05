@@ -8,6 +8,8 @@ use crate::SecretError;
 pub enum RepositoryError {
     DuplicateDocument,
     DuplicateEmail,
+    /// An update matched no row.
+    NotFound,
     Storage(String),
 }
 
@@ -26,6 +28,12 @@ pub enum ApplicationError {
     Repository(RepositoryError),
     Auth(AuthError),
     Secret(SecretError),
+    /// No party with this id in the company (another company's party looks the same).
+    PartyNotFound,
+    /// The operator switched the CNPJ lookup off, so there is nothing to ask.
+    LookupDisabled,
+    /// The party's CNPJ was re-checked a moment ago; the registry has a shared rate limit.
+    RecheckTooSoon,
 }
 
 impl From<SecretError> for ApplicationError {
@@ -57,6 +65,7 @@ impl fmt::Display for RepositoryError {
         match self {
             Self::DuplicateDocument => f.write_str("a party with this document already exists"),
             Self::DuplicateEmail => f.write_str("an account with this email already exists"),
+            Self::NotFound => f.write_str("no matching record"),
             Self::Storage(message) => write!(f, "storage failure: {message}"),
         }
     }
@@ -80,6 +89,11 @@ impl fmt::Display for ApplicationError {
             Self::Repository(error) => error.fmt(f),
             Self::Auth(error) => error.fmt(f),
             Self::Secret(error) => error.fmt(f),
+            Self::PartyNotFound => f.write_str("party not found"),
+            Self::LookupDisabled => f.write_str("CNPJ lookup is switched off on this installation"),
+            Self::RecheckTooSoon => {
+                f.write_str("this CNPJ was checked a moment ago, try again in a few seconds")
+            }
         }
     }
 }

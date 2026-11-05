@@ -25,6 +25,19 @@ impl From<&Party> for PartyCursor {
 pub trait PartyRepository: Send + Sync {
     fn save(&self, party: &Party) -> impl Future<Output = Result<(), RepositoryError>> + Send;
 
+    /// The party, only if it belongs to the company.
+    fn find(
+        &self,
+        company_id: CompanyId,
+        id: PartyId,
+    ) -> impl Future<Output = Result<Option<Party>, RepositoryError>> + Send;
+
+    /// Replaces what is stored about the party's document check, and nothing else.
+    fn update_document_check(
+        &self,
+        party: &Party,
+    ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
+
     /// At most `limit` parties of the company, ordered by name ignoring case, then by id,
     /// starting right after `after` when given.
     fn list_by_company(

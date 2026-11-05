@@ -1,12 +1,12 @@
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use conta_verde_application::{
     CnpjLookupError, CnpjRegistry, IdentityRepository, NewAccount, PartyCursor, PartyRepository,
     RegistryEntry, RepositoryError, StoredCredentials,
 };
-use conta_verde_domain::{Cnpj, Company, CompanyId, Email, Party, User, UserId};
+use conta_verde_domain::{Cnpj, Company, CompanyId, Email, Party, PartyId, User, UserId};
 use uuid::Uuid;
 
 /// Keeps parties in process memory. Used by tests and for running the API without a database.
@@ -27,6 +27,30 @@ impl PartyRepository for InMemoryPartyRepository {
             return Err(RepositoryError::DuplicateDocument);
         }
         parties.push(party.clone());
+        Ok(())
+    }
+
+    async fn find(
+        &self,
+        company_id: CompanyId,
+        id: PartyId,
+    ) -> Result<Option<Party>, RepositoryError> {
+        let parties = self.parties.lock().expect("repository lock poisoned");
+        Ok(parties
+            .iter()
+            .find(|party| party.company_id() == company_id && party.id() == id)
+            .cloned())
+    }
+
+    async fn update_document_check(&self, party: &Party) -> Result<(), RepositoryError> {
+        let mut parties = self.parties.lock().expect("repository lock poisoned");
+        let stored = parties
+            .iter_mut()
+            .find(|stored| stored.company_id() == party.company_id() && stored.id() == party.id());
+        let stored = stored.ok_or(RepositoryError::NotFound)?;
+        *stored = stored
+            .clone()
+            .with_document_check(party.document_check().clone());
         Ok(())
     }
 
@@ -57,39 +81,66 @@ impl PartyRepository for InMemoryPartyRepository {
 }
 
 /// A test double: a registry that knows only the companies it was given, or none at all.
-#[derive(Default)]
+/// Clones share their state, so a test can keep a handle and change what the registry answers
+/// after the service under test has taken ownership of another clone.
+#[derive(Clone, Default)]
 pub struct InMemoryCnpjRegistry {
+    state: Arc<Mutex<RegistryState>>,
+}
+
+#[derive(Default)]
+struct RegistryState {
     companies: HashMap<String, RegistryEntry>,
     unreachable: bool,
 }
 
 impl InMemoryCnpjRegistry {
-    pub fn with_company(mut self, cnpj: &str, legal_name: &str, situation: &str) -> Self {
-        self.companies.insert(
-            cnpj.to_owned(),
-            RegistryEntry {
-                legal_name: legal_name.to_owned(),
-                situation: situation.to_owned(),
-            },
-        );
+    pub fn with_company(self, cnpj: &str, legal_name: &str, situation: &str) -> Self {
+        self.add_company(cnpj, legal_name, situation);
         self
     }
 
-    /// Every lookup fails as if the service were down.
+    pub fn add_company(&self, cnpj: &str, legal_name: &str, situation: &str) {
+        self.state
+            .lock()
+            .expect("registry lock poisoned")
+            .companies
+            .insert(
+                cnpj.to_owned(),
+                RegistryEntry {
+                    legal_name: legal_name.to_owned(),
+                    situation: situation.to_owned(),
+                },
+            );
+    }
+
+    /// Every lookup fails as if the service were down, until `recover` is called.
     pub fn unreachable() -> Self {
-        Self {
-            unreachable: true,
-            ..Self::default()
-        }
+        let registry = Self::default();
+        registry
+            .state
+            .lock()
+            .expect("registry lock poisoned")
+            .unreachable = true;
+        registry
+    }
+
+    pub fn recover(&self) {
+        self.state
+            .lock()
+            .expect("registry lock poisoned")
+            .unreachable = false;
     }
 }
 
 impl CnpjRegistry for InMemoryCnpjRegistry {
     async fn lookup(&self, cnpj: Cnpj<'_>) -> Result<RegistryEntry, CnpjLookupError> {
-        if self.unreachable {
+        let state = self.state.lock().expect("registry lock poisoned");
+        if state.unreachable {
             return Err(CnpjLookupError::Unavailable);
         }
-        self.companies
+        state
+            .companies
             .get(cnpj.as_str())
             .cloned()
             .ok_or(CnpjLookupError::NotFound)
@@ -212,7 +263,7 @@ impl IdentityRepository for InMemoryIdentityRepository {
 #[cfg(test)]
 mod tests {
     use conta_verde_application::{ApplicationError, AuthService, PartyService};
-    use conta_verde_domain::{DocumentCheck, PartyDraft};
+    use conta_verde_domain::{DocumentCheck, DomainError, PartyDraft};
 
     use super::*;
     use crate::{Argon2SecretService, contract};
@@ -304,6 +355,192 @@ mod tests {
             InMemoryCnpjRegistry::unreachable(),
         );
         contract::keeps_the_unverified_mark(&service, CompanyId::generate()).await;
+    }
+
+    #[tokio::test]
+    async fn finds_parties_and_replaces_their_document_check() {
+        let repository = InMemoryPartyRepository::default();
+        contract::finds_parties_and_replaces_their_document_check(
+            &repository,
+            CompanyId::generate(),
+            CompanyId::generate(),
+        )
+        .await;
+    }
+
+    /// A party registered while the registry was down, and the registry handle to bring it back.
+    async fn unverified_party() -> (
+        PartyService<InMemoryPartyRepository, InMemoryCnpjRegistry>,
+        InMemoryCnpjRegistry,
+        CompanyId,
+        conta_verde_domain::PartyId,
+    ) {
+        let registry = InMemoryCnpjRegistry::unreachable();
+        // No waiting between re-checks: the tests check one right after another.
+        let service = PartyService::new(InMemoryPartyRepository::default(), registry.clone())
+            .with_recheck_interval(Duration::ZERO);
+        let company = CompanyId::generate();
+        let party = service
+            .register(company, draft("Padaria", Some(contract::ACTIVE_CNPJ)))
+            .await
+            .unwrap();
+        assert_eq!(party.document_check(), &DocumentCheck::Unverified);
+        (service, registry, company, party.id())
+    }
+
+    #[tokio::test]
+    async fn verifying_again_replaces_the_old_answer() {
+        let (service, registry, company, party_id) = unverified_party().await;
+
+        // Still down: it stays unverified instead of failing.
+        let still_down = service.verify_document(company, party_id).await.unwrap();
+        assert_eq!(still_down.document_check(), &DocumentCheck::Unverified);
+
+        registry.recover();
+        registry.add_company("11222333000181", "PADARIA CENTRAL LTDA", "ATIVA");
+        let verified = service.verify_document(company, party_id).await.unwrap();
+        assert!(matches!(
+            verified.document_check(),
+            DocumentCheck::Verified { situation, .. } if situation == "ATIVA"
+        ));
+        // The answer is stored, not only returned.
+        let listed = service.list(company, None, None).await.unwrap().items;
+        assert_eq!(listed[0].document_check(), verified.document_check());
+    }
+
+    #[tokio::test]
+    async fn re_checks_of_one_party_are_spaced_out() {
+        // The default interval applies: a loop of requests must not burn the shared rate limit.
+        let registry = InMemoryCnpjRegistry::unreachable();
+        let service = PartyService::new(InMemoryPartyRepository::default(), registry);
+        let company = CompanyId::generate();
+        let first = service
+            .register(company, draft("Padaria", Some(contract::ACTIVE_CNPJ)))
+            .await
+            .unwrap();
+        let second = service
+            .register(
+                company,
+                draft("Oficina", Some(contract::CLOSED_ALPHANUMERIC_CNPJ)),
+            )
+            .await
+            .unwrap();
+
+        service.verify_document(company, first.id()).await.unwrap();
+        assert_eq!(
+            service
+                .verify_document(company, first.id())
+                .await
+                .unwrap_err(),
+            ApplicationError::RecheckTooSoon
+        );
+        // Another CNPJ is not held back by the first one.
+        service.verify_document(company, second.id()).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn re_checks_are_spaced_out_per_cnpj_across_companies() {
+        // The rate limit is shared by the installation, so the same CNPJ registered in two companies
+        // must not cost two registry calls in a row.
+        let registry = InMemoryCnpjRegistry::unreachable();
+        let service = PartyService::new(InMemoryPartyRepository::default(), registry);
+        let (company_a, company_b) = (CompanyId::generate(), CompanyId::generate());
+        let in_a = service
+            .register(company_a, draft("Padaria", Some(contract::ACTIVE_CNPJ)))
+            .await
+            .unwrap();
+        let in_b = service
+            .register(company_b, draft("Padaria", Some(contract::ACTIVE_CNPJ)))
+            .await
+            .unwrap();
+
+        service.verify_document(company_a, in_a.id()).await.unwrap();
+        assert_eq!(
+            service
+                .verify_document(company_b, in_b.id())
+                .await
+                .unwrap_err(),
+            ApplicationError::RecheckTooSoon
+        );
+    }
+
+    #[tokio::test]
+    async fn a_party_can_turn_out_to_be_unknown_to_the_registry() {
+        let (service, registry, company, party_id) = unverified_party().await;
+        registry.recover();
+        let party = service.verify_document(company, party_id).await.unwrap();
+        assert_eq!(party.document_check(), &DocumentCheck::NotFound);
+    }
+
+    #[tokio::test]
+    async fn only_a_partys_own_company_can_verify_it() {
+        let (service, _registry, _company, party_id) = unverified_party().await;
+        let result = service
+            .verify_document(CompanyId::generate(), party_id)
+            .await;
+        assert_eq!(result.unwrap_err(), ApplicationError::PartyNotFound);
+        let unknown = service
+            .verify_document(
+                CompanyId::generate(),
+                conta_verde_domain::PartyId::generate(),
+            )
+            .await;
+        assert_eq!(unknown.unwrap_err(), ApplicationError::PartyNotFound);
+    }
+
+    #[tokio::test]
+    async fn a_party_without_a_cnpj_cannot_be_verified() {
+        let service = PartyService::new(
+            InMemoryPartyRepository::default(),
+            InMemoryCnpjRegistry::default(),
+        );
+        let company = CompanyId::generate();
+        let cpf = service
+            .register(company, draft("Ana", Some("529.982.247-25")))
+            .await
+            .unwrap();
+        let none = service
+            .register(company, draft("Sem doc", None))
+            .await
+            .unwrap();
+        for party in [cpf, none] {
+            assert_eq!(
+                service
+                    .verify_document(company, party.id())
+                    .await
+                    .unwrap_err(),
+                ApplicationError::Domain(DomainError::NoCnpjToVerify)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn verifying_with_the_lookup_off_is_refused_and_changes_nothing() {
+        let registry: Option<InMemoryCnpjRegistry> = None;
+        let service = PartyService::new(InMemoryPartyRepository::default(), registry);
+        let company = CompanyId::generate();
+        let party = service
+            .register(company, draft("Padaria", Some(contract::ACTIVE_CNPJ)))
+            .await
+            .unwrap();
+        assert_eq!(
+            service
+                .verify_document(company, party.id())
+                .await
+                .unwrap_err(),
+            ApplicationError::LookupDisabled
+        );
+        // Nothing was asked, so the attempt did not use up the interval: it is refused the same
+        // way again, not with "too soon".
+        assert_eq!(
+            service
+                .verify_document(company, party.id())
+                .await
+                .unwrap_err(),
+            ApplicationError::LookupDisabled
+        );
+        let listed = service.list(company, None, None).await.unwrap().items;
+        assert_eq!(listed[0].document_check(), &DocumentCheck::NotApplicable);
     }
 
     #[tokio::test]
