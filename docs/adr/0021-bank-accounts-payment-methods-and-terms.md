@@ -21,7 +21,9 @@ splits an amount.
 
 - **Kinds:** `checking`, `savings`, `cash`, `card`. The kind is fixed at registration, since what an
   account is asked for and what Phase 2 does with it depend on it. A cash account takes no bank,
-  branch or number: sending them is refused, not ignored. Closing and due days of a card are not
+  branch or number, and a card takes its issuing bank only: sending the rest is refused, not
+  ignored. A card number in particular is never stored, since the audit trail is append-only and
+  would keep it for good. Closing and due days of a card are not
   here; they are an `ADD COLUMN` when the card bills of Phase 2 need them.
 - **No balance.** Opening balances, transfers and balances per account are Phase 2, with the
   money type and the rounding rules they need ([ADR 0003](0003-money-as-decimal.md)). The register
@@ -35,8 +37,11 @@ splits an amount.
   characters. One form is what lets a unique index see "the same account" and, in Phase 2, lets an
   OFX file be matched to an account; whether the identifiers of real OFX files match this form has
   to be verified against real files then.
-- **Uniqueness:** the name, per company, ignoring case; and the bank, branch and number together
-  when all three are known. An account with an incomplete identity never clashes on it.
+- **Uniqueness:** the name, per company, ignoring case; and the kind, bank, branch and number together
+  when the last three are known (the kind is part of it because some banks give a savings account the
+  branch and number of the checking account). An account with an incomplete identity never clashes on
+  it. The index sees the same text twice, not the same account written differently: the ISPB instead
+  of the code, a branch with leading zeros or a number without its check digit are other values.
 
 ### Payment methods
 
@@ -52,8 +57,8 @@ splits an amount.
 
 ### Payment terms
 
-Decided and built with their own change: a name and a list of installments, each an offset in days
-and a percentage, the percentages summing to exactly 100.
+Not decided here. They are a register with child rows and a rule that spans rows (installments that
+sum to exactly 100), so they are decided with their own change, which adds the decision to this ADR.
 
 ## Consequences
 

@@ -55,7 +55,10 @@ export function BankAccountsPage() {
     filters,
   );
   const isFiltered = applied.q !== "" || applied.kind !== "" || applied.active !== "";
-  const hasBank = (editing?.kind ?? kind) !== "cash";
+  // What an account is asked for depends on its kind: cash has no bank, a card only its issuer.
+  const kindNow = editing?.kind ?? kind;
+  const takesBank = kindNow !== "cash";
+  const takesNumber = kindNow === "checking" || kindNow === "savings";
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -67,7 +70,7 @@ export function BankAccountsPage() {
     const input: BankAccountInput = {
       kind: editing?.kind ?? kind,
       name: String(form.get("name") ?? ""),
-      // A disabled field is not in the form data, so cash sends none of the three.
+      // A field that is not on the form is not in the form data, so a kind sends only what it takes.
       bank_code: text("bank_code"),
       branch: text("branch"),
       number: text("number"),
@@ -306,41 +309,50 @@ export function BankAccountsPage() {
               defaultValue={editing?.name}
             />
           </label>
-          <label>
-            Código do banco
-            <input
-              name="bank_code"
-              inputMode="numeric"
-              autoComplete="off"
-              maxLength={8}
-              placeholder="3 dígitos (ou 8, o ISPB)"
-              disabled={!hasBank}
-              defaultValue={editing?.bank_code ?? ""}
-            />
-          </label>
-          <label>
-            Agência
-            <input
-              name="branch"
-              autoComplete="off"
-              spellCheck={false}
-              maxLength={14}
-              disabled={!hasBank}
-              defaultValue={editing?.branch ?? ""}
-            />
-          </label>
-          <label>
-            Conta
-            <input
-              name="number"
-              autoComplete="off"
-              spellCheck={false}
-              maxLength={24}
-              placeholder="com o dígito"
-              disabled={!hasBank}
-              defaultValue={editing?.number ?? ""}
-            />
-          </label>
+          {takesBank && (
+            <label>
+              {kindNow === "card" ? "Banco emissor" : "Código do banco"}
+              <input
+                name="bank_code"
+                inputMode="numeric"
+                autoComplete="off"
+                maxLength={8}
+                placeholder="3 dígitos (ou 8, o ISPB)"
+                defaultValue={editing?.bank_code ?? ""}
+              />
+            </label>
+          )}
+          {takesNumber && (
+            <>
+              <label>
+                Agência
+                <input
+                  name="branch"
+                  autoComplete="off"
+                  spellCheck={false}
+                  maxLength={14}
+                  defaultValue={editing?.branch ?? ""}
+                />
+              </label>
+              <label>
+                Conta
+                <input
+                  name="number"
+                  autoComplete="off"
+                  spellCheck={false}
+                  maxLength={24}
+                  placeholder="com o dígito"
+                  defaultValue={editing?.number ?? ""}
+                />
+              </label>
+            </>
+          )}
+          {!takesBank && <p className="muted">O caixa não tem banco, agência nem número.</p>}
+          {takesBank && !takesNumber && (
+            <p className="muted">
+              Do cartão guardamos só o banco emissor: o número do cartão nunca é salvo.
+            </p>
+          )}
           <label className="inline">
             <input name="active" type="checkbox" defaultChecked={editing?.active ?? true} /> Ativa
           </label>
@@ -353,6 +365,7 @@ export function BankAccountsPage() {
               <Button
                 type="button"
                 variant="ghost"
+                disabled={saving}
                 onClick={() => {
                   setEditing(null);
                   setFormError(null);

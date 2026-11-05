@@ -225,6 +225,11 @@ mod tests {
             ),
             (
                 "pix".to_owned(),
+                " Pix ".to_owned(),
+                "payment_methods_name_is_short",
+            ),
+            (
+                "pix".to_owned(),
                 "x".repeat(201),
                 "payment_methods_name_is_short",
             ),

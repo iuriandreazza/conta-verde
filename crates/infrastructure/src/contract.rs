@@ -2255,6 +2255,20 @@ pub async fn stores_bank_accounts_with_their_trail<R: BankAccountRepository>(
         assert_eq!(repository.find(company, refused.id()).await.unwrap(), None);
         assert_eq!(account_trail(repository, company, refused).await, 0);
     }
+    // The same bank, branch and number under another kind is another account (a savings account
+    // may carry the checking account's), and so is a card of the same bank.
+    let savings = BankAccount::new(
+        BankAccountId::generate(),
+        company,
+        account_draft(
+            BankAccountKind::Savings,
+            "Poupança no mesmo banco",
+            Some(("341", "1234", "56789X")),
+            true,
+        ),
+    )
+    .unwrap();
+    save_account(repository, &savings).await.unwrap();
     // Another company may have both; an account whose identity is not complete never clashes.
     save_account(
         repository,

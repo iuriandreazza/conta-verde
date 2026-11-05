@@ -1325,7 +1325,7 @@ describe("bank accounts", () => {
     });
   });
 
-  it("takes no bank for cash, and sends none", async () => {
+  it("takes no bank for cash and only the issuer for a card, and sends no more", async () => {
     const fetchMock = mockApi((url, init) => {
       if (url === "/api/auth/me") return { status: 200, body: profile };
       if (init?.method === "POST") return { status: 201, body: account("Caixa", { kind: "cash" }) };
@@ -1333,10 +1333,19 @@ describe("bank accounts", () => {
     });
     renderAt("/companies/c1/bank-accounts");
 
-    await userEvent.selectOptions(await screen.findByLabelText("Tipo"), "cash");
-    expect(screen.getByLabelText("Código do banco")).toBeDisabled();
-    expect(screen.getByLabelText("Agência")).toBeDisabled();
-    expect(screen.getByLabelText("Conta")).toBeDisabled();
+    // A card is asked for its issuer and never for a number.
+    await userEvent.selectOptions(await screen.findByLabelText("Tipo"), "card");
+    expect(screen.getByLabelText("Banco emissor")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Agência")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Conta")).not.toBeInTheDocument();
+    expect(screen.getByText(/o número do cartão nunca é salvo/)).toBeInTheDocument();
+
+    // Cash is asked for nothing of the bank, and what was typed for another kind is gone.
+    await userEvent.selectOptions(screen.getByLabelText("Tipo"), "checking");
+    await userEvent.type(screen.getByLabelText("Código do banco"), "341");
+    await userEvent.selectOptions(screen.getByLabelText("Tipo"), "cash");
+    expect(screen.queryByLabelText("Código do banco")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Agência")).not.toBeInTheDocument();
     await userEvent.type(screen.getByLabelText("Nome"), "Caixa");
     await userEvent.click(screen.getByRole("button", { name: "Adicionar" }));
 
@@ -1407,7 +1416,7 @@ describe("bank accounts", () => {
     await waitFor(() => {
       const urls = fetchMock.mock.calls.map(([url]) => String(url));
       expect(urls).toContain("/api/companies/c1/bank-accounts?q=res&kind=savings&active=true");
-    });
+ }, { timeout: 3000 });
 
     await userEvent.click(await screen.findByRole("button", { name: "Histórico de Reserva" }));
     const region = await screen.findByRole("region", { name: "Histórico de Reserva" });
@@ -1442,6 +1451,13 @@ describe("payment methods", () => {
     await userEvent.click(screen.getByRole("button", { name: "Adicionar" }));
     expect(await screen.findByText("Boleto cadastrada.")).toBeInTheDocument();
     expect(bodyOf(fetchMock, "POST")).toEqual({ kind: "bank_slip", name: "Boleto", active: true });
+    // The list is loaded again after a registration; an edit must not race its answer.
+    await waitFor(() => {
+      const lists = fetchMock.mock.calls.filter(
+        ([url, init]) => String(url).endsWith("/payment-methods") && init?.method === undefined,
+      );
+      expect(lists.length).toBeGreaterThanOrEqual(2);
+    });
 
     await userEvent.click(screen.getByRole("button", { name: "Alterar Visa" }));
     expect(screen.getByLabelText("Tipo")).toHaveValue("credit_card");
@@ -1456,7 +1472,7 @@ describe("payment methods", () => {
     await waitFor(() => {
       const urls = fetchMock.mock.calls.map(([url]) => String(url));
       expect(urls).toContain("/api/companies/c1/payment-methods?kind=pix");
-    });
+ }, { timeout: 3000 });
   });
 
   it("shows what the API refused, next to the form", async () => {

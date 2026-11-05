@@ -29,6 +29,7 @@ pub enum DomainError {
     InvalidBranch,
     InvalidAccountNumber,
     CashAccountHasNoBank,
+    CardAccountHasNoNumber,
 }
 
 impl fmt::Display for DomainError {
@@ -84,6 +85,9 @@ impl fmt::Display for DomainError {
             Self::CashAccountHasNoBank => {
                 f.write_str("a cash account has no bank, branch or account number")
             }
+            Self::CardAccountHasNoNumber => f.write_str(
+                "a card account has no branch or account number: a card number is not stored",
+            ),
             Self::KindCannotChange => f.write_str("the kind cannot change once registered"),
         }
     }

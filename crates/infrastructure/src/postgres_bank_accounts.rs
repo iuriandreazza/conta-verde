@@ -246,7 +246,7 @@ mod tests {
         let case = |columns: &'static str, values: &'static str| async move {
             refused_by(insert(columns, values).await)
         };
-        let cases: [(&str, &str, &str); 8] = [
+        let cases: [(&str, &str, &str); 10] = [
             ("kind, name", "'wallet', 'x'", "bank_accounts_kind_valid"),
             (
                 "kind, name",
@@ -282,6 +282,16 @@ mod tests {
                 "kind, name, number",
                 "'cash', 'x', '123'",
                 "bank_accounts_cash_has_no_bank",
+            ),
+            (
+                "kind, name, number",
+                "'card', 'x', '4111111111111111'",
+                "bank_accounts_card_has_no_number",
+            ),
+            (
+                "kind, name",
+                "'checking', ' x '",
+                "bank_accounts_name_is_short",
             ),
         ];
         for (columns, values, constraint) in cases {

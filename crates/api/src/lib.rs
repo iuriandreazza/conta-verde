@@ -1767,10 +1767,16 @@ mod tests {
         let id = created.body["id"].as_str().unwrap().to_owned();
 
         // The same bank, branch and number is the same account, however it is written.
-        let same = json!({ "kind": "savings", "name": "Outra", "bank_code": "341", "branch": "1234", "number": "56789 X" });
+        let same = json!({ "kind": "checking", "name": "Outra", "bank_code": "341", "branch": "1234", "number": "56789 X" });
         assert_eq!(
             post_to(&app, &uri, &cookie, same).await.status,
             StatusCode::CONFLICT
+        );
+        // Under another kind it is another account: a savings account may carry the checking one's.
+        let savings = json!({ "kind": "savings", "name": "Poupança", "bank_code": "341", "branch": "1234", "number": "56789 X" });
+        assert_eq!(
+            post_to(&app, &uri, &cookie, savings).await.status,
+            StatusCode::CREATED
         );
         let same_name = json!({ "kind": "cash", "name": "CONTA DA LOJA" });
         assert_eq!(
@@ -1782,6 +1788,21 @@ mod tests {
         assert_eq!(
             post_to(&app, &uri, &cookie, cash).await.status,
             StatusCode::UNPROCESSABLE_ENTITY
+        );
+        // A card keeps its issuer and never a number: the audit trail would keep it for good.
+        let card = json!({ "kind": "card", "name": "Visa", "bank_code": "341", "number": "4111111111111111" });
+        let refused = post_to(&app, &uri, &cookie, card).await;
+        assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            refused.body["error"]
+                .as_str()
+                .unwrap()
+                .contains("card number is not stored")
+        );
+        let card = json!({ "kind": "card", "name": "Visa", "bank_code": "341" });
+        assert_eq!(
+            post_to(&app, &uri, &cookie, card).await.status,
+            StatusCode::CREATED
         );
 
         let account_uri = format!("{uri}/{id}");

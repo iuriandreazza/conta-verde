@@ -299,6 +299,7 @@ export function PaymentMethodsPage() {
               <Button
                 type="button"
                 variant="ghost"
+                disabled={saving}
                 onClick={() => {
                   setEditing(null);
                   setFormError(null);

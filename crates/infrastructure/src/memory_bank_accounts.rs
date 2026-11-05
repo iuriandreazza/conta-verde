@@ -24,14 +24,19 @@ struct BankAccountState {
     audit: AuditLog,
 }
 
-/// The bank, branch and number of an account, when all three are known.
-fn identity(account: &BankAccount) -> Option<(&str, &str, &str)> {
-    Some((account.bank_code()?, account.branch()?, account.number()?))
+/// The kind, bank, branch and number of an account, when the last three are known.
+fn identity(account: &BankAccount) -> Option<(&'static str, &str, &str, &str)> {
+    Some((
+        account.kind().as_str(),
+        account.bank_code()?,
+        account.branch()?,
+        account.number()?,
+    ))
 }
 
 impl BankAccountState {
     /// What the database's unique indexes say about `account` among the others of its company:
-    /// the name ignoring case, and the bank, branch and number when all three are known.
+    /// the name ignoring case, and the kind, bank, branch and number when the last three are known.
     fn conflict(&self, account: &BankAccount) -> Result<(), RepositoryError> {
         let others = || {
             self.accounts.iter().filter(|other| {

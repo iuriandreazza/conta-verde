@@ -11,7 +11,7 @@ CREATE TABLE payment_methods (
         'cash', 'pix', 'bank_slip', 'credit_card', 'debit_card', 'bank_transfer', 'check', 'other'
     )),
     -- The name is in a btree index, which cannot hold a row of more than about 2.7 KB.
-    CONSTRAINT payment_methods_name_is_short CHECK (char_length(name) BETWEEN 1 AND 200)
+    CONSTRAINT payment_methods_name_is_short CHECK (char_length(name) BETWEEN 1 AND 200 AND name = btrim(name))
 );
 
 -- One name per company, ignoring case; it also serves the order of the list (ADR 0018).

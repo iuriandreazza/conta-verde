@@ -12,7 +12,8 @@ pub enum BankAccountKind {
     Savings,
     /// Cash on hand: no bank.
     Cash,
-    /// A credit card, whose bills are paid from another account.
+    /// A credit card, whose bills are paid from another account. Only its issuing bank is kept;
+    /// never a card number.
     Card,
 }
 
@@ -89,6 +90,11 @@ impl BankAccount {
             && (bank_code.is_some() || branch.is_some() || number.is_some())
         {
             return Err(DomainError::CashAccountHasNoBank);
+        }
+        // A card is issued by a bank but has no branch or account number, and a card number must
+        // not be stored at all: the audit trail is append-only and would keep it for good.
+        if draft.kind == BankAccountKind::Card && (branch.is_some() || number.is_some()) {
+            return Err(DomainError::CardAccountHasNoNumber);
         }
         Ok(Self {
             id,
@@ -275,23 +281,36 @@ mod tests {
     }
 
     #[test]
-    fn cash_has_no_bank_but_everything_else_may() {
+    fn cash_has_no_bank_and_a_card_has_no_number() {
         assert_eq!(
             build(draft(BankAccountKind::Cash)).unwrap_err(),
             DomainError::CashAccountHasNoBank
         );
-        let cash = build(BankAccountDraft {
+        let cash = BankAccountDraft {
             bank_code: None,
             branch: None,
             number: None,
             ..draft(BankAccountKind::Cash)
-        });
-        assert!(cash.is_ok());
-        for kind in [
-            BankAccountKind::Checking,
-            BankAccountKind::Savings,
-            BankAccountKind::Card,
-        ] {
+        };
+        assert!(build(cash).is_ok());
+        // A card keeps the issuer, and refuses anything that could be (part of) a card number.
+        let card = |branch: Option<&str>, number: Option<&str>| {
+            build(BankAccountDraft {
+                branch: branch.map(Into::into),
+                number: number.map(Into::into),
+                ..draft(BankAccountKind::Card)
+            })
+        };
+        assert!(card(None, None).is_ok());
+        assert_eq!(
+            card(None, Some("4111111111111111")).unwrap_err(),
+            DomainError::CardAccountHasNoNumber
+        );
+        assert_eq!(
+            card(Some("1"), None).unwrap_err(),
+            DomainError::CardAccountHasNoNumber
+        );
+        for kind in [BankAccountKind::Checking, BankAccountKind::Savings] {
             assert!(build(draft(kind)).is_ok());
         }
         // Nothing is required: an account can be registered by its name alone.
