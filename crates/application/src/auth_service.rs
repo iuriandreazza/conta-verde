@@ -98,6 +98,17 @@ impl<I: IdentityRepository, S: SecretService> AuthService<I, S> {
         })
     }
 
+    /// Opens a session for a user who was just created some other way than by registering, like
+    /// one who joined a company through an invitation, and says which companies they belong to.
+    pub async fn sign_in_new_member(&self, user: User) -> Result<SignedIn, ApplicationError> {
+        let token = self.open_session(user.id()).await?;
+        let memberships = self.identities.memberships_of(user.id()).await?;
+        Ok(SignedIn {
+            token,
+            profile: Profile { user, memberships },
+        })
+    }
+
     pub async fn login(&self, email: &str, password: &str) -> Result<SignedIn, ApplicationError> {
         // A malformed email gets the same answer as a wrong password.
         let credentials = match Email::parse(email) {

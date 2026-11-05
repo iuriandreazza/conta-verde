@@ -2502,6 +2502,63 @@ describe("members and invitations", () => {
       expect(fetchMock).toHaveBeenCalled();
     });
 
+    it("signs up through the link with no company name, the address of the invitation, and opens the company", async () => {
+      const joined = { ...profile, companies: [{ id: "c2", name: "Mercearia", role: "sales", permissions: { parties: "write" } }] };
+      const fetchMock = mockApi((url) => {
+        if (url === "/api/auth/me") return { status: 401, body: { error: "authentication required" } };
+        if (url === "/api/auth/register") return { status: 201, body: joined };
+        if (url.startsWith("/api/invitations/")) return { status: 200, body: preview };
+        return { status: 200, body: { items: [], next_cursor: null } };
+      });
+      renderAt("/register?next=%2Finvitations%2Fabc123");
+
+      expect(await screen.findByText("Mercearia")).toBeInTheDocument();
+      expect(screen.queryByLabelText("Nome da empresa")).not.toBeInTheDocument();
+      expect(screen.getByLabelText("E-mail")).toHaveValue("bia@example.com");
+      expect(screen.getByLabelText("E-mail")).toHaveAttribute("readonly");
+      await userEvent.type(screen.getByLabelText("Seu nome"), "Bia");
+      await userEvent.type(screen.getByLabelText("Senha"), "correct horse");
+      await userEvent.click(screen.getByRole("button", { name: "Criar conta" }));
+
+      expect(await screen.findByRole("heading", { name: "Painel" })).toBeInTheDocument();
+      const [, init] = fetchMock.mock.calls.find(([url]) => String(url) === "/api/auth/register")!;
+      expect(JSON.parse(String(init?.body))).toEqual({
+        name: "Bia",
+        email: "bia@example.com",
+        password: "correct horse",
+        invitation: "abc123",
+      });
+    });
+
+    it("falls back to an ordinary sign-up, with the reason, when the link no longer works", async () => {
+      mockApi((url) =>
+        url === "/api/auth/me"
+          ? { status: 401, body: { error: "authentication required" } }
+          : { status: 410, body: { error: "this invitation was already used or withdrawn, or has expired: ask for a new one" } },
+      );
+      renderAt("/register?next=%2Finvitations%2Fabc123");
+
+      expect(await screen.findByText(/ask for a new one/)).toBeInTheDocument();
+      expect(screen.getByLabelText("Nome da empresa")).toBeInTheDocument();
+      expect(screen.getByLabelText("E-mail")).not.toHaveAttribute("readonly");
+    });
+
+    it("shows why a sign-up through the link was refused and keeps the form", async () => {
+      mockApi((url) => {
+        if (url === "/api/auth/me") return { status: 401, body: { error: "authentication required" } };
+        if (url === "/api/auth/register") return { status: 409, body: { error: "an account with this e-mail address already exists" } };
+        return { status: 200, body: preview };
+      });
+      renderAt("/register?next=%2Finvitations%2Fabc123");
+
+      await userEvent.type(await screen.findByLabelText("Seu nome"), "Bia");
+      await userEvent.type(screen.getByLabelText("Senha"), "correct horse");
+      await userEvent.click(screen.getByRole("button", { name: "Criar conta" }));
+
+      expect(await screen.findByRole("alert")).toHaveTextContent("already exists");
+      expect(screen.getByLabelText("Seu nome")).toHaveValue("Bia");
+    });
+
     it("ignores a next that is not an invitation", async () => {
       mockApi((url) =>
         url === "/api/auth/login"

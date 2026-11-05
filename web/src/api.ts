@@ -185,12 +185,11 @@ export interface PartyInput {
   tags: string[];
 }
 
-export interface Registration {
-  name: string;
-  email: string;
-  password: string;
-  company_name: string;
-}
+/** A sign-up either starts a company of its own, or joins the one an invitation's link leads to. */
+export type Registration = { name: string; email: string; password: string } & (
+  | { company_name: string }
+  | { invitation: string }
+);
 
 export type ProductKind = "product" | "service";
 

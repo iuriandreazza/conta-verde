@@ -10,7 +10,7 @@ use conta_verde_application::{
 };
 use conta_verde_application::{
     ImportRow, InvitationRepository, InvitationState, Invited, MemberService, NewAccount,
-    NewInvitation, PaymentTermQuery, PaymentTermRepository, PaymentTermService,
+    NewInvitation, NewUser, PaymentTermQuery, PaymentTermRepository, PaymentTermService,
 };
 use conta_verde_domain::{
     Account, AccountDraft, Actor, AddressDraft, AuditAction, AuditEntity, AuditEntry, BankAccount,
@@ -19,7 +19,7 @@ use conta_verde_domain::{
     DomainError, DreGroup, FieldChange, Invitation, InvitationId, Party, PartyDraft, PartyId,
     PaymentMethod, PaymentMethodDraft, PaymentMethodId, PaymentMethodKind, PaymentTerm,
     PaymentTermDraft, PaymentTermId, Product, ProductDraft, ProductId, ProductKind, Role, Tag,
-    UserId, bank_account_changes, bank_account_creation_changes, category_changes,
+    User, UserId, bank_account_changes, bank_account_creation_changes, category_changes,
     category_creation_changes, cost_center_changes, cost_center_creation_changes, creation_changes,
     document_check_changes, payment_method_changes, payment_method_creation_changes,
     product_changes, product_creation_changes,
@@ -1311,6 +1311,61 @@ where
     auth.profile(&signed_up.token).await.unwrap();
 }
 
+/// A user can exist with no company (one who joined through an invitation): found by e-mail like any
+/// other, in no company, and the address is still unique, against accounts made the other way too.
+pub async fn registers_a_user_with_no_company<I: IdentityRepository>(identities: &I) {
+    let unique = Uuid::new_v4();
+    let email = format!("sem-empresa-{unique}@example.com");
+    let new_user = |email: &str| NewUser {
+        user: User::new(UserId::generate(), "Gil", email).unwrap(),
+        password_hash: "not a real hash".into(),
+    };
+    let gil = new_user(&email);
+    identities.register_user(&gil).await.unwrap();
+    let found = identities
+        .find_credentials(gil.user.email())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(found.user, gil.user);
+    assert!(
+        identities
+            .memberships_of(gil.user.id())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        identities
+            .register_user(&new_user(&email))
+            .await
+            .unwrap_err(),
+        RepositoryError::DuplicateEmail
+    );
+
+    // The same address cannot start a company either, and an address that started one cannot join.
+    let account = Account::new(
+        UserId::generate(),
+        CompanyId::generate(),
+        AccountDraft {
+            user_name: "Gil".into(),
+            email: email.clone(),
+            company_name: "Padaria".into(),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        identities
+            .register_account(&NewAccount {
+                account,
+                password_hash: "x".into(),
+            })
+            .await
+            .unwrap_err(),
+        RepositoryError::DuplicateEmail
+    );
+}
+
 /// A membership says what its user is in the company: the creator is the owner, another user can be
 /// added with a role of their own, a second membership never changes the first one's role, and what
 /// a user is differs from company to company.
@@ -1610,6 +1665,108 @@ pub async fn runs_the_invitation_lifecycle<I, M, S>(
         .filter(|invitation| invitation.email().as_str() == eva_email)
         .count();
     assert_eq!(evas, 1);
+
+    // Someone with no account signs up through the link: an account with no company of its own,
+    // a member of the invited one in its role. Everything is checked before anything is stored.
+    let gil_email = format!("gil-{unique}@example.com");
+    let gil = service
+        .invite(company, &ana_actor, &gil_email, Role::Stock)
+        .await
+        .unwrap();
+    let gil_token = token_of(&gil.link);
+    assert_eq!(
+        service
+            .join(
+                &gil_token,
+                "Gil",
+                &format!("outro-{unique}@example.com"),
+                "correct horse"
+            )
+            .await
+            .unwrap_err(),
+        ApplicationError::InvitationForAnotherEmail
+    );
+    assert_eq!(
+        service
+            .join(&gil_token, "Gil", &gil_email, "short")
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::WeakPassword)
+    );
+    assert_eq!(
+        service
+            .join("not-a-token", "Gil", &gil_email, "correct horse")
+            .await
+            .unwrap_err(),
+        ApplicationError::InvitationNotFound
+    );
+    // Nothing above made an account.
+    assert_eq!(
+        auth.login(&gil_email, "correct horse").await.unwrap_err(),
+        ApplicationError::Auth(AuthError::InvalidCredentials)
+    );
+    let (gil_user, joined) = service
+        .join(
+            &gil_token,
+            "Gil",
+            &gil_email.to_uppercase(),
+            "correct horse",
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        (joined, gil_user.email().as_str()),
+        (company, gil_email.as_str())
+    );
+    let profile = auth
+        .login(&gil_email, "correct horse")
+        .await
+        .unwrap()
+        .profile;
+    assert_eq!(profile.memberships.len(), 1, "no company of its own");
+    assert_eq!(
+        (
+            profile.memberships[0].company.id(),
+            profile.memberships[0].role
+        ),
+        (company, Role::Stock)
+    );
+    // Once only.
+    assert_eq!(
+        service
+            .join(&gil_token, "Gil", &gil_email, "correct horse")
+            .await
+            .unwrap_err(),
+        ApplicationError::InvitationNoLongerValid
+    );
+    // An address that already has an account is told so, and the invitation stays open.
+    let cris_invitation = service
+        .invite(
+            company,
+            &ana_actor,
+            cris.user.email().as_str(),
+            Role::Viewer,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .join(
+                &token_of(&cris_invitation.link),
+                "Cris",
+                cris.user.email().as_str(),
+                "correct horse"
+            )
+            .await
+            .unwrap_err(),
+        ApplicationError::Repository(RepositoryError::DuplicateEmail)
+    );
+    assert!(
+        service
+            .preview(&token_of(&cris_invitation.link))
+            .await
+            .is_ok()
+    );
 }
 
 /// Claiming an invitation is one step that takes it once, not after it expired or was withdrawn, and

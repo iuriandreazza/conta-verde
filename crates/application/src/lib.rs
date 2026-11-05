@@ -39,7 +39,7 @@ pub use cost_center_service::{CostCenterPage, CostCenterService};
 pub use email_sender::{EmailError, EmailMessage, EmailSender};
 pub use error::{ApplicationError, AuthError, RepositoryError};
 pub use identity_repository::{
-    CompanyMembership, IdentityRepository, NewAccount, StoredCredentials,
+    CompanyMembership, IdentityRepository, NewAccount, NewUser, StoredCredentials,
 };
 pub use import::{ImportReport, ImportRow, MAX_IMPORT_ROWS, RowNote};
 pub use invitation_repository::{

@@ -1,7 +1,8 @@
 use std::time::Duration;
 
 use conta_verde_application::{
-    CompanyMembership, IdentityRepository, Member, NewAccount, RepositoryError, StoredCredentials,
+    CompanyMembership, IdentityRepository, Member, NewAccount, NewUser, RepositoryError,
+    StoredCredentials,
 };
 use conta_verde_domain::{Company, CompanyId, Email, Role, User, UserId};
 use sqlx::postgres::PgRow;
@@ -58,6 +59,23 @@ impl IdentityRepository for PostgresIdentityRepository {
             .map_err(storage_error)?;
 
         tx.commit().await.map_err(storage_error)
+    }
+
+    async fn register_user(&self, new_user: &NewUser) -> Result<(), RepositoryError> {
+        sqlx::query("INSERT INTO users (id, name, email, password_hash) VALUES ($1, $2, $3, $4)")
+            .bind(new_user.user.id().as_uuid())
+            .bind(new_user.user.name())
+            .bind(new_user.user.email().as_str())
+            .bind(&new_user.password_hash)
+            .execute(&self.pool)
+            .await
+            .map(|_| ())
+            .map_err(|error| match &error {
+                sqlx::Error::Database(db) if db.constraint() == Some(EMAIL_UNIQUE_CONSTRAINT) => {
+                    RepositoryError::DuplicateEmail
+                }
+                _ => storage_error(error),
+            })
     }
 
     async fn find_credentials(
@@ -250,6 +268,13 @@ mod tests {
             Duration::from_secs(3600),
         );
         contract::runs_the_account_lifecycle(&auth).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn registers_a_user_with_no_company() {
+        let pool = contract::test_pool().await;
+        contract::registers_a_user_with_no_company(&PostgresIdentityRepository::new(pool)).await;
     }
 
     #[tokio::test]

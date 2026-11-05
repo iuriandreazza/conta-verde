@@ -14,6 +14,14 @@ pub struct NewAccount {
     pub password_hash: String,
 }
 
+/// A new user with no company, together with the hash of their password: someone who joins a
+/// company that was made by another.
+#[derive(Clone)]
+pub struct NewUser {
+    pub user: User,
+    pub password_hash: String,
+}
+
 #[derive(Clone)]
 pub struct StoredCredentials {
     pub user: User,
@@ -34,6 +42,12 @@ pub trait IdentityRepository: Send + Sync {
     fn register_account(
         &self,
         new_account: &NewAccount,
+    ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
+
+    /// Stores a user who belongs to no company yet. `DuplicateEmail` when the address has an account.
+    fn register_user(
+        &self,
+        new_user: &NewUser,
     ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
 
     fn find_credentials(
