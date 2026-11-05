@@ -1,13 +1,5 @@
 import { motion } from "motion/react";
-import {
-  Fragment,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type FormEvent,
-} from "react";
+import { Fragment, useState, type FormEvent } from "react";
 import { useParams } from "react-router-dom";
 import { NO_FILTERS, api, errorMessage, type Party, type PartyFilters } from "../api";
 import { useAuth } from "../auth";
@@ -21,11 +13,10 @@ import { RefreshCWIcon } from "../components/icons/refresh-cw";
 import { UsersIcon } from "../components/icons/users";
 import { PartyHistory } from "../components/PartyHistory";
 import { Spinner } from "../components/Spinner";
-import { useDebounced } from "../lib/useDebounced";
+import { usePagedList } from "../lib/usePagedList";
 
 // Rows enter one after another, but never wait longer than the eighth for a long page.
 const MAX_STAGGERED_ROWS = 8;
-const SEARCH_DELAY_MS = 300;
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one
 // instance: the old list is dropped and a reply still in flight for another company lands on an
@@ -33,13 +24,8 @@ const SEARCH_DELAY_MS = 300;
 export function PartiesPage() {
   const { companyId = "" } = useParams();
   const { session } = useAuth();
-  const [parties, setParties] = useState<Party[]>([]);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [creating, setCreating] = useState(false);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [registryNotice, setRegistryNotice] = useState<RegistryNotice | null>(null);
   const [verifyingId, setVerifyingId] = useState<string | null>(null);
@@ -53,68 +39,22 @@ export function PartiesPage() {
 
   // The search box updates at once; the list follows once typing pauses.
   const [filters, setFilters] = useState<PartyFilters>(NO_FILTERS);
-  const searchText = useDebounced(filters.q.trim(), SEARCH_DELAY_MS);
-  const applied = useMemo<PartyFilters>(
-    () => ({ q: searchText, kind: filters.kind, sort: filters.sort }),
-    [searchText, filters.kind, filters.sort],
+  const {
+    items: parties,
+    setItems: setParties,
+    nextCursor,
+    loading,
+    loadingMore,
+    error,
+    setError,
+    applied,
+    reload: loadFirstPage,
+    loadMore,
+  } = usePagedList<Party, PartyFilters>(
+    (applied, after) => api.listParties(companyId, applied, after),
+    filters,
   );
   const isFiltered = applied.q !== "" || applied.kind !== "";
-  // Counts the requests for a first page: a reply is only used while it is still the latest, so a
-  // slow answer to an earlier search can neither replace a newer one nor receive its "load more".
-  const latestListing = useRef(0);
-
-  // Only the very first load shows the spinner; refreshing after an insert or a new filter keeps
-  // the rows on screen until the new ones arrive.
-  const loadFirstPage = useCallback(async () => {
-    const listing = ++latestListing.current;
-    setError(null);
-    // The old cursor belongs to the old filters: "load more" must not be clickable until the new
-    // first page says whether there is a next one.
-    setNextCursor(null);
-    try {
-      const page = await api.listParties(companyId, applied);
-      if (listing === latestListing.current) {
-        setParties(page.items);
-        setNextCursor(page.next_cursor);
-      }
-    } catch (failure) {
-      if (listing === latestListing.current) {
-        // Rows of the previous filters under controls that show the new ones would read as its result.
-        setParties([]);
-        setError(errorMessage(failure));
-      }
-    } finally {
-      if (listing === latestListing.current) {
-        setLoading(false);
-      }
-    }
-  }, [companyId, applied]);
-
-  useEffect(() => {
-    void loadFirstPage();
-  }, [loadFirstPage]);
-
-  async function loadMore() {
-    if (nextCursor === null || loadingMore) {
-      return;
-    }
-    const listing = latestListing.current;
-    setLoadingMore(true);
-    setError(null);
-    try {
-      const page = await api.listParties(companyId, applied, nextCursor);
-      if (listing === latestListing.current) {
-        setParties((current) => [...current, ...page.items]);
-        setNextCursor(page.next_cursor);
-      }
-    } catch (failure) {
-      if (listing === latestListing.current) {
-        setError(errorMessage(failure));
-      }
-    } finally {
-      setLoadingMore(false);
-    }
-  }
 
   async function verifyAgain(party: Party) {
     if (verifyingId !== null) {
