@@ -299,7 +299,7 @@ export function ProductsPage() {
           <code>sku</code>, <code>ncm</code>, <code>sale_price</code>, <code>cost_price</code>,{" "}
           <code>minimum_stock</code> e <code>active</code> (<code>sim</code> ou <code>não</code>; em
           branco é ativo). Os preços podem usar a vírgula, como <code>12,50</code>, mas não o ponto de
-          milhar.
+          milhar, nem uma vírgula seguida de três dígitos (<code>1,234</code>), que é ambígua.
         </p>
         <p>
           Nada é importado enquanto uma linha tiver problema. Quem já tem o mesmo SKU é ignorado,

@@ -33,10 +33,16 @@ fn kind_of(cell: Option<&str>) -> Result<ProductKind, String> {
 
 /// A price as a spreadsheet writes it in Brazil, `12,50`, becomes `12.50`. Only that: a cell with
 /// both a comma and a dot (`1.234,56`) is left as it is and refused by the amount's own strict
-/// parsing, since guessing which one is the thousands separator could change a price.
+/// parsing, since guessing which one is the thousands separator could change a price. A comma
+/// followed by exactly three digits (`1,234`) is ambiguous the same way, a thousand in a spreadsheet
+/// from another locale and a decimal in this one, so it is left alone too and refused: the person
+/// writes `1234` or `1,2340`, whichever is meant.
 fn decimal(cell: Option<&str>) -> Option<String> {
     cell.map(|text| {
-        if text.contains(',') && !text.contains('.') {
+        let ambiguous = text.split_once(',').is_some_and(|(_, after)| {
+            after.len() == 3 && after.bytes().all(|b| b.is_ascii_digit())
+        });
+        if text.contains(',') && !text.contains('.') && !ambiguous {
             text.replace(',', ".")
         } else {
             text.to_owned()
@@ -86,4 +92,27 @@ pub(crate) async fn import_products<X: Ports>(
         .await?;
     refused.extend(report.refused.iter().cloned());
     Ok(Json(ImportResponse::new(dry_run, report, refused)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_decimal_comma_becomes_a_dot_and_nothing_ambiguous_is_guessed() {
+        let read = |text: &str| decimal(Some(text)).unwrap();
+        assert_eq!(read("12,50"), "12.50");
+        assert_eq!(read("5,5"), "5.5");
+        assert_eq!(read("12.50"), "12.50");
+        assert_eq!(read("1500"), "1500");
+        // These are refused by the amount's strict parsing, never guessed at.
+        for ambiguous in ["1.234,56", "1,234", "1,234,567", "12,5,0", "1,500"] {
+            assert!(
+                conta_verde_domain::Amount::parse(&read(ambiguous)).is_none(),
+                "{ambiguous}"
+            );
+        }
+        assert!(conta_verde_domain::Amount::parse(&read("1,2340")).is_some());
+        assert_eq!(decimal(None), None);
+    }
 }

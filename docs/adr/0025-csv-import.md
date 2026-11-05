@@ -53,8 +53,9 @@ a row and its audit entry atomically ([ADR 0008](0008-audit-trail.md)).
   `serviço`; blank is a product), `sku`, `ncm`, `sale_price`, `cost_price`, `minimum_stock` and
   `active` (`sim` or `não`; blank is active) are optional. A price may use the comma Brazilian
   spreadsheets write (`12,50` is read as `12.50`, exactly: no float on the way), and **only** that: a
-  cell with both a comma and a dot (`1.234,56`) is refused by the amount's own strict parsing,
-  because guessing which one is the thousands separator could change a price
+  cell with both a comma and a dot (`1.234,56`), or with a comma followed by exactly three digits
+  (`1,234`: a thousand in one locale, a decimal in this one), is refused by the amount's own strict
+  parsing, because guessing which one is the thousands separator could change a price
   ([ADR 0003](0003-money-as-decimal.md)). The key is the **SKU**, which the domain already
   keeps in upper case, so `pao-1` and `PAO-1` are one; a product without a SKU cannot be recognized,
   so sending the file twice repeats it, as for a party without a document.
