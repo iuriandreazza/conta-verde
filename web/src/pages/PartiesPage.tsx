@@ -23,6 +23,7 @@ import { PartyHistory } from "../components/PartyHistory";
 import { Spinner } from "../components/Spinner";
 import { usePagedList } from "../lib/usePagedList";
 import { useCanWrite } from "../lib/useCanWrite";
+import { SquarePenIcon } from "../components/icons/square-pen";
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one
 // instance: the old list is dropped and a reply still in flight for another company lands on an
@@ -208,7 +209,6 @@ export function PartiesPage() {
                   <th>Nome</th>
                   <th>Documento</th>
                   <th>E-mail</th>
-                  <th>Tipo</th>
                   <th>
                     <span className="visually-hidden">Ações</span>
                   </th>
@@ -219,7 +219,17 @@ export function PartiesPage() {
                   <Fragment key={party.id}>
                   <ListRow index={index} highlighted={party.id === highlightedId}>
                     <td>
-                      {party.name}
+                      <div className="cell-title">{party.name}</div>
+                      <div className="muted">
+                        {[
+                          party.is_customer && "Cliente",
+                          party.is_supplier && "Fornecedor",
+                          party.is_carrier && "Transportadora",
+                          party.is_seller && "Vendedor",
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </div>
                       {party.address && (
                         <div className="muted">{`${party.address.city}/${party.address.state}`}</div>
                       )}
@@ -243,6 +253,7 @@ export function PartiesPage() {
                       {party.document ?? "—"} <DocumentBadge check={party.document_check} />
                       {canWrite && party.document_check.needs_attention && (
                         <Button
+                          iconOnly
                           type="button"
                           variant="ghost"
                           className="btn-small"
@@ -264,19 +275,11 @@ export function PartiesPage() {
                         </div>
                       )}
                     </td>
-                    <td>
-                      {[
-                        party.is_customer && "Cliente",
-                        party.is_supplier && "Fornecedor",
-                        party.is_carrier && "Transportadora",
-                        party.is_seller && "Vendedor",
-                      ]
-                        .filter(Boolean)
-                        .join(" · ")}
-                    </td>
-                    <td>
+                    <td className="row-actions">
                       {canWrite && (
                         <Button
+                          iconOnly
+                          icon={SquarePenIcon}
                           type="button"
                           variant="ghost"
                           className="btn-small"
@@ -292,6 +295,7 @@ export function PartiesPage() {
                         </Button>
                       )}
                       <Button
+                        iconOnly
                         type="button"
                         variant="ghost"
                         className="btn-small"

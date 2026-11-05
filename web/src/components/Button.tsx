@@ -28,6 +28,11 @@ interface ButtonProps
   icon?: AnimatedIcon;
   pending?: boolean;
   variant?: "primary" | "ghost";
+  /**
+   * Shows the icon alone, for the actions that repeat on every row. The children stay as the name a
+   * screen reader reads and the tooltip a pointer sees, so they still say what the button does.
+   */
+  iconOnly?: boolean;
   children: ReactNode;
 }
 
@@ -35,6 +40,7 @@ export function Button({
   icon: Icon,
   pending = false,
   variant = "primary",
+  iconOnly = false,
   className,
   disabled,
   children,
@@ -42,6 +48,7 @@ export function Button({
   onMouseLeave,
   onFocus,
   onBlur,
+  title,
   ...props
 }: ButtonProps) {
   const iconRef = useRef<IconHandle>(null);
@@ -54,7 +61,8 @@ export function Button({
 
   return (
     <motion.button
-      className={cn("btn", `btn-${variant}`, className)}
+      className={cn("btn", `btn-${variant}`, iconOnly && "btn-icon", className)}
+      title={title ?? (iconOnly ? props["aria-label"] : undefined)}
       disabled={inactive}
       aria-busy={pending || undefined}
       whileHover={inactive ? undefined : { y: -1 }}
@@ -79,7 +87,7 @@ export function Button({
       {...props}
     >
       {pending ? <Spinner size={16} /> : Icon && <Icon ref={iconRef} size={16} aria-hidden />}
-      <span>{children}</span>
+      <span className={iconOnly ? "visually-hidden" : undefined}>{children}</span>
     </motion.button>
   );
 }

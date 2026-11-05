@@ -23,6 +23,21 @@ import { PlusIcon } from "../components/icons/plus";
 import { BANK_ACCOUNT_KINDS, bankAccountKindLabel } from "../lib/kinds";
 import { usePagedList } from "../lib/usePagedList";
 import { useCanWrite } from "../lib/useCanWrite";
+import { bankName } from "../lib/banks";
+import { CircleDollarSignIcon } from "../components/icons/circle-dollar-sign";
+import { CreditCardIcon } from "../components/icons/credit-card";
+import { HandCoinsIcon } from "../components/icons/hand-coins";
+import { WalletIcon } from "../components/icons/wallet";
+import type { AnimatedIcon } from "../components/Button";
+
+const KIND_ICONS: Record<BankAccount["kind"], AnimatedIcon> = {
+  checking: WalletIcon,
+  savings: HandCoinsIcon,
+  cash: CircleDollarSignIcon,
+  card: CreditCardIcon,
+};
+import { SquarePenIcon } from "../components/icons/square-pen";
+import { StatusBadge } from "../components/StatusBadge";
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one
 // instance: the old list is dropped and a reply still in flight for another company lands on an
@@ -195,8 +210,7 @@ export function BankAccountsPage() {
             <table>
               <thead>
                 <tr>
-                  <th>Nome</th>
-                  <th>Tipo</th>
+                  <th>Conta</th>
                   <th>Banco</th>
                   <th>Agência</th>
                   <th>Conta</th>
@@ -210,15 +224,38 @@ export function BankAccountsPage() {
                 {accounts.map((account, index) => (
                   <Fragment key={account.id}>
                     <ListRow index={index} highlighted={account.id === highlightedId}>
-                      <td>{account.name}</td>
-                      <td>{bankAccountKindLabel(account.kind)}</td>
-                      <td>{account.bank_code ?? "—"}</td>
-                      <td>{account.branch ?? "—"}</td>
-                      <td>{account.number ?? "—"}</td>
-                      <td>{account.active ? "Ativa" : "Inativa"}</td>
                       <td>
+                        <div className="account-cell">
+                          <span className={account.active ? "kind-icon" : "kind-icon is-inactive"} aria-hidden>
+                            {(() => {
+                              const KindIcon = KIND_ICONS[account.kind];
+                              return <KindIcon size={18} />;
+                            })()}
+                          </span>
+                          <div>
+                            <div className="cell-title">{account.name}</div>
+                            <div className="muted">{bankAccountKindLabel(account.kind)}</div>
+                          </div>
+                        </div>
+                      </td>
+                      <td>
+                        {account.bank_code === undefined || account.bank_code === null ? (
+                          "—"
+                        ) : (
+                          <>
+                            <span className="tabular">{account.bank_code}</span>
+                            {bankName(account.bank_code) && <div className="muted">{bankName(account.bank_code)}</div>}
+                          </>
+                        )}
+                      </td>
+                      <td className="tabular">{account.branch ?? "—"}</td>
+                      <td className="tabular">{account.number ?? "—"}</td>
+                      <td><StatusBadge active={account.active} feminine /></td>
+                      <td className="row-actions">
                         {canWrite && (
                           <Button
+                            iconOnly
+                            icon={SquarePenIcon}
                             type="button"
                             variant="ghost"
                             className="btn-small"
@@ -234,6 +271,7 @@ export function BankAccountsPage() {
                           </Button>
                         )}
                         <Button
+                          iconOnly
                           type="button"
                           variant="ghost"
                           className="btn-small"
@@ -251,7 +289,7 @@ export function BankAccountsPage() {
                     </ListRow>
                     {historyOpenFor === account.id && (
                       <tr id={`history-${account.id}`}>
-                        <td colSpan={7} role="region" aria-label={`Histórico de ${account.name}`}>
+                        <td colSpan={6} role="region" aria-label={`Histórico de ${account.name}`}>
                           <BankAccountHistory
                             // Remounted when the account changes, so an open history follows an edit.
                             key={JSON.stringify(account)}

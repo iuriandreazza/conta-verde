@@ -22,6 +22,8 @@ import { HistoryIcon } from "../components/icons/history";
 import { formatDecimal, formatMoney } from "../lib/decimal";
 import { usePagedList } from "../lib/usePagedList";
 import { useCanWrite } from "../lib/useCanWrite";
+import { SquarePenIcon } from "../components/icons/square-pen";
+import { StatusBadge } from "../components/StatusBadge";
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one
 // instance: the old list is dropped and a reply still in flight for another company lands on an
@@ -180,8 +182,6 @@ export function ProductsPage() {
               <thead>
                 <tr>
                   <th>Nome</th>
-                  <th>Tipo</th>
-                  <th>Un.</th>
                   <th className="num">Venda</th>
                   <th className="num">Custo</th>
                   <th className="num">Mínimo</th>
@@ -196,24 +196,26 @@ export function ProductsPage() {
                   <Fragment key={product.id}>
                     <ListRow index={index} highlighted={product.id === highlightedId}>
                       <td>
-                        {product.name}
-                        {product.sku && <span className="muted sku"> {product.sku}</span>}
+                        <div className="cell-title">{product.name}</div>
+                        <div className="muted">
+                          {[product.sku, product.kind === "product" ? "Produto" : "Serviço", product.unit]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </div>
                       </td>
-                      <td>{product.kind === "product" ? "Produto" : "Serviço"}</td>
-                      <td>{product.unit}</td>
                       <td className="num">{formatMoney(product.sale_price)}</td>
                       <td className="num">{formatMoney(product.cost_price)}</td>
                       <td className="num">
                         {product.minimum_stock === null ? "—" : formatDecimal(product.minimum_stock)}
                       </td>
                       <td>
-                        <span className={product.active ? "badge badge-ok" : "badge badge-muted"}>
-                          {product.active ? "Ativo" : "Inativo"}
-                        </span>
+                        <StatusBadge active={product.active} />
                       </td>
-                      <td>
+                      <td className="row-actions">
                         {canWrite && (
                           <Button
+                            iconOnly
+                            icon={SquarePenIcon}
                             type="button"
                             variant="ghost"
                             className="btn-small"
@@ -225,6 +227,7 @@ export function ProductsPage() {
                           </Button>
                         )}
                         <Button
+                          iconOnly
                           type="button"
                           variant="ghost"
                           className="btn-small"
