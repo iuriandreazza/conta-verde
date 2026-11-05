@@ -1,6 +1,6 @@
 use crate::postgres_audit;
 use conta_verde_application::{
-    NameCursor, PartyKind, PartyQuery, PartyRepository, PartySort, RepositoryError,
+    NameCursor, NameSort, PartyKind, PartyQuery, PartyRepository, RepositoryError,
     ensure_audit_describes,
 };
 use conta_verde_domain::{
@@ -21,6 +21,31 @@ pub async fn connect_and_migrate(
 
 pub(crate) fn storage_error(error: sqlx::Error) -> RepositoryError {
     RepositoryError::Storage(error.to_string())
+}
+
+/// The end of every list query (ADR 0018): resume right after the cursor, in the order of the
+/// sort, and stop at `limit`. The statement must already end in a `WHERE` that has a condition.
+pub(crate) fn push_name_keyset(
+    sql: &mut QueryBuilder<'_, Postgres>,
+    sort: NameSort,
+    after: Option<&NameCursor>,
+    limit: usize,
+) {
+    let (comparison, direction) = match sort {
+        NameSort::NameAsc => (">", "ASC"),
+        NameSort::NameDesc => ("<", "DESC"),
+    };
+    if let Some(cursor) = after {
+        sql.push(format!(" AND (lower(name), id) {comparison} (lower("))
+            .push_bind(cursor.name.clone())
+            .push("), ")
+            .push_bind(cursor.id)
+            .push(")");
+    }
+    sql.push(format!(
+        " ORDER BY lower(name) {direction}, id {direction} LIMIT "
+    ))
+    .push_bind(i64::try_from(limit).unwrap_or(i64::MAX));
 }
 
 pub struct PostgresPartyRepository {
@@ -129,12 +154,6 @@ impl PartyRepository for PostgresPartyRepository {
         after: Option<&NameCursor>,
         limit: usize,
     ) -> Result<Vec<Party>, RepositoryError> {
-        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
-        let (comparison, direction) = match query.sort() {
-            PartySort::NameAsc => (">", "ASC"),
-            PartySort::NameDesc => ("<", "DESC"),
-        };
-
         // Every value is bound, never spliced into the text: the pieces pushed as text are fixed.
         let mut sql = QueryBuilder::<Postgres>::new(SELECT_PARTIES);
         sql.push(" WHERE company_id = ")
@@ -158,17 +177,7 @@ impl PartyRepository for PostgresPartyRepository {
             }
             sql.push(")");
         }
-        if let Some(cursor) = after {
-            sql.push(format!(" AND (lower(name), id) {comparison} (lower("))
-                .push_bind(&cursor.name)
-                .push("), ")
-                .push_bind(cursor.id)
-                .push(")");
-        }
-        sql.push(format!(
-            " ORDER BY lower(name) {direction}, id {direction} LIMIT "
-        ))
-        .push_bind(limit);
+        push_name_keyset(&mut sql, query.sort(), after, limit);
 
         let rows = sql
             .build()

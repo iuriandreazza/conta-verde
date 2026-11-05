@@ -7,13 +7,12 @@ use conta_verde_domain::{
     DomainError, FieldChange, Party, PartyDraft, PartyId, creation_changes, document_check_changes,
 };
 
+use crate::list_query::{DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE};
 use crate::{
     ApplicationError, CnpjLookupError, CnpjRegistry, NameCursor, PartyQuery, PartyRepository,
     RegistryEntry, RepositoryError,
 };
 
-const DEFAULT_PAGE_SIZE: usize = 50;
-const MAX_PAGE_SIZE: usize = 200;
 const DEFAULT_RECHECK_INTERVAL: Duration = Duration::from_secs(10);
 
 fn party_audit(

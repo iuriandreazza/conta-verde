@@ -1,0 +1,92 @@
+use std::fmt;
+use std::str::FromStr;
+
+use rust_decimal::Decimal;
+
+// What fits `NUMERIC(19, 6)`, the column for unit prices and quantities (ADR 0003).
+const MAX_INTEGER_DIGITS: usize = 13;
+const MAX_FRACTION_DIGITS: usize = 6;
+
+/// A non-negative decimal used for unit prices and quantities.
+///
+/// Parsing is strict on purpose: no sign, no exponent, no separators and no more than six decimals.
+/// A value with more precision is refused, never rounded, because every rounding point is a named
+/// rule of its own (ADR 0003). The value is kept without trailing zeros, so it reads the same
+/// whichever adapter it came from: Postgres hands back `10.500000` for what was stored as `10.5`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Amount(Decimal);
+
+impl Amount {
+    pub fn parse(raw: &str) -> Option<Self> {
+        let (integer, fraction) = match raw.split_once('.') {
+            Some((integer, fraction)) => (integer, Some(fraction)),
+            None => (raw, None),
+        };
+        let digits = |text: &str| text.bytes().all(|byte| byte.is_ascii_digit());
+        let integer_fits =
+            !integer.is_empty() && integer.len() <= MAX_INTEGER_DIGITS && digits(integer);
+        let fraction_fits = fraction.is_none_or(|fraction| {
+            !fraction.is_empty() && fraction.len() <= MAX_FRACTION_DIGITS && digits(fraction)
+        });
+        if !(integer_fits && fraction_fits) {
+            return None;
+        }
+        Decimal::from_str(raw)
+            .ok()
+            .map(|value| Self(value.normalize()))
+    }
+
+    pub fn as_decimal(&self) -> Decimal {
+        self.0
+    }
+}
+
+impl fmt::Display for Amount {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn text(raw: &str) -> Option<String> {
+        Amount::parse(raw).map(|amount| amount.to_string())
+    }
+
+    #[test]
+    fn accepts_plain_decimals_up_to_the_column_precision() {
+        assert_eq!(text("10").as_deref(), Some("10"));
+        assert_eq!(text("10.5").as_deref(), Some("10.5"));
+        assert_eq!(text("0.000001").as_deref(), Some("0.000001"));
+        assert_eq!(
+            text("9999999999999.999999").as_deref(),
+            Some("9999999999999.999999")
+        );
+    }
+
+    #[test]
+    fn keeps_no_trailing_zeros_so_every_adapter_reads_the_same_text() {
+        assert_eq!(text("10.500000").as_deref(), Some("10.5"));
+        assert_eq!(text("007").as_deref(), Some("7"));
+        assert_eq!(text("0.00").as_deref(), Some("0"));
+        assert_eq!(Amount::parse("10.50"), Amount::parse("10.5"));
+    }
+
+    #[test]
+    fn refuses_anything_that_is_not_a_plain_non_negative_decimal() {
+        for raw in [
+            "", " ", "-1", "+1", "1e3", "1E3", "1_000", "1,5", " 1", "1 ", ".5", "5.", "1..5",
+            "NaN", "inf", "0x10", "١٢",
+        ] {
+            assert_eq!(Amount::parse(raw), None, "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn refuses_what_would_not_fit_instead_of_rounding_it() {
+        assert_eq!(Amount::parse("1.1234567"), None);
+        assert_eq!(Amount::parse("10000000000000"), None);
+    }
+}

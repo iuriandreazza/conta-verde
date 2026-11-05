@@ -23,4 +23,5 @@ macro_rules! uuid_id {
 
 uuid_id!(CompanyId);
 uuid_id!(PartyId);
+uuid_id!(ProductId);
 uuid_id!(UserId);

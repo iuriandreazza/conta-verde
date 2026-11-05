@@ -2,15 +2,19 @@ mod access;
 mod auth;
 mod cursor;
 mod error;
+mod history;
+mod json;
 mod parties;
+mod products;
 mod session;
 
 use std::sync::Arc;
 
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use conta_verde_application::{
-    AuthService, CnpjRegistry, IdentityRepository, PartyRepository, PartyService, SecretService,
+    AuthService, CnpjRegistry, IdentityRepository, PartyRepository, PartyService,
+    ProductRepository, ProductService, SecretService,
 };
 use serde::Serialize;
 
@@ -20,14 +24,19 @@ pub struct ApiConfig {
     pub cookie_secure: bool,
 }
 
-pub(crate) struct AppState<R, C, I, S> {
+pub(crate) struct AppState<R, C, I, S, P> {
     parties: PartyService<R, C>,
+    products: ProductService<P>,
     auth: AuthService<I, S>,
     config: ApiConfig,
 }
 
-pub fn router<R, C, I, S>(
+/// What every handler receives; the five type parameters are the ports the use cases run on.
+pub(crate) type SharedState<R, C, I, S, P> = Arc<AppState<R, C, I, S, P>>;
+
+pub fn router<R, C, I, S, P>(
     parties: PartyService<R, C>,
+    products: ProductService<P>,
     auth: AuthService<I, S>,
     config: ApiConfig,
 ) -> Router
@@ -36,29 +45,45 @@ where
     C: CnpjRegistry + 'static,
     I: IdentityRepository + 'static,
     S: SecretService + 'static,
+    P: ProductRepository + 'static,
 {
     let state = Arc::new(AppState {
         parties,
+        products,
         auth,
         config,
     });
     Router::new()
         .route("/health", get(health))
-        .route("/auth/register", post(auth::register::<R, C, I, S>))
-        .route("/auth/login", post(auth::login::<R, C, I, S>))
-        .route("/auth/logout", post(auth::logout::<R, C, I, S>))
-        .route("/auth/me", get(auth::me::<R, C, I, S>))
+        .route("/auth/register", post(auth::register::<R, C, I, S, P>))
+        .route("/auth/login", post(auth::login::<R, C, I, S, P>))
+        .route("/auth/logout", post(auth::logout::<R, C, I, S, P>))
+        .route("/auth/me", get(auth::me::<R, C, I, S, P>))
         .route(
             "/companies/{company_id}/parties",
-            get(parties::list_parties::<R, C, I, S>).post(parties::register_party::<R, C, I, S>),
+            get(parties::list_parties::<R, C, I, S, P>)
+                .post(parties::register_party::<R, C, I, S, P>),
         )
         .route(
             "/companies/{company_id}/parties/{party_id}/document-check",
-            post(parties::verify_document::<R, C, I, S>),
+            post(parties::verify_document::<R, C, I, S, P>),
         )
         .route(
             "/companies/{company_id}/parties/{party_id}/history",
-            get(parties::party_history::<R, C, I, S>),
+            get(parties::party_history::<R, C, I, S, P>),
+        )
+        .route(
+            "/companies/{company_id}/products",
+            get(products::list_products::<R, C, I, S, P>)
+                .post(products::register_product::<R, C, I, S, P>),
+        )
+        .route(
+            "/companies/{company_id}/products/{product_id}",
+            put(products::update_product::<R, C, I, S, P>),
+        )
+        .route(
+            "/companies/{company_id}/products/{product_id}/history",
+            get(products::product_history::<R, C, I, S, P>),
         )
         .with_state(state)
 }
@@ -80,7 +105,7 @@ mod tests {
     use axum::http::{Request, StatusCode, header};
     use conta_verde_infrastructure::{
         Argon2SecretService, InMemoryCnpjRegistry, InMemoryIdentityRepository,
-        InMemoryPartyRepository,
+        InMemoryPartyRepository, InMemoryProductRepository,
     };
     use http_body_util::BodyExt;
     use serde_json::{Value, json};
@@ -113,6 +138,7 @@ mod tests {
     ) -> Router {
         router(
             parties,
+            ProductService::new(InMemoryProductRepository::default()),
             AuthService::new(
                 InMemoryIdentityRepository::default(),
                 Argon2SecretService::new().unwrap(),
@@ -533,6 +559,7 @@ mod tests {
         let registry: Option<InMemoryCnpjRegistry> = None;
         let app = router(
             PartyService::new(InMemoryPartyRepository::default(), registry),
+            ProductService::new(InMemoryProductRepository::default()),
             AuthService::new(
                 InMemoryIdentityRepository::default(),
                 Argon2SecretService::new().unwrap(),
@@ -857,5 +884,228 @@ mod tests {
         )
         .await;
         assert_eq!(duplicate.status, StatusCode::CONFLICT);
+    }
+
+    fn products_uri(company_id: Uuid) -> String {
+        format!("/companies/{company_id}/products")
+    }
+
+    fn product_body() -> Value {
+        json!({
+            "kind": "product",
+            "name": "Pão francês",
+            "sku": "pao-001",
+            "unit": "kg",
+            "ncm": "1905.90.90",
+            "sale_price": "12.50",
+            "cost_price": "7",
+            "minimum_stock": "10.000"
+        })
+    }
+
+    async fn post_product(app: &Router, cookie: &str, company_id: Uuid, body: Value) -> Reply {
+        let request = json_request("POST", &products_uri(company_id), Some(cookie), body);
+        send(app, request).await
+    }
+
+    #[tokio::test]
+    async fn registers_changes_and_lists_products_with_their_history() {
+        let app = app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+
+        let created = post_product(&app, &cookie, company_id, product_body()).await;
+        assert_eq!(created.status, StatusCode::CREATED);
+        assert_eq!(created.body["sku"], "PAO-001");
+        assert_eq!(created.body["unit"], "KG");
+        assert_eq!(created.body["ncm"], "19059090");
+        // Decimals come back as strings, without trailing zeros.
+        assert_eq!(created.body["sale_price"], "12.5");
+        assert_eq!(created.body["minimum_stock"], "10");
+        assert_eq!(created.body["active"], true);
+        let id = created.body["id"].as_str().unwrap().to_owned();
+
+        let mut changed = product_body();
+        changed["sale_price"] = json!("15");
+        changed["active"] = json!(false);
+        let uri = format!("{}/{id}", products_uri(company_id));
+        let updated = send(
+            &app,
+            json_request("PUT", &uri, Some(&cookie), changed.clone()),
+        )
+        .await;
+        assert_eq!(updated.status, StatusCode::OK);
+        assert_eq!(updated.body["sale_price"], "15");
+        assert_eq!(updated.body["active"], false);
+
+        // The same body again changes nothing and adds nothing to the history.
+        let again = send(&app, json_request("PUT", &uri, Some(&cookie), changed)).await;
+        assert_eq!(again.status, StatusCode::OK);
+
+        let listed = send(&app, get_request(&products_uri(company_id), Some(&cookie))).await;
+        assert_eq!(listed.body["items"].as_array().unwrap().len(), 1);
+        let inactive = format!(
+            "{}?active=false&kind=product&q=PAO",
+            products_uri(company_id)
+        );
+        let listed = send(&app, get_request(&inactive, Some(&cookie))).await;
+        assert_eq!(listed.body["items"][0]["name"], "Pão francês");
+        let active = format!("{}?active=true", products_uri(company_id));
+        let listed = send(&app, get_request(&active, Some(&cookie))).await;
+        assert!(listed.body["items"].as_array().unwrap().is_empty());
+
+        let history = send(&app, get_request(&format!("{uri}/history"), Some(&cookie))).await;
+        let entries = history.body.as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0]["action"], "created");
+        assert_eq!(entries[0]["actor"]["name"], "Ana");
+        assert_eq!(entries[1]["action"], "updated");
+        assert_eq!(
+            entries[1]["changes"],
+            json!([
+                { "field": "sale_price", "from": "12.5", "to": "15" },
+                { "field": "active", "from": "true", "to": "false" },
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn amounts_are_decimal_strings_and_every_refusal_is_json() {
+        let app = app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let with = |field: &str, value: Value| {
+            let mut body = product_body();
+            body[field] = value;
+            body
+        };
+
+        // A JSON number would lose precision on the way: refused, in the API's own error shape.
+        for body in [
+            with("sale_price", json!(10.5)),
+            with("kind", json!("gadget")),
+            with("surprise", json!(1)),
+            with("sale_price", json!({})),
+            json!({ "kind": "product" }),
+        ] {
+            let reply = post_product(&app, &cookie, company_id, body.clone()).await;
+            assert!(reply.status.is_client_error(), "{body}");
+            assert!(reply.body["error"].is_string(), "{body}");
+        }
+
+        // The domain's own rules are 422 with a message that names the field.
+        let comma = post_product(
+            &app,
+            &cookie,
+            company_id,
+            with("sale_price", json!("10,50")),
+        )
+        .await;
+        assert_eq!(comma.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            comma.body["error"]
+                .as_str()
+                .unwrap()
+                .starts_with("sale price must be")
+        );
+        for (field, value) in [
+            ("cost_price", json!("-1")),
+            ("minimum_stock", json!("1e3")),
+            ("unit", json!("quilogramas")),
+            ("ncm", json!("123")),
+            ("sku", json!("a b")),
+            ("name", json!("  ")),
+        ] {
+            let reply = post_product(&app, &cookie, company_id, with(field, value)).await;
+            assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "{field}");
+        }
+        let service = json!({
+            "kind": "service", "name": "Entrega", "unit": "UN", "ncm": "19059090"
+        });
+        let reply = post_product(&app, &cookie, company_id, service).await;
+        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn a_sku_is_unique_within_a_company_and_products_stay_private() {
+        let app = app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let (stranger_cookie, stranger_company) = sign_up(&app, "bia@example.com").await;
+
+        let created = post_product(&app, &cookie, company_id, product_body()).await;
+        let id = created.body["id"].as_str().unwrap().to_owned();
+        let duplicate = post_product(&app, &cookie, company_id, product_body()).await;
+        assert_eq!(duplicate.status, StatusCode::CONFLICT);
+        // Another company may use the same SKU.
+        let own = post_product(&app, &stranger_cookie, stranger_company, product_body()).await;
+        assert_eq!(own.status, StatusCode::CREATED);
+
+        // Neither the product nor its trail can be reached through another company's route...
+        let foreign_uri = format!("{}/{id}", products_uri(stranger_company));
+        let put = json_request("PUT", &foreign_uri, Some(&stranger_cookie), product_body());
+        assert_eq!(send(&app, put).await.status, StatusCode::NOT_FOUND);
+        let history = get_request(&format!("{foreign_uri}/history"), Some(&stranger_cookie));
+        assert_eq!(send(&app, history).await.status, StatusCode::NOT_FOUND);
+        // ...nor through a company the caller does not belong to.
+        let uri = products_uri(company_id);
+        let list = send(&app, get_request(&uri, Some(&stranger_cookie))).await;
+        assert_eq!(list.status, StatusCode::NOT_FOUND);
+        let unknown = format!("{uri}/not-a-uuid");
+        let put = json_request("PUT", &unknown, Some(&cookie), product_body());
+        let reply = send(&app, put).await;
+        assert_eq!(reply.status, StatusCode::NOT_FOUND);
+        assert_eq!(reply.body["error"], "product not found");
+
+        let anonymous = send(&app, get_request(&uri, None)).await;
+        assert_eq!(anonymous.status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn product_list_parameters_are_checked_and_paged() {
+        let app = app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        for name in ["Carla", "Ana", "Bruno"] {
+            let mut body = product_body();
+            body["name"] = json!(name);
+            body["sku"] = Value::Null;
+            post_product(&app, &cookie, company_id, body).await;
+        }
+        let uri = products_uri(company_id);
+        let first = send(
+            &app,
+            get_request(&format!("{uri}?limit=2&sort=-name"), Some(&cookie)),
+        )
+        .await;
+        let names: Vec<&str> = first.body["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["Carla", "Bruno"]);
+        let cursor = first.body["next_cursor"]
+            .as_str()
+            .unwrap()
+            .replace('|', "%7C");
+        let second = send(
+            &app,
+            get_request(
+                &format!("{uri}?limit=2&sort=-name&after={cursor}"),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(second.body["items"][0]["name"], "Ana");
+
+        for query in [
+            "kind=both",
+            "kind=",
+            "active=yes",
+            "active=",
+            "sort=sku",
+            "after=garbage",
+        ] {
+            let reply = send(&app, get_request(&format!("{uri}?{query}"), Some(&cookie))).await;
+            assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{query}");
+            assert!(reply.body["error"].is_string(), "{query}");
+        }
     }
 }

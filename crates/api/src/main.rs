@@ -1,10 +1,10 @@
 use std::time::Duration;
 
 use conta_verde_api::{ApiConfig, router};
-use conta_verde_application::{AuthService, PartyService};
+use conta_verde_application::{AuthService, PartyService, ProductService};
 use conta_verde_infrastructure::{
     Argon2SecretService, BrasilApiCnpjRegistry, CachedCnpjRegistry, PostgresIdentityRepository,
-    PostgresPartyRepository, connect_and_migrate,
+    PostgresPartyRepository, PostgresProductRepository, connect_and_migrate,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -29,6 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         PostgresPartyRepository::new(pool.clone()),
         cnpj_registry_from_env()?,
     );
+    let products = ProductService::new(PostgresProductRepository::new(pool.clone()));
     let auth = AuthService::new(
         PostgresIdentityRepository::new(pool),
         Argon2SecretService::new()?,
@@ -36,7 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     );
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     tracing::info!(%bind_addr, "listening");
-    axum::serve(listener, router(parties, auth, config))
+    axum::serve(listener, router(parties, products, auth, config))
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())

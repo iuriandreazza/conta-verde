@@ -2,7 +2,8 @@ use std::future::Future;
 
 use conta_verde_domain::{AuditEntry, AuditRecord, CompanyId, Party, PartyId};
 
-use crate::{NameCursor, RepositoryError};
+use crate::list_query::clean_search;
+use crate::{NameCursor, NameSort, RepositoryError};
 
 impl From<&Party> for NameCursor {
     fn from(party: &Party) -> Self {
@@ -20,14 +21,6 @@ pub enum PartyKind {
     Supplier,
 }
 
-/// Every sort is by a column that is never empty, so a cursor can always be built from the last row.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum PartySort {
-    #[default]
-    NameAsc,
-    NameDesc,
-}
-
 /// How a list of parties is narrowed and ordered, the convention other lists follow: a free-text
 /// search, filters on single attributes, and one sort. Built through the methods below so that
 /// adapters can trust it is normalized.
@@ -39,21 +32,17 @@ pub struct PartyQuery {
     /// document.
     document_needle: Option<String>,
     kind: Option<PartyKind>,
-    sort: PartySort,
+    sort: NameSort,
 }
 
 impl PartyQuery {
-    /// Longest search text accepted; a person types a name or a number, not a paragraph.
-    pub const MAX_SEARCH_CHARS: usize = 100;
-
     /// Matches a name or an e-mail anywhere in it, ignoring case, and a document ignoring its
-    /// punctuation. Blank text means no search. Control characters are dropped: nobody types
-    /// them into a search box, and a NUL is a storage error in Postgres, not a search.
+    /// punctuation. Blank text means no search.
     pub fn searching(mut self, text: &str) -> Self {
-        let text: String = text.chars().filter(|c| !c.is_control()).collect();
-        let text = text.trim();
-        self.search = (!text.is_empty()).then(|| text.to_owned());
-        let needle: String = text
+        self.search = clean_search(text);
+        let needle: String = self
+            .search()
+            .unwrap_or_default()
             .chars()
             .filter(|c| !matches!(c, '.' | '-' | '/') && !c.is_whitespace())
             .map(|c| c.to_ascii_uppercase())
@@ -67,7 +56,7 @@ impl PartyQuery {
         self
     }
 
-    pub fn sorted(mut self, sort: PartySort) -> Self {
+    pub fn sorted(mut self, sort: NameSort) -> Self {
         self.sort = sort;
         self
     }
@@ -80,7 +69,7 @@ impl PartyQuery {
         self.kind
     }
 
-    pub fn sort(&self) -> PartySort {
+    pub fn sort(&self) -> NameSort {
         self.sort
     }
 

@@ -1,3 +1,4 @@
+use crate::name::clean_name;
 use crate::{CompanyId, Document, DocumentCheck, DomainError, Email, PartyId};
 
 /// Unvalidated input for registering a customer and/or supplier.
@@ -25,10 +26,7 @@ pub struct Party {
 
 impl Party {
     pub fn new(id: PartyId, company_id: CompanyId, draft: PartyDraft) -> Result<Self, DomainError> {
-        let name = draft.name.trim().to_owned();
-        if name.is_empty() {
-            return Err(DomainError::EmptyName);
-        }
+        let name = clean_name(&draft.name)?;
         if !draft.is_customer && !draft.is_supplier {
             return Err(DomainError::MissingRole);
         }

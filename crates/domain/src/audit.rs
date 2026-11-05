@@ -1,6 +1,6 @@
 use uuid::Uuid;
 
-use crate::{CompanyId, DocumentCheck, Party, UserId};
+use crate::{CompanyId, DocumentCheck, Party, Product, UserId};
 
 /// Who made a change. The name is a snapshot: history must keep reading the same after the user is
 /// renamed or removed. API keys will join as another variant ([ADR 0007]).
@@ -13,12 +13,14 @@ pub enum Actor {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuditEntity {
     Party,
+    Product,
 }
 
 impl AuditEntity {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Party => "party",
+            Self::Product => "product",
         }
     }
 }
@@ -87,6 +89,20 @@ impl Audited for Party {
     }
 }
 
+impl Audited for Product {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::Product
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.id().as_uuid()
+    }
+}
+
 impl AuditEntry {
     /// Whether this entry is about that record, in that record's company. Stores check it before
     /// writing, so a caller's mistake cannot put a row into another company's trail.
@@ -132,6 +148,45 @@ pub fn creation_changes(party: &Party) -> Vec<FieldChange> {
     changes
 }
 
+/// The fields of a product as text, in the order the trail lists them; `None` is "not set".
+fn product_fields(product: &Product) -> [(&'static str, Option<String>); 9] {
+    let amount = |amount: Option<crate::Amount>| amount.map(|value| value.to_string());
+    [
+        ("kind", Some(product.kind().as_str().to_owned())),
+        ("name", Some(product.name().to_owned())),
+        ("sku", product.sku().map(str::to_owned)),
+        ("unit", Some(product.unit().to_owned())),
+        ("ncm", product.ncm().map(str::to_owned)),
+        ("sale_price", amount(product.sale_price())),
+        ("cost_price", amount(product.cost_price())),
+        ("minimum_stock", amount(product.minimum_stock())),
+        ("active", Some(product.is_active().to_string())),
+    ]
+}
+
+/// Every field a new product has set.
+pub fn product_creation_changes(product: &Product) -> Vec<FieldChange> {
+    product_fields(product)
+        .into_iter()
+        .filter_map(|(field, value)| value.map(|value| set(field, value)))
+        .collect()
+}
+
+/// The fields that differ between two versions of a product; empty when nothing changed, in which
+/// case nothing is written and nothing is recorded.
+pub fn product_changes(before: &Product, after: &Product) -> Vec<FieldChange> {
+    product_fields(before)
+        .into_iter()
+        .zip(product_fields(after))
+        .filter(|((_, from), (_, to))| from != to)
+        .map(|((field, from), (_, to))| FieldChange {
+            field: field.to_owned(),
+            from,
+            to,
+        })
+        .collect()
+}
+
 /// The fields of the registry check that differ between two answers; empty when nothing changed.
 pub fn document_check_changes(before: &DocumentCheck, after: &DocumentCheck) -> Vec<FieldChange> {
     let fields = |check: &DocumentCheck| -> [(&'static str, Option<String>); 3] {
@@ -169,7 +224,7 @@ pub fn document_check_changes(before: &DocumentCheck, after: &DocumentCheck) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CompanyId, PartyDraft, PartyId};
+    use crate::{CompanyId, PartyDraft, PartyId, ProductDraft, ProductId, ProductKind};
 
     fn party(document: Option<&str>) -> Party {
         Party::new(
@@ -259,5 +314,63 @@ mod tests {
         assert!(
             document_check_changes(&DocumentCheck::NotFound, &DocumentCheck::NotFound).is_empty()
         );
+    }
+
+    fn product(sale_price: &str, active: bool) -> Product {
+        Product::new(
+            ProductId::generate(),
+            CompanyId::generate(),
+            ProductDraft {
+                kind: ProductKind::Product,
+                name: "Pão francês".into(),
+                sku: None,
+                unit: "KG".into(),
+                ncm: None,
+                sale_price: Some(sale_price.into()),
+                cost_price: None,
+                minimum_stock: None,
+                active,
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_new_product_records_only_the_fields_it_has() {
+        let changes = product_creation_changes(&product("12.50", true));
+        assert_eq!(
+            fields(&changes),
+            ["kind", "name", "unit", "sale_price", "active"]
+        );
+        assert_eq!(changes[3].to.as_deref(), Some("12.5"));
+        assert!(changes.iter().all(|change| change.from.is_none()));
+    }
+
+    #[test]
+    fn a_product_edit_lists_only_what_changed_and_an_equal_one_nothing() {
+        let before = product("12.50", true);
+        let after = Product::new(
+            before.id(),
+            before.company_id(),
+            ProductDraft {
+                kind: ProductKind::Product,
+                name: "Pão francês".into(),
+                sku: None,
+                unit: "KG".into(),
+                ncm: None,
+                sale_price: Some("15".into()),
+                cost_price: None,
+                minimum_stock: None,
+                active: false,
+            },
+        )
+        .unwrap();
+        let changes = product_changes(&before, &after);
+        assert_eq!(fields(&changes), ["sale_price", "active"]);
+        assert_eq!(changes[0].from.as_deref(), Some("12.5"));
+        assert_eq!(changes[0].to.as_deref(), Some("15"));
+
+        // An unchanged product has nothing to record.
+        assert!(product_changes(&before, &before.clone()).is_empty());
     }
 }
