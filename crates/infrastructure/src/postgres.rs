@@ -74,7 +74,7 @@ impl PartyRepository for PostgresPartyRepository {
     }
 
     async fn update_document_check(&self, party: &Party) -> Result<(), RepositoryError> {
-        sqlx::query(
+        let result = sqlx::query(
             "UPDATE parties SET document_check = $3, registry_legal_name = $4, registry_situation = $5 \
              WHERE id = $1 AND company_id = $2",
         )
@@ -86,6 +86,10 @@ impl PartyRepository for PostgresPartyRepository {
         .execute(&self.pool)
         .await
         .map_err(storage_error)?;
+        // Matching no row means the party is not in that company: report it, do not pretend.
+        if result.rows_affected() == 0 {
+            return Err(RepositoryError::NotFound);
+        }
         Ok(())
     }
 

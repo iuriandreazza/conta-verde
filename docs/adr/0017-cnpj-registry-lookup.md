@@ -62,8 +62,10 @@ the last two numeric check digits (modulo 11, each character valued as its ASCII
 - A flagged party can be checked again: `POST /companies/{company_id}/parties/{party_id}/document-check` asks the registry
   again and replaces the stored answer, whatever it was (so an `Unverified` party can become `Verified`, and a `Verified` one
   can turn `NotFound`). The UI offers "Verificar de novo" on every flagged row. It answers `404` for a party outside the
-  company, `422` for a party without a CNPJ and `409` when the lookup is switched off. The answer may come from the one-hour
-  cache of found companies, so a company that was just closed can look active for up to an hour.
+  company, `422` for a party without a CNPJ, `409` when the lookup is switched off and `429` when the same party was
+  checked less than 10 seconds ago (the registry's rate limit is shared by the whole installation). A re-check always asks
+  the registry (`CnpjRegistry::refresh`) and updates the cache of found companies: a fresh answer replaces the remembered one,
+  an authoritative "not found" drops it, and an outage leaves it alone.
 - Rate limits are real (a handful of calls from one address were enough to trigger `429`) and are shared by everyone on the
   installation. Installations that register many CNPJs at once should expect `Unverified` rows, run their own mirror of the
   open data, or add the Serpro adapter.

@@ -373,23 +373,32 @@ describe("App", () => {
         },
       }));
 
-      await userEvent.click(await screen.findByRole("button", { name: "Verificar de novo" }));
+      await userEvent.click(await screen.findByRole("button", { name: /Verificar de novo/ }));
 
       expect(await screen.findByText("CNPJ verificado: PADARIA CENTRAL LTDA.")).toBeInTheDocument();
       expect(await screen.findByText("Verificado")).toBeInTheDocument();
       expect(screen.queryByText("Não verificado")).not.toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: "Verificar de novo" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /Verificar de novo/ })).not.toBeInTheDocument();
       const post = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
       expect(String(post?.[0])).toBe(`/api/companies/c1/parties/${listed.id}/document-check`);
+    });
+
+    it("names the party in each button, so rows can be told apart", async () => {
+      listWithAnUnverifiedParty((party) => ({ status: 200, body: party }));
+      expect(
+        await screen.findByRole("button", {
+          name: "Verificar de novo o CNPJ de Padaria Central",
+        }),
+      ).toBeInTheDocument();
     });
 
     it("keeps the button and says so when the registry is still unreachable", async () => {
       listWithAnUnverifiedParty((party) => ({ status: 200, body: party }));
 
-      await userEvent.click(await screen.findByRole("button", { name: "Verificar de novo" }));
+      await userEvent.click(await screen.findByRole("button", { name: /Verificar de novo/ }));
 
       expect(await screen.findByRole("status")).toHaveTextContent("a Receita continua indisponível");
-      expect(screen.getByRole("button", { name: "Verificar de novo" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /Verificar de novo/ })).toBeInTheDocument();
     });
 
     it("shows the API's reason when the check is refused", async () => {
@@ -398,7 +407,7 @@ describe("App", () => {
         body: { error: "CNPJ lookup is switched off on this installation" },
       }));
 
-      await userEvent.click(await screen.findByRole("button", { name: "Verificar de novo" }));
+      await userEvent.click(await screen.findByRole("button", { name: /Verificar de novo/ }));
 
       expect(await screen.findByRole("alert")).toHaveTextContent("CNPJ lookup is switched off");
     });

@@ -4,7 +4,7 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use conta_verde_application::{
-    CnpjRegistry, IdentityRepository, PartyCursor, PartyRepository, SecretService,
+    ApplicationError, CnpjRegistry, IdentityRepository, PartyCursor, PartyRepository, SecretService,
 };
 use conta_verde_domain::{DocumentCheck, Party, PartyDraft, PartyId};
 use serde::{Deserialize, Serialize};
@@ -130,7 +130,9 @@ where
 pub(crate) async fn verify_document<R, C, I, S>(
     State(state): State<Arc<AppState<R, C, I, S>>>,
     CompanyAccess(company_id): CompanyAccess,
-    Path((_, party_id)): Path<(Uuid, Uuid)>,
+    // A string, parsed below: axum's own rejection for a malformed id is plain text, unlike the
+    // JSON errors of the rest of the API. The company id was already validated by CompanyAccess.
+    Path((_, party_id)): Path<(Uuid, String)>,
 ) -> Result<Json<PartyResponse>, ApiError>
 where
     R: PartyRepository,
@@ -138,10 +140,10 @@ where
     I: IdentityRepository,
     S: SecretService,
 {
-    let party = state
-        .parties
-        .verify_document(company_id, PartyId::from_uuid(party_id))
-        .await?;
+    let party_id = Uuid::parse_str(&party_id)
+        .map(PartyId::from_uuid)
+        .map_err(|_| ApplicationError::PartyNotFound)?;
+    let party = state.parties.verify_document(company_id, party_id).await?;
     Ok(Json(PartyResponse::from(&party)))
 }
 

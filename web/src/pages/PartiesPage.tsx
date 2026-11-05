@@ -102,6 +102,8 @@ export function PartiesPage() {
     setCreating(true);
     setFormError(null);
     setRegistryNotice(null);
+    // A message about an earlier re-check would read like a statement about the new state.
+    setVerifyNotice(null);
     try {
       const created = await api.createParty(companyId, {
         name: String(form.get("name") ?? ""),
@@ -216,6 +218,7 @@ export function PartiesPage() {
                           type="button"
                           variant="ghost"
                           className="btn-small"
+                          aria-label={`Verificar de novo o CNPJ de ${party.name}`}
                           icon={RefreshCWIcon}
                           pending={verifyingId === party.id}
                           disabled={verifyingId !== null}

@@ -47,11 +47,10 @@ impl PartyRepository for InMemoryPartyRepository {
         let stored = parties
             .iter_mut()
             .find(|stored| stored.company_id() == party.company_id() && stored.id() == party.id());
-        if let Some(stored) = stored {
-            *stored = stored
-                .clone()
-                .with_document_check(party.document_check().clone());
-        }
+        let stored = stored.ok_or(RepositoryError::NotFound)?;
+        *stored = stored
+            .clone()
+            .with_document_check(party.document_check().clone());
         Ok(())
     }
 
@@ -377,7 +376,9 @@ mod tests {
         conta_verde_domain::PartyId,
     ) {
         let registry = InMemoryCnpjRegistry::unreachable();
-        let service = PartyService::new(InMemoryPartyRepository::default(), registry.clone());
+        // No waiting between re-checks: the tests check one right after another.
+        let service = PartyService::new(InMemoryPartyRepository::default(), registry.clone())
+            .with_recheck_interval(Duration::ZERO);
         let company = CompanyId::generate();
         let party = service
             .register(company, draft("Padaria", Some(contract::ACTIVE_CNPJ)))
@@ -405,6 +406,36 @@ mod tests {
         // The answer is stored, not only returned.
         let listed = service.list(company, None, None).await.unwrap().items;
         assert_eq!(listed[0].document_check(), verified.document_check());
+    }
+
+    #[tokio::test]
+    async fn re_checks_of_one_party_are_spaced_out() {
+        // The default interval applies: a loop of requests must not burn the shared rate limit.
+        let registry = InMemoryCnpjRegistry::unreachable();
+        let service = PartyService::new(InMemoryPartyRepository::default(), registry);
+        let company = CompanyId::generate();
+        let first = service
+            .register(company, draft("Padaria", Some(contract::ACTIVE_CNPJ)))
+            .await
+            .unwrap();
+        let second = service
+            .register(
+                company,
+                draft("Oficina", Some(contract::CLOSED_ALPHANUMERIC_CNPJ)),
+            )
+            .await
+            .unwrap();
+
+        service.verify_document(company, first.id()).await.unwrap();
+        assert_eq!(
+            service
+                .verify_document(company, first.id())
+                .await
+                .unwrap_err(),
+            ApplicationError::RecheckTooSoon
+        );
+        // Another party is not held back by the first one.
+        service.verify_document(company, second.id()).await.unwrap();
     }
 
     #[tokio::test]

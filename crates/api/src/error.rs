@@ -47,8 +47,12 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
             };
             (status, error.to_string())
         }
-        ApplicationError::PartyNotFound => (StatusCode::NOT_FOUND, error.to_string()),
+        ApplicationError::PartyNotFound
+        | ApplicationError::Repository(RepositoryError::NotFound) => {
+            (StatusCode::NOT_FOUND, "party not found".to_owned())
+        }
         ApplicationError::LookupDisabled => (StatusCode::CONFLICT, error.to_string()),
+        ApplicationError::RecheckTooSoon => (StatusCode::TOO_MANY_REQUESTS, error.to_string()),
         // Internal details can leak: log them, but show clients a generic message.
         ApplicationError::Repository(RepositoryError::Storage(detail)) => internal(detail),
         ApplicationError::Secret(error) => internal(&error.to_string()),

@@ -95,9 +95,19 @@ mod tests {
         app_with_registry(known_companies())
     }
 
+    /// No waiting between re-checks of a party, so tests can check one right after another.
     fn app_with_registry(registry: InMemoryCnpjRegistry) -> Router {
+        app_with_parties(
+            PartyService::new(InMemoryPartyRepository::default(), registry)
+                .with_recheck_interval(Duration::ZERO),
+        )
+    }
+
+    fn app_with_parties(
+        parties: PartyService<InMemoryPartyRepository, InMemoryCnpjRegistry>,
+    ) -> Router {
         router(
-            PartyService::new(InMemoryPartyRepository::default(), registry),
+            parties,
             AuthService::new(
                 InMemoryIdentityRepository::default(),
                 Argon2SecretService::new().unwrap(),
@@ -490,6 +500,38 @@ mod tests {
         )
         .await;
         assert_eq!(unknown_party.status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn checking_again_too_fast_is_answered_with_429() {
+        // The default interval: a second re-check right away is refused.
+        let app = app_with_parties(PartyService::new(
+            InMemoryPartyRepository::default(),
+            InMemoryCnpjRegistry::unreachable(),
+        ));
+        let (cookie, company_id, party_id) =
+            party_of_a_new_user(&app, "ana@example.com", "11.222.333/0001-81").await;
+        let uri = document_check_uri(company_id, party_id);
+
+        let first = send(&app, json_request("POST", &uri, Some(&cookie), Value::Null)).await;
+        assert_eq!(first.status, StatusCode::OK);
+        let second = send(&app, json_request("POST", &uri, Some(&cookie), Value::Null)).await;
+        assert_eq!(second.status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            second.body["error"],
+            "this CNPJ was checked a moment ago, try again in a few seconds"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_malformed_party_id_gets_the_json_error_like_any_other_miss() {
+        let app = app();
+        let (cookie, company_id, _) =
+            party_of_a_new_user(&app, "ana@example.com", "11.222.333/0001-81").await;
+        let uri = format!("{}/not-a-uuid/document-check", parties_uri(company_id));
+        let reply = send(&app, json_request("POST", &uri, Some(&cookie), Value::Null)).await;
+        assert_eq!(reply.status, StatusCode::NOT_FOUND);
+        assert_eq!(reply.body["error"], "party not found");
     }
 
     #[tokio::test]

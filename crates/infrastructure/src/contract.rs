@@ -141,7 +141,25 @@ pub async fn finds_parties_and_replaces_their_document_check<R: PartyRepository>
     repository.update_document_check(&verified).await.unwrap();
     assert_eq!(
         repository.find(company, party.id()).await.unwrap(),
-        Some(verified)
+        Some(verified.clone())
+    );
+
+    // The company id is the only tenancy guard on this write: a party object carrying the same id
+    // but another company must not change the stored one, and the miss must be reported.
+    let intruder = Party::new(
+        party.id(),
+        other_company,
+        party_draft("Padaria", Some(ACTIVE_CNPJ)),
+    )
+    .unwrap()
+    .with_document_check(DocumentCheck::NotFound);
+    assert_eq!(
+        repository.update_document_check(&intruder).await,
+        Err(RepositoryError::NotFound)
+    );
+    assert_eq!(
+        repository.find(company, party.id()).await.unwrap(),
+        Some(verified.clone())
     );
 
     // Going back is allowed too: the latest answer wins, whatever it was.

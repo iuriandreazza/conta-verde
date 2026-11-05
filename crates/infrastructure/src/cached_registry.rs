@@ -35,6 +35,13 @@ impl<C: CnpjRegistry> CachedCnpjRegistry<C> {
             .map(|(_, entry)| entry.clone())
     }
 
+    fn forget(&self, cnpj: &str) {
+        self.entries
+            .lock()
+            .expect("registry cache lock poisoned")
+            .remove(cnpj);
+    }
+
     fn remember(&self, cnpj: &str, entry: &RegistryEntry) {
         let mut entries = self.entries.lock().expect("registry cache lock poisoned");
         if entries.len() >= MAX_ENTRIES {
@@ -52,6 +59,22 @@ impl<C: CnpjRegistry> CnpjRegistry for CachedCnpjRegistry<C> {
         let entry = self.inner.lookup(cnpj).await?;
         self.remember(cnpj.as_str(), &entry);
         Ok(entry)
+    }
+
+    /// Asks the registry and updates what is remembered: a fresh answer replaces the old one, and
+    /// an authoritative "not found" drops it. An outage leaves it alone, since it proves nothing.
+    async fn refresh(&self, cnpj: Cnpj<'_>) -> Result<RegistryEntry, CnpjLookupError> {
+        match self.inner.refresh(cnpj).await {
+            Ok(entry) => {
+                self.remember(cnpj.as_str(), &entry);
+                Ok(entry)
+            }
+            Err(CnpjLookupError::NotFound) => {
+                self.forget(cnpj.as_str());
+                Err(CnpjLookupError::NotFound)
+            }
+            Err(other) => Err(other),
+        }
     }
 }
 
@@ -120,6 +143,60 @@ mod tests {
         assert_eq!(lookup(&cached).await, Err(CnpjLookupError::NotFound));
         assert_eq!(lookup(&cached).await, Ok(padaria()));
         assert_eq!(cached.inner.calls.load(Ordering::SeqCst), 3);
+    }
+
+    fn closed() -> RegistryEntry {
+        RegistryEntry {
+            situation: "BAIXADA".into(),
+            ..padaria()
+        }
+    }
+
+    async fn refresh<C: CnpjRegistry>(registry: &C) -> Result<RegistryEntry, CnpjLookupError> {
+        let document = Document::parse("11.222.333/0001-81").unwrap();
+        registry.refresh(document.cnpj().unwrap()).await
+    }
+
+    #[tokio::test]
+    async fn a_refresh_skips_the_cache_and_replaces_what_is_remembered() {
+        let cached = CachedCnpjRegistry::new(
+            Scripted::new(vec![Ok(padaria()), Ok(closed())]),
+            Duration::from_secs(60),
+        );
+        assert_eq!(lookup(&cached).await, Ok(padaria()));
+        // The company closed meanwhile: a plain lookup would keep saying ATIVA.
+        assert_eq!(refresh(&cached).await, Ok(closed()));
+        assert_eq!(lookup(&cached).await, Ok(closed()));
+        assert_eq!(cached.inner.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn a_refresh_that_finds_nothing_forgets_the_company() {
+        let cached = CachedCnpjRegistry::new(
+            Scripted::new(vec![
+                Ok(padaria()),
+                Err(CnpjLookupError::NotFound),
+                Ok(padaria()),
+            ]),
+            Duration::from_secs(60),
+        );
+        assert_eq!(lookup(&cached).await, Ok(padaria()));
+        assert_eq!(refresh(&cached).await, Err(CnpjLookupError::NotFound));
+        // Not served from the cache any more: the registry is asked again.
+        assert_eq!(lookup(&cached).await, Ok(padaria()));
+        assert_eq!(cached.inner.calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn a_refresh_during_an_outage_keeps_what_is_remembered() {
+        let cached = CachedCnpjRegistry::new(
+            Scripted::new(vec![Ok(padaria()), Err(CnpjLookupError::Unavailable)]),
+            Duration::from_secs(60),
+        );
+        assert_eq!(lookup(&cached).await, Ok(padaria()));
+        assert_eq!(refresh(&cached).await, Err(CnpjLookupError::Unavailable));
+        assert_eq!(lookup(&cached).await, Ok(padaria()));
+        assert_eq!(cached.inner.calls.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
