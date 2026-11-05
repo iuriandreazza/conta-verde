@@ -36,7 +36,7 @@ type Invitation =
  * sign-up, with the reason shown, since the account is worth having either way.
  */
 function useInvitation(token: string | null): Invitation {
-  const [invitation, setInvitation] = useState<Invitation>({ status: token === null ? "none" : "loading" });
+  const [loaded, setInvitation] = useState<Invitation>({ status: "loading" });
   useEffect(() => {
     if (token === null) {
       return;
@@ -51,7 +51,7 @@ function useInvitation(token: string | null): Invitation {
       current = false;
     };
   }, [token]);
-  return invitation;
+  return token === null ? { status: "none" } : loaded;
 }
 
 /** The other of the two pages keeps the way back to where the person was going. */
@@ -124,45 +124,43 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
         </p>
       )}
       {invitation.status === "unavailable" && <Notice message={invitation.message} tone="warning" />}
-      {invitation.status === "loading" && (
+      {invitation.status === "loading" ? (
+        // The form waits for the invitation so that nothing typed is lost when the address is fixed.
         <p role="status" className="status">
           <Spinner /> Carregando o convite…
         </p>
+      ) : (
+        <motion.form onSubmit={handleSubmit} animate={shake}>
+          {registering && (
+            <label>
+              Seu nome
+              <input name="name" required autoComplete="name" />
+            </label>
+          )}
+          {registering && invitation.status !== "ready" && (
+            <label>
+              Nome da empresa
+              <input name="company_name" required autoComplete="organization" />
+            </label>
+          )}
+          <label>
+            E-mail
+            <input
+              name="email"
+              type="email"
+              required
+              autoComplete="email"
+              // Another address would be refused, so the one that is accepted is given.
+              {...(invitation.status === "ready" ? { defaultValue: invitation.preview.email, readOnly: true } : {})}
+            />
+          </label>
+          <PasswordField registering={registering} />
+          <Notice message={error} />
+          <Button type="submit" icon={registering ? UserPlusIcon : LogInIcon} pending={submitting}>
+            {registering ? "Criar conta" : "Entrar"}
+          </Button>
+        </motion.form>
       )}
-      <motion.form onSubmit={handleSubmit} animate={shake}>
-        {registering && (
-          <label>
-            Seu nome
-            <input name="name" required autoComplete="name" />
-          </label>
-        )}
-        {registering && invitation.status !== "ready" && (
-          <label>
-            Nome da empresa
-            <input name="company_name" required autoComplete="organization" />
-          </label>
-        )}
-        <label>
-          E-mail
-          <input
-            name="email"
-            type="email"
-            required
-            autoComplete="email"
-            // Another address would be refused, so the one that is accepted is given.
-            {...(invitation.status === "ready" ? { defaultValue: invitation.preview.email, readOnly: true } : {})}
-          />
-        </label>
-        <PasswordField registering={registering} />
-        <Notice message={error} />
-        <Button
-          type="submit"
-          icon={registering ? UserPlusIcon : LogInIcon}
-          pending={submitting || invitation.status === "loading"}
-        >
-          {registering ? "Criar conta" : "Entrar"}
-        </Button>
-      </motion.form>
       <p>
         {registering ? (
           <>
