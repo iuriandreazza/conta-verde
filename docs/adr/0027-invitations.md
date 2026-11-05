@@ -94,8 +94,9 @@ stores anything (the password, that the invitation is open, that the address is 
 `403` otherwise), then registers the user (`IdentityRepository::register_user`, a user with no
 company) and accepts as above. A refusal leaves no account and the invitation open; an address that
 already has an account is `409` and signs in instead. If the invitation is withdrawn in the instant
-between the check and the claim, the account exists with no company and the person asks for a new
-invitation. The sign-up page reads the preview, hides the company name and fixes the address to the
+between the check and the claim, or the membership cannot be written, the account exists with no
+company: in the second case the claim is given back, so signing in and accepting at the invitation's
+page works; in the first the person asks for a new invitation. The sign-up page reads the preview, hides the company name and fixes the address to the
 invited one; a link that no longer works leaves an ordinary sign-up, with the reason shown.
 
 ## Consequences

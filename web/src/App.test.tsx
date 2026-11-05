@@ -2543,6 +2543,25 @@ describe("members and invitations", () => {
       expect(screen.getByLabelText("E-mail")).not.toHaveAttribute("readonly");
     });
 
+    it("goes home, not back to the dead link, after an ordinary sign-up that began at one", async () => {
+      mockApi((url) => {
+        if (url === "/api/auth/me") return { status: 401, body: { error: "authentication required" } };
+        if (url === "/api/auth/register") return { status: 201, body: profile };
+        if (url.startsWith("/api/invitations/")) return { status: 410, body: { error: "this invitation was already used or withdrawn, or has expired: ask for a new one" } };
+        return { status: 200, body: { items: [], next_cursor: null } };
+      });
+      renderAt("/register?next=%2Finvitations%2Fabc123");
+
+      await userEvent.type(await screen.findByLabelText("Seu nome"), "Ana");
+      await userEvent.type(screen.getByLabelText("Nome da empresa"), "Padaria");
+      await userEvent.type(screen.getByLabelText("E-mail"), "ana@example.com");
+      await userEvent.type(screen.getByLabelText("Senha"), "correct horse");
+      await userEvent.click(screen.getByRole("button", { name: "Criar conta" }));
+
+      expect(await screen.findByRole("heading", { name: "Painel" })).toBeInTheDocument();
+      expect(screen.queryByRole("heading", { name: "Convite indisponível" })).not.toBeInTheDocument();
+    });
+
     it("shows why a sign-up through the link was refused and keeps the form", async () => {
       mockApi((url) => {
         if (url === "/api/auth/me") return { status: 401, body: { error: "authentication required" } };

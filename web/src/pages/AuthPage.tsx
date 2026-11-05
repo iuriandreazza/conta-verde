@@ -68,13 +68,16 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
   const shake = useAnimationControls();
   const registering = mode === "register";
   const invitation = useInvitation(registering ? invitationToken(next) : null);
-  // Someone who just joined through the link is a member of that company and of no other: they go
-  // there, not back to the invitation, which is used up by now.
-  const joinedThroughInvitation = useRef(false);
+  // What the sign-up made, so that the person is not sent back to an invitation that is used up or
+  // was never usable: one who joined is a member of that company and of no other, and goes there; one
+  // who made a company of their own goes home.
+  const signedUp = useRef<"joined" | "created" | null>(null);
 
   if (session.status === "authenticated") {
-    const [joined] = session.profile.companies;
-    return <Navigate to={joinedThroughInvitation.current ? `/companies/${joined.id}` : next} replace />;
+    const [first] = session.profile.companies;
+    const destination =
+      signedUp.current === "joined" ? `/companies/${first.id}` : signedUp.current === "created" ? "/" : next;
+    return <Navigate to={destination} replace />;
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -87,16 +90,17 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
       if (registering) {
         const account = { name: field("name"), email: field("email"), password: field("password") };
         if (invitation.status === "ready") {
-          joinedThroughInvitation.current = true;
+          signedUp.current = "joined";
           await signUp({ ...account, invitation: invitationToken(next) ?? "" });
         } else {
+          signedUp.current = "created";
           await signUp({ ...account, company_name: field("company_name") });
         }
       } else {
         await signIn(field("email"), field("password"));
       }
     } catch (failure) {
-      joinedThroughInvitation.current = false;
+      signedUp.current = null;
       setError(errorMessage(failure));
       void shake.start({ x: [0, -8, 8, -5, 5, 0], transition: { duration: 0.4 } });
     } finally {
