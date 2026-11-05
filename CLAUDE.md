@@ -17,7 +17,7 @@ export $(cat .env.example | xargs)
 cargo test --workspace -- --ignored   # Postgres integration tests (need DATABASE_URL)
 cargo run -p conta-verde-api
 pnpm --filter conta-verde-web dev     # web app on http://localhost:5173, proxies /api to the API
-pnpm dev                     # database + API + web together (also: pnpm db, pnpm api, pnpm web)
+pnpm dev                     # database + API + web on free ports (also: pnpm db, pnpm api, pnpm web)
 ```
 
 CI (`.github/workflows/ci.yml`) runs the same checks plus the ignored tests against a Postgres service, and builds the web app.
