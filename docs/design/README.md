@@ -27,7 +27,7 @@ artboard in the same PR; the canvas needs the Claude Design runtime (`support.js
 
 - **Quiet surfaces, one accent.** Neutral green-tinted grays, brand green for the primary action and the current place.
   Data takes blue and orange; red appears only for state, always with an icon and a label.
-- **The list is the page.** Registers show the list first and the form beside it.
+- **The list is the page.** Registers show the list first and the form beside it, and the content uses the width of the screen (up to 120rem). A row says what a record is under its name and keeps its columns for the figures: a table never scrolls sideways at 1440px.
 - **Know where you are.** The sidebar always names the company and the section.
 - **Numbers are text.** Money is a decimal string printed with `formatMoney`; charts only use numbers to draw.
 - **Nothing relies on hover or color alone.** Each chart has a keyboard tooltip and a table view; states have icon and label.
@@ -48,7 +48,7 @@ The two series colors are slots 1 and 2 of the dataviz palette and passed `valid
 
 ## Components
 
-`PageHeader`, `Button` (primary, ghost, small), `Notice` (error, warning, success), badges (`ok`, `warning`, `critical`,
+`PageHeader`, `Button` (primary, ghost, small, and `iconOnly` for the actions that repeat on every row: the label becomes the tooltip and the accessible name), `StatusBadge` (a dot and a word), `Notice` (error, warning, success), badges (`ok`, `warning`, `critical`,
 `muted`), tables (`.num` right-aligns money), `StatTile`, `Sparkline`, `ChartCard` (title, legend, table twin),
 `LineChart`, `BarChart`, segmented period filter, `CompanyNav`.
 

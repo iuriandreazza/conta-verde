@@ -14,6 +14,8 @@ import { PlusIcon } from "../components/icons/plus";
 import { treeRows } from "../lib/categoryTree";
 import { cashFlowLabel, dreLabel } from "../lib/groups";
 import { useCanWrite } from "../lib/useCanWrite";
+import { SquarePenIcon } from "../components/icons/square-pen";
+import { StatusBadge } from "../components/StatusBadge";
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one
 // instance: the old list is dropped and a reply still in flight for another company lands on an
@@ -174,10 +176,12 @@ export function CategoriesPage() {
                       </td>
                       <td>{dreLabel(category.dre_group)}</td>
                       <td>{cashFlowLabel(category.cash_flow_group)}</td>
-                      <td>{category.active ? "Ativa" : "Inativa"}</td>
-                      <td>
+                      <td><StatusBadge active={category.active} feminine /></td>
+                      <td className="row-actions">
                         {canWrite && (
                           <Button
+                            iconOnly
+                            icon={SquarePenIcon}
                             type="button"
                             variant="ghost"
                             className="btn-small"
@@ -190,6 +194,8 @@ export function CategoriesPage() {
                         )}
                         {canWrite && category.active && !isTransfer(category) && category.level < 5 && (
                           <Button
+                            iconOnly
+                            icon={PlusIcon}
                             type="button"
                             variant="ghost"
                             className="btn-small"
@@ -201,6 +207,7 @@ export function CategoriesPage() {
                           </Button>
                         )}
                         <Button
+                          iconOnly
                           type="button"
                           variant="ghost"
                           className="btn-small"

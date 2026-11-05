@@ -2739,3 +2739,48 @@ describe("what a role that cannot write is offered", () => {
     expect(screen.queryByRole("button", { name: /Verificar de novo/ })).not.toBeInTheDocument();
   });
 });
+
+describe("how a list presents its rows", () => {
+  const lists = (items: unknown[]) => (url: string) =>
+    url === "/api/auth/me"
+      ? { status: 200, body: profile }
+      : { status: 200, body: { items, next_cursor: null } };
+
+  it("names the action of an icon-only button in its tooltip as well as its label", async () => {
+    mockApi(lists([party("Maria")]));
+    renderAt("/companies/c1/parties");
+
+    const edit = await screen.findByRole("button", { name: "Alterar Maria" });
+    expect(edit).toHaveAttribute("title", "Alterar Maria");
+  });
+
+  it("says who holds a bank account and what it is, with its status as a word", async () => {
+    const account: BankAccount = {
+      id: "b1",
+      company_id: "c1",
+      kind: "checking",
+      name: "Conta principal",
+      bank_code: "341",
+      branch: "0987",
+      number: "112234",
+      active: false,
+    };
+    mockApi(lists([account]));
+    renderAt("/companies/c1/bank-accounts");
+
+    const row = await screen.findByRole("row", { name: /Conta principal/ });
+    expect(row).toHaveTextContent("Conta corrente");
+    expect(row).toHaveTextContent("341");
+    expect(row).toHaveTextContent("Itaú");
+    expect(row).toHaveTextContent("Inativa");
+  });
+
+  it("keeps a party's roles under its name, so the table has no column for them", async () => {
+    mockApi(lists([{ ...party("Maria"), is_customer: true, is_supplier: true }]));
+    renderAt("/companies/c1/parties");
+
+    const row = await screen.findByRole("row", { name: /Maria/ });
+    expect(row).toHaveTextContent("Cliente · Fornecedor");
+    expect(screen.queryByRole("columnheader", { name: "Tipo" })).not.toBeInTheDocument();
+  });
+});
