@@ -38,6 +38,12 @@ pub trait CnpjRegistry: Send + Sync {
     ) -> impl Future<Output = Result<RegistryEntry, CnpjLookupError>> + Send {
         self.lookup(cnpj)
     }
+
+    /// Whether the operator left the lookup on. A bulk import does not ask the registry for each
+    /// row, and needs to know whether that leaves the CNPJs unchecked or the lookup was never wanted.
+    fn is_enabled(&self) -> bool {
+        true
+    }
 }
 
 /// `None` means the operator switched the lookup off.
@@ -54,5 +60,9 @@ impl<T: CnpjRegistry> CnpjRegistry for Option<T> {
             Some(registry) => registry.refresh(cnpj).await,
             None => Err(CnpjLookupError::Disabled),
         }
+    }
+
+    fn is_enabled(&self) -> bool {
+        self.is_some()
     }
 }

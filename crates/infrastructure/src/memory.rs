@@ -399,6 +399,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn imports_parties_and_records_each_creation() {
+        let service = PartyService::new(InMemoryPartyRepository::default(), contract::registry());
+        contract::imports_parties_and_records_each_creation(
+            &service,
+            CompanyId::generate(),
+            CompanyId::generate(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn an_import_with_the_lookup_off_claims_nothing_about_a_cnpj() {
+        let registry: Option<InMemoryCnpjRegistry> = None;
+        let service = PartyService::new(InMemoryPartyRepository::default(), registry);
+        let company = CompanyId::generate();
+        let draft = PartyDraft {
+            name: "Padaria".into(),
+            document: Some(contract::ACTIVE_CNPJ.into()),
+            is_customer: true,
+            ..PartyDraft::default()
+        };
+        let report = service
+            .import(
+                company,
+                &contract::actor(),
+                vec![conta_verde_application::ImportRow { row: 2, draft }],
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(report.created, 1);
+        let stored = service
+            .list(company, &PartyQuery::default(), None, None)
+            .await
+            .unwrap()
+            .items;
+        assert_eq!(stored[0].document_check(), &DocumentCheck::NotApplicable);
+    }
+
+    #[tokio::test]
     async fn keeps_party_contacts_and_tags() {
         let service = PartyService::new(InMemoryPartyRepository::default(), contract::registry());
         contract::keeps_party_contacts_and_tags(

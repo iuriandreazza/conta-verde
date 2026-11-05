@@ -8,7 +8,9 @@ use conta_verde_application::{
     PaymentMethodService, ProductQuery, ProductRepository, ProductService, RepositoryError,
     SecretService,
 };
-use conta_verde_application::{PaymentTermQuery, PaymentTermRepository, PaymentTermService};
+use conta_verde_application::{
+    ImportRow, PaymentTermQuery, PaymentTermRepository, PaymentTermService,
+};
 use conta_verde_domain::{
     AccountDraft, Actor, AddressDraft, AuditAction, AuditEntity, AuditEntry, BankAccount,
     BankAccountDraft, BankAccountId, BankAccountKind, CashFlowGroup, Category, CategoryId,
@@ -955,6 +957,120 @@ pub async fn keeps_party_contacts_and_tags<R: PartyRepository>(
         .unwrap()
         .items;
     assert_eq!(party_names(&fred), ["Fred"]);
+}
+
+fn import_rows(rows: Vec<PartyDraft>) -> Vec<ImportRow<PartyDraft>> {
+    // The header is row 1, so the first party is row 2, as in a spreadsheet.
+    rows.into_iter()
+        .enumerate()
+        .map(|(index, draft)| ImportRow {
+            row: index + 2,
+            draft,
+        })
+        .collect()
+}
+
+/// An import checks every row before writing any, refuses a file with a bad or repeated row
+/// without leaving a trace, skips what is already registered, and records each creation.
+pub async fn imports_parties_and_records_each_creation<R: PartyRepository>(
+    service: &PartyService<R, InMemoryCnpjRegistry>,
+    company: CompanyId,
+    other_company: CompanyId,
+) {
+    let import = |company: CompanyId, rows: Vec<PartyDraft>, dry_run: bool| async move {
+        service
+            .import(company, &actor(), import_rows(rows), dry_run)
+            .await
+            .unwrap()
+    };
+    let everyone = |company: CompanyId| async move {
+        service
+            .list(company, &PartyQuery::default(), None, None)
+            .await
+            .unwrap()
+            .items
+    };
+    let note = |row: usize, message: &str| conta_verde_application::RowNote {
+        row,
+        message: message.to_owned(),
+    };
+
+    // A file with a bad row, a repeated document and a row without a role writes nothing, and the
+    // report names every one of them, not just the first.
+    let refused = import(
+        company,
+        vec![
+            party_draft("Ana", Some("529.982.247-25")),
+            party_draft("Bruno", Some("111.111.111-11")),
+            party_draft("Ana de novo", Some("52998224725")),
+            PartyDraft {
+                is_customer: false,
+                ..party_draft("Sem papel", None)
+            },
+        ],
+        false,
+    )
+    .await;
+    assert_eq!((refused.valid, refused.created), (1, 0));
+    assert_eq!(
+        refused.refused,
+        [
+            note(3, "document is not a valid CPF or CNPJ"),
+            note(4, "the same document as row 2"),
+            note(
+                5,
+                "party must be a customer, a supplier, a carrier or a seller"
+            ),
+        ]
+    );
+    assert!(everyone(company).await.is_empty());
+
+    // A dry run says what would happen and writes nothing.
+    let rows = || {
+        vec![
+            party_draft("Ana", Some("529.982.247-25")),
+            party_draft("Padaria", Some(ACTIVE_CNPJ)),
+            party_draft("Sem documento", None),
+        ]
+    };
+    let dry = import(company, rows(), true).await;
+    assert_eq!((dry.valid, dry.created), (3, 0));
+    assert!(everyone(company).await.is_empty());
+
+    // The real import writes every row, one audit entry each, and does not ask the registry: the
+    // contract registry knows this CNPJ, yet it is stored unverified.
+    let done = import(company, rows(), false).await;
+    assert_eq!((done.valid, done.created), (3, 3));
+    assert!(done.skipped.is_empty() && done.refused.is_empty());
+    let stored = everyone(company).await;
+    assert_eq!(
+        stored.iter().map(Party::name).collect::<Vec<_>>(),
+        ["Ana", "Padaria", "Sem documento"]
+    );
+    assert_eq!(stored[0].document_check(), &DocumentCheck::NotApplicable);
+    assert_eq!(stored[1].document_check(), &DocumentCheck::Unverified);
+    for party in &stored {
+        let trail = party_trail(service, company, party.id()).await;
+        assert_eq!(trail.len(), 1);
+        assert_eq!(trail[0].action, AuditAction::Created);
+    }
+
+    // Sending the file again skips the rows that have a document and cannot recognize the one
+    // that has none.
+    let again = import(company, rows(), false).await;
+    assert_eq!(again.created, 1);
+    assert_eq!(
+        again.skipped,
+        [
+            note(2, "a party with this document already exists"),
+            note(3, "a party with this document already exists"),
+        ]
+    );
+    assert_eq!(everyone(company).await.len(), 4);
+
+    // Another company's documents are its own.
+    let other = import(other_company, rows(), false).await;
+    assert_eq!(other.created, 3);
 }
 
 pub async fn pages_through_parties<R: PartyRepository, C: CnpjRegistry>(

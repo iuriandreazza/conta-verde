@@ -527,6 +527,16 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires DATABASE_URL"]
+    async fn imports_parties_and_records_each_creation() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let other_company = contract::create_company(&pool).await;
+        let service = PartyService::new(PostgresPartyRepository::new(pool), contract::registry());
+        contract::imports_parties_and_records_each_creation(&service, company, other_company).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
     async fn keeps_party_contacts_and_tags() {
         let pool = contract::test_pool().await;
         let company = contract::create_company(&pool).await;

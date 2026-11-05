@@ -16,6 +16,10 @@ pub(crate) enum ApiError {
     InvalidParameters(axum::extract::rejection::QueryRejection),
     /// A body field this endpoint needs that the request left out.
     InvalidField(&'static str),
+    /// An import file that cannot be read as a whole; the message says what to change.
+    InvalidFile(String),
+    /// An import file past the size this API reads.
+    FileTooLarge,
 }
 
 impl From<ApplicationError> for ApiError {
@@ -39,6 +43,11 @@ impl IntoResponse for ApiError {
                 (StatusCode::UNPROCESSABLE_ENTITY, (*message).to_owned())
             }
             Self::InvalidQuery(message) => (StatusCode::BAD_REQUEST, (*message).to_owned()),
+            Self::InvalidFile(message) => (StatusCode::UNPROCESSABLE_ENTITY, message.clone()),
+            Self::FileTooLarge => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "the file is larger than 1 MiB: split it".to_owned(),
+            ),
             Self::Application(error) => describe(error),
         };
         (status, Json(ErrorBody { error: message })).into_response()
