@@ -1,7 +1,15 @@
 import { motion } from "motion/react";
-import { Fragment, useCallback, useEffect, useState, type FormEvent } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import { useParams } from "react-router-dom";
-import { api, errorMessage, type Party } from "../api";
+import { NO_FILTERS, api, errorMessage, type Party, type PartyFilters } from "../api";
 import { useAuth } from "../auth";
 import { DocumentBadge } from "../components/DocumentBadge";
 import { Notice, type NoticeTone } from "../components/Notice";
@@ -13,9 +21,11 @@ import { RefreshCWIcon } from "../components/icons/refresh-cw";
 import { UsersIcon } from "../components/icons/users";
 import { PartyHistory } from "../components/PartyHistory";
 import { Spinner } from "../components/Spinner";
+import { useDebounced } from "../lib/useDebounced";
 
 // Rows enter one after another, but never wait longer than the eighth for a long page.
 const MAX_STAGGERED_ROWS = 8;
+const SEARCH_DELAY_MS = 300;
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one
 // instance: the old list is dropped and a reply still in flight for another company lands on an
@@ -41,19 +51,39 @@ export function PartiesPage() {
       ? session.profile.companies.find((company) => company.id === companyId)?.name
       : undefined;
 
-  // Only the very first load shows the spinner; refreshing after an insert keeps the rows on screen.
+  // The search box updates at once; the list follows once typing pauses.
+  const [filters, setFilters] = useState<PartyFilters>(NO_FILTERS);
+  const searchText = useDebounced(filters.q.trim(), SEARCH_DELAY_MS);
+  const applied = useMemo<PartyFilters>(
+    () => ({ q: searchText, kind: filters.kind, sort: filters.sort }),
+    [searchText, filters.kind, filters.sort],
+  );
+  const isFiltered = applied.q !== "" || applied.kind !== "";
+  // Counts the requests for a first page: a reply is only used while it is still the latest, so a
+  // slow answer to an earlier search can neither replace a newer one nor receive its "load more".
+  const latestListing = useRef(0);
+
+  // Only the very first load shows the spinner; refreshing after an insert or a new filter keeps
+  // the rows on screen until the new ones arrive.
   const loadFirstPage = useCallback(async () => {
+    const listing = ++latestListing.current;
     setError(null);
     try {
-      const page = await api.listParties(companyId);
-      setParties(page.items);
-      setNextCursor(page.next_cursor);
+      const page = await api.listParties(companyId, applied);
+      if (listing === latestListing.current) {
+        setParties(page.items);
+        setNextCursor(page.next_cursor);
+      }
     } catch (failure) {
-      setError(errorMessage(failure));
+      if (listing === latestListing.current) {
+        setError(errorMessage(failure));
+      }
     } finally {
-      setLoading(false);
+      if (listing === latestListing.current) {
+        setLoading(false);
+      }
     }
-  }, [companyId]);
+  }, [companyId, applied]);
 
   useEffect(() => {
     void loadFirstPage();
@@ -63,14 +93,19 @@ export function PartiesPage() {
     if (nextCursor === null || loadingMore) {
       return;
     }
+    const listing = latestListing.current;
     setLoadingMore(true);
     setError(null);
     try {
-      const page = await api.listParties(companyId, nextCursor);
-      setParties((current) => [...current, ...page.items]);
-      setNextCursor(page.next_cursor);
+      const page = await api.listParties(companyId, applied, nextCursor);
+      if (listing === latestListing.current) {
+        setParties((current) => [...current, ...page.items]);
+        setNextCursor(page.next_cursor);
+      }
     } catch (failure) {
-      setError(errorMessage(failure));
+      if (listing === latestListing.current) {
+        setError(errorMessage(failure));
+      }
     } finally {
       setLoadingMore(false);
     }
@@ -170,6 +205,44 @@ export function PartiesPage() {
 
       <section className="card">
         <h2>Cadastrados</h2>
+        <div className="filters" role="search">
+          <label>
+            Buscar
+            <input
+              type="search"
+              value={filters.q}
+              placeholder="Nome, documento ou e-mail"
+              autoComplete="off"
+              maxLength={100}
+              onChange={(event) => setFilters({ ...filters, q: event.target.value })}
+            />
+          </label>
+          <label>
+            Mostrar
+            <select
+              value={filters.kind}
+              onChange={(event) =>
+                setFilters({ ...filters, kind: event.target.value as PartyFilters["kind"] })
+              }
+            >
+              <option value="">Todos</option>
+              <option value="customer">Clientes</option>
+              <option value="supplier">Fornecedores</option>
+            </select>
+          </label>
+          <label>
+            Ordem
+            <select
+              value={filters.sort}
+              onChange={(event) =>
+                setFilters({ ...filters, sort: event.target.value as PartyFilters["sort"] })
+              }
+            >
+              <option value="name">Nome (A–Z)</option>
+              <option value="-name">Nome (Z–A)</option>
+            </select>
+          </label>
+        </div>
         <Notice message={error} />
         <Notice message={verifyNotice?.message ?? null} tone={verifyNotice?.tone} />
         {loading ? (
@@ -181,6 +254,14 @@ export function PartiesPage() {
           <Button type="button" variant="ghost" onClick={() => void loadFirstPage()}>
             Tentar de novo
           </Button>
+        ) : parties.length === 0 && isFiltered ? (
+          <div className="empty">
+            <UsersIcon size={40} aria-hidden />
+            <p>Nenhum cadastro encontrado.</p>
+            <Button type="button" variant="ghost" onClick={() => setFilters({ ...NO_FILTERS, sort: filters.sort })}>
+              Limpar filtros
+            </Button>
+          </div>
         ) : parties.length === 0 ? (
           <div className="empty">
             <UsersIcon size={40} aria-hidden />

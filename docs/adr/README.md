@@ -33,6 +33,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0015](0015-public-api-and-webhooks.md) | Public API and webhooks | proposed | 8 |
 | [0016](0016-ui-motion-and-icons.md) | Motion for animation, vendored Lucide Animated icons | accepted | 1 |
 | [0017](0017-cnpj-registry-lookup.md) | CNPJ checked against the federal registry behind a port | accepted | 1 |
+| [0018](0018-list-endpoints-search-filter-sort.md) | List endpoints share one search, filter and sort convention | accepted | 1 |
 
 ## Template
 

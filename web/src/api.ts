@@ -48,6 +48,17 @@ export interface PartyPage {
   next_cursor: string | null;
 }
 
+/** How a list is narrowed and ordered; the same three parameters every list endpoint takes. */
+export interface PartyFilters {
+  /** Text found in the name, e-mail or document. */
+  q: string;
+  kind: "" | "customer" | "supplier";
+  /** A leading `-` means descending. */
+  sort: "name" | "-name";
+}
+
+export const NO_FILTERS: PartyFilters = { q: "", kind: "", sort: "name" };
+
 export interface NewParty {
   name: string;
   document?: string;
@@ -118,8 +129,14 @@ export const api = {
   login: (email: string, password: string) => post<Profile>("/auth/login", { email, password }),
   logout: () => post<void>("/auth/logout"),
   me: () => request<Profile>("/auth/me"),
-  listParties: (companyId: string, after?: string) => {
-    const query = after ? `?${new URLSearchParams({ after })}` : "";
+  /** A cursor only continues the list that produced it, so pass the same filters with it. */
+  listParties: (companyId: string, filters: PartyFilters = NO_FILTERS, after?: string) => {
+    const params = new URLSearchParams();
+    if (filters.q) params.set("q", filters.q);
+    if (filters.kind) params.set("kind", filters.kind);
+    if (filters.sort !== NO_FILTERS.sort) params.set("sort", filters.sort);
+    if (after) params.set("after", after);
+    const query = params.size > 0 ? `?${params}` : "";
     return request<PartyPage>(`/companies/${companyId}/parties${query}`);
   },
   createParty: (companyId: string, party: NewParty) =>

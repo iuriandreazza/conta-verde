@@ -747,6 +747,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn filters_and_sorts_the_list_from_query_parameters() {
+        let app = app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let uri = parties_uri(company_id);
+        for (name, is_customer, is_supplier) in [
+            ("Carla", true, false),
+            ("Ana", true, true),
+            ("Bruno", false, true),
+        ] {
+            let body =
+                json!({ "name": name, "is_customer": is_customer, "is_supplier": is_supplier });
+            send(&app, json_request("POST", &uri, Some(&cookie), body)).await;
+        }
+        let names = |reply: &Reply| -> Vec<String> {
+            reply.body["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|item| item["name"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        let list = |query: &str| {
+            let request = get_request(&format!("{uri}?{query}"), Some(&cookie));
+            send(&app, request)
+        };
+
+        assert_eq!(names(&list("sort=-name").await), ["Carla", "Bruno", "Ana"]);
+        assert_eq!(names(&list("kind=supplier").await), ["Ana", "Bruno"]);
+        assert_eq!(names(&list("q=AR").await), ["Carla"]);
+
+        // The cursor of a descending page resumes in descending order.
+        let first = list("sort=-name&limit=2").await;
+        assert_eq!(names(&first), ["Carla", "Bruno"]);
+        let cursor = first.body["next_cursor"]
+            .as_str()
+            .unwrap()
+            .replace('|', "%7C");
+        let second = list(&format!("sort=-name&limit=2&after={cursor}")).await;
+        assert_eq!(names(&second), ["Ana"]);
+
+        for query in [
+            "kind=both",
+            "sort=email",
+            "sort=name%20desc",
+            &format!("q={}", "a".repeat(101)),
+        ] {
+            let reply = list(query).await;
+            assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{query}");
+            assert!(reply.body["error"].is_string());
+        }
+    }
+
+    #[tokio::test]
     async fn other_users_and_unknown_companies_look_the_same() {
         let app = app();
         let (_, company_id) = sign_up(&app, "ana@example.com").await;

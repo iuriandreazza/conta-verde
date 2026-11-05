@@ -1,8 +1,8 @@
 //! Behavior every adapter must share, written once and run against each of them.
 
 use conta_verde_application::{
-    ApplicationError, AuthError, AuthService, CnpjRegistry, IdentityRepository, PartyRepository,
-    PartyService, RepositoryError, SecretService,
+    ApplicationError, AuthError, AuthService, CnpjRegistry, IdentityRepository, PartyKind,
+    PartyQuery, PartyRepository, PartyService, PartySort, RepositoryError, SecretService,
 };
 use conta_verde_domain::{
     AccountDraft, Actor, AuditAction, AuditEntity, AuditEntry, CompanyId, DocumentCheck, Party,
@@ -79,7 +79,11 @@ pub async fn keeps_what_the_registry_said<R: PartyRepository>(
             .unwrap();
     }
 
-    let listed = service.list(company, None, None).await.unwrap().items;
+    let listed = service
+        .list(company, &PartyQuery::default(), None, None)
+        .await
+        .unwrap()
+        .items;
     let checks: Vec<(&str, DocumentCheck)> = listed
         .iter()
         .map(|party| (party.name(), party.document_check().clone()))
@@ -113,7 +117,11 @@ pub async fn keeps_the_unverified_mark<R: PartyRepository>(
         .register(company, &actor(), party_draft("Padaria", Some(ACTIVE_CNPJ)))
         .await
         .unwrap();
-    let listed = service.list(company, None, None).await.unwrap().items;
+    let listed = service
+        .list(company, &PartyQuery::default(), None, None)
+        .await
+        .unwrap()
+        .items;
     assert_eq!(listed[0].document_check(), &DocumentCheck::Unverified);
 }
 
@@ -405,6 +413,139 @@ pub async fn finds_parties_and_replaces_their_document_check<R: PartyRepository>
     );
 }
 
+/// Every name the query lists, two to a page, so that each case also proves that the cursor
+/// resumes correctly under that filter and sort.
+async fn listed_names<R: PartyRepository, C: CnpjRegistry>(
+    service: &PartyService<R, C>,
+    company: CompanyId,
+    query: &PartyQuery,
+) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = service
+            .list(company, query, cursor.as_ref(), Some(2))
+            .await
+            .unwrap();
+        names.extend(page.items.iter().map(|party| party.name().to_owned()));
+        match page.next {
+            Some(next) => cursor = Some(next),
+            None => return names,
+        }
+    }
+}
+
+pub async fn filters_and_sorts_parties<R: PartyRepository, C: CnpjRegistry>(
+    service: &PartyService<R, C>,
+    company: CompanyId,
+    other_company: CompanyId,
+) {
+    let register = |company: CompanyId,
+                    name: &str,
+                    document: Option<&str>,
+                    email: Option<&str>,
+                    is_customer: bool,
+                    is_supplier: bool| {
+        let draft = PartyDraft {
+            name: name.into(),
+            document: document.map(Into::into),
+            email: email.map(Into::into),
+            is_customer,
+            is_supplier,
+        };
+        async move { service.register(company, &actor(), draft).await.unwrap() }
+    };
+    register(
+        company,
+        "Ana Souza",
+        Some("529.982.247-25"),
+        Some("ana@loja.com"),
+        true,
+        false,
+    )
+    .await;
+    register(
+        company,
+        "padaria Central",
+        Some(ACTIVE_CNPJ),
+        Some("contato@padaria.com.br"),
+        true,
+        true,
+    )
+    .await;
+    register(company, "Bruno Atacado", None, None, false, true).await;
+    register(company, "100% Natural", None, None, true, false).await;
+    register(company, "Under_score Ltda", None, None, false, true).await;
+    // Another company's party never shows up, whatever the text.
+    register(other_company, "Ana Souza", None, None, true, false).await;
+
+    let all = PartyQuery::default();
+    let names = |query: PartyQuery| async move { listed_names(service, company, &query).await };
+
+    let ascending = [
+        "100% Natural",
+        "Ana Souza",
+        "Bruno Atacado",
+        "padaria Central",
+        "Under_score Ltda",
+    ];
+    assert_eq!(names(all.clone()).await, ascending);
+    let descending: Vec<&str> = ascending.iter().rev().copied().collect();
+    assert_eq!(
+        names(all.clone().sorted(PartySort::NameDesc)).await,
+        descending
+    );
+
+    // A party that is both a customer and a supplier is in both lists.
+    assert_eq!(
+        names(all.clone().of_kind(PartyKind::Customer)).await,
+        ["100% Natural", "Ana Souza", "padaria Central"]
+    );
+    assert_eq!(
+        names(all.clone().of_kind(PartyKind::Supplier)).await,
+        ["Bruno Atacado", "padaria Central", "Under_score Ltda"]
+    );
+
+    // Search: name or e-mail anywhere in it, ignoring case; a document ignoring punctuation.
+    assert_eq!(names(all.clone().searching("ANA")).await, ["Ana Souza"]);
+    assert_eq!(
+        names(all.clone().searching("  padaria ")).await,
+        ["padaria Central"]
+    );
+    assert_eq!(
+        names(all.clone().searching("loja.com")).await,
+        ["Ana Souza"]
+    );
+    assert_eq!(names(all.clone().searching("529.982")).await, ["Ana Souza"]);
+    assert_eq!(
+        names(all.clone().searching("52998224725")).await,
+        ["Ana Souza"]
+    );
+    assert_eq!(
+        names(all.clone().searching("11.222.333/0001")).await,
+        ["padaria Central"]
+    );
+    // `%` and `_` are ordinary characters, not wildcards.
+    assert_eq!(names(all.clone().searching("%")).await, ["100% Natural"]);
+    assert_eq!(
+        names(all.clone().searching("_")).await,
+        ["Under_score Ltda"]
+    );
+    assert!(names(all.clone().searching("nobody")).await.is_empty());
+    // Blank text is no search.
+    assert_eq!(names(all.clone().searching("   ")).await, ascending);
+
+    // Filters and sort combine, and the cursor keeps working across pages.
+    let customers_with_a = all
+        .of_kind(PartyKind::Customer)
+        .searching("a")
+        .sorted(PartySort::NameDesc);
+    assert_eq!(
+        names(customers_with_a).await,
+        ["padaria Central", "Ana Souza", "100% Natural"]
+    );
+}
+
 pub async fn pages_through_parties<R: PartyRepository, C: CnpjRegistry>(
     service: &PartyService<R, C>,
     company: CompanyId,
@@ -424,7 +565,7 @@ pub async fn pages_through_parties<R: PartyRepository, C: CnpjRegistry>(
     let mut cursor = None;
     loop {
         let page = service
-            .list(company, cursor.as_ref(), Some(2))
+            .list(company, &PartyQuery::default(), cursor.as_ref(), Some(2))
             .await
             .unwrap();
         pages.push(

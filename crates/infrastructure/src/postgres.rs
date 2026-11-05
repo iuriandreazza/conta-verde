@@ -1,12 +1,13 @@
 use crate::postgres_audit;
 use conta_verde_application::{
-    PartyCursor, PartyRepository, RepositoryError, ensure_audit_describes,
+    PartyCursor, PartyKind, PartyQuery, PartyRepository, PartySort, RepositoryError,
+    ensure_audit_describes,
 };
 use conta_verde_domain::{
     AuditEntity, AuditEntry, AuditRecord, CompanyId, DocumentCheck, Party, PartyDraft, PartyId,
 };
 use sqlx::postgres::PgRow;
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Postgres, QueryBuilder, Row};
 
 const DOCUMENT_UNIQUE_INDEX: &str = "parties_company_document_key";
 
@@ -34,7 +35,7 @@ impl PostgresPartyRepository {
 
 const SELECT_PARTIES: &str = "SELECT id, company_id, name, document, email, is_customer, is_supplier, \
      document_check, registry_legal_name, registry_situation \
-     FROM parties WHERE company_id = $1";
+     FROM parties";
 
 impl PartyRepository for PostgresPartyRepository {
     async fn save(&self, party: &Party, audit: &AuditEntry) -> Result<(), RepositoryError> {
@@ -82,12 +83,14 @@ impl PartyRepository for PostgresPartyRepository {
         company_id: CompanyId,
         id: PartyId,
     ) -> Result<Option<Party>, RepositoryError> {
-        let row = sqlx::query(&format!("{SELECT_PARTIES} AND id = $2"))
-            .bind(company_id.as_uuid())
-            .bind(id.as_uuid())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(storage_error)?;
+        let row = sqlx::query(&format!(
+            "{SELECT_PARTIES} WHERE company_id = $1 AND id = $2"
+        ))
+        .bind(company_id.as_uuid())
+        .bind(id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(storage_error)?;
         row.as_ref().map(party_from_row).transpose()
     }
 
@@ -122,36 +125,56 @@ impl PartyRepository for PostgresPartyRepository {
     async fn list_by_company(
         &self,
         company_id: CompanyId,
+        query: &PartyQuery,
         after: Option<&PartyCursor>,
         limit: usize,
     ) -> Result<Vec<Party>, RepositoryError> {
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
-        // Separate statements keep the keyset condition out of the plan when there is no cursor.
-        let rows = match after {
-            None => {
-                sqlx::query(&format!(
-                    "{SELECT_PARTIES} ORDER BY lower(name), id LIMIT $2"
-                ))
-                .bind(company_id.as_uuid())
-                .bind(limit)
-                .fetch_all(&self.pool)
-                .await
-            }
-            Some(cursor) => {
-                sqlx::query(&format!(
-                    "{SELECT_PARTIES} AND (lower(name), id) > (lower($3), $4) \
-                     ORDER BY lower(name), id LIMIT $2"
-                ))
-                .bind(company_id.as_uuid())
-                .bind(limit)
-                .bind(&cursor.name)
-                .bind(cursor.id.as_uuid())
-                .fetch_all(&self.pool)
-                .await
-            }
-        }
-        .map_err(storage_error)?;
+        let (comparison, direction) = match query.sort() {
+            PartySort::NameAsc => (">", "ASC"),
+            PartySort::NameDesc => ("<", "DESC"),
+        };
 
+        // Every value is bound, never spliced into the text: the pieces pushed as text are fixed.
+        let mut sql = QueryBuilder::<Postgres>::new(SELECT_PARTIES);
+        sql.push(" WHERE company_id = ")
+            .push_bind(company_id.as_uuid());
+        match query.kind() {
+            Some(PartyKind::Customer) => sql.push(" AND is_customer"),
+            Some(PartyKind::Supplier) => sql.push(" AND is_supplier"),
+            None => &mut sql,
+        };
+        if let Some(text) = query.search() {
+            // `strpos` instead of `LIKE` so that `%` and `_` in the text mean themselves.
+            sql.push(" AND (strpos(lower(name), lower(")
+                .push_bind(text)
+                .push(")) > 0 OR strpos(lower(coalesce(email, '')), lower(")
+                .push_bind(text)
+                .push(")) > 0");
+            if let Some(document) = query.document_search() {
+                sql.push(" OR strpos(coalesce(document, ''), ")
+                    .push_bind(document)
+                    .push(") > 0");
+            }
+            sql.push(")");
+        }
+        if let Some(cursor) = after {
+            sql.push(format!(" AND (lower(name), id) {comparison} (lower("))
+                .push_bind(&cursor.name)
+                .push("), ")
+                .push_bind(cursor.id.as_uuid())
+                .push(")");
+        }
+        sql.push(format!(
+            " ORDER BY lower(name) {direction}, id {direction} LIMIT "
+        ))
+        .push_bind(limit);
+
+        let rows = sql
+            .build()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(storage_error)?;
         rows.iter().map(party_from_row).collect()
     }
 }
@@ -269,7 +292,11 @@ mod tests {
             .await
             .unwrap();
 
-        let listed = service.list(company, None, None).await.unwrap().items;
+        let listed = service
+            .list(company, &PartyQuery::default(), None, None)
+            .await
+            .unwrap()
+            .items;
         let names: Vec<&str> = listed.iter().map(Party::name).collect();
         assert_eq!(names, ["ana", "Padaria", "zeca"]);
         assert_eq!(listed[1].document().unwrap().as_str(), "11222333000181");
@@ -286,6 +313,16 @@ mod tests {
             InMemoryCnpjRegistry::default(),
         );
         contract::pages_through_parties(&service, company).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn filters_and_sorts_parties() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let other_company = contract::create_company(&pool).await;
+        let service = PartyService::new(PostgresPartyRepository::new(pool), contract::registry());
+        contract::filters_and_sorts_parties(&service, company, other_company).await;
     }
 
     #[tokio::test]
