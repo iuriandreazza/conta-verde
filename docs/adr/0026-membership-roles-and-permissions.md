@@ -84,6 +84,9 @@ Why these, since the choice is a product one and easy to change (it is one funct
   one.
 - Reading is open to every member for the four areas but `members`; hiding what a role cannot use
   in the web app is a convenience that follows from `permissions`, and the API is what refuses.
+- The `members` area has no routes yet, so the HTTP test cannot cover it: it is covered by the
+  table's test and by `area_of`'s, and the routes that claim it (invitations, next) come with an HTTP
+  test per role before they ship.
 - One role per member per company; a person who is the accountant of two companies has two
   memberships.
 

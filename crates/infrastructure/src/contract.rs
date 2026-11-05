@@ -1310,7 +1310,6 @@ where
     auth.profile(&signed_up.token).await.unwrap();
 }
 
-/// Expects an `AuthService` whose sessions last zero seconds.
 /// A membership says what its user is in the company: the creator is the owner, another user can be
 /// added with a role of their own, a second membership never changes the first one's role, and what
 /// a user is differs from company to company.
@@ -1396,6 +1395,7 @@ pub async fn memberships_carry_a_role<I: IdentityRepository>(identities: &I) {
     );
 }
 
+/// Expects an `AuthService` whose sessions last zero seconds.
 pub async fn expired_sessions_are_rejected<I, S>(auth: &AuthService<I, S>)
 where
     I: IdentityRepository,

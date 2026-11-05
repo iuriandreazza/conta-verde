@@ -1282,6 +1282,17 @@ mod tests {
         )
         .await;
         let party_id = party.body["id"].as_str().unwrap().to_owned();
+        let product = send(
+            &app,
+            json_request(
+                "POST",
+                &products_uri(company_id),
+                Some(&owner_cookie),
+                product_body(),
+            ),
+        )
+        .await;
+        let product_id = product.body["id"].as_str().unwrap().to_owned();
 
         // Which of the three kinds of write each role has. Written out here, apart from the domain's
         // own table, so that a change to who may do what is a change to this test too.
@@ -1323,11 +1334,14 @@ mod tests {
             let mut body = party_body();
             body["document"] = Value::Null;
             body["name"] = json!(name);
+            let ok = StatusCode::OK;
+            let created_status = StatusCode::CREATED;
             let writes_of = [
                 (
                     parties,
                     "creates a party",
                     party_write("POST", "/parties", body),
+                    vec![created_status],
                 ),
                 (
                     parties,
@@ -1337,6 +1351,17 @@ mod tests {
                         Some(&cookie),
                         "name,customer\nAna,sim\n",
                     ),
+                    vec![ok],
+                ),
+                (
+                    parties,
+                    "checks a CNPJ again",
+                    party_write(
+                        "POST",
+                        &format!("/parties/{party_id}/document-check"),
+                        Value::Null,
+                    ),
+                    vec![ok],
                 ),
                 (
                     products,
@@ -1346,6 +1371,17 @@ mod tests {
                         product["sku"] = json!(format!("{}-1", role.as_str()));
                         product
                     }),
+                    vec![created_status],
+                ),
+                (
+                    products,
+                    "changes a product",
+                    party_write("PUT", &format!("/products/{product_id}"), {
+                        let mut product = product_body();
+                        product["active"] = json!(true);
+                        product
+                    }),
+                    vec![ok],
                 ),
                 (
                     products,
@@ -1355,6 +1391,7 @@ mod tests {
                         Some(&cookie),
                         "name,unit\nPão,kg\n",
                     ),
+                    vec![ok],
                 ),
                 (
                     finance,
@@ -1364,20 +1401,23 @@ mod tests {
                         "/cost-centers",
                         json!({ "name": format!("Centro {}", role.as_str()) }),
                     ),
+                    vec![created_status],
                 ),
                 (
                     finance,
                     "applies the default categories",
                     party_write("POST", "/categories/default-template", Value::Null),
+                    // The first role that may do it does; for the others they already exist.
+                    vec![created_status, StatusCode::CONFLICT],
                 ),
             ];
-            for (allowed, what, request) in writes_of {
+            for (allowed, what, request, statuses) in writes_of {
                 let reply = send(&app, request).await;
                 if allowed {
-                    assert_ne!(
+                    assert!(
+                        statuses.contains(&reply.status),
+                        "{role:?} {what}: {} {}",
                         reply.status,
-                        StatusCode::FORBIDDEN,
-                        "{role:?} {what}: {}",
                         reply.body
                     );
                 } else {
@@ -1433,6 +1473,46 @@ mod tests {
         expected.sort_unstable();
         assert_eq!(names, expected);
         assert_eq!(created.len(), 1 + 4);
+
+        // The same for products (the owner's, and one per role that may write them) and for the
+        // cost centers (one per role that may write the finance registers).
+        let skus_of = |reply: &Reply| -> Vec<String> {
+            let mut skus: Vec<String> = reply.body["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|item| item["sku"].as_str().unwrap().to_owned())
+                .collect();
+            skus.sort_unstable();
+            skus
+        };
+        let products = send(
+            &app,
+            get_request(&products_uri(company_id), Some(&owner_cookie)),
+        )
+        .await;
+        assert_eq!(
+            skus_of(&products),
+            ["ADMIN-1", "OWNER-1", "PAO-001", "STOCK-1"],
+            "{}",
+            products.body
+        );
+        let centers = send(
+            &app,
+            get_request(&format!("{base}/cost-centers"), Some(&owner_cookie)),
+        )
+        .await;
+        let mut centers: Vec<&str> = centers.body["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["name"].as_str().unwrap())
+            .collect();
+        centers.sort_unstable();
+        assert_eq!(
+            centers,
+            ["Centro admin", "Centro financial", "Centro owner"]
+        );
     }
 
     #[tokio::test]
