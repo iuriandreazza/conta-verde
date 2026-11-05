@@ -73,7 +73,8 @@ impl Record<'_> {
 /// The text with its columns found and checked, one row for each line after the header.
 pub(crate) struct Table {
     headers: Vec<String>,
-    records: Vec<csv::StringRecord>,
+    /// With the number a spreadsheet shows for each: rows with nothing in them were left out.
+    records: Vec<(usize, csv::StringRecord)>,
 }
 
 impl Table {
@@ -90,8 +91,20 @@ impl Table {
     ) -> (Vec<ImportRow<T>>, Vec<RowNote>) {
         let mut rows = Vec::new();
         let mut refused = Vec::new();
-        for (index, cells) in self.records.into_iter().enumerate() {
-            let row = index + 2;
+        for (row, cells) in self.records {
+            // More cells than the header is almost always an unquoted separator inside a cell
+            // (`Silva, Filhos`): reading it anyway would shift every cell after it.
+            if cells.len() > self.headers.len() {
+                refused.push(RowNote {
+                    row,
+                    message: format!(
+                        "the row has {} cells and the header {}: a cell that holds a comma or a semicolon goes in quotes",
+                        cells.len(),
+                        self.headers.len()
+                    ),
+                });
+                continue;
+            }
             let record = Record {
                 headers: &self.headers,
                 cells,
@@ -126,6 +139,9 @@ pub(crate) fn read_table(
     let mut reader = csv::ReaderBuilder::new()
         .delimiter(delimiter)
         .trim(csv::Trim::All)
+        // A row with fewer cells than the header is a row whose last cells are blank; one with more
+        // is refused for its row (see `Table::rows`), not the file.
+        .flexible(true)
         .from_reader(text.as_bytes());
     let headers: Vec<String> = reader
         .headers()
@@ -160,11 +176,16 @@ pub(crate) fn read_table(
     }
 
     let mut records = Vec::new();
-    for record in reader.records() {
+    for (index, record) in reader.records().enumerate() {
+        let record = record.map_err(|error| FileError::Unreadable(error.to_string()))?;
+        // Spreadsheets leave formatted rows with nothing in them at the end of a sheet.
+        if record.iter().all(str::is_empty) {
+            continue;
+        }
         if records.len() == MAX_IMPORT_ROWS {
             return Err(FileError::TooManyRows);
         }
-        records.push(record.map_err(|error| FileError::Unreadable(error.to_string()))?);
+        records.push((index + 2, record));
     }
     if records.is_empty() {
         return Err(FileError::Empty);
@@ -301,17 +322,35 @@ mod tests {
             read_table(&[0xff, 0xfe, b'a'], COLUMNS, &[]).err(),
             Some(FileError::NotUtf8)
         );
-        // A row with more cells than the header is not a row of this table.
-        assert!(matches!(
-            table("name\nAna,extra\n").err(),
-            Some(FileError::Unreadable(_))
-        ));
     }
 
     #[test]
     fn a_column_without_a_name_is_left_alone() {
         let rows = cells("name;document;\nAna;123;\n");
         assert_eq!(rows, [(2, Some("Ana".into()), Some("123".into()))]);
+    }
+
+    #[test]
+    fn rows_with_nothing_in_them_are_left_out_and_the_others_keep_their_numbers() {
+        let rows = cells("name;document\nAna;1\n;\nBruno;2\n;;\n");
+        assert_eq!(
+            rows.iter().map(|row| row.0).collect::<Vec<_>>(),
+            [2, 4],
+            "{rows:?}"
+        );
+        assert_eq!(table("name;document\n;\n;\n").err(), Some(FileError::Empty));
+    }
+
+    #[test]
+    fn a_row_with_more_cells_than_the_header_is_refused_for_its_row_alone() {
+        let (rows, refused) = table("name,document\nAna,1\nSilva, Filhos,2\nCarla\n")
+            .unwrap()
+            .rows(|record| Ok(record.get("name").map(str::to_owned)));
+        // A row with fewer cells is fine: the rest are blank.
+        assert_eq!(rows.iter().map(|r| r.row).collect::<Vec<_>>(), [2, 4]);
+        assert_eq!(refused.len(), 1);
+        assert_eq!(refused[0].row, 3);
+        assert!(refused[0].message.contains("3 cells and the header 2"));
     }
 
     #[test]

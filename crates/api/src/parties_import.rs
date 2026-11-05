@@ -1,6 +1,7 @@
 use axum::Json;
 use axum::body::Body;
 use axum::extract::State;
+use axum::http::{HeaderMap, header};
 use conta_verde_domain::{AddressDraft, PartyDraft};
 use serde::Deserialize;
 
@@ -92,8 +93,17 @@ pub(crate) async fn import_parties<X: Ports>(
     State(state): State<SharedState<X>>,
     CompanyAccess(company_id, actor): CompanyAccess,
     ApiQuery(query): ApiQuery<ImportQuery>,
+    headers: HeaderMap,
     body: Body,
 ) -> Result<Json<ImportResponse>, ApiError> {
+    // Said up front, so a browser that is still uploading gets a clean 413 and not a dropped line.
+    let announced = headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<usize>().ok());
+    if announced.is_some_and(|length| length > MAX_FILE_BYTES) {
+        return Err(ApiError::FileTooLarge);
+    }
     let bytes = axum::body::to_bytes(body, MAX_FILE_BYTES)
         .await
         .map_err(|_| ApiError::FileTooLarge)?;

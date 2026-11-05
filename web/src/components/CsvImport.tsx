@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { errorMessage, type ImportNote, type ImportResult } from "../api";
 import { Button } from "./Button";
 import { Notice } from "./Notice";
@@ -34,9 +34,17 @@ export function CsvImport({
   const [file, setFile] = useState<File | null>(null);
   // A new key empties the file input once the rows were imported.
   const [inputKey, setInputKey] = useState(0);
+  const input = useRef<HTMLInputElement>(null);
   const [pending, setPending] = useState<"check" | "import" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
+
+  // Emptying the input remounts it, which drops the keyboard's place: put it back.
+  useEffect(() => {
+    if (inputKey > 0) {
+      input.current?.focus();
+    }
+  }, [inputKey]);
 
   function choose(event: ChangeEvent<HTMLInputElement>) {
     setFile(event.target.files?.[0] ?? null);
@@ -89,7 +97,14 @@ export function CsvImport({
       </p>
       <label>
         Arquivo CSV
-        <input key={inputKey} type="file" accept=".csv,text/csv" onChange={choose} />
+        <input
+          key={inputKey}
+          ref={input}
+          type="file"
+          accept=".csv,text/csv"
+          disabled={pending !== null}
+          onChange={choose}
+        />
       </label>
       <div className="form-actions">
         <Button
@@ -121,7 +136,7 @@ function ImportOutcome({ result }: { result: ImportResult }) {
   const message = bad
     ? `Nada foi importado: ${plural(result.refused.length, "linha tem", "linhas têm")} problema. Corrija o arquivo e envie de novo.`
     : result.dry_run
-      ? `Arquivo em ordem: ${plural(result.valid, "linha pronta", "linhas prontas")} para importar.`
+      ? `Arquivo em ordem: ${plural(result.valid, "linha válida", "linhas válidas")}. As que já estiverem cadastradas serão ignoradas.`
       : `${plural(result.created, "cadastro criado", "cadastros criados")}${
           result.skipped.length > 0
             ? `; ${plural(result.skipped.length, "linha ignorada", "linhas ignoradas")}`

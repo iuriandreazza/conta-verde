@@ -1088,6 +1088,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_row_with_an_unquoted_separator_is_refused_for_its_row_and_blank_rows_are_ignored() {
+        let app = app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let file = "name;customer;\nAna;sim;\nSilva; Filhos;sim;\n;;\nBruno;sim;\n";
+        let reply = send(
+            &app,
+            csv_request(&import_uri(company_id, ""), Some(&cookie), file),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert_eq!(reply.body["created"], 0);
+        let refused = reply.body["refused"].as_array().unwrap();
+        assert_eq!(refused.len(), 1);
+        assert_eq!(refused[0]["row"], 3);
+        assert!(
+            refused[0]["message"]
+                .as_str()
+                .unwrap()
+                .contains("goes in quotes")
+        );
+
+        // Quoted, and with the empty row and the empty column left out, the file goes through and
+        // keeps the numbers a spreadsheet shows.
+        let fixed = "name;customer;\nAna;sim;\n\"Silva; Filhos\";sim;\n;;\nBruno;sim;\n";
+        let reply = send(
+            &app,
+            csv_request(&import_uri(company_id, ""), Some(&cookie), fixed),
+        )
+        .await;
+        assert_eq!(reply.body["created"], 3);
+    }
+
+    #[tokio::test]
     async fn a_document_already_registered_is_skipped_and_never_overwritten() {
         let app = app();
         let (cookie, company_id) = sign_up(&app, "ana@example.com").await;

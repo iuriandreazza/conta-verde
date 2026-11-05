@@ -38,7 +38,9 @@ a row and its audit entry atomically ([ADR 0008](0008-audit-trail.md)).
   refused whole, with a message that says what to change.
 - A comma or a semicolon separates the cells, whichever the header uses (Brazilian spreadsheets
   save with `;`); quotes may hold the separator and a line break; a leading byte-order mark and
-  blanks around a cell are dropped; a blank cell is not set. Rows are numbered as a spreadsheet
+  blanks around a cell are dropped; a blank cell is not set; a column with no name and a row with
+  nothing in it (what a spreadsheet leaves at the end) are left out. A row with more cells than the
+  header is refused **for that row** (an unquoted comma in `Silva, Filhos`), not the file. Rows are numbered as a spreadsheet
   shows them, the header being row 1.
 - **Parties:** `name` is required, and at least one of `customer`, `supplier`, `carrier`, `seller`
   must be a column (`sim` or `não`, also `s`/`n`, `true`/`false`, `1`/`0`; blank is no). The
@@ -61,7 +63,7 @@ a row and its audit entry atomically ([ADR 0008](0008-audit-trail.md)).
   an import creates, it does not update. This also makes sending the same file twice safe for the
   rows that have a document.
 - It is not one transaction. A storage failure in the middle answers `500` and leaves the rows
-  before it; sending the file again finishes it. **A party without a document cannot be recognized**,
+  before it (so does a client that gives up while the rows are being written); sending the file again finishes it. **A party without a document cannot be recognized**,
   so the same file sent twice repeats those rows: the dry run exists to look before sending, and the
   page says that a skipped row means "already registered".
 - **The registry is not asked about the CNPJs of the file** ([ADR 0017](0017-cnpj-registry-lookup.md)).
@@ -79,6 +81,8 @@ share `ImportRow`, `ImportReport` and the limits.
 
 ## Consequences
 
+- The dry run does not know which rows are already registered (that would take a port for
+  documents that exist): `valid` counts rows that will be skipped, and the page says so.
 - The web page offers a template to download, "Verificar arquivo" (the dry run) and "Importar", and
   lists the problems with their rows.
 - The 1000-row limit is a guard for a request that is read in memory and written one row at a time;

@@ -1054,6 +1054,13 @@ pub async fn imports_parties_and_records_each_creation<R: PartyRepository>(
         assert_eq!(trail.len(), 1);
         assert_eq!(trail[0].action, AuditAction::Created);
     }
+    // The trail says the CNPJ was left unchecked, not that the registry was asked.
+    let cnpj_trail = party_trail(service, company, stored[1].id()).await;
+    assert!(cnpj_trail[0].changes.contains(&FieldChange {
+        field: "document_check".into(),
+        from: None,
+        to: Some("unverified".into()),
+    }));
 
     // Sending the file again skips the rows that have a document and cannot recognize the one
     // that has none.

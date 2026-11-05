@@ -2196,6 +2196,8 @@ describe("importing parties from a CSV file", () => {
     await userEvent.click(screen.getByRole("button", { name: "Verificar arquivo" }));
 
     expect(await screen.findByText(/Nada foi importado: 2 linhas têm problema/)).toBeInTheDocument();
+    // The input gets the keyboard back after it was emptied.
+    expect(screen.getByLabelText("Arquivo CSV")).toHaveFocus();
     expect(screen.getByText("Linha 3: document is not a valid CPF or CNPJ")).toBeInTheDocument();
     expect(screen.getByText("Linha 4: the same document as row 2")).toBeInTheDocument();
     const [url, init] = imports(fetchMock)[0];
