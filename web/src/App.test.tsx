@@ -2706,6 +2706,14 @@ describe("what a role that cannot write is offered", () => {
     expect(await screen.findByRole("button", { name: "Alterar Maria" })).toBeInTheDocument();
   });
 
+  it("tells a role that only reads that someone else makes the categories", async () => {
+    mockApi((url) => (url === "/api/auth/me" ? { status: 200, body: as(readOnly) } : lists(url)));
+    renderAt("/companies/c1/categories");
+
+    expect(await screen.findByText(/Quem cuida do financeiro/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Usar categorias padrão" })).not.toBeInTheDocument();
+  });
+
   it("keeps the history but no edit button on a list the role only reads", async () => {
     mockApi((url) =>
       url === "/api/auth/me"

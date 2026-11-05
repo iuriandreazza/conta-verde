@@ -139,8 +139,10 @@ export function CategoriesPage() {
             <BriefcaseBusinessIcon size={40} aria-hidden />
             <p>Nenhuma categoria ainda.</p>
             <p className="muted">
-              As categorias organizam o que entra e sai do caixa e montam o DRE gerencial. Comece pelo
-              plano usual de uma pequena empresa ou crie as suas acima.
+              As categorias organizam o que entra e sai do caixa e montam o DRE gerencial.{" "}
+              {canWrite
+                ? "Comece pelo plano usual de uma pequena empresa ou crie as suas ao lado."
+                : "Quem cuida do financeiro da empresa pode criar o plano."}
             </p>
             {canWrite && (
               <Button type="button" icon={PlusIcon} pending={applying} onClick={() => void applyTemplate()}>
