@@ -17,6 +17,14 @@ pub enum DomainError {
     ServiceCannotHaveNcm,
     ServiceCannotHaveMinimumStock,
     KindCannotChange,
+    TransferGroupsGoTogether,
+    TransferCategoryHasNoChildren,
+    TransferCategoryStaysActive,
+    CategoryTooDeep,
+    /// A top-level category has to say where it lands.
+    MissingGroups,
+    /// A subcategory takes its groups from its parent.
+    GroupsAreInherited,
 }
 
 impl fmt::Display for DomainError {
@@ -44,6 +52,22 @@ impl fmt::Display for DomainError {
             ),
             Self::ServiceCannotHaveNcm => f.write_str("a service has no NCM"),
             Self::ServiceCannotHaveMinimumStock => f.write_str("a service has no stock"),
+            Self::TransferGroupsGoTogether => {
+                f.write_str("the transfers DRE group and the transfer cash-flow group go together")
+            }
+            Self::TransferCategoryHasNoChildren => {
+                f.write_str("the transfer category cannot have subcategories")
+            }
+            Self::TransferCategoryStaysActive => {
+                f.write_str("the transfer category can be renamed but not deactivated")
+            }
+            Self::CategoryTooDeep => f.write_str("categories have at most 5 levels"),
+            Self::MissingGroups => {
+                f.write_str("a top-level category needs a DRE group and a cash-flow group")
+            }
+            Self::GroupsAreInherited => {
+                f.write_str("a subcategory takes its DRE and cash-flow groups from its parent")
+            }
             Self::KindCannotChange => {
                 f.write_str("a product cannot become a service, nor the other way around")
             }

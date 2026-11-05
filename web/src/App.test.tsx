@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, vi } from "vitest";
 import { App } from "./App";
-import type { DocumentCheck, HistoryEntry, Party, Product, Profile } from "./api";
+import type { Category, CostCenter, DocumentCheck, HistoryEntry, Party, Product, Profile } from "./api";
 import { AuthProvider } from "./auth";
 import { SOURCE_URL } from "./components/Footer";
 
@@ -981,5 +981,247 @@ describe("products and services", () => {
     const region = await screen.findByRole("region", { name: "Histórico de Pão" });
     expect(await within(region).findByText(/R\$ 12,50 → R\$ 15,00/)).toBeInTheDocument();
     expect(within(region).getByText(/sim → não/)).toBeInTheDocument();
+  });
+});
+
+describe("cost centers", () => {
+  function costCenter(name: string, active = true): CostCenter {
+    return { id: `cc-${name}`, company_id: "c1", name, active };
+  }
+
+  const page = (...items: CostCenter[]) => ({ status: 200, body: { items, next_cursor: null } });
+  const bodyOf = (fetchMock: ReturnType<typeof mockApi>, method: string) => {
+    const call = fetchMock.mock.calls.find(([, init]) => init?.method === method);
+    return JSON.parse(String(call?.[1]?.body));
+  };
+
+  it("registers one, changes it in place and filters the list", async () => {
+    const store = costCenter("Loja Centro");
+    const fetchMock = mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (url.includes("/parties")) return { status: 200, body: { items: [], next_cursor: null } };
+      if (init?.method === "POST") return { status: 201, body: costCenter("Projeto X") };
+      if (init?.method === "PUT") return { status: 200, body: { ...store, name: "Loja Norte" } };
+      return page(store);
+    });
+    renderAt("/companies/c1/parties");
+    await userEvent.click(await screen.findByRole("link", { name: "Centros de custo" }));
+    expect(await screen.findByText("Loja Centro")).toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText("Nome"), "Projeto X");
+    await userEvent.click(screen.getByRole("button", { name: "Adicionar" }));
+    expect(await screen.findByText("Projeto X cadastrado.")).toBeInTheDocument();
+    expect(bodyOf(fetchMock, "POST")).toEqual({ name: "Projeto X", active: true });
+
+    await userEvent.click(screen.getByRole("button", { name: "Alterar Loja Centro" }));
+    await userEvent.clear(screen.getByLabelText("Nome"));
+    await userEvent.type(screen.getByLabelText("Nome"), "Loja Norte");
+    await userEvent.click(screen.getByRole("checkbox", { name: "Ativo" }));
+    await userEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
+    expect(await screen.findByText("Loja Norte atualizado.")).toBeInTheDocument();
+    expect(bodyOf(fetchMock, "PUT")).toEqual({ name: "Loja Norte", active: false });
+
+    await userEvent.selectOptions(screen.getByLabelText("Situação"), "false");
+    await userEvent.type(screen.getByRole("searchbox", { name: "Buscar" }), "lo");
+    await waitFor(() => {
+      const urls = fetchMock.mock.calls.map(([url]) => String(url));
+      expect(urls).toContain("/api/companies/c1/cost-centers?q=lo&active=false");
+    });
+  });
+
+  it("shows what the API refused, and the history of one", async () => {
+    const store = costCenter("Loja");
+    const entry: HistoryEntry = {
+      at: Date.UTC(2026, 10, 5, 12, 0),
+      actor: { kind: "user", id: "u1", name: "Ana" },
+      action: "updated",
+      changes: [{ field: "active", from: "true", to: "false" }],
+    };
+    mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (url.endsWith("/history")) return { status: 200, body: [entry] };
+      if (init?.method === "POST") return { status: 409, body: { error: "this name is already in use" } };
+      return page(store);
+    });
+    renderAt("/companies/c1/cost-centers");
+
+    await userEvent.type(await screen.findByLabelText("Nome"), "loja");
+    await userEvent.click(screen.getByRole("button", { name: "Adicionar" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("already in use");
+
+    await userEvent.click(screen.getByRole("button", { name: "Histórico de Loja" }));
+    const region = await screen.findByRole("region", { name: "Histórico de Loja" });
+    expect(await within(region).findByText(/sim → não/)).toBeInTheDocument();
+  });
+});
+
+describe("categories", () => {
+  function category(name: string, overrides: Partial<Category> = {}): Category {
+    return {
+      id: `cat-${name}`,
+      company_id: "c1",
+      parent_id: null,
+      name,
+      dre_group: "operating_expenses",
+      cash_flow_group: "operating",
+      level: 1,
+      active: true,
+      ...overrides,
+    };
+  }
+
+  const tree = [
+    category("Despesas"),
+    category("Aluguel", { parent_id: "cat-Despesas", level: 2 }),
+    category("Transferências", { dre_group: "transfers", cash_flow_group: "transfer" }),
+  ];
+  const listed = (items: Category[]) => ({ status: 200, body: { items } });
+  const bodyOf = (fetchMock: ReturnType<typeof mockApi>, method: string) => {
+    const call = fetchMock.mock.calls.find(([, init]) => init?.method === method);
+    return JSON.parse(String(call?.[1]?.body));
+  };
+
+  it("draws the tree with each subcategory under its parent, and the groups in words", async () => {
+    mockApi((url) => (url === "/api/auth/me" ? { status: 200, body: profile } : listed(tree)));
+    renderAt("/companies/c1/categories");
+
+    await screen.findByRole("table");
+    const rows = screen.getAllByRole("row");
+    // The subcategory comes right after its parent, indented one level.
+    expect(rows[1]).toHaveTextContent(/^Despesas/);
+    expect(rows[2]).toHaveTextContent("Subcategoria de Despesas: Aluguel");
+    expect(rows[2]).toHaveTextContent("Despesas operacionais");
+    expect(rows[2]).toHaveTextContent("Operacional");
+    expect(rows[3]).toHaveTextContent(/^Transferências/);
+    expect(within(rows[2]).getAllByRole("cell")[0].style.paddingLeft).toBe("1.75rem");
+    expect(within(rows[1]).getAllByRole("cell")[0].style.paddingLeft).toBe("0.5rem");
+  });
+
+  it("offers the default tree to a company with none, and shows it once applied", async () => {
+    const fetchMock = mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "POST") return { status: 201, body: { items: tree } };
+      return listed([]);
+    });
+    renderAt("/companies/c1/categories");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Usar categorias padrão" }));
+    expect(await screen.findByText("Transferências")).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(([url]) => String(url) === "/api/companies/c1/categories/default-template"),
+    ).toBe(true);
+    expect(screen.queryByRole("button", { name: "Usar categorias padrão" })).not.toBeInTheDocument();
+  });
+
+  it("lists the possible parents in tree order, each subcategory under its own parent", async () => {
+    const flat = [
+      category("Aluguel", { parent_id: "cat-Despesas", level: 2 }),
+      category("Despesas"),
+      category("Receitas", { dre_group: "gross_revenue" }),
+      category("Vendas", { parent_id: "cat-Receitas", level: 2, dre_group: "gross_revenue" }),
+    ];
+    mockApi((url) => (url === "/api/auth/me" ? { status: 200, body: profile } : listed(flat)));
+    renderAt("/companies/c1/categories");
+
+    await screen.findByRole("table");
+    const select = screen.getByLabelText("Subcategoria de");
+    const options = within(select).getAllByRole("option").map((option) => option.textContent);
+    expect(options).toEqual(["Nenhuma: categoria principal", "Despesas", "— Aluguel", "Receitas", "— Vendas"]);
+  });
+
+  it("shows the tree when the default categories were applied from another tab meanwhile", async () => {
+    let applied = false;
+    mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "POST") {
+        applied = true;
+        return { status: 409, body: { error: "the default categories can only be applied to a company without categories" } };
+      }
+      return listed(applied ? tree : []);
+    });
+    renderAt("/companies/c1/categories");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Usar categorias padrão" }));
+    expect(await screen.findByRole("table")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Usar categorias padrão" })).not.toBeInTheDocument();
+  });
+
+  it("asks a top-level category for its groups, with the usual cash flow filled in", async () => {
+    const fetchMock = mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "POST") return { status: 201, body: category("Impostos", { dre_group: "deductions" }) };
+      return listed(tree);
+    });
+    renderAt("/companies/c1/categories");
+
+    await userEvent.type(await screen.findByLabelText("Nome"), "Receitas extras");
+    await userEvent.selectOptions(screen.getByLabelText("Grupo no DRE"), "financial_result");
+    expect(screen.getByLabelText("Grupo no fluxo de caixa")).toHaveValue("financing");
+    await userEvent.click(screen.getByRole("button", { name: "Adicionar" }));
+
+    expect(await screen.findByText("Impostos cadastrada.")).toBeInTheDocument();
+    expect(bodyOf(fetchMock, "POST")).toEqual({
+      name: "Receitas extras",
+      dre_group: "financial_result",
+      cash_flow_group: "financing",
+    });
+  });
+
+  it("sends only the parent for a subcategory, which inherits the groups, and starts from its button", async () => {
+    const fetchMock = mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "POST") return { status: 201, body: category("Luz", { parent_id: "cat-Despesas", level: 2 }) };
+      return listed(tree);
+    });
+    renderAt("/companies/c1/categories");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Nova subcategoria de Despesas" }));
+    expect(screen.getByLabelText("Subcategoria de")).toHaveValue("cat-Despesas");
+    expect(screen.queryByLabelText("Grupo no DRE")).not.toBeInTheDocument();
+    expect(screen.getByText(/Herda de Despesas/)).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Nome"), "Luz");
+    await userEvent.click(screen.getByRole("button", { name: "Adicionar" }));
+
+    expect(await screen.findByText("Luz cadastrada.")).toBeInTheDocument();
+    expect(bodyOf(fetchMock, "POST")).toEqual({ name: "Luz", parent_id: "cat-Despesas" });
+    // The category for transfers takes no subcategory.
+    expect(screen.queryByRole("button", { name: "Nova subcategoria de Transferências" })).not.toBeInTheDocument();
+  });
+
+  it("changes only the name and the flag, and keeps the transfer category active", async () => {
+    const fetchMock = mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "PUT") {
+        return { status: 200, body: { ...tree[2], name: "Entre contas" } };
+      }
+      return listed(tree);
+    });
+    renderAt("/companies/c1/categories");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Alterar Transferências" }));
+    expect(screen.getByText(/O lugar na árvore e os grupos não mudam/)).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Ativa" })).toBeDisabled();
+    await userEvent.clear(screen.getByLabelText("Nome"));
+    await userEvent.type(screen.getByLabelText("Nome"), "Entre contas");
+    await userEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
+
+    expect(await screen.findByText("Entre contas atualizada.")).toBeInTheDocument();
+    expect(bodyOf(fetchMock, "PUT")).toEqual({ name: "Entre contas", active: true });
+  });
+
+  it("shows what the API refused, such as deactivating a parent with active subcategories", async () => {
+    mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "PUT") {
+        return { status: 409, body: { error: "deactivate the subcategories of this category first" } };
+      }
+      return listed(tree);
+    });
+    renderAt("/companies/c1/categories");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Alterar Despesas" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Ativa" }));
+    await userEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("deactivate the subcategories");
   });
 });

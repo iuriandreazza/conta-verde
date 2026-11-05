@@ -1,6 +1,6 @@
 ---
 title: "ADR 0012: Managerial chart of accounts, not a general ledger"
-status: proposed
+status: accepted
 date: 2026-11-04
 tags: [adr, finance, reporting]
 ---
@@ -52,7 +52,54 @@ not by a ledger inside the product.
 - A future ledger would be a separate bounded context fed by the same entries, not a
   rewrite.
 
+## Implementation notes
+
+First slice (`feat/categories-cost-centers`): the registers only. Entries, reports and the DRE come with Phases 2 and 6, and
+the rules below are what they will rely on. Where this differs from the decision above, the decision stays the target.
+
+**Groups.** The DRE group is one of `gross_revenue`, `deductions`, `costs`, `operating_expenses`, `financial_result`,
+`investments`, `outside_result` (loans and owner capital: cash that moves but is not a result) and `transfers`; the cash-flow
+group is one of `operating`, `investing`, `financing` and `transfer`. The keys are stored (a `CHECK` and the audit trail), so they
+do not change; the Portuguese labels live in the web app. `transfers` and `transfer` go together.
+
+**The tree.**
+- A category has a name, an optional parent, its two groups and an active flag. Names are unique among siblings, ignoring case, and
+  among the roots too. The tree is at most five levels deep.
+- Only a root chooses the groups. A subcategory inherits both from its parent; the server sets them and a request cannot. They are
+  stored on every row, so a report reads a column instead of walking the tree.
+- **The parent and the groups are fixed once the category exists.** Moving a category needs cycle and depth checks over its
+  subtree, and changing a group has to cascade over it, one audit entry per row. Until entries exist, "deactivate it and create the
+  right one" is the answer; both are in "Revisit when".
+- Deactivating a category with active subcategories is refused (`409`), and so is adding a subcategory to, or reactivating one under,
+  an inactive category: an active category is never under an inactive one. There is no delete; entries will reference categories.
+- **The transfer category** is the root whose group is `transfers`. There is at most one per company (a unique index), it has no
+  subcategories and cannot be deactivated, but can be renamed, so Phase 2 finds it by its group and never by its name.
+- **The default template** (revenue, deductions, costs, operating expenses, financial result, investments, loans and capital, and
+  transfers, with their usual subcategories) is applied on request, only to a company that has no categories, and writes every
+  category and its audit entry in one transaction. It is not part of signing up, which would tie accounts to categories; the empty
+  page offers it.
+- The list of categories is the whole tree as a flat list with the parent id, in a fixed order, not a page: a tree has to be drawn
+  whole, and a company has dozens of categories, not thousands. It is the one list that does not follow
+  [ADR 0018](0018-list-endpoints-search-filter-sort.md)'s paging.
+
+- At most 1000 categories per company, checked when one is created, so that the whole-tree list is always complete.
+- The rules about the neighbours of a category (no active subcategory left under an inactive one, the limit, whether the company
+  has any category yet) are checked by the use case from the list it just read, not by the database. Two requests at the same
+  moment can slip past them. The database refuses what a single row can show: duplicate names, a second transfer category, a
+  parent that is not in the company, one level up and of the same groups (which also keeps anything off the transfer category),
+  and a malformed row. It does not see that an active row has an inactive parent; a constraint trigger is the fix if it ever
+  matters.
+- The in-memory adapter orders and folds case the way Rust does, and Postgres the way the database's collation does, so siblings
+  with accents (the template has "Água, luz e internet") come out in another order in memory. The contract tests use ASCII names;
+  the in-memory adapter is for tests and local runs.
+- Subcategory names show in the web app as the screen-reader text "Subcategoria de X", under an indented name; the page is a
+  table, not an ARIA tree, which would owe the user arrow-key navigation.
+
+**Cost centers** are a flat register: a name, unique per company ignoring case, and an active flag, listed as ADR 0018 says.
+They are not a tree for now.
+
 ## Revisit when
 
-Accountants ask for statutory reports (balance sheet, trial balance) inside the product;
+Moving a category, or changing its groups, becomes necessary once entries exist (it then needs a rule for the entries already
+classified), or cost centers need a hierarchy. And, as before: accountants ask for statutory reports (balance sheet, trial balance) inside the product;
 that would be a new ADR introducing a ledger context.

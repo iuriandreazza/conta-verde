@@ -27,7 +27,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0009](0009-postgres-only-background-jobs.md) | PostgreSQL is the only infrastructure; jobs run on it | accepted | 2 |
 | [0010](0010-payment-providers.md) | Payment providers behind ports | proposed | 4 |
 | [0011](0011-bank-data-ingestion.md) | Bank data: OFX first, aggregator later | proposed | 2, 8 |
-| [0012](0012-managerial-accounting-model.md) | Managerial chart of accounts, not a general ledger | proposed | 2, 6 |
+| [0012](0012-managerial-accounting-model.md) | Managerial chart of accounts, not a general ledger | accepted | 1, 2, 6 |
 | [0013](0013-accountant-access-and-exports.md) | Accountant access and exports | proposed | 6 |
 | [0014](0014-notifications.md) | Notifications behind ports | proposed | 4 |
 | [0015](0015-public-api-and-webhooks.md) | Public API and webhooks | proposed | 8 |

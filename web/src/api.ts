@@ -118,6 +118,65 @@ export interface ProductFilters {
 
 export const NO_PRODUCT_FILTERS: ProductFilters = { q: "", kind: "", active: "", sort: "name" };
 
+export interface CostCenter {
+  id: string;
+  company_id: string;
+  name: string;
+  active: boolean;
+}
+
+export interface CostCenterPage {
+  items: CostCenter[];
+  next_cursor: string | null;
+}
+
+export interface CostCenterInput {
+  name: string;
+  active: boolean;
+}
+
+export interface CostCenterFilters {
+  q: string;
+  active: "" | "true" | "false";
+  sort: "name" | "-name";
+}
+
+export const NO_COST_CENTER_FILTERS: CostCenterFilters = { q: "", active: "", sort: "name" };
+
+/** The keys the API stores and sends; `lib/groups.ts` has the labels people read. */
+export type DreGroup =
+  | "gross_revenue"
+  | "deductions"
+  | "costs"
+  | "operating_expenses"
+  | "financial_result"
+  | "investments"
+  | "outside_result"
+  | "transfers";
+
+export type CashFlowGroup = "operating" | "investing" | "financing" | "transfer";
+
+/** A node of the tree of categories; `parent_id` says where it goes, `null` for a top-level one. */
+export interface Category {
+  id: string;
+  company_id: string;
+  parent_id: string | null;
+  name: string;
+  dre_group: DreGroup;
+  cash_flow_group: CashFlowGroup;
+  /** 1 for a top-level category. */
+  level: number;
+  active: boolean;
+}
+
+/** A top-level category chooses the groups; a subcategory names its parent and says nothing else. */
+export interface NewCategory {
+  name: string;
+  parent_id?: string;
+  dre_group?: DreGroup;
+  cash_flow_group?: CashFlowGroup;
+}
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -210,4 +269,42 @@ export const api = {
     }),
   productHistory: (companyId: string, productId: string) =>
     request<HistoryEntry[]>(`/companies/${companyId}/products/${productId}/history`),
+  listCostCenters: (
+    companyId: string,
+    filters: CostCenterFilters = NO_COST_CENTER_FILTERS,
+    after?: string,
+  ) => {
+    const params = new URLSearchParams();
+    if (filters.q) params.set("q", filters.q);
+    if (filters.active) params.set("active", filters.active);
+    if (filters.sort !== NO_COST_CENTER_FILTERS.sort) params.set("sort", filters.sort);
+    if (after) params.set("after", after);
+    const query = params.size > 0 ? `?${params}` : "";
+    return request<CostCenterPage>(`/companies/${companyId}/cost-centers${query}`);
+  },
+  createCostCenter: (companyId: string, input: CostCenterInput) =>
+    post<CostCenter>(`/companies/${companyId}/cost-centers`, input),
+  updateCostCenter: (companyId: string, id: string, input: CostCenterInput) =>
+    request<CostCenter>(`/companies/${companyId}/cost-centers/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  costCenterHistory: (companyId: string, id: string) =>
+    request<HistoryEntry[]>(`/companies/${companyId}/cost-centers/${id}/history`),
+  /** The whole tree, flat and unpaged. */
+  listCategories: (companyId: string) =>
+    request<{ items: Category[] }>(`/companies/${companyId}/categories`),
+  createCategory: (companyId: string, input: NewCategory) =>
+    post<Category>(`/companies/${companyId}/categories`, input),
+  /** Only the name and the active flag change; the parent and the groups are fixed. */
+  changeCategory: (companyId: string, id: string, input: { name: string; active: boolean }) =>
+    request<Category>(`/companies/${companyId}/categories/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  /** For a company that has no categories yet. */
+  applyDefaultCategories: (companyId: string) =>
+    post<{ items: Category[] }>(`/companies/${companyId}/categories/default-template`),
+  categoryHistory: (companyId: string, id: string) =>
+    request<HistoryEntry[]>(`/companies/${companyId}/categories/${id}/history`),
 };

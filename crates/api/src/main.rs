@@ -1,12 +1,28 @@
 use std::time::Duration;
 
-use conta_verde_api::{ApiConfig, router};
-use conta_verde_application::{AuthService, PartyService, ProductService};
+use conta_verde_api::{ApiConfig, Ports, Services, router};
+use conta_verde_application::{
+    AuthService, CategoryService, CostCenterService, PartyService, ProductService,
+};
 use conta_verde_infrastructure::{
-    Argon2SecretService, BrasilApiCnpjRegistry, CachedCnpjRegistry, PostgresIdentityRepository,
-    PostgresPartyRepository, PostgresProductRepository, connect_and_migrate,
+    Argon2SecretService, BrasilApiCnpjRegistry, CachedCnpjRegistry, PostgresCategoryRepository,
+    PostgresCostCenterRepository, PostgresIdentityRepository, PostgresPartyRepository,
+    PostgresProductRepository, connect_and_migrate,
 };
 use tracing_subscriber::EnvFilter;
+
+/// The adapters of a running installation.
+struct PostgresPorts;
+
+impl Ports for PostgresPorts {
+    type Parties = PostgresPartyRepository;
+    type Registry = Option<CachedCnpjRegistry<BrasilApiCnpjRegistry>>;
+    type Identity = PostgresIdentityRepository;
+    type Secrets = Argon2SecretService;
+    type Products = PostgresProductRepository;
+    type CostCenters = PostgresCostCenterRepository;
+    type Categories = PostgresCategoryRepository;
+}
 
 const SESSION_LIFETIME: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 const CNPJ_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
@@ -30,6 +46,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         cnpj_registry_from_env()?,
     );
     let products = ProductService::new(PostgresProductRepository::new(pool.clone()));
+    let cost_centers = CostCenterService::new(PostgresCostCenterRepository::new(pool.clone()));
+    let categories = CategoryService::new(PostgresCategoryRepository::new(pool.clone()));
     let auth = AuthService::new(
         PostgresIdentityRepository::new(pool),
         Argon2SecretService::new()?,
@@ -37,9 +55,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     );
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     tracing::info!(%bind_addr, "listening");
-    axum::serve(listener, router(parties, products, auth, config))
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(
+        listener,
+        router::<PostgresPorts>(
+            Services {
+                parties,
+                products,
+                cost_centers,
+                categories,
+                auth,
+            },
+            config,
+        ),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
     Ok(())
 }
 
