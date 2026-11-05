@@ -266,7 +266,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_blank_name_and_control_characters_in_it() {
+    fn rejects_a_blank_name_a_nul_and_an_overlong_one() {
         let named = |name: &str| {
             build(ProductDraft {
                 name: name.into(),
@@ -275,6 +275,13 @@ mod tests {
         };
         assert_eq!(named("  ").unwrap_err(), DomainError::EmptyName);
         assert_eq!(named("Pão\0").unwrap_err(), DomainError::InvalidName);
+        // A tab or a line break is odd but storable, and parties with one must stay readable.
+        assert!(named("Pão\tfrancês").is_ok());
+        assert!(named(&"ã".repeat(200)).is_ok());
+        assert_eq!(
+            named(&"ã".repeat(201)).unwrap_err(),
+            DomainError::InvalidName
+        );
     }
 
     #[test]

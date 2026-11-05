@@ -38,6 +38,7 @@ export function ProductsPage() {
 
   const {
     items: products,
+    setItems,
     nextCursor,
     loading,
     loadingMore,
@@ -63,8 +64,13 @@ export function ProductsPage() {
         setSaved(`${created.name} cadastrado.`);
       } else {
         const updated = await api.updateProduct(companyId, editing.id, input);
+        // In place: the list stays on the page it was on, and the row stays where it is until the
+        // filters are applied again.
+        setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)));
         setEditing(null);
         setSaved(`${updated.name} atualizado.`);
+        setFormVersion((version) => version + 1);
+        return;
       }
       await reload();
     } catch (failure) {
@@ -91,10 +97,15 @@ export function ProductsPage() {
           // A new key starts the form over for another product, or an empty one after a save.
           key={`${editing?.id ?? "new"}-${formVersion}`}
           product={editing}
+          // After a save or when editing, the person is in the form: put the cursor back in it.
+          focusName={editing !== null || formVersion > 0}
           pending={saving}
           error={formError}
           onSubmit={(input) => void handleSubmit(input)}
-          onCancel={() => setEditing(null)}
+          onCancel={() => {
+            setEditing(null);
+            setFormError(null);
+          }}
         />
         <Notice message={saved} tone="success" />
       </section>

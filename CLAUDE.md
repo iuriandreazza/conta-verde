@@ -40,8 +40,8 @@ One crate per layer; dependencies point inwards and the compiler enforces it.
 
 | Crate | Holds | Depends on |
 |-------|-------|------------|
-| `domain` | Entities, value objects, rules. No I/O, no serde, no sqlx. | `uuid` only |
-| `application` | Use cases (`*Service`) and port traits (`*Repository`). | `domain` |
+| `domain` | Entities, value objects, rules. No I/O, no serde, no sqlx. | `uuid`, `rust_decimal` |
+| `application` | Use cases (`*Service`) and port traits (`*Repository`). | `domain`, `uuid` |
 | `infrastructure` | Adapters implementing ports: Postgres (sqlx) and in-memory. | `application`, `domain` |
 | `api` | axum routes, request/response DTOs, `main.rs` wiring. | all |
 

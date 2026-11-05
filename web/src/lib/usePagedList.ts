@@ -36,20 +36,22 @@ export function usePagedList<T, F extends { q: string }>(
 
   const fetchRef = useRef(fetchPage);
   fetchRef.current = fetchPage;
+  const appliedRef = useRef(applied);
+  appliedRef.current = applied;
   // Counts the requests for a first page: a reply is only used while it is still the latest, so a
   // slow answer to an earlier search can neither replace a newer one nor receive its "load more".
   const latestListing = useRef(0);
 
   // Only the very first load shows the spinner; refreshing after an insert or a new filter keeps
   // the rows on screen until the new ones arrive.
-  const reload = useCallback(async () => {
+  const load = useCallback(async (filtersToApply: F) => {
     const listing = ++latestListing.current;
     setError(null);
     // The old cursor belongs to the old filters: "load more" must not be clickable until the new
     // first page says whether there is a next one.
     setNextCursor(null);
     try {
-      const page = await fetchRef.current(applied);
+      const page = await fetchRef.current(filtersToApply);
       if (listing === latestListing.current) {
         setItems(page.items);
         setNextCursor(page.next_cursor);
@@ -65,11 +67,14 @@ export function usePagedList<T, F extends { q: string }>(
         setLoading(false);
       }
     }
-  }, [applied]);
+  }, []);
 
   useEffect(() => {
-    void reload();
-  }, [reload]);
+    void load(applied);
+  }, [load, applied]);
+
+  /** Loads the first page again with the filters on screen at the moment it is called. */
+  const reload = useCallback(() => load(appliedRef.current), [load]);
 
   async function loadMore() {
     if (nextCursor === null || loadingMore) {

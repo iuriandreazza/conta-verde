@@ -12,6 +12,10 @@ pub(crate) enum ApiError {
     InvalidBody(axum::extract::rejection::JsonRejection),
     /// A list parameter this API does not understand; the message names which one.
     InvalidQuery(&'static str),
+    /// Query parameters that are not even the right shape, like `limit=abc`.
+    InvalidParameters(axum::extract::rejection::QueryRejection),
+    /// A body field this endpoint needs that the request left out.
+    InvalidField(&'static str),
 }
 
 impl From<ApplicationError> for ApiError {
@@ -30,6 +34,10 @@ impl IntoResponse for ApiError {
         let (status, message) = match &self {
             Self::InvalidCursor => (StatusCode::BAD_REQUEST, "invalid cursor".to_owned()),
             Self::InvalidBody(rejection) => crate::json::describe(rejection),
+            Self::InvalidParameters(rejection) => (rejection.status(), rejection.body_text()),
+            Self::InvalidField(message) => {
+                (StatusCode::UNPROCESSABLE_ENTITY, (*message).to_owned())
+            }
             Self::InvalidQuery(message) => (StatusCode::BAD_REQUEST, (*message).to_owned()),
             Self::Application(error) => describe(error),
         };

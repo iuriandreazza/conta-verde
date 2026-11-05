@@ -16,6 +16,8 @@ CREATE TABLE products (
     active        BOOLEAN     NOT NULL,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT products_kind_valid CHECK (kind IN ('product', 'service')),
+    -- The name is in a btree index, which cannot hold a row of more than about 2.7 KB.
+    CONSTRAINT products_name_is_short CHECK (char_length(name) BETWEEN 1 AND 200),
     CONSTRAINT products_ncm_has_eight_digits CHECK (ncm IS NULL OR ncm ~ '^[0-9]{8}$'),
     CONSTRAINT products_amounts_not_negative CHECK (
         COALESCE(sale_price, 0) >= 0 AND COALESCE(cost_price, 0) >= 0 AND COALESCE(minimum_stock, 0) >= 0

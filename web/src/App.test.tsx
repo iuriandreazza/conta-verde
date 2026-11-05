@@ -792,6 +792,85 @@ describe("products and services", () => {
     expect(sent).not.toHaveProperty("minimum_stock");
   });
 
+  it("sends the whole product on a change, a cleared price as absent and the unchecked flag as false", async () => {
+    const bread = product("Pão", { sale_price: "12.5", cost_price: "7", active: true });
+    const fetchMock = mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "PUT") return { status: 200, body: bread };
+      return page(bread);
+    });
+    renderAt("/companies/c1/products");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Alterar Pão" }));
+    await userEvent.clear(screen.getByLabelText("Preço de custo (R$)"));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Ativo" }));
+    await userEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
+
+    await screen.findByText("Pão atualizado.");
+    expect(bodyOf(fetchMock, "PUT")).toEqual({
+      kind: "product",
+      name: "Pão",
+      unit: "UN",
+      sale_price: "12.5",
+      active: false,
+    });
+  });
+
+  it("keeps the list where it was after a change, and forgets an error when the change is cancelled", async () => {
+    const first = product("Clara");
+    const second = product("Davi", { sale_price: "1" });
+    let putStatus = 409;
+    const fetchMock = mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "PUT") {
+        return putStatus === 200
+          ? { status: 200, body: { ...second, sale_price: "2" } }
+          : { status: 409, body: { error: "a product with this SKU already exists" } };
+      }
+      if (url.includes("after=")) return page(second);
+      return { status: 200, body: { items: [first], next_cursor: "id|Clara" } };
+    });
+    renderAt("/companies/c1/products");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Carregar mais" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Alterar Davi" }));
+    await userEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("SKU already exists");
+
+    await userEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    putStatus = 200;
+    await userEvent.click(screen.getByRole("button", { name: "Alterar Davi" }));
+    await userEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
+    expect(await screen.findByText("Davi atualizado.")).toBeInTheDocument();
+    // Both pages are still there, and no request went back to the first page.
+    expect(screen.getByText("Clara")).toBeInTheDocument();
+    expect(screen.getByText("R$ 2,00")).toBeInTheDocument();
+    const firstPages = fetchMock.mock.calls.filter(
+      ([url, init]) => String(url).endsWith("/products") && init?.method === undefined,
+    );
+    expect(firstPages).toHaveLength(1);
+  });
+
+  it("does not rewrite a price written the English way", async () => {
+    const fetchMock = mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "POST") {
+        return { status: 422, body: { error: "sale price must be a decimal" } };
+      }
+      return page();
+    });
+    renderAt("/companies/c1/products");
+
+    await userEvent.type(await screen.findByLabelText("Nome"), "Bolo");
+    await userEvent.type(screen.getByLabelText("Preço de venda (R$)"), "1,234.56");
+    await userEvent.click(screen.getByRole("button", { name: "Adicionar" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("sale price must be");
+    expect(bodyOf(fetchMock, "POST").sale_price).toBe("1,234.56");
+  });
+
   it("asks what was meant by 1.234 instead of guessing, and sends nothing", async () => {
     const fetchMock = mockApi((url) =>
       url === "/api/auth/me" ? { status: 200, body: profile } : page(),

@@ -66,7 +66,9 @@ impl ProductRepository for InMemoryProductRepository {
             .products
             .iter()
             .position(|stored| {
-                stored.company_id() == product.company_id() && stored.id() == product.id()
+                stored.company_id() == product.company_id()
+                    && stored.id() == product.id()
+                    && stored.kind() == product.kind()
             })
             .ok_or(RepositoryError::NotFound)?;
         if state.sku_taken(product) {

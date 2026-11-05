@@ -906,6 +906,51 @@ pub async fn stores_products_with_their_trail<R: ProductRepository>(
     );
     repository.update(&same_sku, &entry).await.unwrap();
 
+    // The kind is fixed at registration: the port refuses to change it, and nothing is written.
+    let kind_swap = Product::new(
+        bread.id(),
+        company,
+        product_draft("Pão serviço", ProductKind::Service, None, true),
+    )
+    .unwrap();
+    let entry = product_entry(&kind_swap, AuditAction::Updated, vec![]);
+    assert_eq!(
+        repository.update(&kind_swap, &entry).await,
+        Err(RepositoryError::NotFound)
+    );
+    assert_eq!(
+        repository
+            .find(company, bread.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .kind(),
+        ProductKind::Product
+    );
+
+    // A SKU given up by a rename is free for another product of the company.
+    let freed = same_sku
+        .replaced_with(product_draft(
+            "Pão francês 2",
+            ProductKind::Product,
+            Some("PAO-2"),
+            true,
+        ))
+        .unwrap();
+    let entry = product_entry(
+        &freed,
+        AuditAction::Updated,
+        product_changes(&same_sku, &freed),
+    );
+    repository.update(&freed, &entry).await.unwrap();
+    let reuse = new_product(company, "Pão novo", Some("PAO-1"));
+    let entry = product_entry(
+        &reuse,
+        AuditAction::Created,
+        product_creation_changes(&reuse),
+    );
+    repository.save(&reuse, &entry).await.unwrap();
+
     // A product that is not in that company cannot be updated from it, and leaves no entry.
     let foreign = Product::new(
         bread.id(),

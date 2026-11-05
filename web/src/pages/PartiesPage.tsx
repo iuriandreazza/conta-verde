@@ -114,7 +114,7 @@ export function PartiesPage() {
         <form onSubmit={handleCreate}>
           <label>
             Nome
-            <input name="name" required />
+            <input name="name" required maxLength={200} />
           </label>
           <label>
             CPF ou CNPJ

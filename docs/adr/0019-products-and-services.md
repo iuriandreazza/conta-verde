@@ -26,6 +26,9 @@ tax classification is a different code, handled with the fiscal phase).
 
 One `products` table and one `Product` entity with `kind` (`product` or `service`).
 
+- **Name** is at most 200 characters and has no NUL byte, for parties too: the name is in a btree index
+  that cannot hold a longer row, and Postgres refuses a NUL. Nothing stricter, so a name already stored
+  stays readable.
 - **Kind is fixed at registration.** Stock and fiscal data hang from it, so an edit that changes
   it is refused (`422`). A service has no NCM and no minimum stock; sending them is refused
   instead of stored and ignored.
@@ -40,7 +43,8 @@ One `products` table and one `Product` entity with `kind` (`product` or `service
   optional, never negative, and travel as strings in both directions. See below.
 - **Inactive** products stay in lists unless `active=true` is asked for, because someone who
   deactivated a product must find it again to bring it back. There is no delete.
-- **Editing** is a full replacement (`PUT`) and is audited as one entry with the fields that
+- **Editing** is a full replacement (`PUT`), so `active` must be sent (registering defaults it to true;
+  a replacement that left it out would switch a deactivated product back on), and is audited as one entry with the fields that
   changed. A request that changes nothing writes nothing and records nothing, so the trail
   lists changes, not attempts ([ADR 0008](0008-audit-trail.md)).
 - **Lists** follow [ADR 0018](0018-list-endpoints-search-filter-sort.md): `q` over name and
@@ -58,7 +62,9 @@ One `products` table and one `Product` entity with `kind` (`product` or `service
   what a Brazilian types (`1.234,56`) into the plain form before sending and formats the answer
   with string operations; it never turns a price into a `Number`. A number written with dots and
   no comma that could be thousands (`1.234`) is refused until the person says which they meant,
-  since both readings are valid decimals and either would be stored silently.
+  since both readings are valid decimals and either would be stored silently. Text with a comma is
+  only rewritten when it has the Brazilian shape (`1.234,56`); `1,234.56`, pasted from an English-language
+  spreadsheet, goes through as typed and the API refuses it.
 - Amounts are bound to Postgres as text and cast, and read back as text, which avoids a
   database feature for the decimal type.
 

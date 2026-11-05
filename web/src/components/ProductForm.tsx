@@ -15,6 +15,8 @@ const AMOUNT_FIELDS = [
 interface ProductFormProps {
   /** The product being changed, or `null` to register a new one. */
   product: Product | null;
+  /** Starts with the cursor in the name, which also brings the form into view. */
+  focusName: boolean;
   pending: boolean;
   error: string | null;
   onSubmit: (input: ProductInput) => void;
@@ -25,7 +27,14 @@ interface ProductFormProps {
  * Registers a product or service, or changes one: the form is the whole product either way, since
  * a change replaces every field. Remount it (a `key`) to start from another product.
  */
-export function ProductForm({ product, pending, error, onSubmit, onCancel }: ProductFormProps) {
+export function ProductForm({
+  product,
+  focusName,
+  pending,
+  error,
+  onSubmit,
+  onCancel,
+}: ProductFormProps) {
   const [kind, setKind] = useState<ProductKind>(product?.kind ?? "product");
   const isProduct = kind === "product";
   const [fieldError, setFieldError] = useState<string | null>(null);
@@ -78,7 +87,13 @@ export function ProductForm({ product, pending, error, onSubmit, onCancel }: Pro
       </label>
       <label>
         Nome
-        <input name="name" required defaultValue={product?.name} />
+        <input
+          name="name"
+          required
+          maxLength={200}
+          autoFocus={focusName}
+          defaultValue={product?.name}
+        />
       </label>
       <label>
         SKU

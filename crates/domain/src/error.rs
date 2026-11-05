@@ -28,7 +28,9 @@ impl fmt::Display for DomainError {
             Self::MissingRole => f.write_str("party must be a customer, a supplier or both"),
             Self::WeakPassword => f.write_str("password must have between 8 and 128 characters"),
             Self::NoCnpjToVerify => f.write_str("the party has no CNPJ to verify"),
-            Self::InvalidName => f.write_str("name must not contain control characters"),
+            Self::InvalidName => {
+                f.write_str("name must have at most 200 characters and no null characters")
+            }
             Self::InvalidSku => {
                 f.write_str("SKU must have at most 60 letters, digits or the characters . - _ /")
             }

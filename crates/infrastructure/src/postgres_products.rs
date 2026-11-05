@@ -91,7 +91,7 @@ impl ProductRepository for PostgresProductRepository {
             "UPDATE products SET name = $3, sku = $4, unit = $5, ncm = $6, \
              sale_price = CAST($7 AS NUMERIC), cost_price = CAST($8 AS NUMERIC), \
              minimum_stock = CAST($9 AS NUMERIC), active = $10 \
-             WHERE id = $1 AND company_id = $2",
+             WHERE id = $1 AND company_id = $2 AND kind = $11",
         )
         .bind(product.id().as_uuid())
         .bind(product.company_id().as_uuid())
@@ -103,10 +103,12 @@ impl ProductRepository for PostgresProductRepository {
         .bind(product.cost_price().map(|amount| amount.to_string()))
         .bind(product.minimum_stock().map(|amount| amount.to_string()))
         .bind(product.is_active())
+        .bind(product.kind().as_str())
         .execute(&mut *tx)
         .await
         .map_err(write_error)?;
-        // Matching no row means the product is not in that company: report it, do not pretend.
+        // Matching no row means the product is not in that company, or is not of that kind: the
+        // kind is fixed at registration. Report it, do not pretend.
         // The transaction is dropped, so no audit row is left for a write that did not happen.
         if result.rows_affected() == 0 {
             return Err(RepositoryError::NotFound);
@@ -245,26 +247,44 @@ mod tests {
                 .await
             }
         };
-        // A service with an NCM, a malformed NCM, a negative price and an unknown kind.
-        assert!(
-            insert("ncm) VALUES ($1, $2, 'service', 'x', 'UN', true, '19059090')")
-                .await
-                .is_err()
+        // A service with an NCM, a malformed NCM, a negative price, an unknown kind and a name too
+        // long for the index: each is refused by its own rule.
+        let refused_by = |result: Result<_, sqlx::Error>| match result {
+            Err(sqlx::Error::Database(db)) => db.constraint().map(str::to_owned),
+            _ => None,
+        };
+        let service_ncm = insert("ncm) VALUES ($1, $2, 'service', 'x', 'UN', true, '19059090')");
+        let short_ncm = insert("ncm) VALUES ($1, $2, 'product', 'x', 'UN', true, '1905')");
+        let negative = insert("sale_price) VALUES ($1, $2, 'product', 'x', 'UN', true, -1)");
+        let unknown_kind = insert("ncm) VALUES ($1, $2, 'gadget', 'x', 'UN', true, NULL)");
+        assert_eq!(
+            refused_by(service_ncm.await).as_deref(),
+            Some("products_service_has_no_stock_data")
         );
-        assert!(
-            insert("ncm) VALUES ($1, $2, 'product', 'x', 'UN', true, '1905')")
-                .await
-                .is_err()
+        assert_eq!(
+            refused_by(short_ncm.await).as_deref(),
+            Some("products_ncm_has_eight_digits")
         );
-        assert!(
-            insert("sale_price) VALUES ($1, $2, 'product', 'x', 'UN', true, -1)")
-                .await
-                .is_err()
+        assert_eq!(
+            refused_by(negative.await).as_deref(),
+            Some("products_amounts_not_negative")
         );
-        assert!(
-            insert("ncm) VALUES ($1, $2, 'gadget', 'x', 'UN', true, NULL)")
-                .await
-                .is_err()
+        assert_eq!(
+            refused_by(unknown_kind.await).as_deref(),
+            Some("products_kind_valid")
+        );
+        let too_long = sqlx::query(
+            "INSERT INTO products (id, company_id, kind, name, unit, active) \
+             VALUES ($1, $2, 'product', $3, 'UN', true)",
+        )
+        .bind(uuid::Uuid::new_v4())
+        .bind(company.as_uuid())
+        .bind("x".repeat(201))
+        .execute(&pool)
+        .await;
+        assert_eq!(
+            refused_by(too_long).as_deref(),
+            Some("products_name_is_short")
         );
         assert!(
             insert("ncm) VALUES ($1, $2, 'product', 'x', 'UN', true, '19059090')")

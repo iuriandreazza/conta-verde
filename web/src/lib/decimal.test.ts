@@ -15,7 +15,11 @@ describe("decimal text", () => {
     expect(toApiDecimal("   ")).toBeUndefined();
     // Not a decimal: left alone, so the API says so.
     expect(toApiDecimal("1e3")).toBe("1e3");
-    expect(toApiDecimal("-1,5")).toBe("-1.5");
+    expect(toApiDecimal("-1,5")).toBe("-1,5");
+    // Written the English way, or with dots in the wrong places: untouched, so the API refuses it.
+    for (const text of ["1,000.00", "1,234.56", "12,345.678", "1.2,5"]) {
+      expect(toApiDecimal(text)).toBe(text);
+    }
   });
 
   it("refuses to guess whether 1.234 is a thousand or a little over one", () => {

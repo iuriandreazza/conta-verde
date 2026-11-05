@@ -899,7 +899,8 @@ mod tests {
             "ncm": "1905.90.90",
             "sale_price": "12.50",
             "cost_price": "7",
-            "minimum_stock": "10.000"
+            "minimum_stock": "10.000",
+            "active": true
         })
     }
 
@@ -1107,5 +1108,70 @@ mod tests {
             assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{query}");
             assert!(reply.body["error"].is_string(), "{query}");
         }
+    }
+
+    #[tokio::test]
+    async fn replacing_must_say_whether_the_product_is_active() {
+        let app = app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let mut inactive = product_body();
+        inactive["active"] = json!(false);
+        let created = post_product(&app, &cookie, company_id, inactive).await;
+        assert_eq!(created.body["active"], false);
+        let id = created.body["id"].as_str().unwrap();
+
+        // Registering may leave it out (active), replacing may not: it would switch the product on.
+        let uri = format!("{}/{id}", products_uri(company_id));
+        let mut without_active = product_body();
+        without_active.as_object_mut().unwrap().remove("active");
+        let reply = send(
+            &app,
+            json_request("PUT", &uri, Some(&cookie), without_active.clone()),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            reply.body["error"]
+                .as_str()
+                .unwrap()
+                .contains("active is required")
+        );
+        let listed = send(
+            &app,
+            get_request(
+                &format!("{}?active=true", products_uri(company_id)),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert!(listed.body["items"].as_array().unwrap().is_empty());
+        without_active["sku"] = json!("other");
+        let bare = post_product(&app, &cookie, company_id, without_active).await;
+        assert_eq!(bare.body["active"], true);
+    }
+
+    #[tokio::test]
+    async fn malformed_list_parameters_and_overlong_names_are_json_refusals() {
+        let app = app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        for uri in [products_uri(company_id), parties_uri(company_id)] {
+            let reply = send(
+                &app,
+                get_request(&format!("{uri}?limit=abc"), Some(&cookie)),
+            )
+            .await;
+            assert!(reply.status.is_client_error(), "{uri}");
+            assert!(reply.body["error"].is_string(), "{uri}");
+        }
+        let mut long = product_body();
+        long["name"] = json!("ã".repeat(201));
+        let reply = post_product(&app, &cookie, company_id, long).await;
+        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            reply.body["error"]
+                .as_str()
+                .unwrap()
+                .contains("200 characters")
+        );
     }
 }

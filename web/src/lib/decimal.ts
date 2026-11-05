@@ -9,7 +9,12 @@
 export function toApiDecimal(input: string): string | undefined {
   const text = input.trim();
   if (text === "") return undefined;
-  return text.includes(",") ? text.replace(/\./g, "").replace(",", ".") : text;
+  // Dots are thousands separators only in the Brazilian shape. Anything else with a comma, like
+  // `1,234.56` pasted from an English-language spreadsheet, goes through as typed and the API
+  // refuses it: rewriting it would turn a thousand into a one without a word.
+  return /^\d{1,3}(\.\d{3})*,\d+$|^\d+,\d+$/.test(text)
+    ? text.replace(/\./g, "").replace(",", ".")
+    : text;
 }
 
 /**

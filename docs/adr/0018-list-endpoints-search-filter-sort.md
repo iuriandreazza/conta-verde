@@ -57,6 +57,10 @@ against Postgres and the in-memory adapter, paged so the cursor is exercised. A 
   (`Ana Maria` before `Anabela`). The in-memory adapter orders by code point, so the two agree
   only for names whose order does not depend on spaces, punctuation or accents. The contract tests
   use such names; do not read the in-memory order as a model of Postgres for anything else.
+- Case folding also differs for some non-ASCII letters (Greek final sigma, Turkish dotted i): Rust's
+  `to_lowercase` in the in-memory adapter and the database's `lower`. The contract tests use ASCII names;
+  the in-memory adapter is for tests and local runs, not a model of the database's text rules.
+- A parameter that is not even the right shape (`limit=abc`) is a JSON `400` like the rest.
 - Search does not ignore accents (`Jose` does not find `José`) and compares case with the
   database's `lower`, which can differ from Rust's for exotic characters. `unaccent` is the
   fix when users ask for it.

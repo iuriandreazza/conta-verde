@@ -1,5 +1,5 @@
 use axum::Json;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use conta_verde_application::{
     ApplicationError, CnpjRegistry, IdentityRepository, MAX_SEARCH_CHARS, NameSort, PartyKind,
@@ -14,7 +14,7 @@ use crate::access::CompanyAccess;
 use crate::cursor::{decode_cursor, encode_cursor};
 use crate::error::ApiError;
 use crate::history::HistoryEntryResponse;
-use crate::json::ApiJson;
+use crate::json::{ApiJson, ApiQuery};
 
 #[derive(Deserialize)]
 pub(crate) struct RegisterPartyRequest {
@@ -220,7 +220,7 @@ where
 pub(crate) async fn list_parties<R, C, I, S, P>(
     State(state): State<SharedState<R, C, I, S, P>>,
     CompanyAccess(company_id, _): CompanyAccess,
-    Query(query): Query<ListQuery>,
+    ApiQuery(query): ApiQuery<ListQuery>,
 ) -> Result<Json<PartyPageResponse>, ApiError>
 where
     R: PartyRepository,

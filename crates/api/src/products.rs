@@ -1,5 +1,5 @@
 use axum::Json;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use conta_verde_application::{
     ApplicationError, CnpjRegistry, IdentityRepository, MAX_SEARCH_CHARS, NameSort,
@@ -14,7 +14,7 @@ use crate::access::CompanyAccess;
 use crate::cursor::{decode_cursor, encode_cursor};
 use crate::error::ApiError;
 use crate::history::HistoryEntryResponse;
-use crate::json::ApiJson;
+use crate::json::{ApiJson, ApiQuery};
 
 /// The body of both registering and changing a product: a change replaces every editable field.
 /// Prices and the minimum stock are strings, never JSON numbers, so no precision is lost.
@@ -29,12 +29,9 @@ pub(crate) struct ProductRequest {
     sale_price: Option<String>,
     cost_price: Option<String>,
     minimum_stock: Option<String>,
-    #[serde(default = "default_active")]
-    active: bool,
-}
-
-fn default_active() -> bool {
-    true
+    /// Optional when registering (active), required when replacing: a body without it would
+    /// otherwise switch a deactivated product back on.
+    active: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -53,6 +50,23 @@ impl From<KindParameter> for ProductKind {
     }
 }
 
+impl ProductRequest {
+    /// `default_active` is what a missing `active` means: `Some(true)` when registering, `None`
+    /// when replacing, where it must be said.
+    fn into_draft(self, default_active: Option<bool>) -> Result<ProductDraft, ApiError> {
+        let active = self
+            .active
+            .or(default_active)
+            .ok_or(ApiError::InvalidField(
+                "active is required when replacing a product",
+            ))?;
+        Ok(ProductDraft {
+            active,
+            ..ProductDraft::from(self)
+        })
+    }
+}
+
 impl From<ProductRequest> for ProductDraft {
     fn from(request: ProductRequest) -> Self {
         Self {
@@ -64,7 +78,7 @@ impl From<ProductRequest> for ProductDraft {
             sale_price: request.sale_price,
             cost_price: request.cost_price,
             minimum_stock: request.minimum_stock,
-            active: request.active,
+            active: request.active.unwrap_or(true),
         }
     }
 }
@@ -175,7 +189,7 @@ fn parse_product_id(raw: &str) -> Result<ProductId, ApiError> {
 pub(crate) async fn list_products<R, C, I, S, P>(
     State(state): State<SharedState<R, C, I, S, P>>,
     CompanyAccess(company_id, _): CompanyAccess,
-    Query(query): Query<ListQuery>,
+    ApiQuery(query): ApiQuery<ListQuery>,
 ) -> Result<Json<ProductPageResponse>, ApiError>
 where
     R: PartyRepository,
@@ -212,7 +226,7 @@ where
 {
     let product = state
         .products
-        .register(company_id, &actor, request.into())
+        .register(company_id, &actor, request.into_draft(Some(true))?)
         .await?;
     Ok((StatusCode::CREATED, Json(ProductResponse::from(&product))))
 }
@@ -235,7 +249,7 @@ where
     let product_id = parse_product_id(&product_id)?;
     let product = state
         .products
-        .update(company_id, &actor, product_id, request.into())
+        .update(company_id, &actor, product_id, request.into_draft(None)?)
         .await?;
     Ok(Json(ProductResponse::from(&product)))
 }
