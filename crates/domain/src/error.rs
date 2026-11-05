@@ -30,6 +30,12 @@ pub enum DomainError {
     InvalidAccountNumber,
     CashAccountHasNoBank,
     CardAccountHasNoNumber,
+    NoInstallments,
+    TooManyInstallments,
+    InvalidInstallmentDays,
+    InstallmentDaysNotIncreasing,
+    InvalidPercent,
+    PercentsDoNotSumTo100,
 }
 
 impl fmt::Display for DomainError {
@@ -88,6 +94,18 @@ impl fmt::Display for DomainError {
             Self::CardAccountHasNoNumber => f.write_str(
                 "a card account has no branch or account number: a card number is not stored",
             ),
+            Self::NoInstallments => f.write_str("a payment term needs at least one installment"),
+            Self::TooManyInstallments => f.write_str("a payment term has at most 24 installments"),
+            Self::InvalidInstallmentDays => {
+                f.write_str("an installment is due in 0 to 3650 days")
+            }
+            Self::InstallmentDaysNotIncreasing => {
+                f.write_str("the days of the installments must increase, each later than the one before")
+            }
+            Self::InvalidPercent => f.write_str(
+                "a percentage must be more than 0 and at most 100, with at most 2 decimals, written like 33.33",
+            ),
+            Self::PercentsDoNotSumTo100 => f.write_str("the percentages must add up to exactly 100"),
             Self::KindCannotChange => f.write_str("the kind cannot change once registered"),
         }
     }

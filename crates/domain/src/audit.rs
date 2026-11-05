@@ -1,8 +1,8 @@
 use uuid::Uuid;
 
 use crate::{
-    BankAccount, Category, CompanyId, CostCenter, DocumentCheck, Party, PaymentMethod, Product,
-    UserId,
+    BankAccount, Category, CompanyId, CostCenter, DocumentCheck, Party, PaymentMethod, PaymentTerm,
+    Product, UserId,
 };
 
 /// Who made a change. The name is a snapshot: history must keep reading the same after the user is
@@ -21,6 +21,7 @@ pub enum AuditEntity {
     Category,
     BankAccount,
     PaymentMethod,
+    PaymentTerm,
 }
 
 impl AuditEntity {
@@ -32,6 +33,7 @@ impl AuditEntity {
             Self::Category => "category",
             Self::BankAccount => "bank_account",
             Self::PaymentMethod => "payment_method",
+            Self::PaymentTerm => "payment_term",
         }
     }
 }
@@ -145,6 +147,20 @@ impl Audited for BankAccount {
 impl Audited for PaymentMethod {
     fn audit_entity(&self) -> AuditEntity {
         AuditEntity::PaymentMethod
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.id().as_uuid()
+    }
+}
+
+impl Audited for PaymentTerm {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::PaymentTerm
     }
 
     fn audit_company(&self) -> CompanyId {
@@ -327,6 +343,23 @@ pub fn payment_method_creation_changes(method: &PaymentMethod) -> Vec<FieldChang
 
 pub fn payment_method_changes(before: &PaymentMethod, after: &PaymentMethod) -> Vec<FieldChange> {
     changes_between(payment_method_fields(before), payment_method_fields(after))
+}
+
+fn payment_term_fields(term: &PaymentTerm) -> Fields {
+    vec![
+        ("name", Some(term.name().to_owned())),
+        ("installments", Some(term.installments_text())),
+        ("active", Some(term.is_active().to_string())),
+    ]
+}
+
+/// Every field a new payment term has set.
+pub fn payment_term_creation_changes(term: &PaymentTerm) -> Vec<FieldChange> {
+    creation_from(payment_term_fields(term))
+}
+
+pub fn payment_term_changes(before: &PaymentTerm, after: &PaymentTerm) -> Vec<FieldChange> {
+    changes_between(payment_term_fields(before), payment_term_fields(after))
 }
 
 fn cost_center_fields(cost_center: &CostCenter) -> Fields {

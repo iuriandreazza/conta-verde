@@ -10,6 +10,7 @@ mod json;
 mod list_params;
 mod parties;
 mod payment_methods;
+mod payment_terms;
 mod products;
 mod session;
 
@@ -20,8 +21,8 @@ use axum::{Json, Router};
 use conta_verde_application::{
     AuthService, BankAccountRepository, BankAccountService, CategoryRepository, CategoryService,
     CnpjRegistry, CostCenterRepository, CostCenterService, IdentityRepository, PartyRepository,
-    PartyService, PaymentMethodRepository, PaymentMethodService, ProductRepository, ProductService,
-    SecretService,
+    PartyService, PaymentMethodRepository, PaymentMethodService, PaymentTermRepository,
+    PaymentTermService, ProductRepository, ProductService, SecretService,
 };
 use serde::Serialize;
 
@@ -43,6 +44,7 @@ pub trait Ports: 'static {
     type Categories: CategoryRepository + 'static;
     type BankAccounts: BankAccountRepository + 'static;
     type PaymentMethods: PaymentMethodRepository + 'static;
+    type PaymentTerms: PaymentTermRepository + 'static;
 }
 
 /// The use cases the API serves.
@@ -53,6 +55,7 @@ pub struct Services<X: Ports> {
     pub categories: CategoryService<X::Categories>,
     pub bank_accounts: BankAccountService<X::BankAccounts>,
     pub payment_methods: PaymentMethodService<X::PaymentMethods>,
+    pub payment_terms: PaymentTermService<X::PaymentTerms>,
     pub auth: AuthService<X::Identity, X::Secrets>,
 }
 
@@ -63,6 +66,7 @@ pub(crate) struct AppState<X: Ports> {
     categories: CategoryService<X::Categories>,
     bank_accounts: BankAccountService<X::BankAccounts>,
     payment_methods: PaymentMethodService<X::PaymentMethods>,
+    payment_terms: PaymentTermService<X::PaymentTerms>,
     auth: AuthService<X::Identity, X::Secrets>,
     config: ApiConfig,
 }
@@ -78,6 +82,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         categories: services.categories,
         bank_accounts: services.bank_accounts,
         payment_methods: services.payment_methods,
+        payment_terms: services.payment_terms,
         auth: services.auth,
         config,
     });
@@ -165,6 +170,19 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
             "/companies/{company_id}/payment-methods/{payment_method_id}/history",
             get(payment_methods::payment_method_history::<X>),
         )
+        .route(
+            "/companies/{company_id}/payment-terms",
+            get(payment_terms::list_payment_terms::<X>)
+                .post(payment_terms::register_payment_term::<X>),
+        )
+        .route(
+            "/companies/{company_id}/payment-terms/{payment_term_id}",
+            put(payment_terms::update_payment_term::<X>),
+        )
+        .route(
+            "/companies/{company_id}/payment-terms/{payment_term_id}/history",
+            get(payment_terms::payment_term_history::<X>),
+        )
         .with_state(state)
 }
 
@@ -186,7 +204,8 @@ mod tests {
     use conta_verde_infrastructure::{
         Argon2SecretService, InMemoryBankAccountRepository, InMemoryCategoryRepository,
         InMemoryCnpjRegistry, InMemoryCostCenterRepository, InMemoryIdentityRepository,
-        InMemoryPartyRepository, InMemoryPaymentMethodRepository, InMemoryProductRepository,
+        InMemoryPartyRepository, InMemoryPaymentMethodRepository, InMemoryPaymentTermRepository,
+        InMemoryProductRepository,
     };
     use http_body_util::BodyExt;
     use serde_json::{Value, json};
@@ -226,6 +245,7 @@ mod tests {
         type Categories = InMemoryCategoryRepository;
         type BankAccounts = InMemoryBankAccountRepository;
         type PaymentMethods = InMemoryPaymentMethodRepository;
+        type PaymentTerms = InMemoryPaymentTermRepository;
     }
 
     /// Like `MemoryPorts`, with the CNPJ lookup switched off.
@@ -241,6 +261,7 @@ mod tests {
         type Categories = InMemoryCategoryRepository;
         type BankAccounts = InMemoryBankAccountRepository;
         type PaymentMethods = InMemoryPaymentMethodRepository;
+        type PaymentTerms = InMemoryPaymentTermRepository;
     }
 
     fn auth_service() -> AuthService<InMemoryIdentityRepository, Argon2SecretService> {
@@ -264,6 +285,7 @@ mod tests {
                 payment_methods: PaymentMethodService::new(
                     InMemoryPaymentMethodRepository::default(),
                 ),
+                payment_terms: PaymentTermService::new(InMemoryPaymentTermRepository::default()),
                 auth: auth_service(),
             },
             ApiConfig::default(),
@@ -689,6 +711,7 @@ mod tests {
                 payment_methods: PaymentMethodService::new(
                     InMemoryPaymentMethodRepository::default(),
                 ),
+                payment_terms: PaymentTermService::new(InMemoryPaymentTermRepository::default()),
                 auth: auth_service(),
             },
             ApiConfig::default(),
@@ -2008,5 +2031,239 @@ mod tests {
         )
         .await;
         assert_eq!(history.body.as_array().unwrap().len(), 2);
+    }
+
+    fn payment_terms_uri(company_id: Uuid) -> String {
+        format!("/companies/{company_id}/payment-terms")
+    }
+
+    #[tokio::test]
+    async fn registers_and_changes_payment_terms_whose_percentages_add_up() {
+        let app = app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let uri = payment_terms_uri(company_id);
+        let body = json!({
+            "name": " 30/60/90 ",
+            "installments": [
+                { "days": 30, "percent": "33.33" },
+                { "days": 60, "percent": "33.33" },
+                { "days": 90, "percent": "33.34" }
+            ]
+        });
+
+        let created = send(
+            &app,
+            json_request("POST", &uri, Some(&cookie), body.clone()),
+        )
+        .await;
+        assert_eq!(created.status, StatusCode::CREATED);
+        assert_eq!(created.body["name"], "30/60/90");
+        assert_eq!(created.body["active"], true);
+        assert_eq!(
+            created.body["installments"][2],
+            json!({ "days": 90, "percent": "33.34" })
+        );
+        let id = created.body["id"].as_str().unwrap().to_owned();
+        let duplicate = send(&app, json_request("POST", &uri, Some(&cookie), body)).await;
+        assert_eq!(duplicate.status, StatusCode::CONFLICT);
+
+        // The whole term is replaced; whole percentages come back as written without zeros.
+        let term_uri = format!("{uri}/{id}");
+        let change = json!({
+            "name": "Entrada e 30",
+            "installments": [{ "days": 0, "percent": "50.00" }, { "days": 30, "percent": "50" }],
+            "active": false
+        });
+        let updated = send(
+            &app,
+            json_request("PUT", &term_uri, Some(&cookie), change.clone()),
+        )
+        .await;
+        assert_eq!(updated.status, StatusCode::OK);
+        assert_eq!(
+            updated.body["installments"],
+            json!([{ "days": 0, "percent": "50" }, { "days": 30, "percent": "50" }])
+        );
+        // The same body again changes nothing and adds nothing to the history.
+        send(&app, json_request("PUT", &term_uri, Some(&cookie), change)).await;
+
+        let listed = send(
+            &app,
+            get_request(
+                &format!("{uri}?active=false&q=ENTRADA&sort=-name"),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(
+            listed.body["items"][0]["installments"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        let history = send(
+            &app,
+            get_request(&format!("{term_uri}/history"), Some(&cookie)),
+        )
+        .await;
+        let entries = history.body.as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        let changes = entries[1]["changes"].as_array().unwrap();
+        assert_eq!(
+            changes[1],
+            json!({ "field": "installments", "from": "30:33.33,60:33.33,90:33.34", "to": "0:50,30:50" })
+        );
+    }
+
+    #[tokio::test]
+    async fn payment_terms_that_do_not_add_up_are_refused_in_json() {
+        let app = app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let uri = payment_terms_uri(company_id);
+        let named = |installments: Value| json!({ "name": "Prazo", "installments": installments });
+        let refusals: [(Value, &str); 8] = [
+            (named(json!([])), "at least one installment"),
+            (
+                named(json!([{ "days": 0, "percent": "99.99" }])),
+                "add up to exactly 100",
+            ),
+            (
+                named(json!([{ "days": 0, "percent": "50" }, { "days": 30, "percent": "50.01" }])),
+                "add up to exactly 100",
+            ),
+            (
+                named(json!([{ "days": 30, "percent": "50" }, { "days": 30, "percent": "50" }])),
+                "must increase",
+            ),
+            (
+                named(json!([{ "days": 60, "percent": "50" }, { "days": 30, "percent": "50" }])),
+                "must increase",
+            ),
+            (
+                named(json!([{ "days": 0, "percent": "50,5" }, { "days": 30, "percent": "49.5" }])),
+                "percentage must be",
+            ),
+            (
+                named(json!([{ "days": 0, "percent": "33.333" }])),
+                "percentage must be",
+            ),
+            (
+                named(json!([{ "days": 3651, "percent": "100" }])),
+                "0 to 3650 days",
+            ),
+        ];
+        for (body, message) in refusals {
+            let reply = send(
+                &app,
+                json_request("POST", &uri, Some(&cookie), body.clone()),
+            )
+            .await;
+            assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+            assert!(
+                reply.body["error"].as_str().unwrap().contains(message),
+                "{body}: {}",
+                reply.body
+            );
+        }
+        // A percentage sent as a JSON number would lose precision: refused in the API's own shape.
+        for body in [
+            named(json!([{ "days": 0, "percent": 100 }])),
+            named(json!([{ "days": -1, "percent": "100" }])),
+            named(json!([{ "days": 0, "percent": "100", "surprise": 1 }])),
+            json!({ "name": "Prazo" }),
+            json!({ "installments": [{ "days": 0, "percent": "100" }] }),
+        ] {
+            let reply = send(
+                &app,
+                json_request("POST", &uri, Some(&cookie), body.clone()),
+            )
+            .await;
+            assert!(reply.status.is_client_error(), "{body}");
+            assert!(reply.body["error"].is_string(), "{body}");
+        }
+        // More than 24 installments, and a name too long.
+        let many: Vec<Value> = (1..=25)
+            .map(|day| json!({ "days": day, "percent": "4" }))
+            .collect();
+        let reply = send(
+            &app,
+            json_request("POST", &uri, Some(&cookie), named(Value::Array(many))),
+        )
+        .await;
+        assert!(reply.body["error"].as_str().unwrap().contains("at most 24"));
+        let long =
+            json!({ "name": "x".repeat(201), "installments": [{ "days": 0, "percent": "100" }] });
+        let reply = send(&app, json_request("POST", &uri, Some(&cookie), long)).await;
+        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
+        // Nothing of that was stored.
+        let listed = send(&app, get_request(&uri, Some(&cookie))).await;
+        assert!(listed.body["items"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn payment_terms_stay_private_and_must_say_whether_they_are_active_when_replaced() {
+        let app = app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let (stranger_cookie, stranger_company) = sign_up(&app, "bia@example.com").await;
+        let uri = payment_terms_uri(company_id);
+        let body = json!({ "name": "À vista", "installments": [{ "days": 0, "percent": "100" }], "active": false });
+        let created = send(
+            &app,
+            json_request("POST", &uri, Some(&cookie), body.clone()),
+        )
+        .await;
+        assert_eq!(created.body["active"], false);
+        let id = created.body["id"].as_str().unwrap().to_owned();
+
+        // Replacing without `active` would switch it back on.
+        let mut without = body.clone();
+        without.as_object_mut().unwrap().remove("active");
+        let put = json_request("PUT", &format!("{uri}/{id}"), Some(&cookie), without);
+        let reply = send(&app, put).await;
+        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            reply.body["error"]
+                .as_str()
+                .unwrap()
+                .contains("active is required")
+        );
+
+        // Another company has its own and cannot reach this one's.
+        let theirs = payment_terms_uri(stranger_company);
+        let own = send(
+            &app,
+            json_request("POST", &theirs, Some(&stranger_cookie), body.clone()),
+        )
+        .await;
+        assert_eq!(own.status, StatusCode::CREATED);
+        let put = json_request(
+            "PUT",
+            &format!("{theirs}/{id}"),
+            Some(&stranger_cookie),
+            body.clone(),
+        );
+        assert_eq!(send(&app, put).await.status, StatusCode::NOT_FOUND);
+        let history = get_request(&format!("{theirs}/{id}/history"), Some(&stranger_cookie));
+        assert_eq!(send(&app, history).await.status, StatusCode::NOT_FOUND);
+        assert_eq!(
+            send(&app, get_request(&uri, Some(&stranger_cookie)))
+                .await
+                .status,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            send(&app, get_request(&uri, None)).await.status,
+            StatusCode::UNAUTHORIZED
+        );
+        let malformed = json_request("PUT", &format!("{uri}/not-a-uuid"), Some(&cookie), body);
+        let reply = send(&app, malformed).await;
+        assert_eq!(reply.status, StatusCode::NOT_FOUND);
+        assert_eq!(reply.body["error"], "payment term not found");
+        for query in ["active=yes", "sort=id", "limit=abc", "after=garbage"] {
+            let reply = send(&app, get_request(&format!("{uri}?{query}"), Some(&cookie))).await;
+            assert!(reply.status.is_client_error(), "{query}");
+            assert!(reply.body["error"].is_string(), "{query}");
+        }
     }
 }

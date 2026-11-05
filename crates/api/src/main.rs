@@ -3,13 +3,13 @@ use std::time::Duration;
 use conta_verde_api::{ApiConfig, Ports, Services, router};
 use conta_verde_application::{
     AuthService, BankAccountService, CategoryService, CostCenterService, PartyService,
-    PaymentMethodService, ProductService,
+    PaymentMethodService, PaymentTermService, ProductService,
 };
 use conta_verde_infrastructure::{
     Argon2SecretService, BrasilApiCnpjRegistry, CachedCnpjRegistry, PostgresBankAccountRepository,
     PostgresCategoryRepository, PostgresCostCenterRepository, PostgresIdentityRepository,
-    PostgresPartyRepository, PostgresPaymentMethodRepository, PostgresProductRepository,
-    connect_and_migrate,
+    PostgresPartyRepository, PostgresPaymentMethodRepository, PostgresPaymentTermRepository,
+    PostgresProductRepository, connect_and_migrate,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -26,6 +26,7 @@ impl Ports for PostgresPorts {
     type Categories = PostgresCategoryRepository;
     type BankAccounts = PostgresBankAccountRepository;
     type PaymentMethods = PostgresPaymentMethodRepository;
+    type PaymentTerms = PostgresPaymentTermRepository;
 }
 
 const SESSION_LIFETIME: Duration = Duration::from_secs(30 * 24 * 60 * 60);
@@ -55,6 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let bank_accounts = BankAccountService::new(PostgresBankAccountRepository::new(pool.clone()));
     let payment_methods =
         PaymentMethodService::new(PostgresPaymentMethodRepository::new(pool.clone()));
+    let payment_terms = PaymentTermService::new(PostgresPaymentTermRepository::new(pool.clone()));
     let auth = AuthService::new(
         PostgresIdentityRepository::new(pool),
         Argon2SecretService::new()?,
@@ -72,6 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 categories,
                 bank_accounts,
                 payment_methods,
+                payment_terms,
                 auth,
             },
             config,

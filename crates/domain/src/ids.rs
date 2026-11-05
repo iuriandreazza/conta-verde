@@ -27,5 +27,6 @@ uuid_id!(CompanyId);
 uuid_id!(CostCenterId);
 uuid_id!(PartyId);
 uuid_id!(PaymentMethodId);
+uuid_id!(PaymentTermId);
 uuid_id!(ProductId);
 uuid_id!(UserId);

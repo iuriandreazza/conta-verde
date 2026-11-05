@@ -53,6 +53,8 @@ pub enum ApplicationError {
     CategoryLimitReached,
     /// No bank account with this id in the company (another company's looks the same).
     BankAccountNotFound,
+    /// No payment term with this id in the company (another company's looks the same).
+    PaymentTermNotFound,
     /// No payment method with this id in the company (another company's looks the same).
     PaymentMethodNotFound,
     /// No cost center with this id in the company (another company's looks the same).
@@ -129,6 +131,7 @@ impl fmt::Display for ApplicationError {
             Self::CostCenterNotFound => f.write_str("cost center not found"),
             Self::BankAccountNotFound => f.write_str("bank account not found"),
             Self::PaymentMethodNotFound => f.write_str("payment method not found"),
+            Self::PaymentTermNotFound => f.write_str("payment term not found"),
             Self::CategoryNotFound => f.write_str("category not found"),
             Self::ParentCategoryNotFound => f.write_str("the parent category does not exist"),
             Self::CategoryParentInactive => {
