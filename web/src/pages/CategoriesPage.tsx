@@ -13,12 +13,14 @@ import { HistoryIcon } from "../components/icons/history";
 import { PlusIcon } from "../components/icons/plus";
 import { treeRows } from "../lib/categoryTree";
 import { cashFlowLabel, dreLabel } from "../lib/groups";
+import { useCanWrite } from "../lib/useCanWrite";
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one
 // instance: the old list is dropped and a reply still in flight for another company lands on an
 // unmounted component.
 export function CategoriesPage() {
   const { companyId = "" } = useParams();
+  const canWrite = useCanWrite("finance");
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -120,7 +122,7 @@ export function CategoriesPage() {
   return (
     <>
       <PageHeader title="Categorias" description="O plano que organiza entradas e saídas." />
-      <div className="split">
+      <div className={canWrite ? "split" : "split split-single"}>
         <section className="card list-card">
         <h2>Plano de categorias</h2>
         <Notice message={error} />
@@ -140,9 +142,11 @@ export function CategoriesPage() {
               As categorias organizam o que entra e sai do caixa e montam o DRE gerencial. Comece pelo
               plano usual de uma pequena empresa ou crie as suas acima.
             </p>
-            <Button type="button" icon={PlusIcon} pending={applying} onClick={() => void applyTemplate()}>
-              Usar categorias padrão
-            </Button>
+            {canWrite && (
+              <Button type="button" icon={PlusIcon} pending={applying} onClick={() => void applyTemplate()}>
+                Usar categorias padrão
+              </Button>
+            )}
           </div>
         ) : (
           <div className="table-wrap">
@@ -170,17 +174,19 @@ export function CategoriesPage() {
                       <td>{cashFlowLabel(category.cash_flow_group)}</td>
                       <td>{category.active ? "Ativa" : "Inativa"}</td>
                       <td>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          className="btn-small"
-                          aria-label={`Alterar ${category.name}`}
-                          disabled={saving}
-                          onClick={() => startEditing(category)}
-                        >
-                          Alterar
-                        </Button>
-                        {category.active && !isTransfer(category) && category.level < 5 && (
+                        {canWrite && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            className="btn-small"
+                            aria-label={`Alterar ${category.name}`}
+                            disabled={saving}
+                            onClick={() => startEditing(category)}
+                          >
+                            Alterar
+                          </Button>
+                        )}
+                        {canWrite && category.active && !isTransfer(category) && category.level < 5 && (
                           <Button
                             type="button"
                             variant="ghost"
@@ -227,27 +233,29 @@ export function CategoriesPage() {
           </div>
         )}
       </section>
-        <aside className="card form-card" ref={formRef}>
-        <h2>{editing === null ? "Nova categoria" : `Alterar ${editing.name}`}</h2>
-        <CategoryForm
-          // A new key starts the form over for another category, or an empty one after a save.
-          key={`${editing?.id ?? "new"}-${parentForNew ?? ""}-${formVersion}`}
-          categories={categories}
-          editing={editing}
-          initialParentId={parentForNew}
-          // After a save or when editing, the person is in the form: put the cursor back in it.
-          focusName={editing !== null || parentForNew !== null || formVersion > 0}
-          pending={saving}
-          error={formError}
-          onCreate={create}
-          onChange={(input) => editing && change(editing, input)}
-          onCancel={() => {
-            setEditing(null);
-            setFormError(null);
-          }}
-        />
-        <Notice message={saved} tone="success" />
-      </aside>
+        {canWrite && (
+          <aside className="card form-card" ref={formRef}>
+          <h2>{editing === null ? "Nova categoria" : `Alterar ${editing.name}`}</h2>
+          <CategoryForm
+            // A new key starts the form over for another category, or an empty one after a save.
+            key={`${editing?.id ?? "new"}-${parentForNew ?? ""}-${formVersion}`}
+            categories={categories}
+            editing={editing}
+            initialParentId={parentForNew}
+            // After a save or when editing, the person is in the form: put the cursor back in it.
+            focusName={editing !== null || parentForNew !== null || formVersion > 0}
+            pending={saving}
+            error={formError}
+            onCreate={create}
+            onChange={(input) => editing && change(editing, input)}
+            onCancel={() => {
+              setEditing(null);
+              setFormError(null);
+            }}
+          />
+          <Notice message={saved} tone="success" />
+        </aside>
+        )}
       </div>
     </>
   );

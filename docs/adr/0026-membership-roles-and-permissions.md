@@ -83,7 +83,9 @@ Why these, since the choice is a product one and easy to change (it is one funct
   port; `add_membership` is the one way to make a member, and never changes the role of an existing
   one.
 - Reading is open to every member for the four areas but `members`; hiding what a role cannot use
-  in the web app is a convenience that follows from `permissions`, and the API is what refuses.
+  in the web app is a convenience that follows from `permissions`, and the API is what refuses. The
+  register pages do it with `useCanWrite(area)`: without `write` they show the list and the history,
+  and no form, import, edit or re-check button.
 - The `members` area has no routes yet, so the HTTP test cannot cover it: it is covered by the
   table's test and by `area_of`'s, and the routes that claim it (invitations, next) come with an HTTP
   test per role before they ship.

@@ -22,12 +22,14 @@ import { HistoryIcon } from "../components/icons/history";
 import { PlusIcon } from "../components/icons/plus";
 import { BANK_ACCOUNT_KINDS, bankAccountKindLabel } from "../lib/kinds";
 import { usePagedList } from "../lib/usePagedList";
+import { useCanWrite } from "../lib/useCanWrite";
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one
 // instance: the old list is dropped and a reply still in flight for another company lands on an
 // unmounted component.
 export function BankAccountsPage() {
   const { companyId = "" } = useParams();
+  const canWrite = useCanWrite("finance");
   const [filters, setFilters] = useState<BankAccountFilters>(NO_BANK_ACCOUNT_FILTERS);
   const [editing, setEditing] = useState<BankAccount | null>(null);
   // The kind chosen in the form: cash has no bank, so those fields go away with it.
@@ -104,7 +106,7 @@ export function BankAccountsPage() {
   return (
     <>
       <PageHeader title="Contas bancárias" description="Onde o dinheiro da empresa fica e circula: bancos, caixa e cartões." />
-      <div className="split">
+      <div className={canWrite ? "split" : "split split-single"}>
       <section className="card list-card">
         <h2>Cadastradas</h2>
         <div className="filters" role="search">
@@ -215,20 +217,22 @@ export function BankAccountsPage() {
                       <td>{account.number ?? "—"}</td>
                       <td>{account.active ? "Ativa" : "Inativa"}</td>
                       <td>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          className="btn-small"
-                          aria-label={`Alterar ${account.name}`}
-                          disabled={saving}
-                          onClick={() => {
-                            setEditing(account);
-                            setFormError(null);
-                            setSaved(null);
-                          }}
-                        >
-                          Alterar
-                        </Button>
+                        {canWrite && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            className="btn-small"
+                            aria-label={`Alterar ${account.name}`}
+                            disabled={saving}
+                            onClick={() => {
+                              setEditing(account);
+                              setFormError(null);
+                              setSaved(null);
+                            }}
+                          >
+                            Alterar
+                          </Button>
+                        )}
                         <Button
                           type="button"
                           variant="ghost"
@@ -275,109 +279,111 @@ export function BankAccountsPage() {
           </Button>
         )}
       </section>
-      <aside className="card form-card">
-        <h2>{editing === null ? "Nova conta" : `Alterar ${editing.name}`}</h2>
-        <form
-          // A new key starts the form over for another account, or an empty one after a save.
-          key={`${editing?.id ?? "new"}-${formVersion}`}
-          onSubmit={(event) => void handleSubmit(event)}
-        >
-          <label>
-            Tipo
-            {/* What an account is asked for depends on its kind, so it is chosen once. */}
-            <select
-              value={editing?.kind ?? kind}
-              disabled={editing !== null}
-              onChange={(event) => setKind(event.target.value as BankAccountKind)}
-            >
-              {BANK_ACCOUNT_KINDS.map((option) => (
-                <option key={option.key} value={option.key}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Nome
-            <input
-              name="name"
-              required
-              maxLength={200}
-              autoComplete="off"
-              // After a save or when editing, the person is in the form: put the cursor back in it.
-              autoFocus={editing !== null || formVersion > 0}
-              defaultValue={editing?.name}
-            />
-          </label>
-          {takesBank && (
+      {canWrite && (
+        <aside className="card form-card">
+          <h2>{editing === null ? "Nova conta" : `Alterar ${editing.name}`}</h2>
+          <form
+            // A new key starts the form over for another account, or an empty one after a save.
+            key={`${editing?.id ?? "new"}-${formVersion}`}
+            onSubmit={(event) => void handleSubmit(event)}
+          >
             <label>
-              {kindNow === "card" ? "Banco emissor" : "Código do banco"}
+              Tipo
+              {/* What an account is asked for depends on its kind, so it is chosen once. */}
+              <select
+                value={editing?.kind ?? kind}
+                disabled={editing !== null}
+                onChange={(event) => setKind(event.target.value as BankAccountKind)}
+              >
+                {BANK_ACCOUNT_KINDS.map((option) => (
+                  <option key={option.key} value={option.key}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Nome
               <input
-                name="bank_code"
-                inputMode="numeric"
+                name="name"
+                required
+                maxLength={200}
                 autoComplete="off"
-                maxLength={8}
-                placeholder="3 dígitos (ou 8, o ISPB)"
-                defaultValue={editing?.bank_code ?? ""}
+                // After a save or when editing, the person is in the form: put the cursor back in it.
+                autoFocus={editing !== null || formVersion > 0}
+                defaultValue={editing?.name}
               />
             </label>
-          )}
-          {takesNumber && (
-            <>
+            {takesBank && (
               <label>
-                Agência
+                {kindNow === "card" ? "Banco emissor" : "Código do banco"}
                 <input
-                  name="branch"
+                  name="bank_code"
+                  inputMode="numeric"
                   autoComplete="off"
-                  spellCheck={false}
-                  maxLength={14}
-                  defaultValue={editing?.branch ?? ""}
+                  maxLength={8}
+                  placeholder="3 dígitos (ou 8, o ISPB)"
+                  defaultValue={editing?.bank_code ?? ""}
                 />
               </label>
-              <label>
-                Conta
-                <input
-                  name="number"
-                  autoComplete="off"
-                  spellCheck={false}
-                  maxLength={24}
-                  placeholder="com o dígito"
-                  defaultValue={editing?.number ?? ""}
-                />
-              </label>
-            </>
-          )}
-          {!takesBank && <p className="muted">O caixa não tem banco, agência nem número.</p>}
-          {takesBank && !takesNumber && (
-            <p className="muted">
-              Do cartão guardamos só o banco emissor: o número do cartão nunca é salvo.
-            </p>
-          )}
-          <label className="inline">
-            <input name="active" type="checkbox" defaultChecked={editing?.active ?? true} /> Ativa
-          </label>
-          <Notice message={formError} />
-          <div className="form-actions">
-            <Button type="submit" icon={editing === null ? PlusIcon : CheckIcon} pending={saving}>
-              {editing === null ? "Adicionar" : "Salvar alterações"}
-            </Button>
-            {editing !== null && (
-              <Button
-                type="button"
-                variant="ghost"
-                disabled={saving}
-                onClick={() => {
-                  setEditing(null);
-                  setFormError(null);
-                }}
-              >
-                Cancelar
-              </Button>
             )}
-          </div>
-        </form>
-        <Notice message={saved} tone="success" />
-      </aside>
+            {takesNumber && (
+              <>
+                <label>
+                  Agência
+                  <input
+                    name="branch"
+                    autoComplete="off"
+                    spellCheck={false}
+                    maxLength={14}
+                    defaultValue={editing?.branch ?? ""}
+                  />
+                </label>
+                <label>
+                  Conta
+                  <input
+                    name="number"
+                    autoComplete="off"
+                    spellCheck={false}
+                    maxLength={24}
+                    placeholder="com o dígito"
+                    defaultValue={editing?.number ?? ""}
+                  />
+                </label>
+              </>
+            )}
+            {!takesBank && <p className="muted">O caixa não tem banco, agência nem número.</p>}
+            {takesBank && !takesNumber && (
+              <p className="muted">
+                Do cartão guardamos só o banco emissor: o número do cartão nunca é salvo.
+              </p>
+            )}
+            <label className="inline">
+              <input name="active" type="checkbox" defaultChecked={editing?.active ?? true} /> Ativa
+            </label>
+            <Notice message={formError} />
+            <div className="form-actions">
+              <Button type="submit" icon={editing === null ? PlusIcon : CheckIcon} pending={saving}>
+                {editing === null ? "Adicionar" : "Salvar alterações"}
+              </Button>
+              {editing !== null && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  disabled={saving}
+                  onClick={() => {
+                    setEditing(null);
+                    setFormError(null);
+                  }}
+                >
+                  Cancelar
+                </Button>
+              )}
+            </div>
+          </form>
+          <Notice message={saved} tone="success" />
+        </aside>
+      )}
       </div>
 
     </>

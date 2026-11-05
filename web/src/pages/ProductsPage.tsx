@@ -21,12 +21,14 @@ import { ChevronDownIcon } from "../components/icons/chevron-down";
 import { HistoryIcon } from "../components/icons/history";
 import { formatDecimal, formatMoney } from "../lib/decimal";
 import { usePagedList } from "../lib/usePagedList";
+import { useCanWrite } from "../lib/useCanWrite";
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one
 // instance: the old list is dropped and a reply still in flight for another company lands on an
 // unmounted component.
 export function ProductsPage() {
   const { companyId = "" } = useParams();
+  const canWrite = useCanWrite("products");
   const [filters, setFilters] = useState<ProductFilters>(NO_PRODUCT_FILTERS);
   const [editing, setEditing] = useState<Product | null>(null);
   // Bumped after a registration so the form starts empty again.
@@ -90,7 +92,7 @@ export function ProductsPage() {
   return (
     <>
       <PageHeader title="Produtos e serviços" description="O que você vende e o que custa para vender." />
-      <div className="split">
+      <div className={canWrite ? "split" : "split split-single"}>
         <section className="card list-card">
         <h2>Cadastrados</h2>
         <div className="filters" role="search">
@@ -210,16 +212,18 @@ export function ProductsPage() {
                         </span>
                       </td>
                       <td>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          className="btn-small"
-                          aria-label={`Alterar ${product.name}`}
-                          disabled={saving}
-                          onClick={() => startEditing(product)}
-                        >
-                          Alterar
-                        </Button>
+                        {canWrite && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            className="btn-small"
+                            aria-label={`Alterar ${product.name}`}
+                            disabled={saving}
+                            onClick={() => startEditing(product)}
+                          >
+                            Alterar
+                          </Button>
+                        )}
                         <Button
                           type="button"
                           variant="ghost"
@@ -266,48 +270,52 @@ export function ProductsPage() {
           </Button>
         )}
       </section>
-        <aside className="card form-card">
-        <h2>{editing === null ? "Novo produto ou serviço" : `Alterar ${editing.name}`}</h2>
-        <ProductForm
-          // A new key starts the form over for another product, or an empty one after a save.
-          key={`${editing?.id ?? "new"}-${formVersion}`}
-          product={editing}
-          // After a save or when editing, the person is in the form: put the cursor back in it.
-          focusName={editing !== null || formVersion > 0}
-          pending={saving}
-          error={formError}
-          onSubmit={(input) => void handleSubmit(input)}
-          onCancel={() => {
-            setEditing(null);
-            setFormError(null);
-          }}
-        />
-        <Notice message={saved} tone="success" />
-      </aside>
+        {canWrite && (
+          <aside className="card form-card">
+          <h2>{editing === null ? "Novo produto ou serviço" : `Alterar ${editing.name}`}</h2>
+          <ProductForm
+            // A new key starts the form over for another product, or an empty one after a save.
+            key={`${editing?.id ?? "new"}-${formVersion}`}
+            product={editing}
+            // After a save or when editing, the person is in the form: put the cursor back in it.
+            focusName={editing !== null || formVersion > 0}
+            pending={saving}
+            error={formError}
+            onSubmit={(input) => void handleSubmit(input)}
+            onCancel={() => {
+              setEditing(null);
+              setFormError(null);
+            }}
+          />
+          <Notice message={saved} tone="success" />
+        </aside>
+        )}
       </div>
-      <CsvImport
-        title="Importar de um arquivo CSV"
-        template={PRODUCTS_TEMPLATE}
-        templateName="produtos-e-servicos.csv"
-        run={(file, dryRun) => api.importProducts(companyId, file, dryRun)}
-        onImported={() => void reload()}
-      >
-        <p>
-          A primeira linha dá o nome das colunas, em qualquer ordem; a vírgula ou o ponto e vírgula
-          separam. <code>name</code> e <code>unit</code> (como UN ou KG) são obrigatórias. As outras
-          são <code>kind</code> (<code>product</code> ou <code>service</code>; em branco é produto),{" "}
-          <code>sku</code>, <code>ncm</code>, <code>sale_price</code>, <code>cost_price</code>,{" "}
-          <code>minimum_stock</code> e <code>active</code> (<code>sim</code> ou <code>não</code>; em
-          branco é ativo). Os preços podem usar a vírgula, como <code>12,50</code>. Um valor com ponto ou vírgula
-          seguido de exatamente três dígitos (<code>1.234</code>, <code>1,234</code>) é ambíguo e
-          recusado: escreva <code>1234</code>. Serviço não tem <code>ncm</code> nem estoque mínimo.
-        </p>
-        <p>
-          Nada é importado enquanto uma linha tiver problema. Quem já tem o mesmo SKU é ignorado,
-          nunca sobrescrito; quem não tem SKU não pode ser reconhecido, então enviar o mesmo arquivo
-          duas vezes o repete.
-        </p>
-      </CsvImport>
+      {canWrite && (
+        <CsvImport
+          title="Importar de um arquivo CSV"
+          template={PRODUCTS_TEMPLATE}
+          templateName="produtos-e-servicos.csv"
+          run={(file, dryRun) => api.importProducts(companyId, file, dryRun)}
+          onImported={() => void reload()}
+        >
+          <p>
+            A primeira linha dá o nome das colunas, em qualquer ordem; a vírgula ou o ponto e vírgula
+            separam. <code>name</code> e <code>unit</code> (como UN ou KG) são obrigatórias. As outras
+            são <code>kind</code> (<code>product</code> ou <code>service</code>; em branco é produto),{" "}
+            <code>sku</code>, <code>ncm</code>, <code>sale_price</code>, <code>cost_price</code>,{" "}
+            <code>minimum_stock</code> e <code>active</code> (<code>sim</code> ou <code>não</code>; em
+            branco é ativo). Os preços podem usar a vírgula, como <code>12,50</code>. Um valor com ponto ou vírgula
+            seguido de exatamente três dígitos (<code>1.234</code>, <code>1,234</code>) é ambíguo e
+            recusado: escreva <code>1234</code>. Serviço não tem <code>ncm</code> nem estoque mínimo.
+          </p>
+          <p>
+            Nada é importado enquanto uma linha tiver problema. Quem já tem o mesmo SKU é ignorado,
+            nunca sobrescrito; quem não tem SKU não pode ser reconhecido, então enviar o mesmo arquivo
+            duas vezes o repete.
+          </p>
+        </CsvImport>
+      )}
     </>
   );
 }

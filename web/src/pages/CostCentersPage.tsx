@@ -19,12 +19,14 @@ import { ChevronDownIcon } from "../components/icons/chevron-down";
 import { HistoryIcon } from "../components/icons/history";
 import { PlusIcon } from "../components/icons/plus";
 import { usePagedList } from "../lib/usePagedList";
+import { useCanWrite } from "../lib/useCanWrite";
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one
 // instance: the old list is dropped and a reply still in flight for another company lands on an
 // unmounted component.
 export function CostCentersPage() {
   const { companyId = "" } = useParams();
+  const canWrite = useCanWrite("finance");
   const [filters, setFilters] = useState<CostCenterFilters>(NO_COST_CENTER_FILTERS);
   const [editing, setEditing] = useState<CostCenter | null>(null);
   // Bumped after a save so the form starts over, empty or for another cost center.
@@ -86,7 +88,7 @@ export function CostCentersPage() {
   return (
     <>
       <PageHeader title="Centros de custo" description="Onde cada gasto e cada receita são lançados." />
-      <div className="split">
+      <div className={canWrite ? "split" : "split split-single"}>
         <section className="card list-card">
         <h2>Cadastrados</h2>
         <div className="filters" role="search">
@@ -173,20 +175,22 @@ export function CostCentersPage() {
                       <td>{costCenter.name}</td>
                       <td>{costCenter.active ? "Ativo" : "Inativo"}</td>
                       <td>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          className="btn-small"
-                          aria-label={`Alterar ${costCenter.name}`}
-                          disabled={saving}
-                          onClick={() => {
-                            setEditing(costCenter);
-                            setFormError(null);
-                            setSaved(null);
-                          }}
-                        >
-                          Alterar
-                        </Button>
+                        {canWrite && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            className="btn-small"
+                            aria-label={`Alterar ${costCenter.name}`}
+                            disabled={saving}
+                            onClick={() => {
+                              setEditing(costCenter);
+                              setFormError(null);
+                              setSaved(null);
+                            }}
+                          >
+                            Alterar
+                          </Button>
+                        )}
                         <Button
                           type="button"
                           variant="ghost"
@@ -233,49 +237,51 @@ export function CostCentersPage() {
           </Button>
         )}
       </section>
-        <aside className="card form-card">
-        <h2>{editing === null ? "Novo centro de custo" : `Alterar ${editing.name}`}</h2>
-        <form
-          // A new key starts the form over for another cost center, or an empty one after a save.
-          key={`${editing?.id ?? "new"}-${formVersion}`}
-          onSubmit={(event) => void handleSubmit(event)}
-        >
-          <label>
-            Nome
-            <input
-              name="name"
-              required
-              maxLength={200}
-              autoComplete="off"
-              // After a save or when editing, the person is in the form: put the cursor back in it.
-              autoFocus={editing !== null || formVersion > 0}
-              defaultValue={editing?.name}
-            />
-          </label>
-          <label className="inline">
-            <input name="active" type="checkbox" defaultChecked={editing?.active ?? true} /> Ativo
-          </label>
-          <Notice message={formError} />
-          <div className="form-actions">
-            <Button type="submit" icon={editing === null ? PlusIcon : CheckIcon} pending={saving}>
-              {editing === null ? "Adicionar" : "Salvar alterações"}
-            </Button>
-            {editing !== null && (
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => {
-                  setEditing(null);
-                  setFormError(null);
-                }}
-              >
-                Cancelar
+        {canWrite && (
+          <aside className="card form-card">
+          <h2>{editing === null ? "Novo centro de custo" : `Alterar ${editing.name}`}</h2>
+          <form
+            // A new key starts the form over for another cost center, or an empty one after a save.
+            key={`${editing?.id ?? "new"}-${formVersion}`}
+            onSubmit={(event) => void handleSubmit(event)}
+          >
+            <label>
+              Nome
+              <input
+                name="name"
+                required
+                maxLength={200}
+                autoComplete="off"
+                // After a save or when editing, the person is in the form: put the cursor back in it.
+                autoFocus={editing !== null || formVersion > 0}
+                defaultValue={editing?.name}
+              />
+            </label>
+            <label className="inline">
+              <input name="active" type="checkbox" defaultChecked={editing?.active ?? true} /> Ativo
+            </label>
+            <Notice message={formError} />
+            <div className="form-actions">
+              <Button type="submit" icon={editing === null ? PlusIcon : CheckIcon} pending={saving}>
+                {editing === null ? "Adicionar" : "Salvar alterações"}
               </Button>
-            )}
-          </div>
-        </form>
-        <Notice message={saved} tone="success" />
-      </aside>
+              {editing !== null && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => {
+                    setEditing(null);
+                    setFormError(null);
+                  }}
+                >
+                  Cancelar
+                </Button>
+              )}
+            </div>
+          </form>
+          <Notice message={saved} tone="success" />
+        </aside>
+        )}
       </div>
     </>
   );
