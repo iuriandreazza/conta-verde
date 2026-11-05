@@ -1,9 +1,9 @@
 use conta_verde_domain::{
-    Actor, AuditAction, AuditEntity, AuditEntry, AuditRecord, CashFlowGroup, Category, CategoryId,
-    CompanyId, DomainError, DreGroup, FieldChange, category_changes, category_creation_changes,
-    default_template,
+    Actor, AuditAction, AuditEntry, AuditRecord, CashFlowGroup, Category, CategoryId, CompanyId,
+    DomainError, DreGroup, category_changes, category_creation_changes, default_template,
 };
 
+use crate::audit::audit_entry;
 use crate::category_repository::MAX_CATEGORIES;
 use crate::{ApplicationError, CategoryRepository, RepositoryError};
 
@@ -76,7 +76,7 @@ impl<R: CategoryRepository> CategoryService<R> {
                 Category::new_child(CategoryId::generate(), parent, &request.name)?
             }
         };
-        let audit = category_audit(
+        let audit = audit_entry(
             &category,
             actor,
             AuditAction::Created,
@@ -132,7 +132,7 @@ impl<R: CategoryRepository> CategoryService<R> {
                 return Err(ApplicationError::CategoryParentInactive);
             }
         }
-        let audit = category_audit(&after, actor, AuditAction::Updated, changes);
+        let audit = audit_entry(&after, actor, AuditAction::Updated, changes);
         self.repository
             .update(&after, &audit)
             .await
@@ -162,7 +162,7 @@ impl<R: CategoryRepository> CategoryService<R> {
         let entries: Vec<(Category, AuditEntry)> = default_template(company_id)
             .iter()
             .map(|category| {
-                let audit = category_audit(
+                let audit = audit_entry(
                     category,
                     actor,
                     AuditAction::Created,
@@ -188,21 +188,5 @@ impl<R: CategoryRepository> CategoryService<R> {
             .await?
             .ok_or(ApplicationError::CategoryNotFound)?;
         Ok(self.repository.history(company_id, id).await?)
-    }
-}
-
-fn category_audit(
-    category: &Category,
-    actor: &Actor,
-    action: AuditAction,
-    changes: Vec<FieldChange>,
-) -> AuditEntry {
-    AuditEntry {
-        company_id: category.company_id(),
-        actor: actor.clone(),
-        entity: AuditEntity::Category,
-        entity_id: category.id().as_uuid(),
-        action,
-        changes,
     }
 }

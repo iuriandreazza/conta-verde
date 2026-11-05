@@ -177,6 +177,83 @@ export interface NewCategory {
   cash_flow_group?: CashFlowGroup;
 }
 
+export type BankAccountKind = "checking" | "savings" | "cash" | "card";
+
+export interface BankAccount {
+  id: string;
+  company_id: string;
+  kind: BankAccountKind;
+  name: string;
+  /** 3 digits (COMPE), or 8 (ISPB) for an institution without one. */
+  bank_code: string | null;
+  /** Upper case letters and digits, without the punctuation it was written with. */
+  branch: string | null;
+  number: string | null;
+  active: boolean;
+}
+
+export interface BankAccountPage {
+  items: BankAccount[];
+  next_cursor: string | null;
+}
+
+/** What is sent to register an account, and, whole, to change one: a change replaces every field. */
+export interface BankAccountInput {
+  kind: BankAccountKind;
+  name: string;
+  bank_code?: string;
+  branch?: string;
+  number?: string;
+  active: boolean;
+}
+
+export interface BankAccountFilters {
+  q: string;
+  kind: "" | BankAccountKind;
+  active: "" | "true" | "false";
+  sort: "name" | "-name";
+}
+
+export const NO_BANK_ACCOUNT_FILTERS: BankAccountFilters = { q: "", kind: "", active: "", sort: "name" };
+
+export type PaymentMethodKind =
+  | "cash"
+  | "pix"
+  | "bank_slip"
+  | "credit_card"
+  | "debit_card"
+  | "bank_transfer"
+  | "check"
+  | "other";
+
+export interface PaymentMethod {
+  id: string;
+  company_id: string;
+  kind: PaymentMethodKind;
+  name: string;
+  active: boolean;
+}
+
+export interface PaymentMethodPage {
+  items: PaymentMethod[];
+  next_cursor: string | null;
+}
+
+export interface PaymentMethodInput {
+  kind: PaymentMethodKind;
+  name: string;
+  active: boolean;
+}
+
+export interface PaymentMethodFilters {
+  q: string;
+  kind: "" | PaymentMethodKind;
+  active: "" | "true" | "false";
+  sort: "name" | "-name";
+}
+
+export const NO_PAYMENT_METHOD_FILTERS: PaymentMethodFilters = { q: "", kind: "", active: "", sort: "name" };
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -291,6 +368,52 @@ export const api = {
     }),
   costCenterHistory: (companyId: string, id: string) =>
     request<HistoryEntry[]>(`/companies/${companyId}/cost-centers/${id}/history`),
+  listBankAccounts: (
+    companyId: string,
+    filters: BankAccountFilters = NO_BANK_ACCOUNT_FILTERS,
+    after?: string,
+  ) => {
+    const params = new URLSearchParams();
+    if (filters.q) params.set("q", filters.q);
+    if (filters.kind) params.set("kind", filters.kind);
+    if (filters.active) params.set("active", filters.active);
+    if (filters.sort !== NO_BANK_ACCOUNT_FILTERS.sort) params.set("sort", filters.sort);
+    if (after) params.set("after", after);
+    const query = params.size > 0 ? `?${params}` : "";
+    return request<BankAccountPage>(`/companies/${companyId}/bank-accounts${query}`);
+  },
+  createBankAccount: (companyId: string, input: BankAccountInput) =>
+    post<BankAccount>(`/companies/${companyId}/bank-accounts`, input),
+  updateBankAccount: (companyId: string, id: string, input: BankAccountInput) =>
+    request<BankAccount>(`/companies/${companyId}/bank-accounts/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  bankAccountHistory: (companyId: string, id: string) =>
+    request<HistoryEntry[]>(`/companies/${companyId}/bank-accounts/${id}/history`),
+  listPaymentMethods: (
+    companyId: string,
+    filters: PaymentMethodFilters = NO_PAYMENT_METHOD_FILTERS,
+    after?: string,
+  ) => {
+    const params = new URLSearchParams();
+    if (filters.q) params.set("q", filters.q);
+    if (filters.kind) params.set("kind", filters.kind);
+    if (filters.active) params.set("active", filters.active);
+    if (filters.sort !== NO_PAYMENT_METHOD_FILTERS.sort) params.set("sort", filters.sort);
+    if (after) params.set("after", after);
+    const query = params.size > 0 ? `?${params}` : "";
+    return request<PaymentMethodPage>(`/companies/${companyId}/payment-methods${query}`);
+  },
+  createPaymentMethod: (companyId: string, input: PaymentMethodInput) =>
+    post<PaymentMethod>(`/companies/${companyId}/payment-methods`, input),
+  updatePaymentMethod: (companyId: string, id: string, input: PaymentMethodInput) =>
+    request<PaymentMethod>(`/companies/${companyId}/payment-methods/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  paymentMethodHistory: (companyId: string, id: string) =>
+    request<HistoryEntry[]>(`/companies/${companyId}/payment-methods/${id}/history`),
   /** The whole tree, flat and unpaged. */
   listCategories: (companyId: string) =>
     request<{ items: Category[] }>(`/companies/${companyId}/categories`),

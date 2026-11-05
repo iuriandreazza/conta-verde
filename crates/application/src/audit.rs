@@ -1,4 +1,4 @@
-use conta_verde_domain::{AuditEntry, Audited};
+use conta_verde_domain::{Actor, AuditAction, AuditEntry, Audited, FieldChange};
 
 use crate::RepositoryError;
 
@@ -15,5 +15,22 @@ pub fn ensure_audit_describes(
         Err(RepositoryError::Storage(
             "audit entry does not describe the record being written".to_owned(),
         ))
+    }
+}
+
+/// The audit entry for a write to `record`, made by `actor`.
+pub(crate) fn audit_entry(
+    record: &impl Audited,
+    actor: &Actor,
+    action: AuditAction,
+    changes: Vec<FieldChange>,
+) -> AuditEntry {
+    AuditEntry {
+        company_id: record.audit_company(),
+        actor: actor.clone(),
+        entity: record.audit_entity(),
+        entity_id: record.audit_id(),
+        action,
+        changes,
     }
 }

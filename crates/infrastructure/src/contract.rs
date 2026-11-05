@@ -1,17 +1,23 @@
 //! Behavior every adapter must share, written once and run against each of them.
 
 use conta_verde_application::{
-    ApplicationError, AuthError, AuthService, CategoryRepository, CategoryService, CnpjRegistry,
-    CostCenterQuery, CostCenterRepository, CostCenterService, IdentityRepository, NameSort,
-    NewCategory, PartyKind, PartyQuery, PartyRepository, PartyService, ProductQuery,
-    ProductRepository, ProductService, RepositoryError, SecretService,
+    ApplicationError, AuthError, AuthService, BankAccountQuery, BankAccountRepository,
+    BankAccountService, CategoryRepository, CategoryService, CnpjRegistry, CostCenterQuery,
+    CostCenterRepository, CostCenterService, IdentityRepository, NameSort, NewCategory, PartyKind,
+    PartyQuery, PartyRepository, PartyService, PaymentMethodQuery, PaymentMethodRepository,
+    PaymentMethodService, ProductQuery, ProductRepository, ProductService, RepositoryError,
+    SecretService,
 };
 use conta_verde_domain::{
-    AccountDraft, Actor, AuditAction, AuditEntity, AuditEntry, CashFlowGroup, Category, CategoryId,
-    CompanyId, CostCenter, CostCenterDraft, CostCenterId, DocumentCheck, DomainError, DreGroup,
-    FieldChange, Party, PartyDraft, PartyId, Product, ProductDraft, ProductId, ProductKind, UserId,
-    category_changes, category_creation_changes, cost_center_changes, cost_center_creation_changes,
-    creation_changes, document_check_changes, product_changes, product_creation_changes,
+    AccountDraft, Actor, AuditAction, AuditEntity, AuditEntry, BankAccount, BankAccountDraft,
+    BankAccountId, BankAccountKind, CashFlowGroup, Category, CategoryId, CompanyId, CostCenter,
+    CostCenterDraft, CostCenterId, DocumentCheck, DomainError, DreGroup, FieldChange, Party,
+    PartyDraft, PartyId, PaymentMethod, PaymentMethodDraft, PaymentMethodId, PaymentMethodKind,
+    Product, ProductDraft, ProductId, ProductKind, UserId, bank_account_changes,
+    bank_account_creation_changes, category_changes, category_creation_changes,
+    cost_center_changes, cost_center_creation_changes, creation_changes, document_check_changes,
+    payment_method_changes, payment_method_creation_changes, product_changes,
+    product_creation_changes,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -2140,5 +2146,882 @@ pub async fn keeps_the_tree_consistent<R: CategoryRepository>(
     assert_eq!(
         service.history(company, nobody).await,
         Err(ApplicationError::CategoryNotFound)
+    );
+}
+
+// ---- bank accounts
+
+fn account_draft(
+    kind: BankAccountKind,
+    name: &str,
+    identity: Option<(&str, &str, &str)>,
+    active: bool,
+) -> BankAccountDraft {
+    BankAccountDraft {
+        kind,
+        name: name.into(),
+        bank_code: identity.map(|identity| identity.0.into()),
+        branch: identity.map(|identity| identity.1.into()),
+        number: identity.map(|identity| identity.2.into()),
+        active,
+    }
+}
+
+fn new_account(
+    company: CompanyId,
+    name: &str,
+    identity: Option<(&str, &str, &str)>,
+) -> BankAccount {
+    BankAccount::new(
+        BankAccountId::generate(),
+        company,
+        account_draft(BankAccountKind::Checking, name, identity, true),
+    )
+    .unwrap()
+}
+
+fn account_entry(
+    account: &BankAccount,
+    action: AuditAction,
+    changes: Vec<FieldChange>,
+) -> AuditEntry {
+    AuditEntry {
+        company_id: account.company_id(),
+        actor: actor(),
+        entity: AuditEntity::BankAccount,
+        entity_id: account.id().as_uuid(),
+        action,
+        changes,
+    }
+}
+
+async fn save_account<R: BankAccountRepository>(
+    repository: &R,
+    account: &BankAccount,
+) -> Result<(), RepositoryError> {
+    let entry = account_entry(
+        account,
+        AuditAction::Created,
+        bank_account_creation_changes(account),
+    );
+    repository.save(account, &entry).await
+}
+
+async fn account_trail<R: BankAccountRepository>(
+    repository: &R,
+    company: CompanyId,
+    account: &BankAccount,
+) -> usize {
+    repository
+        .history(company, account.id())
+        .await
+        .unwrap()
+        .len()
+}
+
+/// A write is stored with its audit entry, scoped by company; one that is refused or misses leaves
+/// nothing in the trail, and an entry that describes something else is refused outright.
+pub async fn stores_bank_accounts_with_their_trail<R: BankAccountRepository>(
+    repository: &R,
+    company: CompanyId,
+    other_company: CompanyId,
+) {
+    let main = new_account(company, "Itaú principal", Some(("341", "1234", "56789X")));
+    save_account(repository, &main).await.unwrap();
+    assert_eq!(
+        repository.find(company, main.id()).await.unwrap(),
+        Some(main.clone())
+    );
+    assert_eq!(
+        repository.find(other_company, main.id()).await.unwrap(),
+        None
+    );
+    assert_eq!(account_trail(repository, company, &main).await, 1);
+    assert_eq!(account_trail(repository, other_company, &main).await, 0);
+
+    // The same name, whatever its case, and the same bank, branch and number, are each refused:
+    // no row and no entry.
+    let same_name = new_account(company, "ITAÚ PRINCIPAL", None);
+    let same_identity = new_account(company, "Outro nome", Some(("341", "1234", "56789X")));
+    assert_eq!(
+        save_account(repository, &same_name).await,
+        Err(RepositoryError::DuplicateName)
+    );
+    assert_eq!(
+        save_account(repository, &same_identity).await,
+        Err(RepositoryError::DuplicateBankAccount)
+    );
+    for refused in [&same_name, &same_identity] {
+        assert_eq!(repository.find(company, refused.id()).await.unwrap(), None);
+        assert_eq!(account_trail(repository, company, refused).await, 0);
+    }
+    // The same bank, branch and number under another kind is another account (a savings account
+    // may carry the checking account's), and so is a card of the same bank.
+    let savings = BankAccount::new(
+        BankAccountId::generate(),
+        company,
+        account_draft(
+            BankAccountKind::Savings,
+            "Poupança no mesmo banco",
+            Some(("341", "1234", "56789X")),
+            true,
+        ),
+    )
+    .unwrap();
+    save_account(repository, &savings).await.unwrap();
+    // Another company may have both; an account whose identity is not complete never clashes.
+    save_account(
+        repository,
+        &new_account(
+            other_company,
+            "Itaú principal",
+            Some(("341", "1234", "56789X")),
+        ),
+    )
+    .await
+    .unwrap();
+    for name in ["Sem número 1", "Sem número 2"] {
+        let partial = BankAccount::new(
+            BankAccountId::generate(),
+            company,
+            BankAccountDraft {
+                number: None,
+                ..account_draft(
+                    BankAccountKind::Checking,
+                    name,
+                    Some(("341", "1234", "x")),
+                    true,
+                )
+            },
+        )
+        .unwrap();
+        save_account(repository, &partial).await.unwrap();
+    }
+    let cash = BankAccount::new(
+        BankAccountId::generate(),
+        company,
+        account_draft(BankAccountKind::Cash, "Caixa", None, true),
+    )
+    .unwrap();
+    save_account(repository, &cash).await.unwrap();
+
+    // An entry about another record, or another company, is refused and nothing is stored.
+    let stray = new_account(company, "Estranha", None);
+    let wrong_record = account_entry(&main, AuditAction::Created, vec![]);
+    assert!(repository.save(&stray, &wrong_record).await.is_err());
+    assert_eq!(repository.find(company, stray.id()).await.unwrap(), None);
+    let mut wrong_company = account_entry(&stray, AuditAction::Created, vec![]);
+    wrong_company.company_id = other_company;
+    assert!(repository.save(&stray, &wrong_company).await.is_err());
+    assert_eq!(account_trail(repository, other_company, &stray).await, 0);
+
+    // An update replaces the fields and adds an entry; changing only the case of its own name, or
+    // keeping its own bank, branch and number, is not a clash.
+    let changed = main
+        .replaced_with(account_draft(
+            BankAccountKind::Checking,
+            "ITAÚ PRINCIPAL",
+            Some(("341", "1234", "56789X")),
+            false,
+        ))
+        .unwrap();
+    let entry = account_entry(
+        &changed,
+        AuditAction::Updated,
+        bank_account_changes(&main, &changed),
+    );
+    repository.update(&changed, &entry).await.unwrap();
+    assert_eq!(
+        repository.find(company, main.id()).await.unwrap(),
+        Some(changed.clone())
+    );
+    assert_eq!(account_trail(repository, company, &main).await, 2);
+
+    // One that clashes changes nothing and adds nothing: with another account's name, or with
+    // another account's bank, branch and number.
+    let other = new_account(company, "Poupança", Some(("104", "0001", "777")));
+    save_account(repository, &other).await.unwrap();
+    for draft in [
+        account_draft(
+            BankAccountKind::Checking,
+            "itaú principal",
+            Some(("104", "0001", "777")),
+            true,
+        ),
+        account_draft(
+            BankAccountKind::Checking,
+            "Poupança",
+            Some(("341", "1234", "56789X")),
+            true,
+        ),
+    ] {
+        let clashing = other.replaced_with(draft).unwrap();
+        let entry = account_entry(
+            &clashing,
+            AuditAction::Updated,
+            bank_account_changes(&other, &clashing),
+        );
+        assert!(matches!(
+            repository.update(&clashing, &entry).await,
+            Err(RepositoryError::DuplicateName | RepositoryError::DuplicateBankAccount)
+        ));
+        assert_eq!(
+            repository.find(company, other.id()).await.unwrap(),
+            Some(other.clone())
+        );
+        // Only the entry of its creation.
+        assert_eq!(account_trail(repository, company, &other).await, 1);
+    }
+
+    // The kind is fixed at registration: the port refuses to change it and writes nothing.
+    let kind_swap = BankAccount::new(
+        other.id(),
+        company,
+        account_draft(
+            BankAccountKind::Savings,
+            "Poupança",
+            Some(("104", "0001", "777")),
+            true,
+        ),
+    )
+    .unwrap();
+    let entry = account_entry(&kind_swap, AuditAction::Updated, vec![]);
+    assert_eq!(
+        repository.update(&kind_swap, &entry).await,
+        Err(RepositoryError::NotFound)
+    );
+    assert_eq!(
+        repository
+            .find(company, other.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .kind(),
+        BankAccountKind::Checking
+    );
+
+    // A number given up by an edit is free for another account of the company.
+    let moved = other
+        .replaced_with(account_draft(
+            BankAccountKind::Checking,
+            "Poupança",
+            Some(("104", "0001", "888")),
+            true,
+        ))
+        .unwrap();
+    let entry = account_entry(
+        &moved,
+        AuditAction::Updated,
+        bank_account_changes(&other, &moved),
+    );
+    repository.update(&moved, &entry).await.unwrap();
+    save_account(
+        repository,
+        &new_account(company, "Terceira", Some(("104", "0001", "777"))),
+    )
+    .await
+    .unwrap();
+
+    // Not in that company, or not at all: nothing is updated and no entry is left.
+    let foreign = BankAccount::new(
+        main.id(),
+        other_company,
+        account_draft(BankAccountKind::Checking, "Roubo", None, true),
+    )
+    .unwrap();
+    let entry = account_entry(&foreign, AuditAction::Updated, vec![]);
+    assert_eq!(
+        repository.update(&foreign, &entry).await,
+        Err(RepositoryError::NotFound)
+    );
+    assert_eq!(account_trail(repository, other_company, &main).await, 0);
+    let unknown = new_account(company, "Fantasma", None);
+    let entry = account_entry(&unknown, AuditAction::Updated, vec![]);
+    assert_eq!(
+        repository.update(&unknown, &entry).await,
+        Err(RepositoryError::NotFound)
+    );
+    assert_eq!(account_trail(repository, company, &unknown).await, 0);
+}
+
+/// An edit that changes nothing writes nothing, and the trail shows who changed what.
+pub async fn edits_bank_accounts_and_records_only_changes<R: BankAccountRepository>(
+    service: &BankAccountService<R>,
+    company: CompanyId,
+    other_company: CompanyId,
+) {
+    let who = actor();
+    // Written the way people write it, stored in one form.
+    let created = service
+        .register(
+            company,
+            &who,
+            account_draft(
+                BankAccountKind::Checking,
+                "  Conta da loja ",
+                Some(("341", " 12.34 ", "56789-x")),
+                true,
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        (created.name(), created.branch(), created.number()),
+        ("Conta da loja", Some("1234"), Some("56789X"))
+    );
+
+    // The same account written differently is no change.
+    service
+        .update(
+            company,
+            &who,
+            created.id(),
+            account_draft(
+                BankAccountKind::Checking,
+                "Conta da loja",
+                Some(("341", "1234", "56789X")),
+                true,
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        service.history(company, created.id()).await.unwrap().len(),
+        1
+    );
+
+    let updated = service
+        .update(
+            company,
+            &who,
+            created.id(),
+            account_draft(
+                BankAccountKind::Checking,
+                "Conta da loja",
+                Some(("341", "1234", "99999")),
+                false,
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.number(), Some("99999"));
+    let history = service.history(company, created.id()).await.unwrap();
+    assert_eq!(history.len(), 2);
+    let fields: Vec<(&str, Option<&str>, Option<&str>)> = history[1]
+        .entry
+        .changes
+        .iter()
+        .map(|change| {
+            (
+                change.field.as_str(),
+                change.from.as_deref(),
+                change.to.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        fields,
+        [
+            ("number", Some("56789X"), Some("99999")),
+            ("active", Some("true"), Some("false"))
+        ]
+    );
+
+    // A kind is for good, and other companies can neither touch nor read the account.
+    assert_eq!(
+        service
+            .update(
+                company,
+                &who,
+                created.id(),
+                account_draft(BankAccountKind::Savings, "Conta da loja", None, true)
+            )
+            .await,
+        Err(ApplicationError::Domain(DomainError::KindCannotChange))
+    );
+    assert_eq!(
+        service
+            .update(
+                other_company,
+                &who,
+                created.id(),
+                account_draft(BankAccountKind::Checking, "X", None, true)
+            )
+            .await,
+        Err(ApplicationError::BankAccountNotFound)
+    );
+    assert_eq!(
+        service.history(other_company, created.id()).await,
+        Err(ApplicationError::BankAccountNotFound)
+    );
+    assert_eq!(
+        service
+            .register(
+                company,
+                &who,
+                account_draft(
+                    BankAccountKind::Checking,
+                    "Outra",
+                    Some(("341", "1234", "99999")),
+                    true
+                )
+            )
+            .await,
+        Err(ApplicationError::Repository(
+            RepositoryError::DuplicateBankAccount
+        ))
+    );
+}
+
+async fn listed_account_names<R: BankAccountRepository>(
+    service: &BankAccountService<R>,
+    company: CompanyId,
+    query: &BankAccountQuery,
+    page_size: usize,
+) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = service
+            .list(company, query, cursor.as_ref(), Some(page_size))
+            .await
+            .unwrap();
+        names.extend(page.items.iter().map(|item| item.name().to_owned()));
+        match page.next {
+            Some(next) => cursor = Some(next),
+            None => return names,
+        }
+    }
+}
+
+pub async fn filters_and_sorts_bank_accounts<R: BankAccountRepository>(
+    service: &BankAccountService<R>,
+    company: CompanyId,
+    other_company: CompanyId,
+) {
+    let who = actor();
+    use BankAccountKind::{Card, Cash, Checking, Savings};
+    for (kind, name, identity, active) in [
+        (Checking, "Alfa", Some(("341", "1", "1001")), true),
+        (Savings, "bravo", Some(("001", "2", "2002")), false),
+        (Cash, "Caixa 100%", None, true),
+        (Card, "Delta_x", None, true),
+        (Checking, "echo", None, false),
+    ] {
+        service
+            .register(company, &who, account_draft(kind, name, identity, active))
+            .await
+            .unwrap();
+    }
+    // Another company's account never shows up, and may reuse a name and a number.
+    service
+        .register(
+            other_company,
+            &who,
+            account_draft(Checking, "Alfa", Some(("341", "1", "1001")), true),
+        )
+        .await
+        .unwrap();
+
+    let all = BankAccountQuery::default();
+    let names = |query: BankAccountQuery| async move {
+        listed_account_names(service, company, &query, 2).await
+    };
+    let ascending = ["Alfa", "bravo", "Caixa 100%", "Delta_x", "echo"];
+    assert_eq!(names(all.clone()).await, ascending);
+    let descending: Vec<&str> = ascending.iter().rev().copied().collect();
+    assert_eq!(
+        names(all.clone().sorted(NameSort::NameDesc)).await,
+        descending
+    );
+
+    assert_eq!(
+        names(all.clone().with_active(true)).await,
+        ["Alfa", "Caixa 100%", "Delta_x"]
+    );
+    assert_eq!(
+        names(all.clone().with_active(false)).await,
+        ["bravo", "echo"]
+    );
+    assert_eq!(names(all.clone().of_kind(Checking)).await, ["Alfa", "echo"]);
+    assert_eq!(names(all.clone().of_kind(Cash)).await, ["Caixa 100%"]);
+
+    // A name anywhere in it, ignoring case; an account number ignoring its punctuation.
+    assert_eq!(names(all.clone().searching("ALF")).await, ["Alfa"]);
+    assert_eq!(names(all.clone().searching("10-01")).await, ["Alfa"]);
+    assert_eq!(names(all.clone().searching(" 2002 ")).await, ["bravo"]);
+    // `%` and `_` are ordinary characters, not wildcards.
+    assert_eq!(names(all.clone().searching("%")).await, ["Caixa 100%"]);
+    assert_eq!(names(all.clone().searching("_")).await, ["Delta_x"]);
+    assert!(names(all.clone().searching("nobody")).await.is_empty());
+    assert_eq!(names(all.clone().searching("al\0fa")).await, ["Alfa"]);
+    assert_eq!(names(all.clone().searching("  ")).await, ascending);
+
+    let active_checking = all.clone().with_active(true).of_kind(Checking);
+    assert_eq!(names(active_checking).await, ["Alfa"]);
+    let active_with_a = all
+        .with_active(true)
+        .searching("a")
+        .sorted(NameSort::NameDesc);
+    assert_eq!(
+        names(active_with_a).await,
+        ["Delta_x", "Caixa 100%", "Alfa"]
+    );
+}
+
+// ---- payment methods
+
+fn method_draft(kind: PaymentMethodKind, name: &str, active: bool) -> PaymentMethodDraft {
+    PaymentMethodDraft {
+        kind,
+        name: name.into(),
+        active,
+    }
+}
+
+fn new_method(company: CompanyId, name: &str) -> PaymentMethod {
+    PaymentMethod::new(
+        PaymentMethodId::generate(),
+        company,
+        method_draft(PaymentMethodKind::Pix, name, true),
+    )
+    .unwrap()
+}
+
+fn method_entry(
+    method: &PaymentMethod,
+    action: AuditAction,
+    changes: Vec<FieldChange>,
+) -> AuditEntry {
+    AuditEntry {
+        company_id: method.company_id(),
+        actor: actor(),
+        entity: AuditEntity::PaymentMethod,
+        entity_id: method.id().as_uuid(),
+        action,
+        changes,
+    }
+}
+
+async fn save_method<R: PaymentMethodRepository>(
+    repository: &R,
+    method: &PaymentMethod,
+) -> Result<(), RepositoryError> {
+    let entry = method_entry(
+        method,
+        AuditAction::Created,
+        payment_method_creation_changes(method),
+    );
+    repository.save(method, &entry).await
+}
+
+async fn method_trail<R: PaymentMethodRepository>(
+    repository: &R,
+    company: CompanyId,
+    method: &PaymentMethod,
+) -> usize {
+    repository
+        .history(company, method.id())
+        .await
+        .unwrap()
+        .len()
+}
+
+/// A write is stored with its audit entry, scoped by company; one that is refused or misses leaves
+/// nothing in the trail, and an entry that describes something else is refused outright.
+pub async fn stores_payment_methods_with_their_trail<R: PaymentMethodRepository>(
+    repository: &R,
+    company: CompanyId,
+    other_company: CompanyId,
+) {
+    let pix = new_method(company, "Pix");
+    save_method(repository, &pix).await.unwrap();
+    assert_eq!(
+        repository.find(company, pix.id()).await.unwrap(),
+        Some(pix.clone())
+    );
+    assert_eq!(
+        repository.find(other_company, pix.id()).await.unwrap(),
+        None
+    );
+    assert_eq!(method_trail(repository, company, &pix).await, 1);
+    assert_eq!(method_trail(repository, other_company, &pix).await, 0);
+
+    // The same name in the same company, whatever its case, is refused: no row, no entry.
+    let twin = new_method(company, "PIX");
+    assert_eq!(
+        save_method(repository, &twin).await,
+        Err(RepositoryError::DuplicateName)
+    );
+    assert_eq!(repository.find(company, twin.id()).await.unwrap(), None);
+    assert_eq!(method_trail(repository, company, &twin).await, 0);
+    save_method(repository, &new_method(other_company, "Pix"))
+        .await
+        .unwrap();
+
+    // An entry about another record, or another company, is refused and nothing is stored.
+    let stray = new_method(company, "Estranho");
+    let wrong_record = method_entry(&pix, AuditAction::Created, vec![]);
+    assert!(repository.save(&stray, &wrong_record).await.is_err());
+    assert_eq!(repository.find(company, stray.id()).await.unwrap(), None);
+    let mut wrong_company = method_entry(&stray, AuditAction::Created, vec![]);
+    wrong_company.company_id = other_company;
+    assert!(repository.save(&stray, &wrong_company).await.is_err());
+    assert_eq!(method_trail(repository, other_company, &stray).await, 0);
+
+    // An update replaces the fields (the kind too) and adds an entry; the case of its own name is
+    // not a clash.
+    let changed = pix
+        .replaced_with(method_draft(PaymentMethodKind::BankTransfer, "PIX", false))
+        .unwrap();
+    let entry = method_entry(
+        &changed,
+        AuditAction::Updated,
+        payment_method_changes(&pix, &changed),
+    );
+    repository.update(&changed, &entry).await.unwrap();
+    assert_eq!(
+        repository.find(company, pix.id()).await.unwrap(),
+        Some(changed.clone())
+    );
+    assert_eq!(method_trail(repository, company, &pix).await, 2);
+
+    // One that clashes with another's name changes nothing and adds nothing.
+    let other = new_method(company, "Boleto");
+    save_method(repository, &other).await.unwrap();
+    let clashing = other
+        .replaced_with(method_draft(PaymentMethodKind::BankSlip, "pix", true))
+        .unwrap();
+    let entry = method_entry(
+        &clashing,
+        AuditAction::Updated,
+        payment_method_changes(&other, &clashing),
+    );
+    assert_eq!(
+        repository.update(&clashing, &entry).await,
+        Err(RepositoryError::DuplicateName)
+    );
+    assert_eq!(
+        repository.find(company, other.id()).await.unwrap(),
+        Some(other.clone())
+    );
+    assert_eq!(method_trail(repository, company, &other).await, 1);
+
+    // A name given up by a rename is free again.
+    let renamed = other
+        .replaced_with(method_draft(
+            PaymentMethodKind::BankSlip,
+            "Boleto bancário",
+            true,
+        ))
+        .unwrap();
+    let entry = method_entry(
+        &renamed,
+        AuditAction::Updated,
+        payment_method_changes(&other, &renamed),
+    );
+    repository.update(&renamed, &entry).await.unwrap();
+    save_method(repository, &new_method(company, "boleto"))
+        .await
+        .unwrap();
+
+    // Not in that company, or not at all: nothing is updated and no entry is left.
+    let foreign = PaymentMethod::new(
+        pix.id(),
+        other_company,
+        method_draft(PaymentMethodKind::Cash, "Roubo", true),
+    )
+    .unwrap();
+    let entry = method_entry(&foreign, AuditAction::Updated, vec![]);
+    assert_eq!(
+        repository.update(&foreign, &entry).await,
+        Err(RepositoryError::NotFound)
+    );
+    assert_eq!(method_trail(repository, other_company, &pix).await, 0);
+    let unknown = new_method(company, "Fantasma");
+    let entry = method_entry(&unknown, AuditAction::Updated, vec![]);
+    assert_eq!(
+        repository.update(&unknown, &entry).await,
+        Err(RepositoryError::NotFound)
+    );
+    assert_eq!(method_trail(repository, company, &unknown).await, 0);
+}
+
+/// An edit that changes nothing writes nothing, and the trail shows who changed what.
+pub async fn edits_payment_methods_and_records_only_changes<R: PaymentMethodRepository>(
+    service: &PaymentMethodService<R>,
+    company: CompanyId,
+    other_company: CompanyId,
+) {
+    let who = actor();
+    let created = service
+        .register(
+            company,
+            &who,
+            method_draft(PaymentMethodKind::CreditCard, "  Visa ", true),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.name(), "Visa");
+
+    service
+        .update(
+            company,
+            &who,
+            created.id(),
+            method_draft(PaymentMethodKind::CreditCard, "Visa", true),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        service.history(company, created.id()).await.unwrap().len(),
+        1
+    );
+
+    let updated = service
+        .update(
+            company,
+            &who,
+            created.id(),
+            method_draft(PaymentMethodKind::DebitCard, "Visa débito", false),
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.kind(), PaymentMethodKind::DebitCard);
+    let history = service.history(company, created.id()).await.unwrap();
+    assert_eq!(history.len(), 2);
+    let fields: Vec<(&str, Option<&str>, Option<&str>)> = history[1]
+        .entry
+        .changes
+        .iter()
+        .map(|change| {
+            (
+                change.field.as_str(),
+                change.from.as_deref(),
+                change.to.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        fields,
+        [
+            ("kind", Some("credit_card"), Some("debit_card")),
+            ("name", Some("Visa"), Some("Visa débito")),
+            ("active", Some("true"), Some("false"))
+        ]
+    );
+
+    assert_eq!(
+        service
+            .update(
+                other_company,
+                &who,
+                created.id(),
+                method_draft(PaymentMethodKind::Cash, "X", true)
+            )
+            .await,
+        Err(ApplicationError::PaymentMethodNotFound)
+    );
+    assert_eq!(
+        service.history(other_company, created.id()).await,
+        Err(ApplicationError::PaymentMethodNotFound)
+    );
+    assert_eq!(
+        service
+            .register(
+                company,
+                &who,
+                method_draft(PaymentMethodKind::Cash, "visa DÉBITO", true)
+            )
+            .await,
+        Err(ApplicationError::Repository(RepositoryError::DuplicateName))
+    );
+}
+
+async fn listed_method_names<R: PaymentMethodRepository>(
+    service: &PaymentMethodService<R>,
+    company: CompanyId,
+    query: &PaymentMethodQuery,
+    page_size: usize,
+) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = service
+            .list(company, query, cursor.as_ref(), Some(page_size))
+            .await
+            .unwrap();
+        names.extend(page.items.iter().map(|item| item.name().to_owned()));
+        match page.next {
+            Some(next) => cursor = Some(next),
+            None => return names,
+        }
+    }
+}
+
+pub async fn filters_and_sorts_payment_methods<R: PaymentMethodRepository>(
+    service: &PaymentMethodService<R>,
+    company: CompanyId,
+    other_company: CompanyId,
+) {
+    use PaymentMethodKind::{Cash, Check, CreditCard, DebitCard, Pix};
+    let who = actor();
+    for (kind, name, active) in [
+        (Pix, "Alfa", true),
+        (Cash, "bravo", false),
+        (CreditCard, "Charlie 100%", true),
+        (DebitCard, "Delta_x", true),
+        (Check, "echo", false),
+    ] {
+        service
+            .register(company, &who, method_draft(kind, name, active))
+            .await
+            .unwrap();
+    }
+    service
+        .register(other_company, &who, method_draft(Pix, "Alfa", true))
+        .await
+        .unwrap();
+
+    let all = PaymentMethodQuery::default();
+    let names = |query: PaymentMethodQuery| async move {
+        listed_method_names(service, company, &query, 2).await
+    };
+    let ascending = ["Alfa", "bravo", "Charlie 100%", "Delta_x", "echo"];
+    assert_eq!(names(all.clone()).await, ascending);
+    let descending: Vec<&str> = ascending.iter().rev().copied().collect();
+    assert_eq!(
+        names(all.clone().sorted(NameSort::NameDesc)).await,
+        descending
+    );
+
+    assert_eq!(
+        names(all.clone().with_active(true)).await,
+        ["Alfa", "Charlie 100%", "Delta_x"]
+    );
+    assert_eq!(
+        names(all.clone().with_active(false)).await,
+        ["bravo", "echo"]
+    );
+    assert_eq!(names(all.clone().of_kind(Check)).await, ["echo"]);
+    assert_eq!(
+        names(all.clone().of_kind(Pix).with_active(false)).await,
+        Vec::<String>::new()
+    );
+
+    assert_eq!(names(all.clone().searching("ALF")).await, ["Alfa"]);
+    assert_eq!(names(all.clone().searching("%")).await, ["Charlie 100%"]);
+    assert_eq!(names(all.clone().searching("_")).await, ["Delta_x"]);
+    assert!(names(all.clone().searching("nobody")).await.is_empty());
+    assert_eq!(names(all.clone().searching("al\0fa")).await, ["Alfa"]);
+    assert_eq!(names(all.clone().searching("  ")).await, ascending);
+
+    let active_with_a = all
+        .with_active(true)
+        .searching("a")
+        .sorted(NameSort::NameDesc);
+    assert_eq!(
+        names(active_with_a).await,
+        ["Delta_x", "Charlie 100%", "Alfa"]
     );
 }

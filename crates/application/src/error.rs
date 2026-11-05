@@ -14,6 +14,8 @@ pub enum RepositoryError {
     DuplicateName,
     /// The company already has a category for transfers between its accounts.
     DuplicateTransferCategory,
+    /// The company already has an account with this bank, branch and number.
+    DuplicateBankAccount,
     /// An update matched no row.
     NotFound,
     Storage(String),
@@ -49,6 +51,10 @@ pub enum ApplicationError {
     /// The default template is for a company that has no categories yet.
     CategoriesAlreadyExist,
     CategoryLimitReached,
+    /// No bank account with this id in the company (another company's looks the same).
+    BankAccountNotFound,
+    /// No payment method with this id in the company (another company's looks the same).
+    PaymentMethodNotFound,
     /// No cost center with this id in the company (another company's looks the same).
     CostCenterNotFound,
     /// The operator switched the CNPJ lookup off, so there is nothing to ask.
@@ -88,6 +94,9 @@ impl fmt::Display for RepositoryError {
             Self::DuplicateEmail => f.write_str("an account with this email already exists"),
             Self::DuplicateSku => f.write_str("a product with this SKU already exists"),
             Self::DuplicateName => f.write_str("this name is already in use"),
+            Self::DuplicateBankAccount => {
+                f.write_str("a bank account with this bank, branch and number already exists")
+            }
             Self::DuplicateTransferCategory => {
                 f.write_str("the company already has a category for transfers between accounts")
             }
@@ -118,6 +127,8 @@ impl fmt::Display for ApplicationError {
             Self::PartyNotFound => f.write_str("party not found"),
             Self::ProductNotFound => f.write_str("product not found"),
             Self::CostCenterNotFound => f.write_str("cost center not found"),
+            Self::BankAccountNotFound => f.write_str("bank account not found"),
+            Self::PaymentMethodNotFound => f.write_str("payment method not found"),
             Self::CategoryNotFound => f.write_str("category not found"),
             Self::ParentCategoryNotFound => f.write_str("the parent category does not exist"),
             Self::CategoryParentInactive => {

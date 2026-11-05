@@ -10,7 +10,7 @@ use crate::access::CompanyAccess;
 use crate::cursor::{decode_cursor, encode_cursor};
 use crate::error::ApiError;
 use crate::history::HistoryEntryResponse;
-use crate::json::{ApiJson, ApiQuery};
+use crate::json::{ApiJson, ApiQuery, active_or};
 use crate::list_params;
 use crate::{Ports, SharedState};
 
@@ -52,12 +52,11 @@ impl ProductRequest {
     /// `default_active` is what a missing `active` means: `Some(true)` when registering, `None`
     /// when replacing, where it must be said.
     fn into_draft(self, default_active: Option<bool>) -> Result<ProductDraft, ApiError> {
-        let active = self
-            .active
-            .or(default_active)
-            .ok_or(ApiError::InvalidField(
-                "active is required when replacing a product",
-            ))?;
+        let active = active_or(
+            self.active,
+            default_active,
+            "active is required when replacing a product",
+        )?;
         Ok(ProductDraft {
             active,
             ..ProductDraft::from(self)

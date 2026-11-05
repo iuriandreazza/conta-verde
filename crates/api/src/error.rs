@@ -53,7 +53,8 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
             | RepositoryError::DuplicateEmail
             | RepositoryError::DuplicateSku
             | RepositoryError::DuplicateName
-            | RepositoryError::DuplicateTransferCategory),
+            | RepositoryError::DuplicateTransferCategory
+            | RepositoryError::DuplicateBankAccount),
         ) => (StatusCode::CONFLICT, error.to_string()),
         ApplicationError::Auth(error) => {
             let status = match error {
@@ -78,6 +79,8 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
         }
         ApplicationError::ProductNotFound
         | ApplicationError::CostCenterNotFound
+        | ApplicationError::BankAccountNotFound
+        | ApplicationError::PaymentMethodNotFound
         | ApplicationError::CategoryNotFound => (StatusCode::NOT_FOUND, error.to_string()),
         ApplicationError::LookupDisabled => (StatusCode::CONFLICT, error.to_string()),
         ApplicationError::RecheckTooSoon => (StatusCode::TOO_MANY_REQUESTS, error.to_string()),

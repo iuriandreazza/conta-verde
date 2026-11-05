@@ -3,33 +3,18 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use conta_verde_domain::{
-    Actor, AuditAction, AuditEntity, AuditEntry, AuditRecord, CompanyId, Document, DocumentCheck,
-    DomainError, FieldChange, Party, PartyDraft, PartyId, creation_changes, document_check_changes,
+    Actor, AuditAction, AuditRecord, CompanyId, Document, DocumentCheck, DomainError, Party,
+    PartyDraft, PartyId, creation_changes, document_check_changes,
 };
 
-use crate::list_query::{DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE};
+use crate::audit::audit_entry;
+use crate::list_query::{clamp_limit, split_page};
 use crate::{
     ApplicationError, CnpjLookupError, CnpjRegistry, NameCursor, PartyQuery, PartyRepository,
     RegistryEntry, RepositoryError,
 };
 
 const DEFAULT_RECHECK_INTERVAL: Duration = Duration::from_secs(10);
-
-fn party_audit(
-    party: &Party,
-    actor: &Actor,
-    action: AuditAction,
-    changes: Vec<FieldChange>,
-) -> AuditEntry {
-    AuditEntry {
-        company_id: party.company_id(),
-        actor: actor.clone(),
-        entity: AuditEntity::Party,
-        entity_id: party.id().as_uuid(),
-        action,
-        changes,
-    }
-}
 
 fn check_from(answer: Result<RegistryEntry, CnpjLookupError>) -> DocumentCheck {
     match answer {
@@ -96,7 +81,7 @@ impl<R: PartyRepository, C: CnpjRegistry> PartyService<R, C> {
             let check = check_from(self.registry.lookup(cnpj).await);
             party = party.with_document_check(check);
         }
-        let audit = party_audit(
+        let audit = audit_entry(
             &party,
             actor,
             AuditAction::Created,
@@ -141,7 +126,7 @@ impl<R: PartyRepository, C: CnpjRegistry> PartyService<R, C> {
         if changes.is_empty() {
             return Ok(party);
         }
-        let audit = party_audit(&party, actor, AuditAction::Updated, changes);
+        let audit = audit_entry(&party, actor, AuditAction::Updated, changes);
         self.repository
             .update_document_check(&party, &audit)
             .await
@@ -200,19 +185,12 @@ impl<R: PartyRepository, C: CnpjRegistry> PartyService<R, C> {
         after: Option<&NameCursor>,
         limit: Option<usize>,
     ) -> Result<PartyPage, ApplicationError> {
-        let limit = limit.unwrap_or(DEFAULT_PAGE_SIZE).clamp(1, MAX_PAGE_SIZE);
-        // One extra row tells whether another page exists without a second query.
-        let mut items = self
+        let limit = clamp_limit(limit);
+        let rows = self
             .repository
             .list_by_company(company_id, query, after, limit + 1)
             .await?;
-        let has_more = items.len() > limit;
-        items.truncate(limit);
-        let next = if has_more {
-            items.last().map(NameCursor::from)
-        } else {
-            None
-        };
+        let (items, next) = split_page(rows, limit);
         Ok(PartyPage { items, next })
     }
 }

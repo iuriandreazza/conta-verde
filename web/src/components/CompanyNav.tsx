@@ -1,9 +1,11 @@
 import { NavLink } from "react-router-dom";
 import { BoxIcon } from "./icons/box";
 import { ChartLineIcon } from "./icons/chart-line";
+import { CreditCardIcon } from "./icons/credit-card";
 import { FolderTreeIcon } from "./icons/folder-tree";
 import { LayersIcon } from "./icons/layers";
 import { UsersIcon } from "./icons/users";
+import { WalletIcon } from "./icons/wallet";
 
 /** The sections of a company; the link of the page being shown is marked as current. */
 export function CompanyNav({ companyId }: { companyId: string }) {
@@ -29,6 +31,14 @@ export function CompanyNav({ companyId }: { companyId: string }) {
       <NavLink to={`${base}/cost-centers`}>
         <LayersIcon size={18} aria-hidden />
         Centros de custo
+      </NavLink>
+      <NavLink to={`${base}/bank-accounts`}>
+        <WalletIcon size={18} aria-hidden />
+        Contas bancárias
+      </NavLink>
+      <NavLink to={`${base}/payment-methods`}>
+        <CreditCardIcon size={18} aria-hidden />
+        Formas de pagamento
       </NavLink>
     </nav>
   );

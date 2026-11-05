@@ -1,11 +1,12 @@
 use conta_verde_domain::{
-    Actor, AuditAction, AuditEntity, AuditEntry, AuditRecord, CompanyId, Product, ProductDraft,
-    ProductId, product_changes, product_creation_changes,
+    Actor, AuditAction, AuditRecord, CompanyId, Product, ProductDraft, ProductId, product_changes,
+    product_creation_changes,
 };
 
+use crate::audit::audit_entry;
 use crate::{
     ApplicationError, NameCursor, ProductQuery, ProductRepository, RepositoryError,
-    list_query::{DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE},
+    list_query::{clamp_limit, split_page},
 };
 
 #[derive(Debug, Clone)]
@@ -33,7 +34,7 @@ impl<R: ProductRepository> ProductService<R> {
         draft: ProductDraft,
     ) -> Result<Product, ApplicationError> {
         let product = Product::new(ProductId::generate(), company_id, draft)?;
-        let audit = product_audit(
+        let audit = audit_entry(
             &product,
             actor,
             AuditAction::Created,
@@ -61,7 +62,7 @@ impl<R: ProductRepository> ProductService<R> {
         if changes.is_empty() {
             return Ok(after);
         }
-        let audit = product_audit(&after, actor, AuditAction::Updated, changes);
+        let audit = audit_entry(&after, actor, AuditAction::Updated, changes);
         self.repository
             .update(&after, &audit)
             .await
@@ -91,19 +92,12 @@ impl<R: ProductRepository> ProductService<R> {
         after: Option<&NameCursor>,
         limit: Option<usize>,
     ) -> Result<ProductPage, ApplicationError> {
-        let limit = limit.unwrap_or(DEFAULT_PAGE_SIZE).clamp(1, MAX_PAGE_SIZE);
-        // One extra row tells whether another page exists without a second query.
-        let mut items = self
+        let limit = clamp_limit(limit);
+        let rows = self
             .repository
             .list_by_company(company_id, query, after, limit + 1)
             .await?;
-        let has_more = items.len() > limit;
-        items.truncate(limit);
-        let next = if has_more {
-            items.last().map(NameCursor::from)
-        } else {
-            None
-        };
+        let (items, next) = split_page(rows, limit);
         Ok(ProductPage { items, next })
     }
 
@@ -116,21 +110,5 @@ impl<R: ProductRepository> ProductService<R> {
             .find(company_id, id)
             .await?
             .ok_or(ApplicationError::ProductNotFound)
-    }
-}
-
-fn product_audit(
-    product: &Product,
-    actor: &Actor,
-    action: AuditAction,
-    changes: Vec<conta_verde_domain::FieldChange>,
-) -> AuditEntry {
-    AuditEntry {
-        company_id: product.company_id(),
-        actor: actor.clone(),
-        entity: AuditEntity::Product,
-        entity_id: product.id().as_uuid(),
-        action,
-        changes,
     }
 }

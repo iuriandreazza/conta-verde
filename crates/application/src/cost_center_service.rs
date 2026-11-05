@@ -1,9 +1,10 @@
 use conta_verde_domain::{
-    Actor, AuditAction, AuditEntity, AuditEntry, AuditRecord, CompanyId, CostCenter,
-    CostCenterDraft, CostCenterId, FieldChange, cost_center_changes, cost_center_creation_changes,
+    Actor, AuditAction, AuditRecord, CompanyId, CostCenter, CostCenterDraft, CostCenterId,
+    cost_center_changes, cost_center_creation_changes,
 };
 
-use crate::list_query::{DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE};
+use crate::audit::audit_entry;
+use crate::list_query::{clamp_limit, split_page};
 use crate::{ApplicationError, CostCenterQuery, CostCenterRepository, NameCursor, RepositoryError};
 
 #[derive(Debug, Clone)]
@@ -31,7 +32,7 @@ impl<R: CostCenterRepository> CostCenterService<R> {
         draft: CostCenterDraft,
     ) -> Result<CostCenter, ApplicationError> {
         let cost_center = CostCenter::new(CostCenterId::generate(), company_id, draft)?;
-        let audit = cost_center_audit(
+        let audit = audit_entry(
             &cost_center,
             actor,
             AuditAction::Created,
@@ -56,7 +57,7 @@ impl<R: CostCenterRepository> CostCenterService<R> {
         if changes.is_empty() {
             return Ok(after);
         }
-        let audit = cost_center_audit(&after, actor, AuditAction::Updated, changes);
+        let audit = audit_entry(&after, actor, AuditAction::Updated, changes);
         self.repository
             .update(&after, &audit)
             .await
@@ -86,19 +87,12 @@ impl<R: CostCenterRepository> CostCenterService<R> {
         after: Option<&NameCursor>,
         limit: Option<usize>,
     ) -> Result<CostCenterPage, ApplicationError> {
-        let limit = limit.unwrap_or(DEFAULT_PAGE_SIZE).clamp(1, MAX_PAGE_SIZE);
-        // One extra row tells whether another page exists without a second query.
-        let mut items = self
+        let limit = clamp_limit(limit);
+        let rows = self
             .repository
             .list_by_company(company_id, query, after, limit + 1)
             .await?;
-        let has_more = items.len() > limit;
-        items.truncate(limit);
-        let next = if has_more {
-            items.last().map(NameCursor::from)
-        } else {
-            None
-        };
+        let (items, next) = split_page(rows, limit);
         Ok(CostCenterPage { items, next })
     }
 
@@ -111,21 +105,5 @@ impl<R: CostCenterRepository> CostCenterService<R> {
             .find(company_id, id)
             .await?
             .ok_or(ApplicationError::CostCenterNotFound)
-    }
-}
-
-fn cost_center_audit(
-    cost_center: &CostCenter,
-    actor: &Actor,
-    action: AuditAction,
-    changes: Vec<FieldChange>,
-) -> AuditEntry {
-    AuditEntry {
-        company_id: cost_center.company_id(),
-        actor: actor.clone(),
-        entity: AuditEntity::CostCenter,
-        entity_id: cost_center.id().as_uuid(),
-        action,
-        changes,
     }
 }
