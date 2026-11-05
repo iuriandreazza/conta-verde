@@ -9,7 +9,7 @@ import {
   type ProductInput,
 } from "../api";
 import { Button } from "../components/Button";
-import { CompanyNav } from "../components/CompanyNav";
+import { PageHeader } from "../components/PageHeader";
 import { ListRow } from "../components/ListRow";
 import { Notice } from "../components/Notice";
 import { ProductForm } from "../components/ProductForm";
@@ -88,29 +88,9 @@ export function ProductsPage() {
 
   return (
     <>
-      <h1>Produtos e serviços</h1>
-      <CompanyNav companyId={companyId} />
-
-      <section className="card">
-        <h2>{editing === null ? "Novo produto ou serviço" : `Alterar ${editing.name}`}</h2>
-        <ProductForm
-          // A new key starts the form over for another product, or an empty one after a save.
-          key={`${editing?.id ?? "new"}-${formVersion}`}
-          product={editing}
-          // After a save or when editing, the person is in the form: put the cursor back in it.
-          focusName={editing !== null || formVersion > 0}
-          pending={saving}
-          error={formError}
-          onSubmit={(input) => void handleSubmit(input)}
-          onCancel={() => {
-            setEditing(null);
-            setFormError(null);
-          }}
-        />
-        <Notice message={saved} tone="success" />
-      </section>
-
-      <section className="card">
+      <PageHeader title="Produtos e serviços" description="O que você vende e o que custa para vender." />
+      <div className="split">
+        <section className="card list-card">
         <h2>Cadastrados</h2>
         <div className="filters" role="search">
           <label>
@@ -189,7 +169,7 @@ export function ProductsPage() {
           <div className="empty">
             <BriefcaseBusinessIcon size={40} aria-hidden />
             <p>Nenhum produto ou serviço ainda.</p>
-            <p className="muted">Use o formulário acima para adicionar o primeiro.</p>
+            <p className="muted">Use o formulário para adicionar o primeiro.</p>
           </div>
         ) : (
           <div className="table-wrap">
@@ -199,9 +179,9 @@ export function ProductsPage() {
                   <th>Nome</th>
                   <th>Tipo</th>
                   <th>Un.</th>
-                  <th>Venda</th>
-                  <th>Custo</th>
-                  <th>Mínimo</th>
+                  <th className="num">Venda</th>
+                  <th className="num">Custo</th>
+                  <th className="num">Mínimo</th>
                   <th>Situação</th>
                   <th>
                     <span className="visually-hidden">Ações</span>
@@ -218,12 +198,16 @@ export function ProductsPage() {
                       </td>
                       <td>{product.kind === "product" ? "Produto" : "Serviço"}</td>
                       <td>{product.unit}</td>
-                      <td>{formatMoney(product.sale_price)}</td>
-                      <td>{formatMoney(product.cost_price)}</td>
-                      <td>
+                      <td className="num">{formatMoney(product.sale_price)}</td>
+                      <td className="num">{formatMoney(product.cost_price)}</td>
+                      <td className="num">
                         {product.minimum_stock === null ? "—" : formatDecimal(product.minimum_stock)}
                       </td>
-                      <td>{product.active ? "Ativo" : "Inativo"}</td>
+                      <td>
+                        <span className={product.active ? "badge badge-ok" : "badge badge-muted"}>
+                          {product.active ? "Ativo" : "Inativo"}
+                        </span>
+                      </td>
                       <td>
                         <Button
                           type="button"
@@ -281,6 +265,25 @@ export function ProductsPage() {
           </Button>
         )}
       </section>
+        <aside className="card form-card">
+        <h2>{editing === null ? "Novo produto ou serviço" : `Alterar ${editing.name}`}</h2>
+        <ProductForm
+          // A new key starts the form over for another product, or an empty one after a save.
+          key={`${editing?.id ?? "new"}-${formVersion}`}
+          product={editing}
+          // After a save or when editing, the person is in the form: put the cursor back in it.
+          focusName={editing !== null || formVersion > 0}
+          pending={saving}
+          error={formError}
+          onSubmit={(input) => void handleSubmit(input)}
+          onCancel={() => {
+            setEditing(null);
+            setFormError(null);
+          }}
+        />
+        <Notice message={saved} tone="success" />
+      </aside>
+      </div>
     </>
   );
 }

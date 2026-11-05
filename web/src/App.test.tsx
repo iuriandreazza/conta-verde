@@ -99,7 +99,7 @@ describe("App", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("invalid email or password");
   });
 
-  it("opens the only company's parties and loads more with the cursor", async () => {
+  it("opens the only company's dashboard and reaches its parties, which load more with the cursor", async () => {
     const fetchMock = mockApi((url) => {
       if (url === "/api/auth/me") return { status: 200, body: profile };
       if (url.includes("after=")) {
@@ -109,7 +109,9 @@ describe("App", () => {
     });
     renderAt("/");
 
-    expect(await screen.findByRole("heading", { name: "Padaria" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Painel" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("link", { name: "Clientes e fornecedores" }));
+    expect(await screen.findByRole("heading", { name: "Clientes e fornecedores" })).toBeInTheDocument();
     expect(await screen.findByText("Carla")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Carregar mais" }));
@@ -290,7 +292,7 @@ describe("App", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("signs up and lands on the new company's parties", async () => {
+  it("signs up and lands on the new company's dashboard", async () => {
     const fetchMock = mockApi((url, init) => {
       if (url === "/api/auth/me") return { status: 401 };
       if (url === "/api/auth/register") return { status: 201, body: profile };
@@ -305,7 +307,7 @@ describe("App", () => {
     await userEvent.type(screen.getByLabelText("Senha"), "correct horse");
     await userEvent.click(screen.getByRole("button", { name: "Criar conta" }));
 
-    expect(await screen.findByRole("heading", { name: "Padaria" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Painel" })).toBeInTheDocument();
     const register = fetchMock.mock.calls.find(([url]) => String(url) === "/api/auth/register");
     expect(JSON.parse(String(register?.[1]?.body))).toEqual({
       name: "Ana",
@@ -334,7 +336,8 @@ describe("App", () => {
 
     expect(await screen.findByRole("heading", { name: "Escolha uma empresa" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("link", { name: "Mercearia" }));
-    expect(await screen.findByRole("heading", { name: "Mercearia" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Painel" })).toBeInTheDocument();
+    expect(screen.getByText("Mercearia")).toBeInTheDocument();
   });
 
   it("returns to sign-in when the session is lost after the page loaded", async () => {
@@ -981,5 +984,43 @@ describe("products and services", () => {
     const region = await screen.findByRole("region", { name: "Histórico de Pão" });
     expect(await within(region).findByText(/R\$ 12,50 → R\$ 15,00/)).toBeInTheDocument();
     expect(within(region).getByText(/sim → não/)).toBeInTheDocument();
+  });
+});
+
+describe("dashboard", () => {
+  beforeEach(() => {
+    mockApi((url) => (url === "/api/auth/me" ? { status: 200, body: profile } : { status: 404 }));
+  });
+
+  it("says its numbers are sample data", async () => {
+    renderAt("/companies/c1");
+    expect(await screen.findByText(/Dados de exemplo/)).toBeInTheDocument();
+  });
+
+  it("writes the cash balance as money", async () => {
+    renderAt("/companies/c1");
+    expect(await screen.findByText("R$ 48.720,35")).toBeInTheDocument();
+  });
+
+  it("scopes the chart table to the period chosen", async () => {
+    renderAt("/companies/c1");
+    await screen.findByRole("heading", { name: "Painel" });
+
+    await userEvent.click(screen.getAllByRole("button", { name: "Ver como tabela" })[0]);
+    const flow = screen.getByRole("table", { name: "Entradas e saídas" });
+    expect(within(flow).getAllByRole("row")).toHaveLength(1 + 6);
+
+    await userEvent.click(screen.getByLabelText("12 meses"));
+    expect(within(flow).getAllByRole("row")).toHaveLength(1 + 12);
+  });
+
+  it("offers the due ranges as a table, with overdue named in words", async () => {
+    renderAt("/companies/c1");
+    await screen.findByRole("heading", { name: "Painel" });
+
+    await userEvent.click(screen.getAllByRole("button", { name: "Ver como tabela" })[1]);
+    const due = screen.getByRole("table", { name: "Contas por vencimento" });
+    expect(within(due).getByRole("cell", { name: "Vencidas" })).toBeInTheDocument();
+    expect(within(due).getByRole("cell", { name: "R$ 21.350,50" })).toBeInTheDocument();
   });
 });

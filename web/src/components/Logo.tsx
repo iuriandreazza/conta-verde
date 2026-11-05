@@ -3,7 +3,7 @@ import { useId } from "react";
 
 interface LogoProps {
   size?: number;
-  /** Green tile behind the leaf. Off on the green top bar, where the tile would disappear. */
+  /** Green tile behind the leaf. Off where the mark sits on a green surface and the tile would disappear. */
   tile?: boolean;
   /** Draws the leaf and the rising line once when the logo first appears. */
   animated?: boolean;
@@ -48,10 +48,10 @@ export function LogoMark({ size = 32, tile = true, animated = false }: LogoProps
   );
 }
 
-export function Logo({ size = 32, tile = true }: Omit<LogoProps, "animated">) {
+export function Logo({ size = 32, tile = true, animated = false }: LogoProps) {
   return (
     <span className="logo">
-      <LogoMark size={size} tile={tile} />
+      <LogoMark size={size} tile={tile} animated={animated} />
       <span className="wordmark">
         conta<span className="wordmark-accent">-verde</span>
       </span>

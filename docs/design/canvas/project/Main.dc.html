@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>conta-verde design system</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#14201a;background:#f5f7f6}
+h1,h2,h3,p{margin:0}
+.sec{display:flex;flex-direction:column;gap:16px}
+.row{display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start}
+.sw{display:flex;flex-direction:column;gap:6px;width:144px;font-size:12px;color:#3f4f47}
+.chip{height:56px;border-radius:8px;border:1px solid #e1e8e4}
+.card{background:#fff;border:1px solid #e1e8e4;border-radius:12px;padding:20px 24px;box-shadow:0 1px 2px rgba(20,32,26,.05)}
+.btn{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 18px;border-radius:8px;font:600 15px system-ui;border:1px solid transparent;cursor:pointer}
+.btn-p{background:#1f7a4d;color:#fff}
+.btn-g{background:#fff;color:#17603c;border-color:#c9d5ce}
+.badge{display:inline-flex;align-items:center;gap:4px;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:600}
+.lbl{font-size:14px;font-weight:500;color:#3f4f47}
+.in{height:44px;border:1px solid #c9d5ce;border-radius:8px;background:#fff;padding:0 12px;box-sizing:border-box;width:100%}
+.note{font-size:13px;color:#5d6b64}
+th{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:#5d6b64;background:#f8faf9;text-align:left;padding:12px 14px}
+td{padding:12px 14px;border-top:1px solid #e1e8e4;font-size:15px}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+</style>
+</helmet>
+<div style="width:1280px;box-sizing:border-box;padding:56px 64px;display:flex;flex-direction:column;gap:48px">
+
+<div style="display:flex;flex-direction:column;gap:8px">
+<p style="font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:#1f7a4d">conta-verde · ADR 0020</p>
+<h1 style="font-size:44px;letter-spacing:-.02em">Design system</h1>
+<p style="font-size:18px;color:#3f4f47;max-width:760px">Um verde sóbrio, neutros esverdeados e dados em azul e laranja. Tudo vive como variáveis CSS em <b>web/src/styles.css</b>; esta página mostra cada decisão em uso.</p>
+</div>
+
+<div class="sec">
+<h2 style="font-size:24px">Cor</h2>
+<p class="note">Marca e neutros</p>
+<div class="row">
+<div class="sw"><div class="chip" style="background:#1f7a4d"></div><b>--green</b>#1f7a4d · ação primária</div>
+<div class="sw"><div class="chip" style="background:#17603c"></div><b>--green-dark</b>#17603c · hover, links</div>
+<div class="sw"><div class="chip" style="background:#e6f4ec"></div><b>--green-soft</b>#e6f4ec · fundos suaves</div>
+<div class="sw"><div class="chip" style="background:#0f2a1e"></div><b>--forest</b>#0f2a1e · sidebar</div>
+<div class="sw"><div class="chip" style="background:#14201a"></div><b>--ink</b>#14201a · texto</div>
+<div class="sw"><div class="chip" style="background:#5d6b64"></div><b>--muted</b>#5d6b64 · apoio (5,3:1)</div>
+<div class="sw"><div class="chip" style="background:#e1e8e4"></div><b>--line</b>#e1e8e4 · bordas</div>
+<div class="sw"><div class="chip" style="background:#f5f7f6"></div><b>--page</b>#f5f7f6 · fundo</div>
+</div>
+<p class="note">Dados e estados: a paleta categórica foi validada com validate_palette.js (CVD ΔE 24,7; visão normal 33,6; contraste ≥ 3:1)</p>
+<div class="row">
+<div class="sw"><div class="chip" style="background:#2a78d6"></div><b>--series-1</b>#2a78d6 · entradas, a receber</div>
+<div class="sw"><div class="chip" style="background:#eb6834"></div><b>--series-2</b>#eb6834 · saídas, a pagar</div>
+<div class="sw"><div class="chip" style="background:#d03b3b"></div><b>--status-critical</b>#d03b3b · sempre com ícone e rótulo</div>
+<div class="sw"><div class="chip" style="background:#fff4d6"></div><b>--warning-soft</b>#fff4d6 · texto #8a5a00</div>
+<div class="sw"><div class="chip" style="background:#fdecea"></div><b>--danger-soft</b>#fdecea · texto #b3261e</div>
+<div class="sw"><div class="chip" style="background:#898781"></div><b>--chart-muted</b>#898781 · eixos, tendência</div>
+</div>
+</div>
+
+<div class="sec">
+<h2 style="font-size:24px">Tipografia, espaço e forma</h2>
+<div class="row" style="gap:48px">
+<div style="display:flex;flex-direction:column;gap:10px;width:520px">
+<p style="font-size:52px;font-weight:700;letter-spacing:-.03em;line-height:1.1">R$ 48.720,35</p>
+<p class="note">Número de destaque, 3,25rem, uma por tela</p>
+<h2 style="font-size:28px;letter-spacing:-.015em">Título da página, 1,75rem</h2>
+<h3 style="font-size:17px">Título de cartão, 1,0625rem</h3>
+<p style="font-size:16px">Texto corrente em 1rem, entrelinha 1,5. A fonte é a do sistema: nenhuma face de exibição.</p>
+<p class="note">Apoio e legendas em 0,875rem, cinza #5d6b64</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:10px;font-size:14px;color:#3f4f47">
+<p><b>Raios</b> 12px cartões · 8px campos e botões · 999px selos</p>
+<p><b>Sombra</b> 0 1px 2px, só nos cartões; 0 8px 24px em tooltips e foco de destaque</p>
+<p><b>Espaço</b> 0,25 · 0,5 · 0,75 · 1 · 1,25 · 1,5 · 2rem</p>
+<p><b>Larguras</b> sidebar 16rem · conteúdo até 76rem · formulário lateral 22rem</p>
+<p><b>Movimento</b> só na entrada, menos de 250 ms, respeita prefers-reduced-motion</p>
+</div>
+</div>
+</div>
+
+<div class="sec">
+<h2 style="font-size:24px">Componentes</h2>
+<div class="row" style="gap:24px">
+<div class="card" style="width:340px;display:flex;flex-direction:column;gap:14px">
+<h3 style="font-size:17px">Botões e campos</h3>
+<div class="row" style="gap:10px"><span class="btn btn-p">Adicionar</span><span class="btn btn-g">Cancelar</span></div>
+<div style="display:flex;flex-direction:column;gap:5px"><span class="lbl">Nome</span><div class="in"></div></div>
+<p class="note">Altura mínima de 44px, rótulo sempre visível, foco com anel verde de 3px.</p>
+</div>
+<div class="card" style="width:340px;display:flex;flex-direction:column;gap:14px">
+<h3 style="font-size:17px">Selos e avisos</h3>
+<div class="row" style="gap:8px">
+<span class="badge" style="background:#e6f4ec;color:#17603c">Em dia</span>
+<span class="badge" style="background:#fff4d6;color:#8a5a00">Vence hoje</span>
+<span class="badge" style="background:#fdecea;color:#b3261e"><svg width="12" height="12" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="7" fill="#d03b3b"/><path d="M7 3.5v4.2M7 10v.1" stroke="#fff" stroke-width="1.6" stroke-linecap="round" fill="none"/></svg>Vencida</span>
+<span class="badge" style="background:#eceff1;color:#5d6b64">Inativo</span>
+</div>
+<div style="padding:10px 12px;border-radius:8px;background:#fff4d6;color:#8a5a00;font-size:14px">Dados de exemplo: o financeiro chega na próxima fase.</div>
+<p class="note">Estado nunca só por cor: ícone + rótulo.</p>
+</div>
+<div class="card" style="width:340px;display:flex;flex-direction:column;gap:14px">
+<h3 style="font-size:17px">Filtro de período</h3>
+<div style="display:inline-flex;gap:2px;padding:3px;border:1px solid #c9d5ce;border-radius:8px;align-self:flex-start">
+<span style="padding:6px 14px;border-radius:6px;font-weight:500;color:#3f4f47">3 meses</span>
+<span style="padding:6px 14px;border-radius:6px;font-weight:500;background:#1f7a4d;color:#fff">6 meses</span>
+<span style="padding:6px 14px;border-radius:6px;font-weight:500;color:#3f4f47">12 meses</span>
+</div>
+<p class="note">Uma única linha acima do que ela filtra; vale para tudo abaixo.</p>
+</div>
+</div>
+
+<div class="card" style="padding:0;overflow:hidden;width:1040px">
+<table style="width:100%;border-collapse:collapse">
+<thead><tr><th>Nome</th><th>Tipo</th><th class="num">Venda</th><th>Situação</th></tr></thead>
+<tbody>
+<tr><td>Café especial 250g</td><td>Produto</td><td class="num">R$ 32,90</td><td><span class="badge" style="background:#e6f4ec;color:#17603c">Ativo</span></td></tr>
+<tr><td>Entrega expressa</td><td>Serviço</td><td class="num">R$ 12,00</td><td><span class="badge" style="background:#eceff1;color:#5d6b64">Inativo</span></td></tr>
+</tbody>
+</table>
+</div>
+<p class="note">Tabelas: cabeçalho em caixa-alta pequena, linha com hover, números à direita com algarismos tabulares, selos para situação.</p>
+</div>
+
+<div class="sec">
+<h2 style="font-size:24px">Gráficos (método dataviz)</h2>
+<div class="row" style="gap:24px;align-items:stretch">
+<div class="card" style="width:520px;display:flex;flex-direction:column;gap:10px">
+<h3 style="font-size:17px">Entradas e saídas</h3>
+<div style="display:flex;gap:16px;font-size:13px;color:#3f4f47"><span><span style="display:inline-block;width:16px;height:2px;background:#2a78d6;vertical-align:middle;margin-right:6px"></span>Entradas</span><span><span style="display:inline-block;width:16px;height:2px;background:#eb6834;vertical-align:middle;margin-right:6px"></span>Saídas</span></div>
+<svg width="472" height="150" viewBox="0 0 472 150" role="img" aria-label="Exemplo de gráfico de linhas: entradas acima de saídas em todos os meses">
+<line x1="40" x2="440" y1="130" y2="130" stroke="#c9d5ce"/><line x1="40" x2="440" y1="80" y2="80" stroke="#e1e8e4"/><line x1="40" x2="440" y1="30" y2="30" stroke="#e1e8e4"/>
+<polyline fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" points="40,70 120,76 200,58 280,52 360,56 440,36"/>
+<polyline fill="none" stroke="#eb6834" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" points="40,92 120,86 200,84 280,78 360,72 440,64"/>
+<circle cx="440" cy="36" r="4" fill="#2a78d6" stroke="#fff" stroke-width="2"/><circle cx="440" cy="64" r="4" fill="#eb6834" stroke="#fff" stroke-width="2"/>
+</svg>
+</div>
+<div style="width:560px;display:flex;flex-direction:column;gap:10px;font-size:15px;color:#3f4f47;justify-content:center">
+<p><b>Forma pelo trabalho.</b> Um número é um cartão de estatística; tendência é linha; faixas de prazo são barras.</p>
+<p><b>Um eixo só.</b> Nunca dois eixos y. Cor segue a entidade: azul é entrada e a receber, laranja é saída e a pagar.</p>
+<p><b>Marcas finas.</b> Linha de 2px, barra de até 24px com ponta de 4px, anel de 2px na cor da superfície.</p>
+<p><b>Nunca só no passeio do mouse.</b> Toda leitura vale por foco de teclado e por “Ver como tabela”.</p>
+<p><b>Dinheiro é texto decimal.</b> Números só desenham; o que se lê vem de formatMoney.</p>
+</div>
+</div>
+</div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":1640}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

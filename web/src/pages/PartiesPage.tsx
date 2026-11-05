@@ -1,8 +1,7 @@
 import { Fragment, useState, type FormEvent } from "react";
 import { useParams } from "react-router-dom";
 import { NO_FILTERS, api, errorMessage, type Party, type PartyFilters } from "../api";
-import { useAuth } from "../auth";
-import { CompanyNav } from "../components/CompanyNav";
+import { PageHeader } from "../components/PageHeader";
 import { DocumentBadge } from "../components/DocumentBadge";
 import { ListRow } from "../components/ListRow";
 import { Notice, type NoticeTone } from "../components/Notice";
@@ -21,7 +20,6 @@ import { usePagedList } from "../lib/usePagedList";
 // unmounted component.
 export function PartiesPage() {
   const { companyId = "" } = useParams();
-  const { session } = useAuth();
   const [creating, setCreating] = useState(false);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
@@ -29,11 +27,6 @@ export function PartiesPage() {
   const [verifyingId, setVerifyingId] = useState<string | null>(null);
   const [historyOpenFor, setHistoryOpenFor] = useState<string | null>(null);
   const [verifyNotice, setVerifyNotice] = useState<RegistryNotice | null>(null);
-
-  const companyName =
-    session.status === "authenticated"
-      ? session.profile.companies.find((company) => company.id === companyId)?.name
-      : undefined;
 
   // The search box updates at once; the list follows once typing pauses.
   const [filters, setFilters] = useState<PartyFilters>(NO_FILTERS);
@@ -106,48 +99,9 @@ export function PartiesPage() {
 
   return (
     <>
-      <h1>{companyName ?? "Clientes e fornecedores"}</h1>
-      <CompanyNav companyId={companyId} />
-
-      <section className="card">
-        <h2>Novo cliente ou fornecedor</h2>
-        <form onSubmit={handleCreate}>
-          <label>
-            Nome
-            <input name="name" required maxLength={200} />
-          </label>
-          <label>
-            CPF ou CNPJ
-            {/* No numeric keypad: a CNPJ may contain letters since July 2026. */}
-            <input
-              name="document"
-              autoCapitalize="characters"
-              autoComplete="off"
-              spellCheck={false}
-            />
-          </label>
-          <label>
-            E-mail
-            <input name="email" type="email" />
-          </label>
-          <fieldset>
-            <legend>Tipo</legend>
-            <label className="inline">
-              <input name="is_customer" type="checkbox" defaultChecked /> Cliente
-            </label>
-            <label className="inline">
-              <input name="is_supplier" type="checkbox" /> Fornecedor
-            </label>
-          </fieldset>
-          <Notice message={formError} />
-          <Notice message={registryNotice?.message ?? null} tone={registryNotice?.tone} />
-          <Button type="submit" icon={PlusIcon} pending={creating} disabled={verifyingId !== null}>
-            Adicionar
-          </Button>
-        </form>
-      </section>
-
-      <section className="card">
+      <PageHeader title="Clientes e fornecedores" description="Quem compra de você e de quem você compra." />
+      <div className="split">
+        <section className="card list-card">
         <h2>Cadastrados</h2>
         <div className="filters" role="search">
           <label>
@@ -210,7 +164,7 @@ export function PartiesPage() {
           <div className="empty">
             <UsersIcon size={40} aria-hidden />
             <p>Nenhum cadastro ainda.</p>
-            <p className="muted">Use o formulário acima para adicionar o primeiro.</p>
+            <p className="muted">Use o formulário para adicionar o primeiro.</p>
           </div>
         ) : (
           <div className="table-wrap">
@@ -301,6 +255,44 @@ export function PartiesPage() {
           </Button>
         )}
       </section>
+        <aside className="card form-card">
+        <h2>Novo cliente ou fornecedor</h2>
+        <form onSubmit={handleCreate}>
+          <label>
+            Nome
+            <input name="name" required maxLength={200} />
+          </label>
+          <label>
+            CPF ou CNPJ
+            {/* No numeric keypad: a CNPJ may contain letters since July 2026. */}
+            <input
+              name="document"
+              autoCapitalize="characters"
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </label>
+          <label>
+            E-mail
+            <input name="email" type="email" />
+          </label>
+          <fieldset>
+            <legend>Tipo</legend>
+            <label className="inline">
+              <input name="is_customer" type="checkbox" defaultChecked /> Cliente
+            </label>
+            <label className="inline">
+              <input name="is_supplier" type="checkbox" /> Fornecedor
+            </label>
+          </fieldset>
+          <Notice message={formError} />
+          <Notice message={registryNotice?.message ?? null} tone={registryNotice?.tone} />
+          <Button type="submit" icon={PlusIcon} pending={creating} disabled={verifyingId !== null}>
+            Adicionar
+          </Button>
+        </form>
+      </aside>
+      </div>
     </>
   );
 }
