@@ -2,7 +2,7 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use conta_verde_application::{ApplicationError, PartyKind, PartyQuery};
-use conta_verde_domain::{DocumentCheck, Party, PartyDraft, PartyId};
+use conta_verde_domain::{Address, AddressDraft, DocumentCheck, Party, PartyDraft, PartyId};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -10,28 +10,71 @@ use crate::access::CompanyAccess;
 use crate::cursor::{decode_cursor, encode_cursor};
 use crate::error::ApiError;
 use crate::history::HistoryEntryResponse;
-use crate::json::{ApiJson, ApiQuery};
+use crate::json::{ApiJson, ApiQuery, flag_or};
 use crate::list_params;
 use crate::{Ports, SharedState};
 
+/// The body of both registering and changing a party: a change replaces every field, so what is
+/// left out (the document, the e-mail, the address) is cleared.
 #[derive(Deserialize)]
-pub(crate) struct RegisterPartyRequest {
+#[serde(deny_unknown_fields)]
+pub(crate) struct PartyRequest {
     name: String,
     document: Option<String>,
     email: Option<String>,
     is_customer: bool,
     is_supplier: bool,
+    /// Optional when registering (no), required when replacing: a body without it would
+    /// otherwise drop the role.
+    is_carrier: Option<bool>,
+    is_seller: Option<bool>,
+    address: Option<AddressRequest>,
 }
 
-impl From<RegisterPartyRequest> for PartyDraft {
-    fn from(request: RegisterPartyRequest) -> Self {
-        Self {
-            name: request.name,
-            document: request.document,
-            email: request.email,
-            is_customer: request.is_customer,
-            is_supplier: request.is_supplier,
-        }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AddressRequest {
+    postal_code: String,
+    street: String,
+    number: Option<String>,
+    complement: Option<String>,
+    district: Option<String>,
+    city: String,
+    state: String,
+}
+
+impl PartyRequest {
+    /// `default_role` is what a missing `is_carrier` or `is_seller` means: `Some(false)` when
+    /// registering, `None` when replacing, where it must be said.
+    fn into_draft(self, default_role: Option<bool>) -> Result<PartyDraft, ApiError> {
+        let is_carrier = flag_or(
+            self.is_carrier,
+            default_role,
+            "is_carrier is required when replacing a party",
+        )?;
+        let is_seller = flag_or(
+            self.is_seller,
+            default_role,
+            "is_seller is required when replacing a party",
+        )?;
+        Ok(PartyDraft {
+            name: self.name,
+            document: self.document,
+            email: self.email,
+            is_customer: self.is_customer,
+            is_supplier: self.is_supplier,
+            is_carrier,
+            is_seller,
+            address: self.address.map(|address| AddressDraft {
+                postal_code: address.postal_code,
+                street: address.street,
+                number: address.number,
+                complement: address.complement,
+                district: address.district,
+                city: address.city,
+                state: address.state,
+            }),
+        })
     }
 }
 
@@ -41,7 +84,7 @@ pub(crate) struct ListQuery {
     after: Option<String>,
     /// Text found in the name or e-mail, or in the document ignoring punctuation.
     q: Option<String>,
-    /// `customer` or `supplier`.
+    /// `customer`, `supplier`, `carrier` or `seller`.
     kind: Option<String>,
     /// `name` (default) or `-name` for descending, the convention every list follows.
     sort: Option<String>,
@@ -57,9 +100,11 @@ impl ListQuery {
             None => query,
             Some("customer") => query.of_kind(PartyKind::Customer),
             Some("supplier") => query.of_kind(PartyKind::Supplier),
+            Some("carrier") => query.of_kind(PartyKind::Carrier),
+            Some("seller") => query.of_kind(PartyKind::Seller),
             Some(_) => {
                 return Err(ApiError::InvalidQuery(
-                    "invalid kind: expected customer or supplier",
+                    "invalid kind: expected customer, supplier, carrier or seller",
                 ));
             }
         };
@@ -76,7 +121,35 @@ pub(crate) struct PartyResponse {
     email: Option<String>,
     is_customer: bool,
     is_supplier: bool,
+    is_carrier: bool,
+    is_seller: bool,
+    address: Option<AddressResponse>,
     document_check: DocumentCheckResponse,
+}
+
+#[derive(Serialize)]
+struct AddressResponse {
+    postal_code: String,
+    street: String,
+    number: Option<String>,
+    complement: Option<String>,
+    district: Option<String>,
+    city: String,
+    state: String,
+}
+
+impl From<&Address> for AddressResponse {
+    fn from(address: &Address) -> Self {
+        Self {
+            postal_code: address.postal_code().to_owned(),
+            street: address.street().to_owned(),
+            number: address.number().map(str::to_owned),
+            complement: address.complement().map(str::to_owned),
+            district: address.district().map(str::to_owned),
+            city: address.city().to_owned(),
+            state: address.state().to_owned(),
+        }
+    }
 }
 
 /// What the federal registry said about a CNPJ. `needs_attention` is true when the registry does
@@ -126,6 +199,9 @@ impl From<&Party> for PartyResponse {
             email: party.email().map(|email| email.as_str().to_owned()),
             is_customer: party.is_customer(),
             is_supplier: party.is_supplier(),
+            is_carrier: party.is_carrier(),
+            is_seller: party.is_seller(),
+            address: party.address().map(AddressResponse::from),
             document_check: DocumentCheckResponse::from(party.document_check()),
         }
     }
@@ -140,13 +216,33 @@ pub(crate) struct PartyPageResponse {
 pub(crate) async fn register_party<X: Ports>(
     State(state): State<SharedState<X>>,
     CompanyAccess(company_id, actor): CompanyAccess,
-    ApiJson(request): ApiJson<RegisterPartyRequest>,
+    ApiJson(request): ApiJson<PartyRequest>,
 ) -> Result<(StatusCode, Json<PartyResponse>), ApiError> {
     let party = state
         .parties
-        .register(company_id, &actor, request.into())
+        .register(company_id, &actor, request.into_draft(Some(false))?)
         .await?;
     Ok((StatusCode::CREATED, Json(PartyResponse::from(&party))))
+}
+
+/// Replaces every field of a party. A CNPJ that differs from the stored one is checked against
+/// the registry; nothing is written, and nothing recorded, when nothing changes.
+pub(crate) async fn update_party<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, actor): CompanyAccess,
+    Path((_, party_id)): Path<(Uuid, String)>,
+    ApiJson(request): ApiJson<PartyRequest>,
+) -> Result<Json<PartyResponse>, ApiError> {
+    let party = state
+        .parties
+        .update(
+            company_id,
+            &actor,
+            parse_party_id(&party_id)?,
+            request.into_draft(None)?,
+        )
+        .await?;
+    Ok(Json(PartyResponse::from(&party)))
 }
 
 // A string, parsed here: axum's own rejection for a malformed id is plain text, unlike the JSON

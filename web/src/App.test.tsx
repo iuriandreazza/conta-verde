@@ -21,6 +21,9 @@ function party(name: string): Party {
     email: null,
     is_customer: true,
     is_supplier: false,
+    is_carrier: false,
+    is_seller: false,
+    address: null,
     document_check: { status: "not_applicable", legal_name: null, situation: null, needs_attention: false },
   };
 }
@@ -1673,5 +1676,207 @@ describe("payment terms", () => {
     expect(
       await within(region).findByText(/à vista 50% · 30 dias 50% → à vista 40% · 30 dias 60%/),
     ).toBeInTheDocument();
+  });
+});
+
+describe("changing a party, its roles and its address", () => {
+  const withAddress: Party = {
+    ...party("Padaria"),
+    address: {
+      postal_code: "01310100",
+      street: "Avenida Paulista",
+      number: "1000",
+      complement: null,
+      district: null,
+      city: "São Paulo",
+      state: "SP",
+    },
+  };
+  const page = (...items: Party[]) => ({ status: 200, body: { items, next_cursor: null } });
+  const puts = (fetchMock: ReturnType<typeof mockApi>) =>
+    fetchMock.mock.calls.filter(([, init]) => init?.method === "PUT");
+  const sentBody = (fetchMock: ReturnType<typeof mockApi>, index = 0) =>
+    JSON.parse(String(puts(fetchMock)[index][1]?.body));
+
+  it("sends the whole party with the new roles and address, and updates the row in place", async () => {
+    const changed: Party = { ...withAddress, is_carrier: true };
+    const fetchMock = mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "PUT") return { status: 200, body: changed };
+      return page(party("Padaria"));
+    });
+    renderAt("/companies/c1/parties");
+
+    await screen.findByRole("table");
+    await userEvent.click(screen.getByRole("button", { name: "Alterar Padaria" }));
+    expect(screen.getByLabelText("Nome")).toHaveValue("Padaria");
+    await userEvent.click(screen.getByLabelText("Transportadora"));
+    await userEvent.type(screen.getByLabelText("CEP"), "01310-100");
+    await userEvent.type(screen.getByLabelText("Logradouro"), "Avenida Paulista");
+    await userEvent.type(screen.getByLabelText("Número"), "1000");
+    await userEvent.type(screen.getByLabelText("Cidade"), "São Paulo");
+    await userEvent.selectOptions(screen.getByLabelText("UF"), "SP");
+    await userEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
+
+    const row = (await screen.findByText("São Paulo/SP")).closest("tr")!;
+    expect(row).toHaveTextContent("Cliente · Transportadora");
+    expect(String(puts(fetchMock)[0][0])).toBe("/api/companies/c1/parties/Padaria");
+    expect(sentBody(fetchMock)).toEqual({
+      name: "Padaria",
+      is_customer: true,
+      is_supplier: false,
+      is_carrier: true,
+      is_seller: false,
+      address: {
+        postal_code: "01310-100",
+        street: "Avenida Paulista",
+        number: "1000",
+        city: "São Paulo",
+        state: "SP",
+      },
+    });
+    // The form is back to registering.
+    expect(screen.getByRole("heading", { name: "Novo cliente ou fornecedor" })).toBeInTheDocument();
+  });
+
+  it("fills the form with the address and leaves it out when every part is cleared", async () => {
+    const fetchMock = mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "PUT") return { status: 200, body: party("Padaria") };
+      return page(withAddress);
+    });
+    renderAt("/companies/c1/parties");
+
+    await screen.findByRole("table");
+    await userEvent.click(screen.getByRole("button", { name: "Alterar Padaria" }));
+    expect(screen.getByLabelText("CEP")).toHaveValue("01310-100");
+    expect(screen.getByLabelText("UF")).toHaveValue("SP");
+    for (const label of ["CEP", "Logradouro", "Número", "Cidade"]) {
+      await userEvent.clear(screen.getByLabelText(label));
+    }
+    await userEvent.selectOptions(screen.getByLabelText("UF"), "");
+    await userEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
+
+    await waitFor(() => expect(puts(fetchMock)).toHaveLength(1));
+    expect(sentBody(fetchMock)).not.toHaveProperty("address");
+  });
+
+  it("shows what the API refused, such as a half-filled address, and keeps the form", async () => {
+    mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "PUT") {
+        return { status: 422, body: { error: "address street is required, or too long or has null characters" } };
+      }
+      return page(party("Padaria"));
+    });
+    renderAt("/companies/c1/parties");
+
+    await screen.findByRole("table");
+    await userEvent.click(screen.getByRole("button", { name: "Alterar Padaria" }));
+    await userEvent.type(screen.getByLabelText("CEP"), "01310-100");
+    await userEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("address street is required");
+    expect(screen.getByLabelText("CEP")).toHaveValue("01310-100");
+  });
+
+  it("tells what the registry said only when the document changed", async () => {
+    const withCnpj = partyWithCheck({
+      status: "verified",
+      legal_name: "OFICINA LTDA",
+      situation: "ATIVA",
+      needs_attention: false,
+    });
+    let answer: Party = withCnpj;
+    mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "PUT") return { status: 200, body: answer };
+      return page(withCnpj);
+    });
+    renderAt("/companies/c1/parties");
+
+    await screen.findByRole("table");
+    // Same document: nothing was asked, so nothing is said.
+    await userEvent.click(screen.getByRole("button", { name: "Alterar Padaria Central" }));
+    await userEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
+    await screen.findByRole("heading", { name: "Novo cliente ou fornecedor" });
+    expect(screen.queryByText(/CNPJ verificado/)).not.toBeInTheDocument();
+
+    // Another document: the answer for the new one is reported, like at registration.
+    answer = {
+      ...withCnpj,
+      document: "11222333000181",
+      document_check: { status: "not_found", legal_name: null, situation: null, needs_attention: true },
+    };
+    await userEvent.click(screen.getByRole("button", { name: "Alterar Padaria Central" }));
+    await userEvent.clear(screen.getByLabelText("CPF ou CNPJ"));
+    await userEvent.type(screen.getByLabelText("CPF ou CNPJ"), "11.222.333/0001-81");
+    await userEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
+    expect(await screen.findByText(/Atualizado, mas a Receita não encontrou este CNPJ/)).toBeInTheDocument();
+  });
+
+  it("drops a party from a list of one kind when the change makes it another", async () => {
+    const supplier: Party = { ...party("Padaria"), is_customer: false, is_supplier: true };
+    mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "PUT") return { status: 200, body: supplier };
+      return page(party("Padaria"), party("Zeca"));
+    });
+    renderAt("/companies/c1/parties");
+
+    await screen.findByRole("table");
+    await userEvent.selectOptions(screen.getByLabelText("Mostrar"), "customer");
+    await userEvent.click(await screen.findByRole("button", { name: "Alterar Padaria" }));
+    await userEvent.click(screen.getByLabelText("Cliente"));
+    await userEvent.click(screen.getByLabelText("Fornecedor"));
+    await userEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
+
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Alterar Padaria" })).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Alterar Zeca" })).toBeInTheDocument();
+  });
+
+  it("cancels a change and goes back to registering", async () => {
+    mockApi((url) => (url === "/api/auth/me" ? { status: 200, body: profile } : page(party("Padaria"))));
+    renderAt("/companies/c1/parties");
+
+    await screen.findByRole("table");
+    await userEvent.click(screen.getByRole("button", { name: "Alterar Padaria" }));
+    expect(screen.getByRole("heading", { name: "Alterar Padaria" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+    expect(screen.getByRole("heading", { name: "Novo cliente ou fornecedor" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Nome")).toHaveValue("");
+  });
+
+  it("filters by carrier and seller, and names the new fields in the history", async () => {
+    const entry: HistoryEntry = {
+      at: Date.UTC(2026, 10, 5, 12, 0),
+      actor: { kind: "user", id: "u1", name: "Ana" },
+      action: "updated",
+      changes: [
+        { field: "is_carrier", from: "false", to: "true" },
+        { field: "postal_code", from: null, to: "01310100" },
+        { field: "street_number", from: null, to: "1000" },
+      ],
+    };
+    const fetchMock = mockApi((url) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (url.endsWith("/history")) return { status: 200, body: [entry] };
+      return page(party("Padaria"));
+    });
+    renderAt("/companies/c1/parties");
+
+    await screen.findByRole("table");
+    const requested = () => fetchMock.mock.calls.map(([url]) => String(url));
+    await userEvent.selectOptions(screen.getByLabelText("Mostrar"), "carrier");
+    await waitFor(() => expect(requested()).toContain("/api/companies/c1/parties?kind=carrier"));
+    await userEvent.selectOptions(screen.getByLabelText("Mostrar"), "seller");
+    await waitFor(() => expect(requested()).toContain("/api/companies/c1/parties?kind=seller"));
+
+    await userEvent.click(await screen.findByRole("button", { name: "Histórico de Padaria" }));
+    expect(await screen.findByText("Transportadora:")).toBeInTheDocument();
+    expect(screen.getByText("não → sim")).toBeInTheDocument();
+    expect(screen.getByText("CEP:")).toBeInTheDocument();
+    expect(screen.getByText("Número:")).toBeInTheDocument();
+    expect(screen.queryByText(/is_carrier|postal_code|street_number/)).not.toBeInTheDocument();
   });
 });

@@ -97,6 +97,10 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
             get(parties::list_parties::<X>).post(parties::register_party::<X>),
         )
         .route(
+            "/companies/{company_id}/parties/{party_id}",
+            put(parties::update_party::<X>),
+        )
+        .route(
             "/companies/{company_id}/parties/{party_id}/document-check",
             post(parties::verify_document::<X>),
         )
@@ -522,6 +526,196 @@ mod tests {
         assert_eq!(listed.status, StatusCode::OK);
         assert_eq!(listed.body["items"].as_array().unwrap().len(), 1);
         assert!(listed.body["next_cursor"].is_null());
+    }
+
+    fn address_body() -> Value {
+        json!({
+            "postal_code": "01310-100",
+            "street": "Avenida Paulista",
+            "number": "1000",
+            "city": "São Paulo",
+            "state": "sp"
+        })
+    }
+
+    #[tokio::test]
+    async fn registers_and_changes_parties_with_roles_and_an_address() {
+        let app = app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let uri = parties_uri(company_id);
+
+        let mut body = party_body();
+        body["is_carrier"] = json!(true);
+        body["address"] = address_body();
+        let created = send(&app, json_request("POST", &uri, Some(&cookie), body)).await;
+        assert_eq!(created.status, StatusCode::CREATED);
+        assert_eq!(created.body["is_carrier"], true);
+        assert_eq!(created.body["is_seller"], false);
+        assert_eq!(
+            created.body["address"],
+            json!({
+                "postal_code": "01310100",
+                "street": "Avenida Paulista",
+                "number": "1000",
+                "complement": null,
+                "district": null,
+                "city": "São Paulo",
+                "state": "SP"
+            })
+        );
+        let id = created.body["id"].as_str().unwrap().to_owned();
+        let one = format!("{uri}/{id}");
+
+        // A change replaces every field: no address, a seller instead of a carrier.
+        let mut replacement = party_body();
+        replacement["name"] = json!("Padaria do Centro");
+        replacement["is_carrier"] = json!(false);
+        replacement["is_seller"] = json!(true);
+        let put = json_request("PUT", &one, Some(&cookie), replacement.clone());
+        let changed = send(&app, put).await;
+        assert_eq!(changed.status, StatusCode::OK);
+        assert_eq!(changed.body["name"], "Padaria do Centro");
+        assert_eq!(changed.body["is_seller"], true);
+        assert!(changed.body["address"].is_null());
+        // The document did not change, so what the registry said stays.
+        assert_eq!(changed.body["document_check"]["status"], "verified");
+
+        let sellers = send(
+            &app,
+            get_request(&format!("{uri}?kind=seller"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(sellers.body["items"].as_array().unwrap().len(), 1);
+        let carriers = send(
+            &app,
+            get_request(&format!("{uri}?kind=carrier"), Some(&cookie)),
+        )
+        .await;
+        assert!(carriers.body["items"].as_array().unwrap().is_empty());
+        let unknown = send(
+            &app,
+            get_request(&format!("{uri}?kind=driver"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(unknown.status, StatusCode::BAD_REQUEST);
+
+        let history = send(&app, get_request(&format!("{one}/history"), Some(&cookie))).await;
+        let entries = history.body.as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        let fields: Vec<&str> = entries[1]["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|change| change["field"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            fields,
+            [
+                "name",
+                "is_carrier",
+                "is_seller",
+                "postal_code",
+                "street",
+                "street_number",
+                "city",
+                "state"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_party_change_must_name_its_roles_and_refusals_are_json() {
+        let app = app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let uri = parties_uri(company_id);
+        let created = send(
+            &app,
+            json_request("POST", &uri, Some(&cookie), party_body()),
+        )
+        .await;
+        let one = format!("{uri}/{}", created.body["id"].as_str().unwrap());
+        let put = |body: Value| json_request("PUT", &one, Some(&cookie), body);
+
+        // Replacing without the new roles would drop them.
+        let reply = send(&app, put(party_body())).await;
+        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            reply.body["error"]
+                .as_str()
+                .unwrap()
+                .contains("is_carrier is required")
+        );
+
+        let mut complete = party_body();
+        complete["is_carrier"] = json!(false);
+        complete["is_seller"] = json!(false);
+        let mut bad_address = complete.clone();
+        bad_address["address"] = address_body();
+        bad_address["address"]["postal_code"] = json!("123");
+        let reply = send(&app, put(bad_address)).await;
+        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(reply.body["error"].as_str().unwrap().contains("CEP"));
+
+        let mut no_role = complete.clone();
+        no_role["is_customer"] = json!(false);
+        let reply = send(&app, put(no_role)).await;
+        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
+
+        // A field the API does not know is an error, not silently dropped (a typo in `address`).
+        let mut typo = complete.clone();
+        typo["adress"] = address_body();
+        assert!(send(&app, put(typo)).await.status.is_client_error());
+
+        // A document another party already has.
+        let other = send(
+            &app,
+            json_request(
+                "POST",
+                &uri,
+                Some(&cookie),
+                json!({ "name": "Bruno", "document": "529.982.247-25", "is_customer": true, "is_supplier": false }),
+            ),
+        )
+        .await;
+        let mut taken = complete;
+        taken["document"] = json!("529.982.247-25");
+        let reply = send(&app, put(taken)).await;
+        assert_eq!(reply.status, StatusCode::CONFLICT);
+        assert_eq!(other.status, StatusCode::CREATED);
+
+        // Nothing above changed the party.
+        let history = send(&app, get_request(&format!("{one}/history"), Some(&cookie))).await;
+        assert_eq!(history.body.as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn parties_cannot_be_changed_from_another_company() {
+        let app = app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let (stranger_cookie, stranger_company) = sign_up(&app, "bia@example.com").await;
+        let created = send(
+            &app,
+            json_request(
+                "POST",
+                &parties_uri(company_id),
+                Some(&cookie),
+                party_body(),
+            ),
+        )
+        .await;
+        let id = created.body["id"].as_str().unwrap();
+        let mut body = party_body();
+        body["is_carrier"] = json!(false);
+        body["is_seller"] = json!(false);
+
+        let theirs = format!("{}/{id}", parties_uri(stranger_company));
+        let put = json_request("PUT", &theirs, Some(&stranger_cookie), body.clone());
+        assert_eq!(send(&app, put).await.status, StatusCode::NOT_FOUND);
+        let mine = format!("{}/{id}", parties_uri(company_id));
+        let put = json_request("PUT", &mine, Some(&stranger_cookie), body.clone());
+        assert_eq!(send(&app, put).await.status, StatusCode::NOT_FOUND);
+        let put = json_request("PUT", &mine, None, body);
+        assert_eq!(send(&app, put).await.status, StatusCode::UNAUTHORIZED);
     }
 
     async fn register_party(app: &Router, document: Option<&str>) -> Reply {

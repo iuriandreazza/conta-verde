@@ -10,15 +10,15 @@ use conta_verde_application::{
 };
 use conta_verde_application::{PaymentTermQuery, PaymentTermRepository, PaymentTermService};
 use conta_verde_domain::{
-    AccountDraft, Actor, AuditAction, AuditEntity, AuditEntry, BankAccount, BankAccountDraft,
-    BankAccountId, BankAccountKind, CashFlowGroup, Category, CategoryId, CompanyId, CostCenter,
-    CostCenterDraft, CostCenterId, DocumentCheck, DomainError, DreGroup, FieldChange, Party,
-    PartyDraft, PartyId, PaymentMethod, PaymentMethodDraft, PaymentMethodId, PaymentMethodKind,
-    PaymentTerm, PaymentTermDraft, PaymentTermId, Product, ProductDraft, ProductId, ProductKind,
-    UserId, bank_account_changes, bank_account_creation_changes, category_changes,
-    category_creation_changes, cost_center_changes, cost_center_creation_changes, creation_changes,
-    document_check_changes, payment_method_changes, payment_method_creation_changes,
-    product_changes, product_creation_changes,
+    AccountDraft, Actor, AddressDraft, AuditAction, AuditEntity, AuditEntry, BankAccount,
+    BankAccountDraft, BankAccountId, BankAccountKind, CashFlowGroup, Category, CategoryId,
+    CompanyId, CostCenter, CostCenterDraft, CostCenterId, DocumentCheck, DomainError, DreGroup,
+    FieldChange, Party, PartyDraft, PartyId, PaymentMethod, PaymentMethodDraft, PaymentMethodId,
+    PaymentMethodKind, PaymentTerm, PaymentTermDraft, PaymentTermId, Product, ProductDraft,
+    ProductId, ProductKind, UserId, bank_account_changes, bank_account_creation_changes,
+    category_changes, category_creation_changes, cost_center_changes, cost_center_creation_changes,
+    creation_changes, document_check_changes, payment_method_changes,
+    payment_method_creation_changes, product_changes, product_creation_changes,
 };
 use conta_verde_domain::{InstallmentDraft, payment_term_changes, payment_term_creation_changes};
 use sqlx::PgPool;
@@ -70,6 +70,7 @@ fn party_draft(name: &str, document: Option<&str>) -> PartyDraft {
         email: None,
         is_customer: true,
         is_supplier: false,
+        ..PartyDraft::default()
     }
 }
 
@@ -185,10 +186,7 @@ pub async fn records_what_was_written<R: PartyRepository>(
             situation: "ATIVA".into(),
         });
     let rechecked = check_entry(&unverified, &verified);
-    repository
-        .update_document_check(&verified, &rechecked)
-        .await
-        .unwrap();
+    repository.update(&verified, &rechecked).await.unwrap();
 
     // Oldest first, with a growing sequence and a real time, carrying exactly what was written.
     let history = repository.history(company, unverified.id()).await.unwrap();
@@ -296,7 +294,7 @@ pub async fn leaves_no_trace_of_a_write_that_did_not_happen<R: PartyRepository>(
     .with_document_check(DocumentCheck::NotFound);
     assert_eq!(
         repository
-            .update_document_check(&wrong_company, &check_entry(&first, &wrong_company))
+            .update(&wrong_company, &check_entry(&first, &wrong_company))
             .await,
         Err(RepositoryError::NotFound)
     );
@@ -338,9 +336,7 @@ pub async fn leaves_no_trace_of_a_write_that_did_not_happen<R: PartyRepository>(
     // The same guard protects the update.
     let rechecked = first.clone().with_document_check(DocumentCheck::NotFound);
     assert!(matches!(
-        repository
-            .update_document_check(&rechecked, &for_another_company)
-            .await,
+        repository.update(&rechecked, &for_another_company).await,
         Err(RepositoryError::Storage(_))
     ));
     assert_eq!(
@@ -386,7 +382,7 @@ pub async fn finds_parties_and_replaces_their_document_check<R: PartyRepository>
         situation: "ATIVA".into(),
     });
     repository
-        .update_document_check(&verified, &check_entry(&party, &verified))
+        .update(&verified, &check_entry(&party, &verified))
         .await
         .unwrap();
     assert_eq!(
@@ -405,7 +401,7 @@ pub async fn finds_parties_and_replaces_their_document_check<R: PartyRepository>
     .with_document_check(DocumentCheck::NotFound);
     assert_eq!(
         repository
-            .update_document_check(&intruder, &check_entry(&party, &intruder))
+            .update(&intruder, &check_entry(&party, &intruder))
             .await,
         Err(RepositoryError::NotFound)
     );
@@ -417,7 +413,7 @@ pub async fn finds_parties_and_replaces_their_document_check<R: PartyRepository>
     // Going back is allowed too: the latest answer wins, whatever it was.
     let not_found = party.with_document_check(DocumentCheck::NotFound);
     repository
-        .update_document_check(&not_found, &check_entry(&verified, &not_found))
+        .update(&not_found, &check_entry(&verified, &not_found))
         .await
         .unwrap();
     assert_eq!(
@@ -462,6 +458,7 @@ pub async fn breaks_ties_between_equal_names<R: PartyRepository, C: CnpjRegistry
             email: None,
             is_customer: true,
             is_supplier: false,
+            ..PartyDraft::default()
         };
         service.register(company, &actor(), draft).await.unwrap();
     }
@@ -499,6 +496,7 @@ pub async fn filters_and_sorts_parties<R: PartyRepository, C: CnpjRegistry>(
             email: email.map(Into::into),
             is_customer,
             is_supplier,
+            ..PartyDraft::default()
         };
         async move { service.register(company, &actor(), draft).await.unwrap() }
     };
@@ -595,6 +593,198 @@ pub async fn filters_and_sorts_parties<R: PartyRepository, C: CnpjRegistry>(
     );
 }
 
+fn address_draft(postal_code: &str, street: &str) -> AddressDraft {
+    AddressDraft {
+        postal_code: postal_code.into(),
+        street: street.into(),
+        city: "São Paulo".into(),
+        state: "SP".into(),
+        ..AddressDraft::default()
+    }
+}
+
+async fn party_trail<R: PartyRepository, C: CnpjRegistry>(
+    service: &PartyService<R, C>,
+    company: CompanyId,
+    id: PartyId,
+) -> Vec<AuditEntry> {
+    let history = service.history(company, id).await.unwrap();
+    history.into_iter().map(|record| record.entry).collect()
+}
+
+fn changed_fields(entry: &AuditEntry) -> Vec<&str> {
+    entry
+        .changes
+        .iter()
+        .map(|change| change.field.as_str())
+        .collect()
+}
+
+/// A party is replaced as a whole and only what differs is recorded; the registry is asked again
+/// only for a new CNPJ; a refused edit leaves the party and its trail as they were.
+pub async fn edits_parties_and_records_only_changes<R: PartyRepository>(
+    service: &PartyService<R, InMemoryCnpjRegistry>,
+    company: CompanyId,
+    other_company: CompanyId,
+) {
+    let ana = service
+        .register(
+            company,
+            &actor(),
+            party_draft("Ana", Some("529.982.247-25")),
+        )
+        .await
+        .unwrap();
+    let padaria = service
+        .register(company, &actor(), party_draft("Padaria", Some(ACTIVE_CNPJ)))
+        .await
+        .unwrap();
+    let edit = |id: PartyId, draft: PartyDraft| async move {
+        service.update(company, &actor(), id, draft).await
+    };
+
+    // Refused edits leave nothing behind.
+    let duplicate = edit(ana.id(), party_draft("Ana", Some(ACTIVE_CNPJ))).await;
+    assert_eq!(
+        duplicate.unwrap_err(),
+        ApplicationError::Repository(RepositoryError::DuplicateDocument)
+    );
+    let no_role = edit(
+        ana.id(),
+        PartyDraft {
+            is_customer: false,
+            ..party_draft("Ana", Some("529.982.247-25"))
+        },
+    )
+    .await;
+    assert_eq!(
+        no_role.unwrap_err(),
+        ApplicationError::Domain(DomainError::MissingRole)
+    );
+    let bad_address = edit(
+        ana.id(),
+        PartyDraft {
+            address: Some(address_draft("123", "Rua A")),
+            ..party_draft("Ana", Some("529.982.247-25"))
+        },
+    )
+    .await;
+    assert_eq!(
+        bad_address.unwrap_err(),
+        ApplicationError::Domain(DomainError::InvalidPostalCode)
+    );
+    assert_eq!(party_trail(service, company, ana.id()).await.len(), 1);
+    let stored = service
+        .list(company, &PartyQuery::default(), None, None)
+        .await
+        .unwrap()
+        .items;
+    assert_eq!(stored[0].document().unwrap().as_str(), "52998224725");
+
+    // Another company's party, and one that does not exist, are not found.
+    let foreign = service
+        .update(other_company, &actor(), ana.id(), party_draft("Ana", None))
+        .await;
+    assert_eq!(foreign.unwrap_err(), ApplicationError::PartyNotFound);
+    let unknown = edit(PartyId::generate(), party_draft("Ana", None)).await;
+    assert_eq!(unknown.unwrap_err(), ApplicationError::PartyNotFound);
+
+    // A change of name, role and address keeps the registry answer: the document is the same.
+    let carrier_draft = PartyDraft {
+        is_carrier: true,
+        address: Some(address_draft("01310-100", "Avenida Paulista")),
+        ..party_draft("Padaria do Centro", Some(ACTIVE_CNPJ))
+    };
+    let edited = edit(padaria.id(), carrier_draft.clone()).await.unwrap();
+    assert_eq!(edited.name(), "Padaria do Centro");
+    assert_eq!(edited.address().unwrap().postal_code(), "01310100");
+    assert!(matches!(
+        edited.document_check(),
+        DocumentCheck::Verified { .. }
+    ));
+    let trail = party_trail(service, company, padaria.id()).await;
+    assert_eq!(trail.len(), 2);
+    assert_eq!(trail[1].action, AuditAction::Updated);
+    assert_eq!(
+        changed_fields(&trail[1]),
+        [
+            "name",
+            "is_carrier",
+            "postal_code",
+            "street",
+            "city",
+            "state"
+        ]
+    );
+    assert_eq!(trail[1].changes[0].from.as_deref(), Some("Padaria"));
+    assert_eq!(trail[1].changes[0].to.as_deref(), Some("Padaria do Centro"));
+    let carriers = service
+        .list(
+            company,
+            &PartyQuery::default().of_kind(PartyKind::Carrier),
+            None,
+            None,
+        )
+        .await
+        .unwrap()
+        .items;
+    assert_eq!(carriers.len(), 1);
+    assert_eq!(carriers[0].address(), edited.address());
+
+    // The same edit again changes nothing, so it records nothing.
+    edit(padaria.id(), carrier_draft.clone()).await.unwrap();
+    assert_eq!(party_trail(service, company, padaria.id()).await.len(), 2);
+
+    // A new CNPJ is asked about; its answer replaces the old one, and the trail says so.
+    let closed = edit(
+        padaria.id(),
+        PartyDraft {
+            document: Some(CLOSED_ALPHANUMERIC_CNPJ.into()),
+            ..carrier_draft.clone()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        closed.document_check(),
+        &DocumentCheck::Verified {
+            legal_name: "OFICINA ALFANUMERICA LTDA".into(),
+            situation: "BAIXADA".into(),
+        }
+    );
+    let trail = party_trail(service, company, padaria.id()).await;
+    assert_eq!(
+        changed_fields(&trail[2]),
+        ["document", "registry_legal_name", "registry_situation"]
+    );
+    let unknown_cnpj = edit(
+        padaria.id(),
+        PartyDraft {
+            document: Some(UNKNOWN_CNPJ.into()),
+            ..carrier_draft.clone()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(unknown_cnpj.document_check(), &DocumentCheck::NotFound);
+
+    // Without a document there is nothing left to say about it.
+    let without = edit(
+        padaria.id(),
+        PartyDraft {
+            document: None,
+            ..carrier_draft
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(without.document_check(), &DocumentCheck::NotApplicable);
+    let trail = party_trail(service, company, padaria.id()).await;
+    assert_eq!(trail.len(), 5);
+    assert_eq!(changed_fields(&trail[4]), ["document", "document_check"]);
+    assert!(trail[4].changes.iter().all(|change| change.to.is_none()));
+}
+
 pub async fn pages_through_parties<R: PartyRepository, C: CnpjRegistry>(
     service: &PartyService<R, C>,
     company: CompanyId,
@@ -606,6 +796,7 @@ pub async fn pages_through_parties<R: PartyRepository, C: CnpjRegistry>(
             email: None,
             is_customer: true,
             is_supplier: false,
+            ..PartyDraft::default()
         };
         service.register(company, &actor(), draft).await.unwrap();
     }

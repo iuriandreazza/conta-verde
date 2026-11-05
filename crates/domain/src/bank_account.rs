@@ -1,4 +1,4 @@
-use crate::name::clean_name;
+use crate::name::{clean_name, non_blank};
 use crate::{BankAccountId, CompanyId, DomainError};
 
 const MAX_BRANCH_LEN: usize = 10;
@@ -148,11 +148,6 @@ impl BankAccount {
     pub fn is_active(&self) -> bool {
         self.active
     }
-}
-
-fn non_blank(raw: &str) -> Option<&str> {
-    let trimmed = raw.trim();
-    (!trimmed.is_empty()).then_some(trimmed)
 }
 
 /// Three digits, or eight when the institution has no such code.

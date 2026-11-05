@@ -1,4 +1,5 @@
 mod account;
+mod address;
 mod amount;
 mod audit;
 mod bank_account;
@@ -16,12 +17,13 @@ mod payment_term;
 mod product;
 
 pub use account::{Account, AccountDraft, Company, User, validate_password};
+pub use address::{Address, AddressDraft};
 pub use amount::Amount;
 pub use audit::{
     Actor, AuditAction, AuditEntity, AuditEntry, AuditRecord, Audited, FieldChange,
     bank_account_changes, bank_account_creation_changes, category_changes,
     category_creation_changes, cost_center_changes, cost_center_creation_changes, creation_changes,
-    document_check_changes, payment_method_changes, payment_method_creation_changes,
+    document_check_changes, party_changes, payment_method_changes, payment_method_creation_changes,
     payment_term_changes, payment_term_creation_changes, product_changes, product_creation_changes,
 };
 pub use bank_account::{BankAccount, BankAccountDraft, BankAccountKind};

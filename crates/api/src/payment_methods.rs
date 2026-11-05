@@ -10,7 +10,7 @@ use crate::access::CompanyAccess;
 use crate::cursor::{decode_cursor, encode_cursor};
 use crate::error::ApiError;
 use crate::history::HistoryEntryResponse;
-use crate::json::{ApiJson, ApiQuery, active_or};
+use crate::json::{ApiJson, ApiQuery, flag_or};
 use crate::list_params;
 use crate::{Ports, SharedState};
 
@@ -33,7 +33,7 @@ impl PaymentMethodRequest {
         let kind = PaymentMethodKind::parse(&self.kind).ok_or(ApiError::InvalidField(
             "invalid kind: expected cash, pix, bank_slip, credit_card, debit_card, bank_transfer, check or other",
         ))?;
-        let active = active_or(
+        let active = flag_or(
             self.active,
             default_active,
             "active is required when replacing a payment method",

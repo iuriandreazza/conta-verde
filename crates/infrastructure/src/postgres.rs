@@ -4,7 +4,8 @@ use conta_verde_application::{
     ensure_audit_describes,
 };
 use conta_verde_domain::{
-    AuditEntity, AuditEntry, AuditRecord, CompanyId, DocumentCheck, Party, PartyDraft, PartyId,
+    AddressDraft, AuditEntity, AuditEntry, AuditRecord, CompanyId, DocumentCheck, Party,
+    PartyDraft, PartyId,
 };
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Postgres, QueryBuilder, Row};
@@ -59,6 +60,7 @@ impl PostgresPartyRepository {
 }
 
 const SELECT_PARTIES: &str = "SELECT id, company_id, name, document, email, is_customer, is_supplier, \
+     is_carrier, is_seller, postal_code, street, street_number, complement, district, city, state, \
      document_check, registry_legal_name, registry_situation \
      FROM parties";
 
@@ -68,29 +70,20 @@ impl PartyRepository for PostgresPartyRepository {
         // One transaction: if the party is refused (a duplicate document) or the audit row cannot
         // be written, the rollback leaves neither behind.
         let mut tx = self.pool.begin().await.map_err(storage_error)?;
-        sqlx::query(
-            "INSERT INTO parties (id, company_id, name, document, email, is_customer, is_supplier, \
-             document_check, registry_legal_name, registry_situation) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+        bind_party(
+            sqlx::query(
+                "INSERT INTO parties (id, company_id, name, document, email, is_customer, \
+                 is_supplier, is_carrier, is_seller, postal_code, street, street_number, \
+                 complement, district, city, state, document_check, registry_legal_name, \
+                 registry_situation) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, \
+                 $17, $18, $19)",
+            ),
+            party,
         )
-        .bind(party.id().as_uuid())
-        .bind(party.company_id().as_uuid())
-        .bind(party.name())
-        .bind(party.document().map(|document| document.as_str()))
-        .bind(party.email().map(|email| email.as_str()))
-        .bind(party.is_customer())
-        .bind(party.is_supplier())
-        .bind(check_kind(party.document_check()))
-        .bind(registry_legal_name(party.document_check()))
-        .bind(registry_situation(party.document_check()))
         .execute(&mut *tx)
         .await
-        .map_err(|error| match &error {
-            sqlx::Error::Database(db) if db.constraint() == Some(DOCUMENT_UNIQUE_INDEX) => {
-                RepositoryError::DuplicateDocument
-            }
-            _ => storage_error(error),
-        })?;
+        .map_err(duplicate_document_or_storage_error)?;
         postgres_audit::insert(&mut tx, audit).await?;
         tx.commit().await.map_err(storage_error)
     }
@@ -119,25 +112,23 @@ impl PartyRepository for PostgresPartyRepository {
         row.as_ref().map(party_from_row).transpose()
     }
 
-    async fn update_document_check(
-        &self,
-        party: &Party,
-        audit: &AuditEntry,
-    ) -> Result<(), RepositoryError> {
+    async fn update(&self, party: &Party, audit: &AuditEntry) -> Result<(), RepositoryError> {
         ensure_audit_describes(audit, party)?;
         let mut tx = self.pool.begin().await.map_err(storage_error)?;
-        let result = sqlx::query(
-            "UPDATE parties SET document_check = $3, registry_legal_name = $4, registry_situation = $5 \
-             WHERE id = $1 AND company_id = $2",
+        let result = bind_party(
+            sqlx::query(
+                "UPDATE parties SET name = $3, document = $4, email = $5, is_customer = $6, \
+                 is_supplier = $7, is_carrier = $8, is_seller = $9, postal_code = $10, \
+                 street = $11, street_number = $12, complement = $13, district = $14, \
+                 city = $15, state = $16, document_check = $17, registry_legal_name = $18, \
+                 registry_situation = $19 \
+                 WHERE company_id = $2 AND id = $1",
+            ),
+            party,
         )
-        .bind(party.id().as_uuid())
-        .bind(party.company_id().as_uuid())
-        .bind(check_kind(party.document_check()))
-        .bind(registry_legal_name(party.document_check()))
-        .bind(registry_situation(party.document_check()))
         .execute(&mut *tx)
         .await
-        .map_err(storage_error)?;
+        .map_err(duplicate_document_or_storage_error)?;
         // Matching no row means the party is not in that company: report it, do not pretend. The
         // transaction is dropped, so no audit row is left for a write that did not happen.
         if result.rows_affected() == 0 {
@@ -161,6 +152,8 @@ impl PartyRepository for PostgresPartyRepository {
         match query.kind() {
             Some(PartyKind::Customer) => sql.push(" AND is_customer"),
             Some(PartyKind::Supplier) => sql.push(" AND is_supplier"),
+            Some(PartyKind::Carrier) => sql.push(" AND is_carrier"),
+            Some(PartyKind::Seller) => sql.push(" AND is_seller"),
             None => &mut sql,
         };
         if let Some(text) = query.search() {
@@ -188,6 +181,64 @@ impl PartyRepository for PostgresPartyRepository {
     }
 }
 
+type PartyQueryBuilder<'q> = sqlx::query::Query<'q, Postgres, sqlx::postgres::PgArguments>;
+
+/// Binds the columns `$1` to `$19` of the INSERT and the UPDATE, which list them in the same order.
+fn bind_party<'q>(query: PartyQueryBuilder<'q>, party: &'q Party) -> PartyQueryBuilder<'q> {
+    let address = party.address();
+    query
+        .bind(party.id().as_uuid())
+        .bind(party.company_id().as_uuid())
+        .bind(party.name())
+        .bind(party.document().map(|document| document.as_str()))
+        .bind(party.email().map(|email| email.as_str()))
+        .bind(party.is_customer())
+        .bind(party.is_supplier())
+        .bind(party.is_carrier())
+        .bind(party.is_seller())
+        .bind(address.map(|address| address.postal_code()))
+        .bind(address.map(|address| address.street()))
+        .bind(address.and_then(|address| address.number()))
+        .bind(address.and_then(|address| address.complement()))
+        .bind(address.and_then(|address| address.district()))
+        .bind(address.map(|address| address.city()))
+        .bind(address.map(|address| address.state()))
+        .bind(check_kind(party.document_check()))
+        .bind(registry_legal_name(party.document_check()))
+        .bind(registry_situation(party.document_check()))
+}
+
+fn duplicate_document_or_storage_error(error: sqlx::Error) -> RepositoryError {
+    match &error {
+        sqlx::Error::Database(db) if db.constraint() == Some(DOCUMENT_UNIQUE_INDEX) => {
+            RepositoryError::DuplicateDocument
+        }
+        _ => storage_error(error),
+    }
+}
+
+fn address_from_row(row: &PgRow) -> Result<Option<AddressDraft>, RepositoryError> {
+    let postal_code: Option<String> = row.try_get("postal_code").map_err(storage_error)?;
+    let street: Option<String> = row.try_get("street").map_err(storage_error)?;
+    let city: Option<String> = row.try_get("city").map_err(storage_error)?;
+    let state: Option<String> = row.try_get("state").map_err(storage_error)?;
+    // The table's CHECK makes the four go together; a row without them has no address.
+    let (Some(postal_code), Some(street), Some(city), Some(state)) =
+        (postal_code, street, city, state)
+    else {
+        return Ok(None);
+    };
+    Ok(Some(AddressDraft {
+        postal_code,
+        street,
+        number: row.try_get("street_number").map_err(storage_error)?,
+        complement: row.try_get("complement").map_err(storage_error)?,
+        district: row.try_get("district").map_err(storage_error)?,
+        city,
+        state,
+    }))
+}
+
 fn party_from_row(row: &PgRow) -> Result<Party, RepositoryError> {
     let draft = PartyDraft {
         name: row.try_get("name").map_err(storage_error)?,
@@ -195,6 +246,9 @@ fn party_from_row(row: &PgRow) -> Result<Party, RepositoryError> {
         email: row.try_get("email").map_err(storage_error)?,
         is_customer: row.try_get("is_customer").map_err(storage_error)?,
         is_supplier: row.try_get("is_supplier").map_err(storage_error)?,
+        is_carrier: row.try_get("is_carrier").map_err(storage_error)?,
+        is_seller: row.try_get("is_seller").map_err(storage_error)?,
+        address: address_from_row(row)?,
     };
     let id = PartyId::from_uuid(row.try_get("id").map_err(storage_error)?);
     let company_id = CompanyId::from_uuid(row.try_get("company_id").map_err(storage_error)?);
@@ -270,6 +324,7 @@ mod tests {
             email: Some("contato@example.com".into()),
             is_customer: true,
             is_supplier: true,
+            ..PartyDraft::default()
         };
 
         service
@@ -310,6 +365,16 @@ mod tests {
         assert_eq!(names, ["ana", "Padaria", "zeca"]);
         assert_eq!(listed[1].document().unwrap().as_str(), "11222333000181");
         assert!(listed[1].is_customer() && listed[1].is_supplier());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn edits_parties_and_records_only_changes() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let other_company = contract::create_company(&pool).await;
+        let service = PartyService::new(PostgresPartyRepository::new(pool), contract::registry());
+        contract::edits_parties_and_records_only_changes(&service, company, other_company).await;
     }
 
     #[tokio::test]
@@ -376,8 +441,9 @@ mod tests {
             let pool = pool.clone();
             async move {
                 sqlx::query(
-                    "INSERT INTO parties (id, company_id, name, document, is_customer, is_supplier, document_check) \
-                     VALUES (gen_random_uuid(), $1, 'Teste', $2, true, false, $3)",
+                    "INSERT INTO parties (id, company_id, name, document, is_customer, is_supplier, \
+                     is_carrier, is_seller, document_check) \
+                     VALUES (gen_random_uuid(), $1, 'Teste', $2, true, false, false, false, $3)",
                 )
                 .bind(company.as_uuid())
                 .bind(document)
@@ -400,6 +466,104 @@ mod tests {
         // A CNPJ may carry any of them, including the status added by the second migration.
         insert(Some("11222333000181"), "not_found").await.unwrap();
         insert(Some("12ABC34501DE35"), "unverified").await.unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn the_database_refuses_what_the_domain_would_in_roles_and_addresses() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let refused_by = |result: Result<_, sqlx::Error>| match result {
+            Err(sqlx::Error::Database(db)) => db.constraint().map(str::to_owned),
+            _ => None,
+        };
+        // Roles: customer, supplier, carrier, seller; the address columns: CEP, street, number,
+        // complement, district, city, state.
+        let insert = |roles: [bool; 4], address: [Option<&'static str>; 7]| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query(
+                    "INSERT INTO parties (id, company_id, name, is_customer, is_supplier, \
+                     is_carrier, is_seller, postal_code, street, street_number, complement, \
+                     district, city, state, document_check) \
+                     VALUES (gen_random_uuid(), $1, 'Teste', $2, $3, $4, $5, $6, $7, $8, $9, $10, \
+                     $11, $12, 'not_applicable')",
+                )
+                .bind(company.as_uuid())
+                .bind(roles[0])
+                .bind(roles[1])
+                .bind(roles[2])
+                .bind(roles[3])
+                .bind(address[0])
+                .bind(address[1])
+                .bind(address[2])
+                .bind(address[3])
+                .bind(address[4])
+                .bind(address[5])
+                .bind(address[6])
+                .execute(&pool)
+                .await
+            }
+        };
+        let none = [None; 7];
+        let whole = [
+            Some("01310100"),
+            Some("Avenida Paulista"),
+            None,
+            None,
+            None,
+            Some("São Paulo"),
+            Some("SP"),
+        ];
+        let with = |index: usize, value: Option<&'static str>| {
+            let mut address = whole;
+            address[index] = value;
+            address
+        };
+
+        assert_eq!(
+            refused_by(insert([false; 4], none).await).as_deref(),
+            Some("parties_has_role")
+        );
+        // Any one role is enough, and the address is optional.
+        for role in 0..4 {
+            let mut roles = [false; 4];
+            roles[role] = true;
+            insert(roles, none).await.unwrap();
+        }
+        insert([true, false, false, false], whole).await.unwrap();
+
+        let customer = [true, false, false, false];
+        let cases = [
+            (with(0, None), "parties_address_is_whole"),
+            (with(1, None), "parties_address_is_whole"),
+            (with(5, None), "parties_address_is_whole"),
+            (with(6, None), "parties_address_is_whole"),
+            // Only the number, the complement and the district alone are not an address.
+            (
+                [None, None, Some("10"), None, None, None, None],
+                "parties_address_is_whole",
+            ),
+            (with(0, Some("0131010")), "parties_postal_code_valid"),
+            (with(0, Some("01310-100")), "parties_postal_code_valid"),
+            (with(6, Some("XX")), "parties_state_valid"),
+            (with(6, Some("sp")), "parties_state_valid"),
+            (with(1, Some("")), "parties_address_text_valid"),
+            (with(1, Some(" Rua A")), "parties_address_text_valid"),
+            // White space the domain trims but `btrim` does not: a tab, a line break, only blanks.
+            (with(1, Some("\tRua A")), "parties_address_text_valid"),
+            (with(1, Some("\t")), "parties_address_text_valid"),
+            (with(5, Some("Recife\n")), "parties_address_text_valid"),
+            (with(5, Some("Recife ")), "parties_address_text_valid"),
+            (with(2, Some("")), "parties_address_text_valid"),
+        ];
+        for (address, constraint) in cases {
+            assert_eq!(
+                refused_by(insert(customer, address).await).as_deref(),
+                Some(constraint),
+                "{address:?}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -442,6 +606,7 @@ mod tests {
                 email: None,
                 is_customer: true,
                 is_supplier: false,
+                ..PartyDraft::default()
             },
         )
         .unwrap();
@@ -474,6 +639,7 @@ mod tests {
                 email: None,
                 is_customer: true,
                 is_supplier: false,
+                ..PartyDraft::default()
             },
         )
         .unwrap();
@@ -531,6 +697,7 @@ mod tests {
                     email: None,
                     is_customer: true,
                     is_supplier: false,
+                    ..PartyDraft::default()
                 },
             )
             .await;

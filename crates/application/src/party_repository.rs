@@ -19,6 +19,8 @@ impl From<&Party> for NameCursor {
 pub enum PartyKind {
     Customer,
     Supplier,
+    Carrier,
+    Seller,
 }
 
 /// How a list of parties is narrowed and ordered, the convention other lists follow: a free-text
@@ -84,6 +86,8 @@ impl PartyQuery {
             None => true,
             Some(PartyKind::Customer) => party.is_customer(),
             Some(PartyKind::Supplier) => party.is_supplier(),
+            Some(PartyKind::Carrier) => party.is_carrier(),
+            Some(PartyKind::Seller) => party.is_seller(),
         };
         kind_matches
             && self
@@ -123,8 +127,10 @@ pub trait PartyRepository: Send + Sync {
         id: PartyId,
     ) -> impl Future<Output = Result<Option<Party>, RepositoryError>> + Send;
 
-    /// Replaces what is stored about the party's document check, and nothing else.
-    fn update_document_check(
+    /// Replaces everything stored about the party, its registry check included, with what `party`
+    /// holds. `NotFound` when the company has no such party; `DuplicateDocument` when another
+    /// party of the company already has the document.
+    fn update(
         &self,
         party: &Party,
         audit: &AuditEntry,

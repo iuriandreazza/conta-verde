@@ -8,10 +8,21 @@ const FIELD_LABELS: Record<string, string> = {
   email: "E-mail",
   is_customer: "Cliente",
   is_supplier: "Fornecedor",
+  is_carrier: "Transportadora",
+  is_seller: "Vendedor",
+  postal_code: "CEP",
+  street: "Logradouro",
+  street_number: "Número",
+  complement: "Complemento",
+  district: "Bairro",
+  city: "Cidade",
+  state: "UF",
   document_check: "Verificação do CNPJ",
   registry_legal_name: "Razão social (Receita)",
   registry_situation: "Situação (Receita)",
 };
+
+const ROLE_FIELDS = ["is_customer", "is_supplier", "is_carrier", "is_seller"];
 
 const CHECK_LABELS: Record<string, string> = {
   verified: "Verificado",
@@ -25,7 +36,7 @@ function label(field: string): string {
 
 function display(field: string, value: string | null): string {
   if (value === null) return "—";
-  if (field === "is_customer" || field === "is_supplier") return value === "true" ? "sim" : "não";
+  if (ROLE_FIELDS.includes(field)) return value === "true" ? "sim" : "não";
   if (field === "document_check") return CHECK_LABELS[value] ?? value;
   return value;
 }

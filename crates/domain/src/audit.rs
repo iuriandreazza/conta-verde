@@ -213,24 +213,6 @@ fn set(field: &str, value: impl Into<String>) -> FieldChange {
     }
 }
 
-/// Every field a new party has set.
-pub fn creation_changes(party: &Party) -> Vec<FieldChange> {
-    let mut changes = vec![set("name", party.name())];
-    if let Some(document) = party.document() {
-        changes.push(set("document", document.as_str()));
-    }
-    if let Some(email) = party.email() {
-        changes.push(set("email", email.as_str()));
-    }
-    changes.push(set("is_customer", party.is_customer().to_string()));
-    changes.push(set("is_supplier", party.is_supplier().to_string()));
-    changes.extend(document_check_changes(
-        &DocumentCheck::NotApplicable,
-        party.document_check(),
-    ));
-    changes
-}
-
 /// The fields of a record as text, in the order the trail lists them; `None` is "not set".
 type Fields = Vec<(&'static str, Option<String>)>;
 
@@ -255,6 +237,48 @@ fn changes_between(before: Fields, after: Fields) -> Vec<FieldChange> {
             to,
         })
         .collect()
+}
+
+fn party_fields(party: &Party) -> Fields {
+    let address = party.address();
+    let text = |value: Option<&str>| value.map(str::to_owned);
+    vec![
+        ("name", Some(party.name().to_owned())),
+        ("document", text(party.document().map(|d| d.as_str()))),
+        ("email", text(party.email().map(|e| e.as_str()))),
+        ("is_customer", Some(party.is_customer().to_string())),
+        ("is_supplier", Some(party.is_supplier().to_string())),
+        ("is_carrier", Some(party.is_carrier().to_string())),
+        ("is_seller", Some(party.is_seller().to_string())),
+        ("postal_code", text(address.map(|a| a.postal_code()))),
+        ("street", text(address.map(|a| a.street()))),
+        ("street_number", text(address.and_then(|a| a.number()))),
+        ("complement", text(address.and_then(|a| a.complement()))),
+        ("district", text(address.and_then(|a| a.district()))),
+        ("city", text(address.map(|a| a.city()))),
+        ("state", text(address.map(|a| a.state()))),
+    ]
+}
+
+/// Every field a new party has set, and what the registry said about its CNPJ.
+pub fn creation_changes(party: &Party) -> Vec<FieldChange> {
+    let mut changes = creation_from(party_fields(party));
+    changes.extend(document_check_changes(
+        &DocumentCheck::NotApplicable,
+        party.document_check(),
+    ));
+    changes
+}
+
+/// What differs between two versions of a party: its fields, and the registry's answer when the
+/// document changed. Empty when nothing did.
+pub fn party_changes(before: &Party, after: &Party) -> Vec<FieldChange> {
+    let mut changes = changes_between(party_fields(before), party_fields(after));
+    changes.extend(document_check_changes(
+        before.document_check(),
+        after.document_check(),
+    ));
+    changes
 }
 
 fn product_fields(product: &Product) -> Fields {
@@ -415,7 +439,9 @@ pub fn document_check_changes(before: &DocumentCheck, after: &DocumentCheck) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CompanyId, PartyDraft, PartyId, ProductDraft, ProductId, ProductKind};
+    use crate::{
+        AddressDraft, CompanyId, PartyDraft, PartyId, ProductDraft, ProductId, ProductKind,
+    };
 
     fn party(document: Option<&str>) -> Party {
         Party::new(
@@ -426,7 +452,7 @@ mod tests {
                 document: document.map(Into::into),
                 email: Some("contato@padaria.example".into()),
                 is_customer: true,
-                is_supplier: false,
+                ..PartyDraft::default()
             },
         )
         .unwrap()
@@ -442,7 +468,14 @@ mod tests {
         let changes = creation_changes(&bare);
         assert_eq!(
             fields(&changes),
-            ["name", "email", "is_customer", "is_supplier"]
+            [
+                "name",
+                "email",
+                "is_customer",
+                "is_supplier",
+                "is_carrier",
+                "is_seller"
+            ]
         );
         assert!(changes.iter().all(|change| change.from.is_none()));
 
@@ -460,6 +493,46 @@ mod tests {
         let changes = creation_changes(&checked);
         assert!(changes.contains(&set("document_check", "verified")));
         assert!(changes.contains(&set("registry_situation", "ATIVA")));
+    }
+
+    #[test]
+    fn a_party_edit_lists_only_what_changed_and_an_equal_one_nothing() {
+        let before = party(Some("529.982.247-25"));
+        assert!(party_changes(&before, &before.clone()).is_empty());
+
+        let after = before
+            .replaced_with(PartyDraft {
+                name: "Padaria do Centro".into(),
+                document: Some("529.982.247-25".into()),
+                email: None,
+                is_customer: true,
+                is_seller: true,
+                address: Some(AddressDraft {
+                    postal_code: "01310-100".into(),
+                    street: "Avenida Paulista".into(),
+                    city: "São Paulo".into(),
+                    state: "SP".into(),
+                    ..AddressDraft::default()
+                }),
+                ..PartyDraft::default()
+            })
+            .unwrap();
+        let changes = party_changes(&before, &after);
+        assert_eq!(
+            fields(&changes),
+            [
+                "name",
+                "email",
+                "is_seller",
+                "postal_code",
+                "street",
+                "city",
+                "state"
+            ]
+        );
+        assert_eq!(changes[1].from.as_deref(), Some("contato@padaria.example"));
+        assert_eq!(changes[1].to, None);
+        assert_eq!(changes[2].to.as_deref(), Some("true"));
     }
 
     #[test]
