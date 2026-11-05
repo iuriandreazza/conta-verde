@@ -180,6 +180,41 @@ impl IdentityRepository for PostgresIdentityRepository {
             })
     }
 
+    async fn set_role(
+        &self,
+        user_id: UserId,
+        company_id: CompanyId,
+        role: Role,
+    ) -> Result<(), RepositoryError> {
+        let changed = sqlx::query(
+            "UPDATE memberships SET role = $3 \
+             WHERE user_id = $1 AND company_id = $2 AND role <> 'owner'",
+        )
+        .bind(user_id.as_uuid())
+        .bind(company_id.as_uuid())
+        .bind(role.as_str())
+        .execute(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        matched_one(changed.rows_affected())
+    }
+
+    async fn remove_membership(
+        &self,
+        user_id: UserId,
+        company_id: CompanyId,
+    ) -> Result<(), RepositoryError> {
+        let removed = sqlx::query(
+            "DELETE FROM memberships WHERE user_id = $1 AND company_id = $2 AND role <> 'owner'",
+        )
+        .bind(user_id.as_uuid())
+        .bind(company_id.as_uuid())
+        .execute(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        matched_one(removed.rows_affected())
+    }
+
     async fn create_session(
         &self,
         user_id: UserId,
@@ -247,6 +282,14 @@ fn role_from_row(row: &PgRow) -> Result<Role, RepositoryError> {
     Role::parse(&key).ok_or_else(|| {
         RepositoryError::Storage(format!("stored membership role `{key}` is unknown"))
     })
+}
+
+fn matched_one(rows: u64) -> Result<(), RepositoryError> {
+    if rows == 0 {
+        Err(RepositoryError::NotFound)
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

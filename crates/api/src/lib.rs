@@ -21,7 +21,7 @@ mod session;
 
 use std::sync::Arc;
 
-use axum::routing::{delete, get, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
 use conta_verde_application::{
     AuthService, BankAccountRepository, BankAccountService, CategoryRepository, CategoryService,
@@ -213,6 +213,10 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         .route(
             "/companies/{company_id}/members",
             get(members::list_members::<X>),
+        )
+        .route(
+            "/companies/{company_id}/members/{user_id}",
+            patch(members::change_role::<X>).delete(members::remove_member::<X>),
         )
         .route(
             "/companies/{company_id}/invitations",
@@ -1797,6 +1801,162 @@ mod tests {
                 .status,
             StatusCode::NOT_FOUND
         );
+    }
+
+    #[tokio::test]
+    async fn an_admin_changes_roles_and_removes_members_but_the_owner_stays_as_they_are() {
+        use conta_verde_domain::Role;
+
+        let (app, identities, _) = app_with_mailbox();
+        let (owner, company_id) = sign_up(&app, "dona@example.com").await;
+        let members_uri = format!("/companies/{company_id}/members");
+        let sales = member_with_role(&app, &identities, company_id, Role::Sales).await;
+        let admin = member_with_role(&app, &identities, company_id, Role::Admin).await;
+        let (other, other_company) = sign_up(&app, "outra@example.com").await;
+        let listed = send(&app, get_request(&members_uri, Some(&owner))).await;
+        let id_of = |role: &str| {
+            listed
+                .body
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|m| m["role"] == role)
+                .unwrap()["user_id"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        let (owner_id, sales_id, admin_id) = (id_of("owner"), id_of("sales"), id_of("admin"));
+        let change = |cookie: &str, id: &str, role: &str| {
+            send(
+                &app,
+                json_request(
+                    "PATCH",
+                    &format!("{members_uri}/{id}"),
+                    Some(cookie),
+                    json!({ "role": role }),
+                ),
+            )
+        };
+        let remove = |cookie: &str, id: &str| {
+            send(
+                &app,
+                json_request(
+                    "DELETE",
+                    &format!("{members_uri}/{id}"),
+                    Some(cookie),
+                    Value::Null,
+                ),
+            )
+        };
+
+        // Not a role that reaches the members: refused as for any other write.
+        assert_eq!(
+            change(&sales, &admin_id, "viewer").await.status,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            remove(&sales, &admin_id).await.status,
+            StatusCode::FORBIDDEN
+        );
+
+        // A role changes, and the person sees it at once.
+        assert_eq!(
+            change(&admin, &sales_id, "financial").await.status,
+            StatusCode::NO_CONTENT
+        );
+        let me = send(&app, get_request("/auth/me", Some(&sales))).await;
+        let role_here = me.body["companies"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == company_id.to_string())
+            .unwrap()["role"]
+            .clone();
+        assert_eq!(role_here, "financial");
+
+        // What cannot be said, and whom there is none to change.
+        assert_eq!(
+            change(&admin, &sales_id, "boss").await.status,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let owning = change(&admin, &sales_id, "owner").await;
+        assert_eq!(owning.status, StatusCode::CONFLICT);
+        assert!(owning.body["error"].as_str().unwrap().contains("one owner"));
+        let stranger = Uuid::new_v4().to_string();
+        assert_eq!(
+            change(&admin, &stranger, "viewer").await.status,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            change(&admin, "not-an-id", "viewer").await.status,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            remove(&admin, &stranger).await.status,
+            StatusCode::NOT_FOUND
+        );
+        // A member of another company is no member of this one.
+        let theirs = send(
+            &app,
+            get_request(&format!("/companies/{other_company}/members"), Some(&other)),
+        )
+        .await;
+        let their_id = theirs.body[0]["user_id"].as_str().unwrap().to_owned();
+        assert_eq!(
+            change(&admin, &their_id, "viewer").await.status,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            remove(&admin, &their_id).await.status,
+            StatusCode::NOT_FOUND
+        );
+
+        // Nobody, an admin included, changes or removes the owner.
+        assert_eq!(
+            change(&admin, &owner_id, "viewer").await.status,
+            StatusCode::CONFLICT
+        );
+        assert_eq!(remove(&admin, &owner_id).await.status, StatusCode::CONFLICT);
+        assert_eq!(remove(&owner, &owner_id).await.status, StatusCode::CONFLICT);
+
+        // A removed member is out of the company at their next request, and still has their account.
+        assert_eq!(
+            remove(&admin, &sales_id).await.status,
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(
+            send(&app, get_request(&parties_uri(company_id), Some(&sales)))
+                .await
+                .status,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            remove(&admin, &sales_id).await.status,
+            StatusCode::NOT_FOUND
+        );
+        let me = send(&app, get_request("/auth/me", Some(&sales))).await;
+        assert_eq!(me.status, StatusCode::OK);
+        assert!(
+            me.body["companies"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|c| c["id"] != company_id.to_string())
+        );
+        let left = send(&app, get_request(&members_uri, Some(&owner))).await;
+        assert_eq!(left.body.as_array().unwrap().len(), 2);
+
+        // And can be invited again.
+        let again = invite_as(
+            &app,
+            &owner,
+            company_id,
+            me.body["user"]["email"].as_str().unwrap(),
+            "viewer",
+        )
+        .await;
+        assert_eq!(again.status, StatusCode::CREATED);
     }
 
     #[tokio::test]

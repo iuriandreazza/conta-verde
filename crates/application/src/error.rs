@@ -65,6 +65,10 @@ pub enum ApplicationError {
     CostCenterNotFound,
     /// No invitation behind this token or id (another company's id looks the same).
     InvitationNotFound,
+    /// The user is not a member of the company (or no longer is).
+    MemberNotFound,
+    /// A company has one owner, who is not changed, removed or given to another ([ADR 0028]).
+    OwnerIsFixed,
     /// The invitation was accepted, withdrawn or has expired.
     InvitationNoLongerValid,
     /// The signed-in user is not the address the invitation was sent to.
@@ -168,6 +172,10 @@ impl fmt::Display for ApplicationError {
             ),
             Self::CategoryLimitReached => f.write_str("a company can have at most 1000 categories"),
             Self::InvitationNotFound => f.write_str("invitation not found"),
+            Self::MemberNotFound => f.write_str("member not found"),
+            Self::OwnerIsFixed => f.write_str(
+                "a company has one owner, who cannot be changed, removed or given to another",
+            ),
             Self::InvitationNoLongerValid => f.write_str(
                 "this invitation was already used or withdrawn, or has expired: ask for a new one",
             ),

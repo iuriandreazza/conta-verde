@@ -349,6 +349,40 @@ impl IdentityRepository for InMemoryIdentityRepository {
         Ok(())
     }
 
+    async fn set_role(
+        &self,
+        user_id: UserId,
+        company_id: CompanyId,
+        role: Role,
+    ) -> Result<(), RepositoryError> {
+        let mut state = self.state.lock().expect("repository lock poisoned");
+        let membership = state
+            .memberships
+            .iter_mut()
+            .find(|(member, company, current)| {
+                *member == user_id && *company == company_id && *current != Role::Owner
+            })
+            .ok_or(RepositoryError::NotFound)?;
+        membership.2 = role;
+        Ok(())
+    }
+
+    async fn remove_membership(
+        &self,
+        user_id: UserId,
+        company_id: CompanyId,
+    ) -> Result<(), RepositoryError> {
+        let mut state = self.state.lock().expect("repository lock poisoned");
+        let before = state.memberships.len();
+        state.memberships.retain(|(member, company, role)| {
+            !(*member == user_id && *company == company_id && *role != Role::Owner)
+        });
+        if state.memberships.len() == before {
+            return Err(RepositoryError::NotFound);
+        }
+        Ok(())
+    }
+
     async fn create_session(
         &self,
         user_id: UserId,

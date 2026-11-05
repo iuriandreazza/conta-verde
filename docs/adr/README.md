@@ -43,6 +43,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0025](0025-csv-import.md) | CSV import of registers | accepted | 1 |
 | [0026](0026-membership-roles-and-permissions.md) | Membership roles and what each may do | accepted | 1 |
 | [0027](0027-invitations.md) | Invitations | accepted | 1 |
+| [0028](0028-member-management.md) | Changing and removing members | accepted | 1 |
 
 ## Template
 

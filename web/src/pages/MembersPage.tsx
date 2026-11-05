@@ -23,6 +23,9 @@ export function MembersPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [invited, setInvited] = useState<Invited | null>(null);
   const [revokingId, setRevokingId] = useState<string | null>(null);
+  // One member is changed at a time, and removing asks first.
+  const [changingId, setChangingId] = useState<string | null>(null);
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
   // Bumped after an invitation so the e-mail field starts over.
   const [formVersion, setFormVersion] = useState(0);
 
@@ -63,6 +66,23 @@ export function MembersPage() {
       setFormError(errorMessage(failure));
     } finally {
       setSending(false);
+    }
+  }
+
+  async function changeMember(member: Member, change: () => Promise<void>) {
+    if (changingId !== null) {
+      return;
+    }
+    setChangingId(member.user_id);
+    setConfirmingId(null);
+    setError(null);
+    try {
+      await change();
+      await load();
+    } catch (failure) {
+      setError(errorMessage(failure));
+    } finally {
+      setChangingId(null);
     }
   }
 
@@ -107,6 +127,9 @@ export function MembersPage() {
                       <th>Nome</th>
                       <th>E-mail</th>
                       <th>Papel</th>
+                      <th>
+                        <span className="visually-hidden">Ações</span>
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -114,7 +137,75 @@ export function MembersPage() {
                       <tr key={member.user_id}>
                         <td>{member.name}</td>
                         <td>{member.email}</td>
-                        <td>{ROLE_LABELS[member.role]}</td>
+                        {member.role === "owner" ? (
+                          // A company has one owner, who is not changed or removed.
+                          <>
+                            <td>{ROLE_LABELS[member.role]}</td>
+                            <td />
+                          </>
+                        ) : (
+                          <>
+                            <td>
+                              <select
+                                aria-label={`Papel de ${member.name}`}
+                                value={member.role}
+                                disabled={changingId !== null}
+                                onChange={(event) =>
+                                  void changeMember(member, () =>
+                                    api.changeRole(companyId, member.user_id, event.target.value as Role),
+                                  )
+                                }
+                              >
+                                {INVITABLE_ROLES.map((option) => (
+                                  <option key={option} value={option}>
+                                    {ROLE_LABELS[option]}
+                                  </option>
+                                ))}
+                              </select>
+                            </td>
+                            <td>
+                              {confirmingId === member.user_id ? (
+                                <span className="form-actions">
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    className="btn-small"
+                                    aria-label={`Confirmar a remoção de ${member.name}`}
+                                    pending={changingId === member.user_id}
+                                    disabled={changingId !== null}
+                                    onClick={() =>
+                                      void changeMember(member, () =>
+                                        api.removeMember(companyId, member.user_id),
+                                      )
+                                    }
+                                  >
+                                    Confirmar
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    className="btn-small"
+                                    disabled={changingId !== null}
+                                    onClick={() => setConfirmingId(null)}
+                                  >
+                                    Cancelar
+                                  </Button>
+                                </span>
+                              ) : (
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  className="btn-small"
+                                  aria-label={`Remover ${member.name}`}
+                                  disabled={changingId !== null}
+                                  onClick={() => setConfirmingId(member.user_id)}
+                                >
+                                  Remover
+                                </Button>
+                              )}
+                            </td>
+                          </>
+                        )}
                       </tr>
                     ))}
                   </tbody>

@@ -112,7 +112,7 @@ invited one; a link that no longer works leaves an ordinary sign-up, with the re
 - There is no rate limit on the preview, which needs no session; a token of 256 bits makes
   guessing pointless, and a limiter in front of the API is the remedy for the rest, as for the CNPJ
   and CEP lookups.
-- Not here: removing a member, changing a member's role, handing a company over (an owner is not
+- Not here: handing a company over (an owner is not
   invitable), password reset, and the web app hiding what a role cannot use (the API refuses it
   already).
 

@@ -99,7 +99,10 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
         ApplicationError::LookupDisabled | ApplicationError::PostalCodeLookupDisabled => {
             (StatusCode::CONFLICT, error.to_string())
         }
-        ApplicationError::InvitationNotFound => (StatusCode::NOT_FOUND, error.to_string()),
+        ApplicationError::InvitationNotFound | ApplicationError::MemberNotFound => {
+            (StatusCode::NOT_FOUND, error.to_string())
+        }
+        ApplicationError::OwnerIsFixed => (StatusCode::CONFLICT, error.to_string()),
         // It existed and cannot be used any more: the link was used, withdrawn or has expired.
         ApplicationError::InvitationNoLongerValid => (StatusCode::GONE, error.to_string()),
         ApplicationError::InvitationForAnotherEmail => (StatusCode::FORBIDDEN, error.to_string()),
