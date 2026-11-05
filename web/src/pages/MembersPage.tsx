@@ -85,6 +85,9 @@ export function MembersPage() {
       await change();
       await load();
     } catch (failure) {
+      // Read again even so: a refusal often means the list was out of date (the member was removed
+      // meanwhile). `load` clears the error, so it is set after.
+      await load();
       setError(errorMessage(failure));
     } finally {
       setChangingId(null);

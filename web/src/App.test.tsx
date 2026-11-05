@@ -2511,18 +2511,22 @@ describe("members and invitations", () => {
       expect(String(sent(fetchMock, "DELETE")[0][0])).toBe("/api/companies/c1/members/u2");
     });
 
-    it("says why a change was refused and keeps the list", async () => {
+    it("says why a change was refused and reads the list again", async () => {
+      let members = [ana, bia];
       mockApi((url, init) => {
         if (url === "/api/auth/me") return { status: 200, body: profile };
-        if (init?.method === "PATCH") return { status: 404, body: { error: "member not found" } };
-        return { status: 200, body: url.endsWith("/members") ? [ana, bia] : [] };
+        if (init?.method === "PATCH") {
+          members = [ana];
+          return { status: 404, body: { error: "member not found" } };
+        }
+        return { status: 200, body: url.endsWith("/members") ? members : [] };
       });
       renderAt("/companies/c1/members");
 
       await userEvent.selectOptions(await screen.findByRole("combobox", { name: "Papel de Bia" }), "viewer");
 
       expect(await screen.findByRole("alert")).toHaveTextContent("member not found");
-      expect(screen.getByText("bia@example.com")).toBeInTheDocument();
+      expect(screen.queryByText("bia@example.com")).not.toBeInTheDocument();
     });
   });
 
