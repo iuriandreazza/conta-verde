@@ -970,6 +970,74 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires DATABASE_URL"]
+    async fn an_edit_refused_after_the_old_contacts_were_deleted_keeps_them() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        // A trigger that refuses one contact name makes the insert fail *after* the update of the
+        // party and the delete of the old lists, inside the transaction of the edit.
+        for statement in [
+            "CREATE OR REPLACE FUNCTION refuse_boom_contact() RETURNS trigger LANGUAGE plpgsql AS \
+             $$ BEGIN IF NEW.name = 'Boom' THEN RAISE EXCEPTION 'boom'; END IF; RETURN NEW; END $$",
+            "DROP TRIGGER IF EXISTS refuse_boom_contact ON party_contacts",
+            "CREATE TRIGGER refuse_boom_contact BEFORE INSERT ON party_contacts \
+             FOR EACH ROW EXECUTE FUNCTION refuse_boom_contact()",
+        ] {
+            sqlx::query(statement).execute(&pool).await.unwrap();
+        }
+        let service = PartyService::new(
+            PostgresPartyRepository::new(pool.clone()),
+            InMemoryCnpjRegistry::default(),
+        );
+        let contact = |name: &str| ContactDraft {
+            name: name.into(),
+            ..ContactDraft::default()
+        };
+        let draft = |name: &str, tags: &[&str], contacts: Vec<ContactDraft>| PartyDraft {
+            name: name.into(),
+            is_customer: true,
+            tags: tags.iter().map(|tag| (*tag).to_owned()).collect(),
+            contacts,
+            ..PartyDraft::default()
+        };
+        let party = service
+            .register(
+                company,
+                &contract::actor(),
+                draft("Padaria", &["vip"], vec![contact("Ana"), contact("Bruno")]),
+            )
+            .await
+            .unwrap();
+
+        let refused = service
+            .update(
+                company,
+                &contract::actor(),
+                party.id(),
+                draft("Padaria Nova", &["novo"], vec![contact("Boom")]),
+            )
+            .await;
+        sqlx::query("DROP TRIGGER refuse_boom_contact ON party_contacts")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(refused.is_err());
+
+        let kept = service
+            .list(company, &PartyQuery::default(), None, None)
+            .await
+            .unwrap()
+            .items;
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].name(), "Padaria");
+        assert_eq!(kept[0].tags().len(), 1);
+        assert_eq!(kept[0].tags()[0].as_str(), "vip");
+        let names: Vec<&str> = kept[0].contacts().iter().map(|c| c.name()).collect();
+        assert_eq!(names, ["Ana", "Bruno"]);
+        assert_eq!(service.history(company, party.id()).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
     async fn the_audit_log_cannot_be_changed_or_deleted() {
         let pool = contract::test_pool().await;
         let company = contract::create_company(&pool).await;

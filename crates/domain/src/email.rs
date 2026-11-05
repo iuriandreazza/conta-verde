@@ -7,8 +7,11 @@ pub struct Email(String);
 impl Email {
     pub fn parse(raw: &str) -> Result<Self, DomainError> {
         let email = raw.trim();
+        // A NUL byte is one Postgres refuses to store, so it must be refused here, as a 422.
         match email.split_once('@') {
-            Some((local, domain)) if !local.is_empty() && domain.contains('.') => {
+            Some((local, domain))
+                if !local.is_empty() && domain.contains('.') && !email.contains('\0') =>
+            {
                 Ok(Self(email.to_lowercase()))
             }
             _ => Err(DomainError::InvalidEmail),
@@ -32,7 +35,7 @@ mod tests {
 
     #[test]
     fn rejects_malformed_addresses() {
-        for raw in ["", "ana", "@example.com", "ana@example"] {
+        for raw in ["", "ana", "@example.com", "ana@example", "a\0@example.com"] {
             assert_eq!(Email::parse(raw), Err(DomainError::InvalidEmail), "{raw}");
         }
     }

@@ -64,6 +64,15 @@ export function PartyForm({
     (party?.contacts ?? []).map((contact) => rowOf(nextKey.current++, contact)),
   );
 
+  // The row just added takes the cursor, so a keyboard user can type the name straight away.
+  const [addedKey, setAddedKey] = useState<number | null>(null);
+
+  function addRow() {
+    const key = nextKey.current++;
+    setAddedKey(key);
+    setRows((current) => [...current, rowOf(key)]);
+  }
+
   function update(key: number, change: Partial<ContactRow>) {
     setRows((current) => current.map((row) => (row.key === key ? { ...row, ...change } : row)));
   }
@@ -232,6 +241,7 @@ export function PartyForm({
               <input
                 autoComplete="off"
                 maxLength={100}
+                autoFocus={row.key === addedKey}
                 aria-label={`Nome do contato ${index + 1}`}
                 value={row.name}
                 onChange={(event) => update(row.key, { name: event.target.value })}
@@ -286,7 +296,7 @@ export function PartyForm({
             className="btn-small"
             icon={PlusIcon}
             disabled={rows.length >= MAX_CONTACTS}
-            onClick={() => setRows((current) => [...current, rowOf(nextKey.current++)])}
+            onClick={addRow}
           >
             Adicionar contato
           </Button>

@@ -399,7 +399,7 @@ export const api = {
     const params = new URLSearchParams();
     if (filters.q) params.set("q", filters.q);
     if (filters.kind) params.set("kind", filters.kind);
-    if (filters.tag) params.set("tag", filters.tag);
+    if (filters.tag.trim()) params.set("tag", filters.tag.trim());
     if (filters.sort !== NO_FILTERS.sort) params.set("sort", filters.sort);
     if (after) params.set("after", after);
     const query = params.size > 0 ? `?${params}` : "";

@@ -155,7 +155,8 @@ export function PartiesPage() {
               placeholder="Por exemplo vip"
               autoComplete="off"
               maxLength={30}
-              onChange={(event) => setFilters({ ...filters, tag: event.target.value })}
+              // No comma: a tag never has one, and the API would answer 400 to it.
+              onChange={(event) => setFilters({ ...filters, tag: event.target.value.replace(/,/g, "") })}
             />
           </label>
           <label>

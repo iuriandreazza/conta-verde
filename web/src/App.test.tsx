@@ -1881,6 +1881,16 @@ describe("changing a party, its roles and its address", () => {
     ]);
   });
 
+  it("puts the cursor in the name of a contact just added", async () => {
+    mockApi((url) => (url === "/api/auth/me" ? { status: 200, body: profile } : page(party("Padaria"))));
+    renderAt("/companies/c1/parties");
+
+    await screen.findByRole("table");
+    await userEvent.click(screen.getByRole("button", { name: "Alterar Padaria" }));
+    await userEvent.click(screen.getByRole("button", { name: "Adicionar contato" }));
+    expect(screen.getByLabelText("Nome do contato 1")).toHaveFocus();
+  });
+
   it("keeps a contact the API refused in the form, with the message", async () => {
     mockApi((url, init) => {
       if (url === "/api/auth/me") return { status: 200, body: profile };
@@ -1918,7 +1928,8 @@ describe("changing a party, its roles and its address", () => {
     );
 
     await userEvent.clear(screen.getByLabelText("Etiqueta"));
-    await userEvent.type(screen.getByLabelText("Etiqueta"), "atacado");
+    // A comma is never part of a tag, so it is not typed into the filter.
+    await userEvent.type(screen.getByLabelText("Etiqueta"), "ata,cado");
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith("/api/companies/c1/parties?tag=atacado", expect.anything()),
     );
