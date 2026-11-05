@@ -31,6 +31,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0013](0013-accountant-access-and-exports.md) | Accountant access and exports | proposed | 6 |
 | [0014](0014-notifications.md) | Notifications behind ports | proposed | 4 |
 | [0015](0015-public-api-and-webhooks.md) | Public API and webhooks | proposed | 8 |
+| [0016](0016-ui-motion-and-icons.md) | Motion for animation, vendored Lucide Animated icons | accepted | 1 |
 
 ## Template
 

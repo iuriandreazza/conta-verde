@@ -33,7 +33,7 @@ Registers:
 - [ ] Categories as a tree with DRE group mapping; cost centers ([ADR 0012](adr/0012-managerial-accounting-model.md))
 - [ ] Bank accounts (checking, savings, cash, card), payment methods, payment terms
 - [ ] CSV import for parties and products
-- [ ] Web app skeleton: login, company switcher, register screens ([ADR 0005](adr/0005-spa-frontend.md))
+- [x] Web app skeleton: login, company switcher, register screens ([ADR 0005](adr/0005-spa-frontend.md)) — sign in, sign up, company picker, and the parties list and form, with the AGPL "Source code" footer link
 
 Exit criteria: a new user signs up, creates a company, invites a colleague and fills every
 register from the browser; no endpoint accepts a `company_id` the caller is not a member of.

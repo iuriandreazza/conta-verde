@@ -1,0 +1,391 @@
+:root {
+  --green: #1f7a4d;
+  --green-dark: #17603c;
+  --green-soft: #e6f4ec;
+  --ink: #1d2a24;
+  --muted: #5d6b64;
+  --line: #d9e2dc;
+  --surface: #ffffff;
+  --page: #f3f7f4;
+  --danger: #b3261e;
+  --danger-soft: #fdecea;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--ink);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--page);
+}
+
+.shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+main {
+  flex: 1;
+  width: 100%;
+  max-width: 60rem;
+  margin: 0 auto;
+  padding: 1.5rem 1rem;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 1rem;
+  background: linear-gradient(90deg, var(--green-dark), var(--green));
+  color: #fff;
+  box-shadow: 0 1px 6px rgb(23 96 60 / 0.25);
+}
+
+.brand {
+  display: inline-flex;
+  text-decoration: none;
+  border-radius: 0.4rem;
+}
+
+.logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.wordmark {
+  font-weight: 700;
+  font-size: 1.1rem;
+  letter-spacing: -0.01em;
+  color: #fff;
+}
+
+.wordmark-accent {
+  color: #b8e8cf;
+}
+
+.topbar-user {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.avatar {
+  display: inline-grid;
+  place-items: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  border-radius: 50%;
+  background: #ffffff26;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.user-name {
+  max-width: 10rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1rem;
+  box-shadow: 0 1px 2px rgb(29 42 36 / 0.04);
+}
+
+.narrow {
+  max-width: 24rem;
+  margin: 2rem auto;
+}
+
+.narrow-wide {
+  max-width: 32rem;
+  margin: 1rem auto;
+}
+
+.auth-logo {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 0.25rem;
+}
+
+.auth-logo + h1 {
+  text-align: center;
+  margin-top: 0.5rem;
+}
+
+form {
+  display: grid;
+  gap: 0.75rem;
+}
+
+label,
+.field {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+label.inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-right: 1rem;
+}
+
+input:not([type="checkbox"]) {
+  width: 100%;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+  font: inherit;
+  color: var(--ink);
+  background: #fff;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+input:not([type="checkbox"]):focus {
+  outline: none;
+  border-color: var(--green);
+  box-shadow: 0 0 0 3px rgb(31 122 77 / 0.18);
+}
+
+.field-with-action {
+  position: relative;
+  display: block;
+}
+
+.field-with-action input {
+  padding-right: 2.6rem;
+}
+
+.field-action {
+  position: absolute;
+  top: 50%;
+  right: 0.3rem;
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  transform: translateY(-50%);
+  border: 0;
+  border-radius: 0.35rem;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.field-action:hover {
+  background: var(--green-soft);
+  color: var(--green-dark);
+}
+
+fieldset {
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  padding: 0.55rem 1rem;
+  border: 1px solid transparent;
+  border-radius: 0.4rem;
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    box-shadow 0.15s ease,
+    opacity 0.15s ease;
+}
+
+.btn-primary {
+  background: var(--green);
+  color: #fff;
+  box-shadow: 0 1px 2px rgb(23 96 60 / 0.35);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--green-dark);
+  box-shadow: 0 3px 10px rgb(23 96 60 / 0.3);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--green-dark);
+  border-color: var(--line);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: var(--green-soft);
+}
+
+.topbar .btn-ghost {
+  color: #fff;
+  border-color: #ffffff80;
+}
+
+.topbar .btn-ghost:hover:not(:disabled) {
+  background: #ffffff1f;
+}
+
+.btn:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+
+:focus-visible {
+  outline: 2px solid var(--green-dark);
+  outline-offset: 2px;
+}
+
+.topbar :focus-visible {
+  outline-color: #fff;
+}
+
+.alert {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.5rem 0.7rem;
+  border-radius: 0.4rem;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 0.9rem;
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: var(--muted);
+}
+
+.empty {
+  display: grid;
+  justify-items: center;
+  gap: 0.15rem;
+  padding: 1.5rem 0;
+  color: var(--green);
+}
+
+.empty p {
+  margin: 0;
+  color: var(--ink);
+}
+
+.empty .muted,
+.muted {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.plain-list {
+  list-style: none;
+  padding: 0;
+}
+
+.company-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.company-card {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 500;
+  text-decoration: none;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.company-card:hover {
+  border-color: var(--green);
+  box-shadow: 0 4px 14px rgb(31 122 77 / 0.15);
+}
+
+.company-card svg {
+  color: var(--green);
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 0.75rem;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.footer {
+  padding: 1rem;
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+/* The vendored icons wrap their SVG in a block <div>; keep it inline next to text. */
+.btn > div,
+.alert > div {
+  display: inline-flex;
+}
+
+@media (max-width: 30rem) {
+  .user-name {
+    display: none;
+  }
+
+  main {
+    padding: 1rem 0.75rem;
+  }
+
+  th,
+  td {
+    padding: 0.4rem 0.25rem;
+    font-size: 0.9rem;
+  }
+}
+
+/* Motion is decoration: honor the user's system setting for everything CSS drives. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}

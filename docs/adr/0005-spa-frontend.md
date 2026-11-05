@@ -48,6 +48,19 @@ PostgreSQL is a complete deployment.
 - UI copy is in Portuguese for the end user; code, identifiers and docs stay in English.
 - Visual identity is ours: no screenshots, icons or copy from the reference product.
 
+## Implementation notes
+
+First Phase 1 slice (`feat/web-base`). The decision above stays the target; the slice is deliberately smaller:
+
+- Plain `fetch`, React state and React Router. TanStack Query, the design system and the generated OpenAPI client are not
+  adopted yet; `web/src/api.ts` mirrors the Rust DTOs by hand until the API has an OpenAPI document.
+- The browser only calls `/api/*` on its own origin. A proxy strips the prefix and forwards to the API: the Vite dev server in
+  development (`VITE_API_TARGET`), a reverse proxy in production. The session cookie stays same-origin, so the API needs no CORS.
+  Serving the built SPA from the API is not done yet.
+- The footer link comes from `VITE_SOURCE_URL` at build time, so a fork running modified code points at its own source.
+- UI copy is in Portuguese. Error messages that come from the API are shown as the API sends them, in English, until the API
+  returns error codes the SPA can translate.
+
 ## Revisit when
 
 The SPA needs server-side rendering for public pages (payment page, quote approval link).

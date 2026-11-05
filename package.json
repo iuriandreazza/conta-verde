@@ -1,11 +1,12 @@
 {
   "name": "conta-verde",
   "private": true,
-  "description": "Tooling for the conta-verde repository (git hooks). The application itself is Rust.",
+  "description": "Tooling for the conta-verde repository (git hooks). The application is Rust (crates/) plus a React web app (web/).",
   "license": "AGPL-3.0-or-later",
+  "packageManager": "pnpm@11.24.0",
   "scripts": {
     "prepare": "husky",
-    "check": "cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace"
+    "check": "cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && pnpm --filter conta-verde-web typecheck && pnpm --filter conta-verde-web test"
   },
   "devDependencies": {
     "husky": "^9.1.7"

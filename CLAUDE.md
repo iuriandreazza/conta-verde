@@ -1,6 +1,6 @@
 # conta-verde
 
-Open-source ERP for small businesses (inspired by cloud ERPs such as Conta Azul), written in Rust.
+Open-source ERP for small businesses (inspired by cloud ERPs such as Conta Azul): a Rust API (`crates/`) and a React SPA (`web/`).
 License: **AGPL-3.0-or-later** (ADR 0001). Never use the Conta Azul name, logo or screenshots in code, docs or UI.
 
 Read `docs/macro-plan.md` for scope (the reference module map and release plan), `docs/roadmap.md` for
@@ -11,15 +11,27 @@ accepting the `proposed` ADRs it depends on.
 
 ```bash
 pnpm install                 # once: installs husky and enables the pre-commit hook
-pnpm check                   # fmt --check, clippy -D warnings, tests (what the hook runs)
+pnpm check                   # Rust fmt/clippy/tests plus web typecheck/tests (what the hook runs)
 docker compose up -d db      # PostgreSQL for local runs and ignored tests
 export $(cat .env.example | xargs)
 cargo test --workspace -- --ignored   # Postgres integration tests (need DATABASE_URL)
 cargo run -p conta-verde-api
+pnpm --filter conta-verde-web dev     # web app on http://localhost:5173, proxies /api to the API
 ```
 
-CI (`.github/workflows/ci.yml`) runs the same checks plus the ignored tests against a Postgres service.
+CI (`.github/workflows/ci.yml`) runs the same checks plus the ignored tests against a Postgres service, and builds the web app.
 The pre-commit hook does not run ignored tests, so run them yourself when touching `infrastructure`.
+
+## Web app (ADR 0005)
+
+- `web/` is Vite + React + TypeScript; it talks only to `/api/*`, which the Vite dev server (and a reverse proxy in production) forwards to the API with the prefix removed. Same origin means the session cookie works and no CORS is needed. Never add permissive CORS with credentials.
+- `VITE_API_TARGET` points the dev proxy at the API (default `http://127.0.0.1:3000`). `VITE_SOURCE_URL` sets the footer's "Source code" link at build time; forks running modified code must point it at their own source (AGPL section 13).
+- Keep the footer link and the API contract in `web/src/api.ts` in sync with the Rust DTOs by hand; there is no generated client yet.
+- Tests are Vitest + Testing Library with `fetch` stubbed; prefer asserting what the user sees.
+- Animation is Motion (`motion/react`) and icons are vendored Lucide Animated components in `web/src/components/icons/` (ADR 0016). Do not edit those by hand beyond the documented tweaks; to add one, download its registry JSON from `https://lucide-animated.com/r/<name>.json`, check it (only `motion/react`, `react` and `cn` imports, no network or DOM access) and replace the `@/lib/utils` import with `../../lib/utils`.
+- Use `components/Button` for buttons (it plays its icon on hover/focus and shows a spinner while `pending`). Pages animate on enter only, and `Layout` remounts `<main>` on every path change, so page state never leaks across routes.
+- The logo is `web/public/favicon.svg`, mirrored by `LogoMark` in `web/src/components/Logo.tsx`; change both together. The PNG and ICO favicons are rendered from the SVG.
+- A browser pane or tab that is not painting never advances `requestAnimationFrame`, so animations look frozen at their first frame; that is the environment, not the app. Use a visible tab when checking motion.
 
 ## Architecture (ADR 0002)
 
