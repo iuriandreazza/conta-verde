@@ -2,10 +2,12 @@ import { Route, Routes } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { RequireAuth } from "./components/RequireAuth";
 import { AuthPage } from "./pages/AuthPage";
+import { BankAccountsPage } from "./pages/BankAccountsPage";
 import { CategoriesPage } from "./pages/CategoriesPage";
 import { CompaniesPage } from "./pages/CompaniesPage";
 import { CostCentersPage } from "./pages/CostCentersPage";
 import { PartiesPage } from "./pages/PartiesPage";
+import { PaymentMethodsPage } from "./pages/PaymentMethodsPage";
 import { ProductsPage } from "./pages/ProductsPage";
 
 export function App() {
@@ -20,6 +22,8 @@ export function App() {
           <Route path="/companies/:companyId/products" element={<ProductsPage />} />
           <Route path="/companies/:companyId/categories" element={<CategoriesPage />} />
           <Route path="/companies/:companyId/cost-centers" element={<CostCentersPage />} />
+          <Route path="/companies/:companyId/bank-accounts" element={<BankAccountsPage />} />
+          <Route path="/companies/:companyId/payment-methods" element={<PaymentMethodsPage />} />
         </Route>
       </Route>
     </Routes>

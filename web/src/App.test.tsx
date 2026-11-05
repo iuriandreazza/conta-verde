@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, vi } from "vitest";
 import { App } from "./App";
-import type { Category, CostCenter, DocumentCheck, HistoryEntry, Party, Product, Profile } from "./api";
+import type { BankAccount, Category, CostCenter, PaymentMethod, DocumentCheck, HistoryEntry, Party, Product, Profile } from "./api";
 import { AuthProvider } from "./auth";
 import { SOURCE_URL } from "./components/Footer";
 
@@ -1223,5 +1223,200 @@ describe("categories", () => {
     await userEvent.click(screen.getByRole("checkbox", { name: "Ativa" }));
     await userEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("deactivate the subcategories");
+  });
+});
+
+describe("bank accounts", () => {
+  function account(name: string, overrides: Partial<BankAccount> = {}): BankAccount {
+    return {
+      id: `acc-${name}`,
+      company_id: "c1",
+      kind: "checking",
+      name,
+      bank_code: null,
+      branch: null,
+      number: null,
+      active: true,
+      ...overrides,
+    };
+  }
+
+  const page = (...items: BankAccount[]) => ({ status: 200, body: { items, next_cursor: null } });
+  const bodyOf = (fetchMock: ReturnType<typeof mockApi>, method: string) => {
+    const call = fetchMock.mock.calls.find(([, init]) => init?.method === method);
+    return JSON.parse(String(call?.[1]?.body));
+  };
+
+  it("registers an account with the bank written as typed, for the API to put in one form", async () => {
+    const fetchMock = mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "POST") return { status: 201, body: account("Conta da loja") };
+      return page();
+    });
+    renderAt("/companies/c1/bank-accounts");
+
+    await userEvent.type(await screen.findByLabelText("Nome"), "Conta da loja");
+    await userEvent.type(screen.getByLabelText("Código do banco"), "341");
+    await userEvent.type(screen.getByLabelText("Agência"), "12.34");
+    await userEvent.type(screen.getByLabelText("Conta"), "56789-0");
+    await userEvent.click(screen.getByRole("button", { name: "Adicionar" }));
+
+    expect(await screen.findByText("Conta da loja cadastrada.")).toBeInTheDocument();
+    expect(bodyOf(fetchMock, "POST")).toEqual({
+      kind: "checking",
+      name: "Conta da loja",
+      bank_code: "341",
+      branch: "12.34",
+      number: "56789-0",
+      active: true,
+    });
+  });
+
+  it("takes no bank for cash, and sends none", async () => {
+    const fetchMock = mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "POST") return { status: 201, body: account("Caixa", { kind: "cash" }) };
+      return page();
+    });
+    renderAt("/companies/c1/bank-accounts");
+
+    await userEvent.selectOptions(await screen.findByLabelText("Tipo"), "cash");
+    expect(screen.getByLabelText("Código do banco")).toBeDisabled();
+    expect(screen.getByLabelText("Agência")).toBeDisabled();
+    expect(screen.getByLabelText("Conta")).toBeDisabled();
+    await userEvent.type(screen.getByLabelText("Nome"), "Caixa");
+    await userEvent.click(screen.getByRole("button", { name: "Adicionar" }));
+
+    expect(await screen.findByText("Caixa cadastrada.")).toBeInTheDocument();
+    const sent = bodyOf(fetchMock, "POST");
+    expect(sent.kind).toBe("cash");
+    for (const field of ["bank_code", "branch", "number"]) {
+      expect(sent).not.toHaveProperty(field);
+    }
+  });
+
+  it("changes an account with its kind fixed, and shows what the API refused", async () => {
+    const main = account("Conta principal", { bank_code: "341", branch: "1234", number: "56789X" });
+    let answer = 409;
+    const fetchMock = mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "PUT") {
+        return answer === 200
+          ? { status: 200, body: { ...main, number: "99999" } }
+          : { status: 409, body: { error: "a bank account with this bank, branch and number already exists" } };
+      }
+      return page(main);
+    });
+    renderAt("/companies/c1/bank-accounts");
+
+    await screen.findByRole("table");
+    await userEvent.click(screen.getByRole("button", { name: "Alterar Conta principal" }));
+    expect(screen.getByLabelText("Tipo")).toBeDisabled();
+    expect(screen.getByLabelText("Agência")).toHaveValue("1234");
+    await userEvent.clear(screen.getByLabelText("Conta"));
+    await userEvent.type(screen.getByLabelText("Conta"), "99999");
+    await userEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("already exists");
+
+    answer = 200;
+    await userEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
+    expect(await screen.findByText("Conta principal atualizada.")).toBeInTheDocument();
+    expect(bodyOf(fetchMock, "PUT")).toEqual({
+      kind: "checking",
+      name: "Conta principal",
+      bank_code: "341",
+      branch: "1234",
+      number: "99999",
+      active: true,
+    });
+    expect(screen.getByText("99999")).toBeInTheDocument();
+  });
+
+  it("filters by kind, situation and text, and shows the history with the kind in words", async () => {
+    const savings = account("Reserva", { kind: "savings" });
+    const entry: HistoryEntry = {
+      at: Date.UTC(2026, 10, 5, 12, 0),
+      actor: { kind: "user", id: "u1", name: "Ana" },
+      action: "created",
+      changes: [{ field: "kind", from: null, to: "savings" }],
+    };
+    const fetchMock = mockApi((url) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (url.endsWith("/history")) return { status: 200, body: [entry] };
+      return page(savings);
+    });
+    renderAt("/companies/c1/bank-accounts");
+    await screen.findByRole("table");
+
+    await userEvent.selectOptions(screen.getByLabelText("Mostrar"), "savings");
+    await userEvent.selectOptions(screen.getByLabelText("Situação"), "true");
+    await userEvent.type(screen.getByRole("searchbox", { name: "Buscar" }), "res");
+    await waitFor(() => {
+      const urls = fetchMock.mock.calls.map(([url]) => String(url));
+      expect(urls).toContain("/api/companies/c1/bank-accounts?q=res&kind=savings&active=true");
+    });
+
+    await userEvent.click(await screen.findByRole("button", { name: "Histórico de Reserva" }));
+    const region = await screen.findByRole("region", { name: "Histórico de Reserva" });
+    expect(await within(region).findByText(/Poupança/)).toBeInTheDocument();
+  });
+});
+
+describe("payment methods", () => {
+  function method(name: string, overrides: Partial<PaymentMethod> = {}): PaymentMethod {
+    return { id: `pm-${name}`, company_id: "c1", kind: "pix", name, active: true, ...overrides };
+  }
+
+  const page = (...items: PaymentMethod[]) => ({ status: 200, body: { items, next_cursor: null } });
+  const bodyOf = (fetchMock: ReturnType<typeof mockApi>, httpMethod: string) => {
+    const call = fetchMock.mock.calls.find(([, init]) => init?.method === httpMethod);
+    return JSON.parse(String(call?.[1]?.body));
+  };
+
+  it("registers one with its kind, changes the kind in place and filters the list", async () => {
+    const visa = method("Visa", { kind: "credit_card" });
+    const fetchMock = mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "POST") return { status: 201, body: method("Boleto", { kind: "bank_slip" }) };
+      if (init?.method === "PUT") return { status: 200, body: { ...visa, kind: "debit_card", name: "Visa débito" } };
+      return page(visa);
+    });
+    renderAt("/companies/c1/payment-methods");
+    await screen.findByRole("table");
+
+    await userEvent.selectOptions(screen.getByLabelText("Tipo"), "bank_slip");
+    await userEvent.type(screen.getByLabelText("Nome"), "Boleto");
+    await userEvent.click(screen.getByRole("button", { name: "Adicionar" }));
+    expect(await screen.findByText("Boleto cadastrada.")).toBeInTheDocument();
+    expect(bodyOf(fetchMock, "POST")).toEqual({ kind: "bank_slip", name: "Boleto", active: true });
+
+    await userEvent.click(screen.getByRole("button", { name: "Alterar Visa" }));
+    expect(screen.getByLabelText("Tipo")).toHaveValue("credit_card");
+    await userEvent.selectOptions(screen.getByLabelText("Tipo"), "debit_card");
+    await userEvent.clear(screen.getByLabelText("Nome"));
+    await userEvent.type(screen.getByLabelText("Nome"), "Visa débito");
+    await userEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
+    expect(await screen.findByText("Visa débito atualizada.")).toBeInTheDocument();
+    expect(bodyOf(fetchMock, "PUT")).toEqual({ kind: "debit_card", name: "Visa débito", active: true });
+
+    await userEvent.selectOptions(screen.getByLabelText("Mostrar"), "pix");
+    await waitFor(() => {
+      const urls = fetchMock.mock.calls.map(([url]) => String(url));
+      expect(urls).toContain("/api/companies/c1/payment-methods?kind=pix");
+    });
+  });
+
+  it("shows what the API refused, next to the form", async () => {
+    mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "POST") return { status: 409, body: { error: "this name is already in use" } };
+      return page(method("Pix"));
+    });
+    renderAt("/companies/c1/payment-methods");
+    await screen.findByRole("table");
+
+    await userEvent.type(screen.getByLabelText("Nome"), "pix");
+    await userEvent.click(screen.getByRole("button", { name: "Adicionar" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("already in use");
   });
 });

@@ -8,6 +8,8 @@ export function CompanyNav({ companyId }: { companyId: string }) {
       <NavLink to={`/companies/${companyId}/products`}>Produtos e serviços</NavLink>
       <NavLink to={`/companies/${companyId}/categories`}>Categorias</NavLink>
       <NavLink to={`/companies/${companyId}/cost-centers`}>Centros de custo</NavLink>
+      <NavLink to={`/companies/${companyId}/bank-accounts`}>Contas bancárias</NavLink>
+      <NavLink to={`/companies/${companyId}/payment-methods`}>Formas de pagamento</NavLink>
     </nav>
   );
 }

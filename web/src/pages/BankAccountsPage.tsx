@@ -1,0 +1,372 @@
+import { Fragment, useState, type FormEvent } from "react";
+import { useParams } from "react-router-dom";
+import {
+  NO_BANK_ACCOUNT_FILTERS,
+  api,
+  errorMessage,
+  type BankAccount,
+  type BankAccountFilters,
+  type BankAccountInput,
+  type BankAccountKind,
+} from "../api";
+import { BankAccountHistory } from "../components/BankAccountHistory";
+import { Button } from "../components/Button";
+import { CompanyNav } from "../components/CompanyNav";
+import { ListRow } from "../components/ListRow";
+import { Notice } from "../components/Notice";
+import { Spinner } from "../components/Spinner";
+import { BriefcaseBusinessIcon } from "../components/icons/briefcase-business";
+import { CheckIcon } from "../components/icons/check";
+import { ChevronDownIcon } from "../components/icons/chevron-down";
+import { HistoryIcon } from "../components/icons/history";
+import { PlusIcon } from "../components/icons/plus";
+import { BANK_ACCOUNT_KINDS, bankAccountKindLabel } from "../lib/kinds";
+import { usePagedList } from "../lib/usePagedList";
+
+// Layout remounts the page whenever the path changes, so `companyId` never changes within one
+// instance: the old list is dropped and a reply still in flight for another company lands on an
+// unmounted component.
+export function BankAccountsPage() {
+  const { companyId = "" } = useParams();
+  const [filters, setFilters] = useState<BankAccountFilters>(NO_BANK_ACCOUNT_FILTERS);
+  const [editing, setEditing] = useState<BankAccount | null>(null);
+  // The kind chosen in the form: cash has no bank, so those fields go away with it.
+  const [kind, setKind] = useState<BankAccountKind>("checking");
+  // Bumped after a save so the form starts over, empty or for another account.
+  const [formVersion, setFormVersion] = useState(0);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+  const [highlightedId, setHighlightedId] = useState<string | null>(null);
+  const [historyOpenFor, setHistoryOpenFor] = useState<string | null>(null);
+
+  const {
+    items: accounts,
+    setItems,
+    nextCursor,
+    loading,
+    loadingMore,
+    error,
+    applied,
+    reload,
+    loadMore,
+  } = usePagedList<BankAccount, BankAccountFilters>(
+    (applied, after) => api.listBankAccounts(companyId, applied, after),
+    filters,
+  );
+  const isFiltered = applied.q !== "" || applied.kind !== "" || applied.active !== "";
+  const hasBank = (editing?.kind ?? kind) !== "cash";
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (saving) {
+      return;
+    }
+    const form = new FormData(event.currentTarget);
+    const text = (name: string) => String(form.get(name) ?? "").trim() || undefined;
+    const input: BankAccountInput = {
+      kind: editing?.kind ?? kind,
+      name: String(form.get("name") ?? ""),
+      // A disabled field is not in the form data, so cash sends none of the three.
+      bank_code: text("bank_code"),
+      branch: text("branch"),
+      number: text("number"),
+      active: form.get("active") === "on",
+    };
+    setSaving(true);
+    setFormError(null);
+    setSaved(null);
+    try {
+      if (editing === null) {
+        const created = await api.createBankAccount(companyId, input);
+        setHighlightedId(created.id);
+        setSaved(`${created.name} cadastrada.`);
+        setFormVersion((version) => version + 1);
+        await reload();
+      } else {
+        const updated = await api.updateBankAccount(companyId, editing.id, input);
+        // In place: the list keeps its page and its filters.
+        setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+        setEditing(null);
+        setSaved(`${updated.name} atualizada.`);
+        setFormVersion((version) => version + 1);
+      }
+    } catch (failure) {
+      setFormError(errorMessage(failure));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <>
+      <h1>Contas bancárias</h1>
+      <CompanyNav companyId={companyId} />
+
+      <section className="card">
+        <h2>{editing === null ? "Nova conta" : `Alterar ${editing.name}`}</h2>
+        <form
+          // A new key starts the form over for another account, or an empty one after a save.
+          key={`${editing?.id ?? "new"}-${formVersion}`}
+          onSubmit={(event) => void handleSubmit(event)}
+        >
+          <label>
+            Tipo
+            {/* What an account is asked for depends on its kind, so it is chosen once. */}
+            <select
+              value={editing?.kind ?? kind}
+              disabled={editing !== null}
+              onChange={(event) => setKind(event.target.value as BankAccountKind)}
+            >
+              {BANK_ACCOUNT_KINDS.map((option) => (
+                <option key={option.key} value={option.key}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Nome
+            <input
+              name="name"
+              required
+              maxLength={200}
+              autoComplete="off"
+              // After a save or when editing, the person is in the form: put the cursor back in it.
+              autoFocus={editing !== null || formVersion > 0}
+              defaultValue={editing?.name}
+            />
+          </label>
+          <label>
+            Código do banco
+            <input
+              name="bank_code"
+              inputMode="numeric"
+              autoComplete="off"
+              maxLength={8}
+              placeholder="3 dígitos (ou 8, o ISPB)"
+              disabled={!hasBank}
+              defaultValue={editing?.bank_code ?? ""}
+            />
+          </label>
+          <label>
+            Agência
+            <input
+              name="branch"
+              autoComplete="off"
+              spellCheck={false}
+              maxLength={14}
+              disabled={!hasBank}
+              defaultValue={editing?.branch ?? ""}
+            />
+          </label>
+          <label>
+            Conta
+            <input
+              name="number"
+              autoComplete="off"
+              spellCheck={false}
+              maxLength={24}
+              placeholder="com o dígito"
+              disabled={!hasBank}
+              defaultValue={editing?.number ?? ""}
+            />
+          </label>
+          <label className="inline">
+            <input name="active" type="checkbox" defaultChecked={editing?.active ?? true} /> Ativa
+          </label>
+          <Notice message={formError} />
+          <div className="form-actions">
+            <Button type="submit" icon={editing === null ? PlusIcon : CheckIcon} pending={saving}>
+              {editing === null ? "Adicionar" : "Salvar alterações"}
+            </Button>
+            {editing !== null && (
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => {
+                  setEditing(null);
+                  setFormError(null);
+                }}
+              >
+                Cancelar
+              </Button>
+            )}
+          </div>
+        </form>
+        <Notice message={saved} tone="success" />
+      </section>
+
+      <section className="card">
+        <h2>Cadastradas</h2>
+        <div className="filters" role="search">
+          <label>
+            Buscar
+            <input
+              type="search"
+              value={filters.q}
+              placeholder="Nome ou número da conta"
+              autoComplete="off"
+              maxLength={100}
+              onChange={(event) => setFilters({ ...filters, q: event.target.value })}
+            />
+          </label>
+          <label>
+            Mostrar
+            <select
+              value={filters.kind}
+              onChange={(event) =>
+                setFilters({ ...filters, kind: event.target.value as BankAccountFilters["kind"] })
+              }
+            >
+              <option value="">Todas</option>
+              {BANK_ACCOUNT_KINDS.map((option) => (
+                <option key={option.key} value={option.key}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Situação
+            <select
+              value={filters.active}
+              onChange={(event) =>
+                setFilters({ ...filters, active: event.target.value as BankAccountFilters["active"] })
+              }
+            >
+              <option value="">Ativas e inativas</option>
+              <option value="true">Só ativas</option>
+              <option value="false">Só inativas</option>
+            </select>
+          </label>
+          <label>
+            Ordem
+            <select
+              value={filters.sort}
+              onChange={(event) =>
+                setFilters({ ...filters, sort: event.target.value as BankAccountFilters["sort"] })
+              }
+            >
+              <option value="name">Nome (A–Z)</option>
+              <option value="-name">Nome (Z–A)</option>
+            </select>
+          </label>
+        </div>
+        <Notice message={error} />
+        {loading ? (
+          <p role="status" className="status">
+            <Spinner /> Carregando…
+          </p>
+        ) : accounts.length === 0 && error ? (
+          <Button type="button" variant="ghost" onClick={() => void reload()}>
+            Tentar de novo
+          </Button>
+        ) : accounts.length === 0 && isFiltered ? (
+          <div className="empty">
+            <BriefcaseBusinessIcon size={40} aria-hidden />
+            <p role="status">Nenhum cadastro encontrado.</p>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setFilters({ ...NO_BANK_ACCOUNT_FILTERS, sort: filters.sort })}
+            >
+              Limpar filtros
+            </Button>
+          </div>
+        ) : accounts.length === 0 ? (
+          <div className="empty">
+            <BriefcaseBusinessIcon size={40} aria-hidden />
+            <p>Nenhuma conta ainda.</p>
+            <p className="muted">Uma conta corrente, a poupança, o caixa da loja ou um cartão.</p>
+          </div>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Nome</th>
+                  <th>Tipo</th>
+                  <th>Banco</th>
+                  <th>Agência</th>
+                  <th>Conta</th>
+                  <th>Situação</th>
+                  <th>
+                    <span className="visually-hidden">Ações</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {accounts.map((account, index) => (
+                  <Fragment key={account.id}>
+                    <ListRow index={index} highlighted={account.id === highlightedId}>
+                      <td>{account.name}</td>
+                      <td>{bankAccountKindLabel(account.kind)}</td>
+                      <td>{account.bank_code ?? "—"}</td>
+                      <td>{account.branch ?? "—"}</td>
+                      <td>{account.number ?? "—"}</td>
+                      <td>{account.active ? "Ativa" : "Inativa"}</td>
+                      <td>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="btn-small"
+                          aria-label={`Alterar ${account.name}`}
+                          disabled={saving}
+                          onClick={() => {
+                            setEditing(account);
+                            setFormError(null);
+                            setSaved(null);
+                          }}
+                        >
+                          Alterar
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="btn-small"
+                          aria-label={`Histórico de ${account.name}`}
+                          aria-expanded={historyOpenFor === account.id}
+                          aria-controls={`history-${account.id}`}
+                          icon={HistoryIcon}
+                          onClick={() =>
+                            setHistoryOpenFor(historyOpenFor === account.id ? null : account.id)
+                          }
+                        >
+                          Histórico
+                        </Button>
+                      </td>
+                    </ListRow>
+                    {historyOpenFor === account.id && (
+                      <tr id={`history-${account.id}`}>
+                        <td colSpan={7} role="region" aria-label={`Histórico de ${account.name}`}>
+                          <BankAccountHistory
+                            // Remounted when the account changes, so an open history follows an edit.
+                            key={JSON.stringify(account)}
+                            companyId={companyId}
+                            accountId={account.id}
+                          />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {nextCursor !== null && (
+          <Button
+            type="button"
+            variant="ghost"
+            icon={ChevronDownIcon}
+            pending={loadingMore}
+            onClick={() => void loadMore()}
+          >
+            Carregar mais
+          </Button>
+        )}
+      </section>
+    </>
+  );
+}
