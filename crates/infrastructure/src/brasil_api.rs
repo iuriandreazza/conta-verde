@@ -66,9 +66,18 @@ impl CnpjRegistry for BrasilApiCnpjRegistry {
                 let body: CnpjResponse = response.json().await.map_err(|error| {
                     unavailable(cnpj, format_args!("unexpected response body: {error}"))
                 })?;
+                let legal_name = bounded(&body.razao_social, MAX_LEGAL_NAME_CHARS);
+                let situation = bounded(&body.descricao_situacao_cadastral, MAX_SITUATION_CHARS);
+                // A 200 without a name or a situation is not an answer we can show or rely on.
+                if legal_name.is_empty() || situation.is_empty() {
+                    return Err(unavailable(
+                        cnpj,
+                        format_args!("answered without a name or situation"),
+                    ));
+                }
                 Ok(RegistryEntry {
-                    legal_name: bounded(&body.razao_social, MAX_LEGAL_NAME_CHARS),
-                    situation: bounded(&body.descricao_situacao_cadastral, MAX_SITUATION_CHARS),
+                    legal_name,
+                    situation,
                 })
             }
             StatusCode::NOT_FOUND => Err(CnpjLookupError::NotFound),
@@ -79,8 +88,17 @@ impl CnpjRegistry for BrasilApiCnpjRegistry {
     }
 }
 
+/// Control characters and the invisible direction marks and overrides could scramble how the text
+/// reads next to other text (React escapes HTML, but not these), so they are dropped.
 fn bounded(text: &str, max_chars: usize) -> String {
-    text.trim().chars().take(max_chars).collect()
+    let visible: String = text
+        .chars()
+        .filter(|c| {
+            !c.is_control()
+                && !matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+        })
+        .collect();
+    visible.trim().chars().take(max_chars).collect()
 }
 
 fn unavailable(cnpj: &str, cause: std::fmt::Arguments<'_>) -> CnpjLookupError {
@@ -110,6 +128,8 @@ mod tests {
     const UNREADABLE_BODY: &str = "12.345.678/000A-08";
     const SERVER_ERROR: &str = "AA345678/0003-86";
     const HUGE_TEXT: &str = "AA345678/000A-29";
+    const EMPTY_NAME: &str = "11.222.333/000A-96";
+    const SCRAMBLED_TEXT: &str = "12.345.678/000B-80";
 
     async fn serve(router: Router) -> SocketAddr {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -156,6 +176,9 @@ mod tests {
         match cnpj {
             c if c == stored(FOUND) => found("PADARIA CENTRAL LTDA".into()),
             c if c == stored(HUGE_TEXT) => found("X".repeat(5_000)),
+            c if c == stored(EMPTY_NAME) => found("  \u{200B} ".into()),
+            // A right-to-left override and a bell in the middle of the name.
+            c if c == stored(SCRAMBLED_TEXT) => found("PADARIA\u{202E}\u{7} LTDA".into()),
             c if c == stored(MISSING) => (
                 StatusCode::NOT_FOUND,
                 axum::Json(json!({"type": "not_found"})),
@@ -207,7 +230,13 @@ mod tests {
             lookup(&registry, MISSING).await,
             Err(CnpjLookupError::NotFound)
         );
-        for unreliable in [BAD_REQUEST, RATE_LIMITED, SERVER_ERROR, UNREADABLE_BODY] {
+        for unreliable in [
+            BAD_REQUEST,
+            RATE_LIMITED,
+            SERVER_ERROR,
+            UNREADABLE_BODY,
+            EMPTY_NAME,
+        ] {
             assert_eq!(
                 lookup(&registry, unreliable).await,
                 Err(CnpjLookupError::Unavailable),
@@ -223,6 +252,15 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(entry.legal_name.chars().count(), MAX_LEGAL_NAME_CHARS);
+    }
+
+    #[tokio::test]
+    async fn drops_control_and_direction_characters_from_the_text() {
+        let addr = serve(fake_service()).await;
+        let entry = lookup(&registry_at(addr, Duration::from_secs(2)), SCRAMBLED_TEXT)
+            .await
+            .unwrap();
+        assert_eq!(entry.legal_name, "PADARIA LTDA");
     }
 
     #[tokio::test]

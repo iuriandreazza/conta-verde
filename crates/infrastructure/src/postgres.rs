@@ -274,6 +274,41 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires DATABASE_URL"]
+    async fn the_database_refuses_a_registry_check_on_anything_but_a_cnpj() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let insert = |document: Option<&'static str>, check: &'static str| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query(
+                    "INSERT INTO parties (id, company_id, name, document, is_customer, is_supplier, document_check) \
+                     VALUES (gen_random_uuid(), $1, 'Teste', $2, true, false, $3)",
+                )
+                .bind(company.as_uuid())
+                .bind(document)
+                .bind(check)
+                .execute(&pool)
+                .await
+            }
+        };
+
+        // A CPF and a party without a document can only be 'not_applicable'.
+        for check in ["unverified", "not_found"] {
+            assert!(
+                insert(Some("52998224725"), check).await.is_err(),
+                "CPF as {check}"
+            );
+            assert!(insert(None, check).await.is_err(), "no document as {check}");
+        }
+        insert(Some("52998224725"), "not_applicable").await.unwrap();
+        insert(None, "not_applicable").await.unwrap();
+        // A CNPJ may carry any of them, including the status added by the second migration.
+        insert(Some("11222333000181"), "not_found").await.unwrap();
+        insert(Some("12ABC34501DE35"), "unverified").await.unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
     async fn finds_parties_and_replaces_their_document_check() {
         let pool = contract::test_pool().await;
         let company = contract::create_company(&pool).await;
