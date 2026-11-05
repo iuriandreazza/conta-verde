@@ -52,7 +52,8 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
             error @ (RepositoryError::DuplicateDocument
             | RepositoryError::DuplicateEmail
             | RepositoryError::DuplicateSku
-            | RepositoryError::DuplicateName),
+            | RepositoryError::DuplicateName
+            | RepositoryError::DuplicateTransferCategory),
         ) => (StatusCode::CONFLICT, error.to_string()),
         ApplicationError::Auth(error) => {
             let status = match error {
@@ -68,9 +69,16 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
         | ApplicationError::Repository(RepositoryError::NotFound) => {
             (StatusCode::NOT_FOUND, "party not found".to_owned())
         }
-        ApplicationError::ProductNotFound | ApplicationError::CostCenterNotFound => {
-            (StatusCode::NOT_FOUND, error.to_string())
+        ApplicationError::CategoryParentInactive
+        | ApplicationError::CategoryHasActiveChildren
+        | ApplicationError::CategoriesAlreadyExist
+        | ApplicationError::CategoryLimitReached => (StatusCode::CONFLICT, error.to_string()),
+        ApplicationError::ParentCategoryNotFound => {
+            (StatusCode::UNPROCESSABLE_ENTITY, error.to_string())
         }
+        ApplicationError::ProductNotFound
+        | ApplicationError::CostCenterNotFound
+        | ApplicationError::CategoryNotFound => (StatusCode::NOT_FOUND, error.to_string()),
         ApplicationError::LookupDisabled => (StatusCode::CONFLICT, error.to_string()),
         ApplicationError::RecheckTooSoon => (StatusCode::TOO_MANY_REQUESTS, error.to_string()),
         // Internal details can leak: log them, but show clients a generic message.

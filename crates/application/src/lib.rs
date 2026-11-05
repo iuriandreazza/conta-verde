@@ -1,5 +1,7 @@
 mod audit;
 mod auth_service;
+mod category_repository;
+mod category_service;
 mod cnpj_registry;
 mod cost_center_repository;
 mod cost_center_service;
@@ -15,6 +17,8 @@ mod secret_service;
 
 pub use audit::ensure_audit_describes;
 pub use auth_service::{AuthService, Profile, SignedIn};
+pub use category_repository::{CategoryRepository, MAX_CATEGORIES};
+pub use category_service::{CategoryService, NewCategory};
 pub use cnpj_registry::{CnpjLookupError, CnpjRegistry, RegistryEntry};
 pub use cost_center_repository::{CostCenterQuery, CostCenterRepository};
 pub use cost_center_service::{CostCenterPage, CostCenterService};

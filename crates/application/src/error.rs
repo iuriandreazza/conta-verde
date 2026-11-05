@@ -12,6 +12,8 @@ pub enum RepositoryError {
     /// The name is taken by another record of the same kind and place (a cost center of the
     /// company, a category under the same parent), ignoring case.
     DuplicateName,
+    /// The company already has a category for transfers between its accounts.
+    DuplicateTransferCategory,
     /// An update matched no row.
     NotFound,
     Storage(String),
@@ -36,6 +38,17 @@ pub enum ApplicationError {
     PartyNotFound,
     /// No product or service with this id in the company (another company's looks the same).
     ProductNotFound,
+    /// No category with this id in the company (another company's looks the same).
+    CategoryNotFound,
+    /// The category a new one was to go under does not exist in the company.
+    ParentCategoryNotFound,
+    /// An active category is never under an inactive one.
+    CategoryParentInactive,
+    /// A category with active subcategories cannot be deactivated.
+    CategoryHasActiveChildren,
+    /// The default template is for a company that has no categories yet.
+    CategoriesAlreadyExist,
+    CategoryLimitReached,
     /// No cost center with this id in the company (another company's looks the same).
     CostCenterNotFound,
     /// The operator switched the CNPJ lookup off, so there is nothing to ask.
@@ -75,6 +88,9 @@ impl fmt::Display for RepositoryError {
             Self::DuplicateEmail => f.write_str("an account with this email already exists"),
             Self::DuplicateSku => f.write_str("a product with this SKU already exists"),
             Self::DuplicateName => f.write_str("this name is already in use"),
+            Self::DuplicateTransferCategory => {
+                f.write_str("the company already has a category for transfers between accounts")
+            }
             Self::NotFound => f.write_str("no matching record"),
             Self::Storage(message) => write!(f, "storage failure: {message}"),
         }
@@ -102,6 +118,18 @@ impl fmt::Display for ApplicationError {
             Self::PartyNotFound => f.write_str("party not found"),
             Self::ProductNotFound => f.write_str("product not found"),
             Self::CostCenterNotFound => f.write_str("cost center not found"),
+            Self::CategoryNotFound => f.write_str("category not found"),
+            Self::ParentCategoryNotFound => f.write_str("the parent category does not exist"),
+            Self::CategoryParentInactive => {
+                f.write_str("the parent category is inactive; reactivate it first")
+            }
+            Self::CategoryHasActiveChildren => {
+                f.write_str("deactivate the subcategories of this category first")
+            }
+            Self::CategoriesAlreadyExist => f.write_str(
+                "the default categories can only be applied to a company without categories",
+            ),
+            Self::CategoryLimitReached => f.write_str("a company can have at most 1000 categories"),
             Self::LookupDisabled => f.write_str("CNPJ lookup is switched off on this installation"),
             Self::RecheckTooSoon => {
                 f.write_str("this CNPJ was checked a moment ago, try again in a few seconds")

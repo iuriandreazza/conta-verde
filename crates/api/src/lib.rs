@@ -1,5 +1,6 @@
 mod access;
 mod auth;
+mod categories;
 mod cost_centers;
 mod cursor;
 mod error;
@@ -15,8 +16,9 @@ use std::sync::Arc;
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use conta_verde_application::{
-    AuthService, CnpjRegistry, CostCenterRepository, CostCenterService, IdentityRepository,
-    PartyRepository, PartyService, ProductRepository, ProductService, SecretService,
+    AuthService, CategoryRepository, CategoryService, CnpjRegistry, CostCenterRepository,
+    CostCenterService, IdentityRepository, PartyRepository, PartyService, ProductRepository,
+    ProductService, SecretService,
 };
 use serde::Serialize;
 
@@ -35,6 +37,7 @@ pub trait Ports: 'static {
     type Secrets: SecretService + 'static;
     type Products: ProductRepository + 'static;
     type CostCenters: CostCenterRepository + 'static;
+    type Categories: CategoryRepository + 'static;
 }
 
 /// The use cases the API serves.
@@ -42,6 +45,7 @@ pub struct Services<X: Ports> {
     pub parties: PartyService<X::Parties, X::Registry>,
     pub products: ProductService<X::Products>,
     pub cost_centers: CostCenterService<X::CostCenters>,
+    pub categories: CategoryService<X::Categories>,
     pub auth: AuthService<X::Identity, X::Secrets>,
 }
 
@@ -49,6 +53,7 @@ pub(crate) struct AppState<X: Ports> {
     parties: PartyService<X::Parties, X::Registry>,
     products: ProductService<X::Products>,
     cost_centers: CostCenterService<X::CostCenters>,
+    categories: CategoryService<X::Categories>,
     auth: AuthService<X::Identity, X::Secrets>,
     config: ApiConfig,
 }
@@ -61,6 +66,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         parties: services.parties,
         products: services.products,
         cost_centers: services.cost_centers,
+        categories: services.categories,
         auth: services.auth,
         config,
     });
@@ -106,6 +112,22 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
             "/companies/{company_id}/cost-centers/{cost_center_id}/history",
             get(cost_centers::cost_center_history::<X>),
         )
+        .route(
+            "/companies/{company_id}/categories",
+            get(categories::list_categories::<X>).post(categories::create_category::<X>),
+        )
+        .route(
+            "/companies/{company_id}/categories/default-template",
+            post(categories::apply_default_template::<X>),
+        )
+        .route(
+            "/companies/{company_id}/categories/{category_id}",
+            put(categories::change_category::<X>),
+        )
+        .route(
+            "/companies/{company_id}/categories/{category_id}/history",
+            get(categories::category_history::<X>),
+        )
         .with_state(state)
 }
 
@@ -125,8 +147,9 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode, header};
     use conta_verde_infrastructure::{
-        Argon2SecretService, InMemoryCnpjRegistry, InMemoryCostCenterRepository,
-        InMemoryIdentityRepository, InMemoryPartyRepository, InMemoryProductRepository,
+        Argon2SecretService, InMemoryCategoryRepository, InMemoryCnpjRegistry,
+        InMemoryCostCenterRepository, InMemoryIdentityRepository, InMemoryPartyRepository,
+        InMemoryProductRepository,
     };
     use http_body_util::BodyExt;
     use serde_json::{Value, json};
@@ -163,6 +186,7 @@ mod tests {
         type Secrets = Argon2SecretService;
         type Products = InMemoryProductRepository;
         type CostCenters = InMemoryCostCenterRepository;
+        type Categories = InMemoryCategoryRepository;
     }
 
     /// Like `MemoryPorts`, with the CNPJ lookup switched off.
@@ -175,6 +199,7 @@ mod tests {
         type Secrets = Argon2SecretService;
         type Products = InMemoryProductRepository;
         type CostCenters = InMemoryCostCenterRepository;
+        type Categories = InMemoryCategoryRepository;
     }
 
     fn auth_service() -> AuthService<InMemoryIdentityRepository, Argon2SecretService> {
@@ -193,6 +218,7 @@ mod tests {
                 parties,
                 products: ProductService::new(InMemoryProductRepository::default()),
                 cost_centers: CostCenterService::new(InMemoryCostCenterRepository::default()),
+                categories: CategoryService::new(InMemoryCategoryRepository::default()),
                 auth: auth_service(),
             },
             ApiConfig::default(),
@@ -613,6 +639,7 @@ mod tests {
                 parties: PartyService::new(InMemoryPartyRepository::default(), registry),
                 products: ProductService::new(InMemoryProductRepository::default()),
                 cost_centers: CostCenterService::new(InMemoryCostCenterRepository::default()),
+                categories: CategoryService::new(InMemoryCategoryRepository::default()),
                 auth: auth_service(),
             },
             ApiConfig::default(),
@@ -1366,6 +1393,291 @@ mod tests {
         ] {
             let reply = send(&app, get_request(&format!("{uri}?{query}"), Some(&cookie))).await;
             assert!(reply.status.is_client_error(), "{query}");
+            assert!(reply.body["error"].is_string(), "{query}");
+        }
+    }
+
+    fn categories_uri(company_id: Uuid) -> String {
+        format!("/companies/{company_id}/categories")
+    }
+
+    async fn post_category(app: &Router, cookie: &str, company_id: Uuid, body: Value) -> Reply {
+        let request = json_request("POST", &categories_uri(company_id), Some(cookie), body);
+        send(app, request).await
+    }
+
+    #[tokio::test]
+    async fn builds_a_tree_of_categories_whose_groups_come_from_the_root() {
+        let app = app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+
+        let root = post_category(
+            &app,
+            &cookie,
+            company_id,
+            json!({ "name": "Despesas", "dre_group": "operating_expenses", "cash_flow_group": "operating" }),
+        )
+        .await;
+        assert_eq!(root.status, StatusCode::CREATED);
+        assert_eq!(root.body["parent_id"], Value::Null);
+        assert_eq!(root.body["level"], 1);
+        let root_id = root.body["id"].as_str().unwrap().to_owned();
+
+        let child = post_category(
+            &app,
+            &cookie,
+            company_id,
+            json!({ "name": "Aluguel", "parent_id": root_id }),
+        )
+        .await;
+        assert_eq!(child.status, StatusCode::CREATED);
+        assert_eq!(child.body["parent_id"], root_id.as_str());
+        assert_eq!(child.body["dre_group"], "operating_expenses");
+        assert_eq!(child.body["level"], 2);
+        let child_id = child.body["id"].as_str().unwrap().to_owned();
+
+        // The groups of a subcategory are not its own to choose, and a root has to choose them.
+        let with_groups = json!({ "name": "X", "parent_id": root_id, "dre_group": "costs", "cash_flow_group": "operating" });
+        assert_eq!(
+            post_category(&app, &cookie, company_id, with_groups)
+                .await
+                .status,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let bare_root = post_category(&app, &cookie, company_id, json!({ "name": "Y" })).await;
+        assert_eq!(bare_root.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            bare_root.body["error"]
+                .as_str()
+                .unwrap()
+                .contains("needs a DRE group")
+        );
+        let duplicate = post_category(
+            &app,
+            &cookie,
+            company_id,
+            json!({ "name": "ALUGUEL", "parent_id": root_id }),
+        )
+        .await;
+        assert_eq!(duplicate.status, StatusCode::CONFLICT);
+
+        // The whole tree, flat and in a fixed order; the active ones can be asked for alone.
+        let listed = send(
+            &app,
+            get_request(&categories_uri(company_id), Some(&cookie)),
+        )
+        .await;
+        let names: Vec<&str> = listed.body["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["Aluguel", "Despesas"]);
+
+        // Switched off from the bottom up; a body that moves it or changes its groups is refused.
+        let uri = |id: &str| format!("{}/{id}", categories_uri(company_id));
+        let off = |name: &str| json!({ "name": name, "active": false });
+        let blocked = send(
+            &app,
+            json_request("PUT", &uri(&root_id), Some(&cookie), off("Despesas")),
+        )
+        .await;
+        assert_eq!(blocked.status, StatusCode::CONFLICT);
+        let leaf = send(
+            &app,
+            json_request("PUT", &uri(&child_id), Some(&cookie), off("Aluguel")),
+        )
+        .await;
+        assert_eq!(leaf.status, StatusCode::OK);
+        assert_eq!(leaf.body["active"], false);
+        let moved = json!({ "name": "Aluguel", "active": true, "parent_id": root_id });
+        assert!(
+            send(
+                &app,
+                json_request("PUT", &uri(&child_id), Some(&cookie), moved)
+            )
+            .await
+            .status
+            .is_client_error()
+        );
+        let regrouped = json!({ "name": "Aluguel", "active": true, "dre_group": "costs" });
+        assert!(
+            send(
+                &app,
+                json_request("PUT", &uri(&child_id), Some(&cookie), regrouped)
+            )
+            .await
+            .status
+            .is_client_error()
+        );
+        let without_active = json_request(
+            "PUT",
+            &uri(&child_id),
+            Some(&cookie),
+            json!({ "name": "Aluguel" }),
+        );
+        assert_eq!(
+            send(&app, without_active).await.status,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let active_only = format!("{}?active=true", categories_uri(company_id));
+        let listed = send(&app, get_request(&active_only, Some(&cookie))).await;
+        assert_eq!(listed.body["items"].as_array().unwrap().len(), 1);
+
+        // Under an inactive parent nothing active can go.
+        let off_root = send(
+            &app,
+            json_request("PUT", &uri(&root_id), Some(&cookie), off("Despesas")),
+        )
+        .await;
+        assert_eq!(off_root.status, StatusCode::OK);
+        let under = post_category(
+            &app,
+            &cookie,
+            company_id,
+            json!({ "name": "Luz", "parent_id": root_id }),
+        )
+        .await;
+        assert_eq!(under.status, StatusCode::CONFLICT);
+        let unknown = post_category(
+            &app,
+            &cookie,
+            company_id,
+            json!({ "name": "Luz", "parent_id": Uuid::new_v4() }),
+        )
+        .await;
+        assert_eq!(unknown.status, StatusCode::UNPROCESSABLE_ENTITY);
+
+        let history = send(
+            &app,
+            get_request(&format!("{}/history", uri(&child_id)), Some(&cookie)),
+        )
+        .await;
+        let entries = history.body.as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            entries[1]["changes"],
+            json!([{ "field": "active", "from": "true", "to": "false" }])
+        );
+    }
+
+    #[tokio::test]
+    async fn the_default_template_is_applied_once_and_the_transfer_category_is_kept() {
+        let app = app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let (stranger_cookie, stranger_company) = sign_up(&app, "bia@example.com").await;
+        let template = format!("{}/default-template", categories_uri(company_id));
+
+        let applied = send(
+            &app,
+            json_request("POST", &template, Some(&cookie), Value::Null),
+        )
+        .await;
+        assert_eq!(applied.status, StatusCode::CREATED);
+        let items = applied.body["items"].as_array().unwrap();
+        assert!(items.len() > 20);
+        let transfers: Vec<&Value> = items
+            .iter()
+            .filter(|item| item["dre_group"] == "transfers")
+            .collect();
+        assert_eq!(transfers.len(), 1);
+        assert_eq!(transfers[0]["cash_flow_group"], "transfer");
+        assert_eq!(transfers[0]["parent_id"], Value::Null);
+        let again = send(
+            &app,
+            json_request("POST", &template, Some(&cookie), Value::Null),
+        )
+        .await;
+        assert_eq!(again.status, StatusCode::CONFLICT);
+
+        // It can be renamed but not switched off, and it cannot be duplicated.
+        let uri = format!(
+            "{}/{}",
+            categories_uri(company_id),
+            transfers[0]["id"].as_str().unwrap()
+        );
+        let off = json_request(
+            "PUT",
+            &uri,
+            Some(&cookie),
+            json!({ "name": "Transferências", "active": false }),
+        );
+        assert_eq!(
+            send(&app, off).await.status,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let renamed = json_request(
+            "PUT",
+            &uri,
+            Some(&cookie),
+            json!({ "name": "Entre contas", "active": true }),
+        );
+        assert_eq!(send(&app, renamed).await.body["dre_group"], "transfers");
+        let second = post_category(
+            &app,
+            &cookie,
+            company_id,
+            json!({ "name": "Outra", "dre_group": "transfers", "cash_flow_group": "transfer" }),
+        )
+        .await;
+        assert_eq!(second.status, StatusCode::CONFLICT);
+        let mismatched = post_category(
+            &app,
+            &cookie,
+            company_id,
+            json!({ "name": "Outra", "dre_group": "transfers", "cash_flow_group": "operating" }),
+        )
+        .await;
+        assert_eq!(mismatched.status, StatusCode::UNPROCESSABLE_ENTITY);
+        let unknown_group = post_category(
+            &app,
+            &cookie,
+            company_id,
+            json!({ "name": "Outra", "dre_group": "profit", "cash_flow_group": "operating" }),
+        )
+        .await;
+        assert_eq!(unknown_group.status, StatusCode::UNPROCESSABLE_ENTITY);
+
+        // Another company sees none of it, cannot change it, and starts from nothing.
+        let theirs = send(
+            &app,
+            get_request(&categories_uri(stranger_company), Some(&stranger_cookie)),
+        )
+        .await;
+        assert!(theirs.body["items"].as_array().unwrap().is_empty());
+        let foreign = json_request(
+            "PUT",
+            &format!(
+                "{}/{}",
+                categories_uri(stranger_company),
+                transfers[0]["id"].as_str().unwrap()
+            ),
+            Some(&stranger_cookie),
+            json!({ "name": "X", "active": true }),
+        );
+        assert_eq!(send(&app, foreign).await.status, StatusCode::NOT_FOUND);
+        let not_theirs = send(
+            &app,
+            get_request(&categories_uri(company_id), Some(&stranger_cookie)),
+        )
+        .await;
+        assert_eq!(not_theirs.status, StatusCode::NOT_FOUND);
+        let anonymous = send(&app, json_request("POST", &template, None, Value::Null)).await;
+        assert_eq!(anonymous.status, StatusCode::UNAUTHORIZED);
+        let malformed = json_request(
+            "PUT",
+            &format!("{}/not-a-uuid", categories_uri(company_id)),
+            Some(&cookie),
+            json!({ "name": "X", "active": true }),
+        );
+        let reply = send(&app, malformed).await;
+        assert_eq!(reply.status, StatusCode::NOT_FOUND);
+        assert_eq!(reply.body["error"], "category not found");
+        for query in ["active=yes", "active=", "active=maybe"] {
+            let uri = format!("{}?{query}", categories_uri(company_id));
+            let reply = send(&app, get_request(&uri, Some(&cookie))).await;
+            assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{query}");
             assert!(reply.body["error"].is_string(), "{query}");
         }
     }

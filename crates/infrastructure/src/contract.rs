@@ -1,16 +1,17 @@
 //! Behavior every adapter must share, written once and run against each of them.
 
 use conta_verde_application::{
-    ApplicationError, AuthError, AuthService, CnpjRegistry, CostCenterQuery, CostCenterRepository,
-    CostCenterService, IdentityRepository, NameSort, PartyKind, PartyQuery, PartyRepository,
-    PartyService, ProductQuery, ProductRepository, ProductService, RepositoryError, SecretService,
+    ApplicationError, AuthError, AuthService, CategoryRepository, CategoryService, CnpjRegistry,
+    CostCenterQuery, CostCenterRepository, CostCenterService, IdentityRepository, NameSort,
+    NewCategory, PartyKind, PartyQuery, PartyRepository, PartyService, ProductQuery,
+    ProductRepository, ProductService, RepositoryError, SecretService,
 };
 use conta_verde_domain::{
-    AccountDraft, Actor, AuditAction, AuditEntity, AuditEntry, CompanyId, CostCenter,
-    CostCenterDraft, CostCenterId, DocumentCheck, DomainError, FieldChange, Party, PartyDraft,
-    PartyId, Product, ProductDraft, ProductId, ProductKind, UserId, cost_center_changes,
-    cost_center_creation_changes, creation_changes, document_check_changes, product_changes,
-    product_creation_changes,
+    AccountDraft, Actor, AuditAction, AuditEntity, AuditEntry, CashFlowGroup, Category, CategoryId,
+    CompanyId, CostCenter, CostCenterDraft, CostCenterId, DocumentCheck, DomainError, DreGroup,
+    FieldChange, Party, PartyDraft, PartyId, Product, ProductDraft, ProductId, ProductKind, UserId,
+    category_changes, category_creation_changes, cost_center_changes, cost_center_creation_changes,
+    creation_changes, document_check_changes, product_changes, product_creation_changes,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -1532,5 +1533,586 @@ pub async fn filters_and_sorts_cost_centers<R: CostCenterRepository>(
     assert_eq!(
         names(active_with_a).await,
         ["Delta_x", "Charlie 100%", "Alfa"]
+    );
+}
+
+// ---- categories
+
+fn category_entry(
+    category: &Category,
+    action: AuditAction,
+    changes: Vec<FieldChange>,
+) -> AuditEntry {
+    AuditEntry {
+        company_id: category.company_id(),
+        actor: actor(),
+        entity: AuditEntity::Category,
+        entity_id: category.id().as_uuid(),
+        action,
+        changes,
+    }
+}
+
+fn created(category: &Category) -> (Category, AuditEntry) {
+    let entry = category_entry(
+        category,
+        AuditAction::Created,
+        category_creation_changes(category),
+    );
+    (category.clone(), entry)
+}
+
+fn root_category(company: CompanyId, name: &str) -> Category {
+    Category::new_root(
+        CategoryId::generate(),
+        company,
+        name,
+        DreGroup::GrossRevenue,
+        CashFlowGroup::Operating,
+    )
+    .unwrap()
+}
+
+fn child_category(parent: &Category, name: &str) -> Category {
+    Category::new_child(CategoryId::generate(), parent, name).unwrap()
+}
+
+async fn category_trail<R: CategoryRepository>(
+    repository: &R,
+    company: CompanyId,
+    category: &Category,
+) -> usize {
+    repository
+        .history(company, category.id())
+        .await
+        .unwrap()
+        .len()
+}
+
+async fn save_category<R: CategoryRepository>(repository: &R, category: &Category) {
+    let (category, entry) = created(category);
+    repository.save(&category, &entry).await.unwrap();
+}
+
+/// A write is stored with its audit entry, scoped by company; one that is refused or misses leaves
+/// nothing in the trail, and an entry that describes something else is refused outright.
+pub async fn stores_categories_with_their_trail<R: CategoryRepository>(
+    repository: &R,
+    company: CompanyId,
+    other_company: CompanyId,
+) {
+    let revenue = root_category(company, "Receitas");
+    let sales = child_category(&revenue, "Vendas");
+    save_category(repository, &revenue).await;
+    save_category(repository, &sales).await;
+    for category in [&revenue, &sales] {
+        assert_eq!(
+            repository
+                .find(company, category.id())
+                .await
+                .unwrap()
+                .as_ref(),
+            Some(category)
+        );
+        assert_eq!(
+            repository.find(other_company, category.id()).await.unwrap(),
+            None
+        );
+        assert_eq!(category_trail(repository, company, category).await, 1);
+        assert_eq!(category_trail(repository, other_company, category).await, 0);
+    }
+    let history = repository.history(company, sales.id()).await.unwrap();
+    assert_eq!(history[0].entry.action, AuditAction::Created);
+    assert_eq!(history[0].entry.changes, category_creation_changes(&sales));
+
+    // Siblings have distinct names whatever their case; the roots are siblings of each other.
+    for twin in [
+        child_category(&revenue, "VENDAS"),
+        root_category(company, "receitas"),
+    ] {
+        let (twin, entry) = created(&twin);
+        assert_eq!(
+            repository.save(&twin, &entry).await,
+            Err(RepositoryError::DuplicateName)
+        );
+        assert_eq!(repository.find(company, twin.id()).await.unwrap(), None);
+        assert_eq!(category_trail(repository, company, &twin).await, 0);
+    }
+    // The same name under another parent, or in another company, is fine.
+    let expenses = root_category(company, "Despesas");
+    save_category(repository, &expenses).await;
+    save_category(repository, &child_category(&expenses, "Vendas")).await;
+    save_category(repository, &root_category(other_company, "Receitas")).await;
+
+    // A parent has to be in the company.
+    let orphan = Category::restore(
+        CategoryId::generate(),
+        other_company,
+        Some(revenue.id()),
+        "Filha de outra empresa",
+        DreGroup::GrossRevenue,
+        CashFlowGroup::Operating,
+        2,
+        true,
+    )
+    .unwrap();
+    let (orphan, entry) = created(&orphan);
+    assert_eq!(
+        repository.save(&orphan, &entry).await,
+        Err(RepositoryError::NotFound)
+    );
+    assert_eq!(category_trail(repository, other_company, &orphan).await, 0);
+
+    // One category for transfers per company.
+    let transfers = Category::new_root(
+        CategoryId::generate(),
+        company,
+        "Transferências",
+        DreGroup::Transfers,
+        CashFlowGroup::Transfer,
+    )
+    .unwrap();
+    save_category(repository, &transfers).await;
+    let second = Category::new_root(
+        CategoryId::generate(),
+        company,
+        "Entre contas",
+        DreGroup::Transfers,
+        CashFlowGroup::Transfer,
+    )
+    .unwrap();
+    let (second, entry) = created(&second);
+    assert_eq!(
+        repository.save(&second, &entry).await,
+        Err(RepositoryError::DuplicateTransferCategory)
+    );
+    assert_eq!(category_trail(repository, company, &second).await, 0);
+
+    // An entry about another record, or another company, is refused and nothing is stored.
+    let stray = root_category(company, "Estranha");
+    let wrong_record = category_entry(&revenue, AuditAction::Created, vec![]);
+    assert!(repository.save(&stray, &wrong_record).await.is_err());
+    assert_eq!(repository.find(company, stray.id()).await.unwrap(), None);
+    let mut wrong_company = category_entry(&stray, AuditAction::Created, vec![]);
+    wrong_company.company_id = other_company;
+    assert!(repository.save(&stray, &wrong_company).await.is_err());
+    assert_eq!(category_trail(repository, other_company, &stray).await, 0);
+
+    // An update changes the name and the flag, adds an entry, and leaves the rest where it was;
+    // changing only the case of its own name is not a clash.
+    let changed = sales.changed("Vendas e serviços", false).unwrap();
+    let entry = category_entry(
+        &changed,
+        AuditAction::Updated,
+        category_changes(&sales, &changed),
+    );
+    repository.update(&changed, &entry).await.unwrap();
+    assert_eq!(
+        repository.find(company, sales.id()).await.unwrap(),
+        Some(changed.clone())
+    );
+    assert_eq!(category_trail(repository, company, &sales).await, 2);
+    let recased = revenue.changed("RECEITAS", true).unwrap();
+    let entry = category_entry(
+        &recased,
+        AuditAction::Updated,
+        category_changes(&revenue, &recased),
+    );
+    repository.update(&recased, &entry).await.unwrap();
+
+    // One that clashes with a sibling changes nothing and adds nothing.
+    let clash = expenses.changed("receitas", true).unwrap();
+    let entry = category_entry(
+        &clash,
+        AuditAction::Updated,
+        category_changes(&expenses, &clash),
+    );
+    assert_eq!(
+        repository.update(&clash, &entry).await,
+        Err(RepositoryError::DuplicateName)
+    );
+    assert_eq!(
+        repository.find(company, expenses.id()).await.unwrap(),
+        Some(expenses.clone())
+    );
+    assert_eq!(category_trail(repository, company, &expenses).await, 1);
+
+    // Not in that company, or not at all: nothing is updated and no entry is left.
+    let foreign = Category::restore(
+        revenue.id(),
+        other_company,
+        None,
+        "Roubo",
+        DreGroup::GrossRevenue,
+        CashFlowGroup::Operating,
+        1,
+        true,
+    )
+    .unwrap();
+    let entry = category_entry(&foreign, AuditAction::Updated, vec![]);
+    assert_eq!(
+        repository.update(&foreign, &entry).await,
+        Err(RepositoryError::NotFound)
+    );
+    assert_eq!(category_trail(repository, other_company, &revenue).await, 0);
+
+    // The list is the whole company, in a fixed order, and can be narrowed to the active ones.
+    let names = |categories: Vec<Category>| -> Vec<String> {
+        categories
+            .iter()
+            .map(|category| category.name().to_owned())
+            .collect()
+    };
+    let all = repository.list_by_company(company, None).await.unwrap();
+    assert_eq!(
+        names(all),
+        [
+            "Despesas",
+            "RECEITAS",
+            "Transferências",
+            "Vendas",
+            "Vendas e serviços"
+        ]
+    );
+    let inactive = repository
+        .list_by_company(company, Some(false))
+        .await
+        .unwrap();
+    assert_eq!(names(inactive), ["Vendas e serviços"]);
+    assert_eq!(
+        repository
+            .list_by_company(company, Some(true))
+            .await
+            .unwrap()
+            .len(),
+        4
+    );
+}
+
+/// A batch is stored whole, with all its entries, or not at all.
+pub async fn saves_a_batch_all_or_nothing<R: CategoryRepository>(
+    repository: &R,
+    company: CompanyId,
+) {
+    let revenue = root_category(company, "Receitas");
+    let sales = child_category(&revenue, "Vendas");
+    let twin = root_category(company, "RECEITAS");
+    let batch = vec![created(&revenue), created(&sales), created(&twin)];
+    assert_eq!(
+        repository.save_all(&batch).await,
+        Err(RepositoryError::DuplicateName)
+    );
+    assert!(
+        repository
+            .list_by_company(company, None)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    for category in [&revenue, &sales, &twin] {
+        assert_eq!(category_trail(repository, company, category).await, 0);
+    }
+
+    // An entry that describes something else refuses the whole batch too.
+    let wrong = (
+        sales.clone(),
+        category_entry(&revenue, AuditAction::Created, vec![]),
+    );
+    assert!(
+        repository
+            .save_all(&[created(&revenue), wrong])
+            .await
+            .is_err()
+    );
+    assert!(
+        repository
+            .list_by_company(company, None)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // Without the clash it is stored, parents first, each with its entry.
+    repository
+        .save_all(&[created(&revenue), created(&sales)])
+        .await
+        .unwrap();
+    assert_eq!(
+        repository
+            .list_by_company(company, None)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(category_trail(repository, company, &revenue).await, 1);
+    assert_eq!(category_trail(repository, company, &sales).await, 1);
+}
+
+pub async fn applies_the_default_template_once<R: CategoryRepository>(
+    service: &CategoryService<R>,
+    company: CompanyId,
+    other_company: CompanyId,
+) {
+    let applied = service
+        .apply_default_template(company, &actor())
+        .await
+        .unwrap();
+    let listed = service.list(company, None).await.unwrap();
+    assert_eq!(listed.len(), applied.len());
+    assert!(applied.len() > 20);
+    // Found by its group, never by its name: one category for transfers, a root.
+    let transfers: Vec<&Category> = listed
+        .iter()
+        .filter(|category| category.is_transfer())
+        .collect();
+    assert_eq!(transfers.len(), 1);
+    assert_eq!(transfers[0].cash_flow_group(), CashFlowGroup::Transfer);
+    // Every one has its entry, and every subcategory sits under a parent of the same groups.
+    for category in &listed {
+        let history = service.history(company, category.id()).await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].entry.action, AuditAction::Created);
+        if let Some(parent) = category
+            .parent_id()
+            .and_then(|id| listed.iter().find(|c| c.id() == id))
+        {
+            assert_eq!(category.dre_group(), parent.dre_group());
+            assert_eq!(category.level(), parent.level() + 1);
+        }
+    }
+    assert!(service.list(company, Some(false)).await.unwrap().is_empty());
+
+    // Only to a company that has none; another company is not touched and may have its own.
+    assert_eq!(
+        service.apply_default_template(company, &actor()).await,
+        Err(ApplicationError::CategoriesAlreadyExist)
+    );
+    assert_eq!(
+        service.list(company, None).await.unwrap().len(),
+        applied.len()
+    );
+    assert!(service.list(other_company, None).await.unwrap().is_empty());
+    service
+        .apply_default_template(other_company, &actor())
+        .await
+        .unwrap();
+    assert_eq!(
+        service.list(other_company, None).await.unwrap().len(),
+        applied.len()
+    );
+}
+
+fn new_category(
+    parent: Option<&Category>,
+    name: &str,
+    groups: Option<(DreGroup, CashFlowGroup)>,
+) -> NewCategory {
+    NewCategory {
+        parent_id: parent.map(Category::id),
+        name: name.into(),
+        dre_group: groups.map(|groups| groups.0),
+        cash_flow_group: groups.map(|groups| groups.1),
+    }
+}
+
+/// The rules that keep a tree consistent, as the use case enforces them.
+pub async fn keeps_the_tree_consistent<R: CategoryRepository>(
+    service: &CategoryService<R>,
+    company: CompanyId,
+) {
+    let who = actor();
+    let costs = (DreGroup::OperatingExpenses, CashFlowGroup::Operating);
+    let domain = |error: DomainError| Err(ApplicationError::Domain(error));
+
+    // A root says where it lands; a subcategory takes it from its parent and may not say.
+    assert_eq!(
+        service
+            .create(company, &who, new_category(None, "Despesas", None))
+            .await,
+        domain(DomainError::MissingGroups)
+    );
+    let expenses = service
+        .create(company, &who, new_category(None, "Despesas", Some(costs)))
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .create(
+                company,
+                &who,
+                new_category(Some(&expenses), "Aluguel", Some(costs))
+            )
+            .await,
+        domain(DomainError::GroupsAreInherited)
+    );
+    let rent = service
+        .create(
+            company,
+            &who,
+            new_category(Some(&expenses), "Aluguel", None),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rent.dre_group(), DreGroup::OperatingExpenses);
+    assert_eq!(rent.level(), 2);
+    let unknown_parent = NewCategory {
+        parent_id: Some(CategoryId::generate()),
+        ..new_category(None, "Filha", None)
+    };
+    assert_eq!(
+        service.create(company, &who, unknown_parent).await,
+        Err(ApplicationError::ParentCategoryNotFound)
+    );
+
+    // Five levels, no more.
+    let mut node = rent;
+    for level in 3..=5 {
+        node = service
+            .create(
+                company,
+                &who,
+                new_category(Some(&node), &format!("Nível {level}"), None),
+            )
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        service
+            .create(company, &who, new_category(Some(&node), "Nível 6", None))
+            .await,
+        domain(DomainError::CategoryTooDeep)
+    );
+
+    // The category for transfers: one, no children, never off, but it can be renamed.
+    let transfer_groups = (DreGroup::Transfers, CashFlowGroup::Transfer);
+    let transfers = service
+        .create(
+            company,
+            &who,
+            new_category(None, "Transferências", Some(transfer_groups)),
+        )
+        .await
+        .unwrap();
+    assert!(transfers.is_transfer());
+    assert_eq!(
+        service
+            .create(
+                company,
+                &who,
+                new_category(None, "Entre contas", Some(transfer_groups))
+            )
+            .await,
+        Err(ApplicationError::Repository(
+            RepositoryError::DuplicateTransferCategory
+        ))
+    );
+    assert_eq!(
+        service
+            .create(company, &who, new_category(Some(&transfers), "Filha", None))
+            .await,
+        domain(DomainError::TransferCategoryHasNoChildren)
+    );
+    assert_eq!(
+        service
+            .update(company, &who, transfers.id(), "Transferências", false)
+            .await,
+        domain(DomainError::TransferCategoryStaysActive)
+    );
+    let renamed = service
+        .update(company, &who, transfers.id(), "Entre contas", true)
+        .await
+        .unwrap();
+    assert!(renamed.is_transfer());
+
+    // An active category is never under an inactive one, whichever way round it is asked for.
+    let (parent, leaf) = (
+        expenses.clone(),
+        service
+            .list(company, None)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|c| c.name() == "Aluguel")
+            .unwrap(),
+    );
+    assert_eq!(
+        service
+            .update(company, &who, parent.id(), "Despesas", false)
+            .await,
+        Err(ApplicationError::CategoryHasActiveChildren)
+    );
+    // Its subtree has to be switched off from the bottom up.
+    for name in ["Nível 5", "Nível 4", "Nível 3", "Aluguel", "Despesas"] {
+        let category = service
+            .list(company, None)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|category| category.name() == name)
+            .unwrap();
+        service
+            .update(company, &who, category.id(), name, false)
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        service
+            .create(
+                company,
+                &who,
+                new_category(Some(&parent), "Marketing", None)
+            )
+            .await,
+        Err(ApplicationError::CategoryParentInactive)
+    );
+    assert_eq!(
+        service
+            .update(company, &who, leaf.id(), "Aluguel", true)
+            .await,
+        Err(ApplicationError::CategoryParentInactive)
+    );
+    service
+        .update(company, &who, parent.id(), "Despesas", true)
+        .await
+        .unwrap();
+    let back = service
+        .update(company, &who, leaf.id(), "Aluguel", true)
+        .await
+        .unwrap();
+    // The place in the tree and the groups did not move.
+    assert_eq!(back.parent_id(), Some(parent.id()));
+    assert_eq!(back.dre_group(), DreGroup::OperatingExpenses);
+    assert_eq!(back.level(), 2);
+
+    // A change that changes nothing writes nothing.
+    let before = service.history(company, leaf.id()).await.unwrap().len();
+    service
+        .update(company, &who, leaf.id(), "  Aluguel ", true)
+        .await
+        .unwrap();
+    assert_eq!(
+        service.history(company, leaf.id()).await.unwrap().len(),
+        before
+    );
+    let last = service
+        .history(company, leaf.id())
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!(last.entry.action, AuditAction::Updated);
+    assert_eq!(last.entry.changes.len(), 1);
+    assert_eq!(last.entry.changes[0].field, "active");
+
+    // Unknown ones answer like another company's.
+    let nobody = CategoryId::generate();
+    assert_eq!(
+        service.update(company, &who, nobody, "X", true).await,
+        Err(ApplicationError::CategoryNotFound)
+    );
+    assert_eq!(
+        service.history(company, nobody).await,
+        Err(ApplicationError::CategoryNotFound)
     );
 }

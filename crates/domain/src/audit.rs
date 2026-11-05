@@ -1,6 +1,6 @@
 use uuid::Uuid;
 
-use crate::{CompanyId, CostCenter, DocumentCheck, Party, Product, UserId};
+use crate::{Category, CompanyId, CostCenter, DocumentCheck, Party, Product, UserId};
 
 /// Who made a change. The name is a snapshot: history must keep reading the same after the user is
 /// renamed or removed. API keys will join as another variant ([ADR 0007]).
@@ -15,6 +15,7 @@ pub enum AuditEntity {
     Party,
     Product,
     CostCenter,
+    Category,
 }
 
 impl AuditEntity {
@@ -23,6 +24,7 @@ impl AuditEntity {
             Self::Party => "party",
             Self::Product => "product",
             Self::CostCenter => "cost_center",
+            Self::Category => "category",
         }
     }
 }
@@ -94,6 +96,20 @@ impl Audited for Party {
 impl Audited for Product {
     fn audit_entity(&self) -> AuditEntity {
         AuditEntity::Product
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.id().as_uuid()
+    }
+}
+
+impl Audited for Category {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::Category
     }
 
     fn audit_company(&self) -> CompanyId {
@@ -212,6 +228,33 @@ pub fn product_creation_changes(product: &Product) -> Vec<FieldChange> {
 
 pub fn product_changes(before: &Product, after: &Product) -> Vec<FieldChange> {
     changes_between(product_fields(before), product_fields(after))
+}
+
+fn category_fields(category: &Category) -> Fields {
+    vec![
+        ("name", Some(category.name().to_owned())),
+        (
+            "parent",
+            category
+                .parent_id()
+                .map(|parent| parent.as_uuid().to_string()),
+        ),
+        ("dre_group", Some(category.dre_group().as_str().to_owned())),
+        (
+            "cash_flow_group",
+            Some(category.cash_flow_group().as_str().to_owned()),
+        ),
+        ("active", Some(category.is_active().to_string())),
+    ]
+}
+
+/// Every field a new category has set.
+pub fn category_creation_changes(category: &Category) -> Vec<FieldChange> {
+    creation_from(category_fields(category))
+}
+
+pub fn category_changes(before: &Category, after: &Category) -> Vec<FieldChange> {
+    changes_between(category_fields(before), category_fields(after))
 }
 
 fn cost_center_fields(cost_center: &CostCenter) -> Fields {

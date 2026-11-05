@@ -21,6 +21,7 @@ macro_rules! uuid_id {
     };
 }
 
+uuid_id!(CategoryId);
 uuid_id!(CompanyId);
 uuid_id!(CostCenterId);
 uuid_id!(PartyId);
