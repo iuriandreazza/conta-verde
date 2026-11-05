@@ -2664,3 +2664,70 @@ describe("members and invitations", () => {
     });
   });
 });
+
+describe("what a role that cannot write is offered", () => {
+  const readOnly = { parties: "read", products: "read", finance: "read" } as const;
+  const as = (permissions: Profile["companies"][number]["permissions"]): Profile => ({
+    ...profile,
+    companies: [{ id: "c1", name: "Padaria", role: "viewer", permissions }],
+  });
+  const lists = (url: string): { status: number; body: unknown } =>
+    url === "/api/auth/me"
+      ? { status: 200, body: null }
+      : { status: 200, body: { items: [], next_cursor: null } };
+
+  it.each([
+    ["parties", "Clientes e fornecedores", "Novo cliente ou fornecedor"],
+    ["products", "Produtos e serviços", "Novo produto ou serviço"],
+    ["categories", "Categorias", "Nova categoria"],
+    ["cost-centers", "Centros de custo", "Novo centro de custo"],
+    ["bank-accounts", "Contas bancárias", "Nova conta"],
+    ["payment-methods", "Formas de pagamento", "Nova forma de pagamento"],
+    ["payment-terms", "Prazos de pagamento", "Novo prazo de pagamento"],
+  ])("%s: a role that only reads gets the list and no form", async (path, title, formHeading) => {
+    mockApi((url) => (url === "/api/auth/me" ? { status: 200, body: as(readOnly) } : lists(url)));
+    renderAt(`/companies/c1/${path}`);
+
+    // The page is there (its form would be too, for a role that writes) before anything is missing.
+    await screen.findByRole("heading", { name: title });
+    expect(screen.queryByRole("heading", { name: formHeading })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Importar/ })).not.toBeInTheDocument();
+  });
+
+  it("offers the form, the import and the edit button where the role writes", async () => {
+    mockApi((url) =>
+      url === "/api/auth/me"
+        ? { status: 200, body: as({ ...readOnly, parties: "write" }) }
+        : { status: 200, body: { items: [party("Maria")], next_cursor: null } },
+    );
+    renderAt("/companies/c1/parties");
+
+    expect(await screen.findByRole("heading", { name: "Novo cliente ou fornecedor" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Alterar Maria" })).toBeInTheDocument();
+  });
+
+  it("keeps the history but no edit button on a list the role only reads", async () => {
+    mockApi((url) =>
+      url === "/api/auth/me"
+        ? { status: 200, body: as(readOnly) }
+        : { status: 200, body: { items: [party("Maria")], next_cursor: null } },
+    );
+    renderAt("/companies/c1/parties");
+
+    expect(await screen.findByRole("button", { name: "Histórico de Maria" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Alterar Maria" })).not.toBeInTheDocument();
+  });
+
+  it("does not offer a read-only role to re-check a CNPJ", async () => {
+    const flagged = { ...party("Maria"), document_check: { status: "unverified", legal_name: null, situation: null, needs_attention: true } };
+    mockApi((url) =>
+      url === "/api/auth/me"
+        ? { status: 200, body: as(readOnly) }
+        : { status: 200, body: { items: [flagged], next_cursor: null } },
+    );
+    renderAt("/companies/c1/parties");
+
+    expect(await screen.findByRole("button", { name: "Histórico de Maria" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Verificar de novo/ })).not.toBeInTheDocument();
+  });
+});

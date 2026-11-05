@@ -22,12 +22,14 @@ import { UsersIcon } from "../components/icons/users";
 import { PartyHistory } from "../components/PartyHistory";
 import { Spinner } from "../components/Spinner";
 import { usePagedList } from "../lib/usePagedList";
+import { useCanWrite } from "../lib/useCanWrite";
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one
 // instance: the old list is dropped and a reply still in flight for another company lands on an
 // unmounted component.
 export function PartiesPage() {
   const { companyId = "" } = useParams();
+  const canWrite = useCanWrite("parties");
   const [editing, setEditing] = useState<Party | null>(null);
   // Bumped after a save so the form starts over, empty or for another party.
   const [formVersion, setFormVersion] = useState(0);
@@ -118,7 +120,7 @@ export function PartiesPage() {
   return (
     <>
       <PageHeader title="Clientes e fornecedores" description="Quem compra de você e de quem você compra." />
-      <div className="split">
+      <div className={canWrite ? "split" : "split split-single"}>
         <section className="card list-card">
         <h2>Cadastrados</h2>
         <div className="filters" role="search">
@@ -239,7 +241,7 @@ export function PartiesPage() {
                     </td>
                     <td>
                       {party.document ?? "—"} <DocumentBadge check={party.document_check} />
-                      {party.document_check.needs_attention && (
+                      {canWrite && party.document_check.needs_attention && (
                         <Button
                           type="button"
                           variant="ghost"
@@ -273,20 +275,22 @@ export function PartiesPage() {
                         .join(" · ")}
                     </td>
                     <td>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        className="btn-small"
-                        aria-label={`Alterar ${party.name}`}
-                        disabled={saving}
-                        onClick={() => {
-                          setEditing(party);
-                          setFormError(null);
-                          setRegistryNotice(null);
-                        }}
-                      >
-                        Alterar
-                      </Button>
+                      {canWrite && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="btn-small"
+                          aria-label={`Alterar ${party.name}`}
+                          disabled={saving}
+                          onClick={() => {
+                            setEditing(party);
+                            setFormError(null);
+                            setRegistryNotice(null);
+                          }}
+                        >
+                          Alterar
+                        </Button>
+                      )}
                       <Button
                         type="button"
                         variant="ghost"
@@ -334,49 +338,53 @@ export function PartiesPage() {
           </Button>
         )}
       </section>
-        <aside className="card form-card">
-        <h2>{editing === null ? "Novo cliente ou fornecedor" : `Alterar ${editing.name}`}</h2>
-        <PartyForm
-          // A new key starts the form over for another party, or an empty one after a save.
-          key={`${editing?.id ?? "new"}-${formVersion}`}
-          party={editing}
-          // After a save or when editing, the person is in the form: put the cursor back in it.
-          focusName={editing !== null || formVersion > 0}
-          pending={saving}
-          blocked={verifyingId !== null}
-          error={formError}
-          notice={registryNotice}
-          lookupAddress={(postalCode) => api.lookupPostalCode(companyId, postalCode)}
-          onSubmit={(input) => void handleSubmit(input)}
-          onCancel={() => {
-            setEditing(null);
-            setFormError(null);
-          }}
-        />
-      </aside>
+        {canWrite && (
+          <aside className="card form-card">
+          <h2>{editing === null ? "Novo cliente ou fornecedor" : `Alterar ${editing.name}`}</h2>
+          <PartyForm
+            // A new key starts the form over for another party, or an empty one after a save.
+            key={`${editing?.id ?? "new"}-${formVersion}`}
+            party={editing}
+            // After a save or when editing, the person is in the form: put the cursor back in it.
+            focusName={editing !== null || formVersion > 0}
+            pending={saving}
+            blocked={verifyingId !== null}
+            error={formError}
+            notice={registryNotice}
+            lookupAddress={(postalCode) => api.lookupPostalCode(companyId, postalCode)}
+            onSubmit={(input) => void handleSubmit(input)}
+            onCancel={() => {
+              setEditing(null);
+              setFormError(null);
+            }}
+          />
+        </aside>
+        )}
       </div>
-      <CsvImport
-        title="Importar de um arquivo CSV"
-        template={PARTIES_TEMPLATE}
-        templateName="clientes-e-fornecedores.csv"
-        run={(file, dryRun) => api.importParties(companyId, file, dryRun)}
-        onImported={() => void loadFirstPage()}
-      >
-        <p>
-          A primeira linha dá o nome das colunas, em qualquer ordem; a vírgula ou o ponto e vírgula
-          separam. Só <code>name</code> é obrigatória, e ao menos uma de <code>customer</code>,{" "}
-          <code>supplier</code>, <code>carrier</code> e <code>seller</code> diz o que o cadastro é
-          (<code>sim</code> ou <code>não</code>). O endereço é <code>postal_code</code>,{" "}
-          <code>street</code>, <code>number</code>, <code>complement</code>, <code>district</code>,{" "}
-          <code>city</code> e <code>state</code>; as etiquetas vão em <code>tags</code>, separadas por{" "}
-          <code>|</code>. Contatos se adicionam depois, um a um.
-        </p>
-        <p>
-          Nada é importado enquanto uma linha tiver problema. Quem já tem o mesmo documento é
-          ignorado, nunca sobrescrito. Os CNPJs não são consultados na Receita: use "Verificar de
-          novo" depois.
-        </p>
-      </CsvImport>
+      {canWrite && (
+        <CsvImport
+          title="Importar de um arquivo CSV"
+          template={PARTIES_TEMPLATE}
+          templateName="clientes-e-fornecedores.csv"
+          run={(file, dryRun) => api.importParties(companyId, file, dryRun)}
+          onImported={() => void loadFirstPage()}
+        >
+          <p>
+            A primeira linha dá o nome das colunas, em qualquer ordem; a vírgula ou o ponto e vírgula
+            separam. Só <code>name</code> é obrigatória, e ao menos uma de <code>customer</code>,{" "}
+            <code>supplier</code>, <code>carrier</code> e <code>seller</code> diz o que o cadastro é
+            (<code>sim</code> ou <code>não</code>). O endereço é <code>postal_code</code>,{" "}
+            <code>street</code>, <code>number</code>, <code>complement</code>, <code>district</code>,{" "}
+            <code>city</code> e <code>state</code>; as etiquetas vão em <code>tags</code>, separadas por{" "}
+            <code>|</code>. Contatos se adicionam depois, um a um.
+          </p>
+          <p>
+            Nada é importado enquanto uma linha tiver problema. Quem já tem o mesmo documento é
+            ignorado, nunca sobrescrito. Os CNPJs não são consultados na Receita: use "Verificar de
+            novo" depois.
+          </p>
+        </CsvImport>
+      )}
     </>
   );
 }

@@ -20,12 +20,14 @@ import { ChevronDownIcon } from "../components/icons/chevron-down";
 import { HistoryIcon } from "../components/icons/history";
 import { describeInstallments } from "../lib/installments";
 import { usePagedList } from "../lib/usePagedList";
+import { useCanWrite } from "../lib/useCanWrite";
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one
 // instance: the old list is dropped and a reply still in flight for another company lands on an
 // unmounted component.
 export function PaymentTermsPage() {
   const { companyId = "" } = useParams();
+  const canWrite = useCanWrite("finance");
   const [filters, setFilters] = useState<PaymentTermFilters>(NO_PAYMENT_TERM_FILTERS);
   const [editing, setEditing] = useState<PaymentTerm | null>(null);
   // Bumped after a save so the form starts over, empty or for another term.
@@ -84,7 +86,7 @@ export function PaymentTermsPage() {
         title="Prazos de pagamento"
         description="Como um valor se divide no tempo: à vista, 30/60/90, entrada e saldo."
       />
-      <div className="split">
+      <div className={canWrite ? "split" : "split split-single"}>
         <section className="card list-card">
           <h2>Cadastrados</h2>
           <div className="filters" role="search">
@@ -173,20 +175,22 @@ export function PaymentTermsPage() {
                         <td>{describeInstallments(term.installments)}</td>
                         <td>{term.active ? "Ativo" : "Inativo"}</td>
                         <td>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            className="btn-small"
-                            aria-label={`Alterar ${term.name}`}
-                            disabled={saving}
-                            onClick={() => {
-                              setEditing(term);
-                              setFormError(null);
-                              setSaved(null);
-                            }}
-                          >
-                            Alterar
-                          </Button>
+                          {canWrite && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              className="btn-small"
+                              aria-label={`Alterar ${term.name}`}
+                              disabled={saving}
+                              onClick={() => {
+                                setEditing(term);
+                                setFormError(null);
+                                setSaved(null);
+                              }}
+                            >
+                              Alterar
+                            </Button>
+                          )}
                           <Button
                             type="button"
                             variant="ghost"
@@ -233,24 +237,26 @@ export function PaymentTermsPage() {
             </Button>
           )}
         </section>
-        <aside className="card form-card">
-          <h2>{editing === null ? "Novo prazo de pagamento" : `Alterar ${editing.name}`}</h2>
-          <PaymentTermForm
-            // A new key starts the form over for another term, or an empty one after a save.
-            key={`${editing?.id ?? "new"}-${formVersion}`}
-            term={editing}
-            // After a save or when editing, the person is in the form: put the cursor back in it.
-            focusName={editing !== null || formVersion > 0}
-            pending={saving}
-            error={formError}
-            onSubmit={(input) => void handleSubmit(input)}
-            onCancel={() => {
-              setEditing(null);
-              setFormError(null);
-            }}
-          />
-          <Notice message={saved} tone="success" />
-        </aside>
+        {canWrite && (
+          <aside className="card form-card">
+            <h2>{editing === null ? "Novo prazo de pagamento" : `Alterar ${editing.name}`}</h2>
+            <PaymentTermForm
+              // A new key starts the form over for another term, or an empty one after a save.
+              key={`${editing?.id ?? "new"}-${formVersion}`}
+              term={editing}
+              // After a save or when editing, the person is in the form: put the cursor back in it.
+              focusName={editing !== null || formVersion > 0}
+              pending={saving}
+              error={formError}
+              onSubmit={(input) => void handleSubmit(input)}
+              onCancel={() => {
+                setEditing(null);
+                setFormError(null);
+              }}
+            />
+            <Notice message={saved} tone="success" />
+          </aside>
+        )}
       </div>
     </>
   );

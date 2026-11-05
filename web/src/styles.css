@@ -346,6 +346,11 @@ main {
   align-items: start;
 }
 
+/* A page with no form beside the list, for a role that only reads. */
+.split-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .form-card {
   position: sticky;
   top: 1.25rem;
