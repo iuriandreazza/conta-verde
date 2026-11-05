@@ -66,7 +66,12 @@ First slice (`feat/audit-trail`), covering parties. Where it differs from the de
   cannot be enforced; a trigger raises on `UPDATE`, `DELETE` and `TRUNCATE` of `audit_log`. It protects against bugs, not
   against a superuser, who can drop the trigger.
 - Order is `audit_log.sequence` (an identity column), not the timestamp, so rows written in the same millisecond keep a stable
-  order. Time is exposed as epoch milliseconds; the SPA formats it in the user's time zone.
+  order. The sequence is assigned when the row is inserted, not when the transaction commits, so two concurrent writes can
+  commit in the opposite order; for one party's trail (writes are rare and a CNPJ re-check is throttled) this does not matter,
+  but a consumer that follows the whole log by sequence, such as the accountant export, must not assume it never skips ahead.
+  A re-check reads the previous check before asking the registry and then replaces it unconditionally, so its recorded "from"
+  could be stale if something else changed the check in between; the throttle makes that practically impossible, and a
+  conditional update would close it if more writers appear. Time is exposed as epoch milliseconds; the SPA formats it in the user's time zone.
 - `GET /companies/{company_id}/parties/{party_id}/history` returns the entries oldest first; a party of another company is a
   `404`, like everywhere else. The SPA shows it under "Histórico" in each row, loaded when opened.
 - **Not done yet:** soft delete and audited hard delete (there is no delete endpoint), a history for entities other than

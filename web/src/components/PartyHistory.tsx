@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, errorMessage, type HistoryEntry } from "../api";
+import { Button } from "./Button";
 import { Notice } from "./Notice";
 import { Spinner } from "./Spinner";
 
@@ -38,16 +39,26 @@ const formatTime = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeSt
 export function PartyHistory({ companyId, partyId }: { companyId: string; partyId: string }) {
   const [entries, setEntries] = useState<HistoryEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Bumped by the retry button to load again.
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
+    setError(null);
     api
       .partyHistory(companyId, partyId)
       .then((loaded) => setEntries([...loaded].reverse()))
       .catch((failure: unknown) => setError(errorMessage(failure)));
-  }, [companyId, partyId]);
+  }, [companyId, partyId, attempt]);
 
   if (error) {
-    return <Notice message={error} />;
+    return (
+      <>
+        <Notice message={error} />
+        <Button type="button" variant="ghost" className="btn-small" onClick={() => setAttempt(attempt + 1)}>
+          Tentar de novo
+        </Button>
+      </>
+    );
   }
   if (entries === null) {
     return (

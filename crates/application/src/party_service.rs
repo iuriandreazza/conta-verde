@@ -136,8 +136,9 @@ impl<R: PartyRepository, C: CnpjRegistry> PartyService<R, C> {
             self.release_recheck(&cnpj_key);
             return Err(ApplicationError::LookupDisabled);
         }
-        let changes = document_check_changes(party.document_check(), &check_from(answer.clone()));
-        let party = party.with_document_check(check_from(answer));
+        let new_check = check_from(answer);
+        let changes = document_check_changes(party.document_check(), &new_check);
+        let party = party.with_document_check(new_check);
         if changes.is_empty() {
             return Ok(party);
         }

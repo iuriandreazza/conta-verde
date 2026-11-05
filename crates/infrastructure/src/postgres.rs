@@ -367,6 +367,38 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires DATABASE_URL"]
+    async fn a_party_is_not_stored_when_its_audit_row_cannot_be_written() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let repository = PostgresPartyRepository::new(pool);
+        let party = Party::new(
+            PartyId::generate(),
+            company,
+            PartyDraft {
+                name: "Padaria".into(),
+                document: None,
+                email: None,
+                is_customer: true,
+                is_supplier: false,
+            },
+        )
+        .unwrap();
+        // The entry names a company that does not exist, so the audit insert violates its foreign
+        // key *after* the party insert succeeded inside the transaction.
+        let broken = AuditEntry {
+            company_id: CompanyId::generate(),
+            ..contract::created_entry(&party)
+        };
+
+        assert!(matches!(
+            repository.save(&party, &broken).await,
+            Err(RepositoryError::Storage(_))
+        ));
+        assert_eq!(repository.find(company, party.id()).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
     async fn the_audit_log_cannot_be_changed_or_deleted() {
         let pool = contract::test_pool().await;
         let company = contract::create_company(&pool).await;

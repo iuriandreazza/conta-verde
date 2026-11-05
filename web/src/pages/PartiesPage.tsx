@@ -247,6 +247,7 @@ export function PartiesPage() {
                         className="btn-small"
                         aria-label={`Histórico de ${party.name}`}
                         aria-expanded={historyOpenFor === party.id}
+                        aria-controls={`history-${party.id}`}
                         icon={HistoryIcon}
                         onClick={() =>
                           setHistoryOpenFor(historyOpenFor === party.id ? null : party.id)
@@ -257,8 +258,8 @@ export function PartiesPage() {
                     </td>
                   </motion.tr>
                   {historyOpenFor === party.id && (
-                    <tr>
-                      <td colSpan={5}>
+                    <tr id={`history-${party.id}`}>
+                      <td colSpan={5} role="region" aria-label={`Histórico de ${party.name}`}>
                         <PartyHistory
                           // Remounted when the check changes, so an open history follows a re-check.
                           key={`${party.document_check.status}-${party.document_check.situation}`}

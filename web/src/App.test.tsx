@@ -414,10 +414,30 @@ describe("App", () => {
       expect(screen.queryByText(/cadastrou/)).not.toBeInTheDocument();
     });
 
-    it("shows the API's reason when the history cannot be loaded", async () => {
-      listWithHistory(() => ({ status: 500, body: { error: "internal error" } }));
-      await userEvent.click(await screen.findByRole("button", { name: "Histórico de Padaria Central" }));
+    it("shows the API's reason when the history cannot be loaded, and can try again", async () => {
+      let calls = 0;
+      listWithHistory(() => {
+        calls += 1;
+        return calls === 1
+          ? { status: 500, body: { error: "internal error" } }
+          : { status: 200, body: [created] };
+      });
+      const opener = await screen.findByRole("button", { name: "Histórico de Padaria Central" });
+      await userEvent.click(opener);
       expect(await screen.findByRole("alert")).toHaveTextContent("internal error");
+
+      await userEvent.click(screen.getByRole("button", { name: "Tentar de novo" }));
+      expect(await screen.findByText(/cadastrou/)).toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("names the panel and ties the toggle to it", async () => {
+      listWithHistory(() => ({ status: 200, body: [created] }));
+      const opener = await screen.findByRole("button", { name: "Histórico de Padaria Central" });
+      await userEvent.click(opener);
+
+      const panel = await screen.findByRole("region", { name: "Histórico de Padaria Central" });
+      expect(opener.getAttribute("aria-controls")).toBe(panel.closest("tr")?.id);
     });
   });
 
