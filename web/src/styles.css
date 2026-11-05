@@ -1264,6 +1264,20 @@ tbody tr:last-child td {
   grid-column: span 2;
 }
 
+.import-card {
+  margin-top: 1.5rem;
+}
+
+.import-card .muted p {
+  margin: 0 0 0.5rem;
+}
+
+.import-notes ul {
+  margin: 0.25rem 0 0.75rem;
+  padding-left: 1.25rem;
+  font-size: 0.9rem;
+}
+
 .contacts {
   display: grid;
   gap: 0.75rem;

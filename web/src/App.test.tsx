@@ -2000,7 +2000,9 @@ describe("changing a party, its roles and its address", () => {
     expect(screen.getByText("Número:")).toBeInTheDocument();
     expect(screen.getByText("Etiquetas:")).toBeInTheDocument();
     expect(screen.getByText("Contatos:")).toBeInTheDocument();
-    expect(screen.queryByText(/is_carrier|postal_code|street_number/)).not.toBeInTheDocument();
+    // The history uses the names people read, not the API's (the import help names the columns).
+    const history = screen.getByRole("region", { name: "Histórico de Padaria" });
+    expect(within(history).queryByText(/is_carrier|postal_code|street_number/)).not.toBeInTheDocument();
   });
 });
 
@@ -2142,5 +2144,122 @@ describe("looking an address up by CEP", () => {
     // The form still works by hand.
     await userEvent.type(screen.getByLabelText("Logradouro"), "Rua A");
     expect(screen.getByLabelText("Logradouro")).toHaveValue("Rua A");
+  });
+});
+
+describe("importing parties from a CSV file", () => {
+  const empty = { status: 200, body: { items: [], next_cursor: null } };
+  const csv = (text = "name,customer\nAna,sim\n") =>
+    new File([text], "clientes.csv", { type: "text/csv" });
+  const imports = (fetchMock: ReturnType<typeof mockApi>) =>
+    fetchMock.mock.calls.filter(([url]) => String(url).includes("/parties/import"));
+
+  async function chooseFile(file: File) {
+    renderAt("/companies/c1/parties");
+    await screen.findByRole("heading", { name: "Importar de um arquivo CSV" });
+    await userEvent.upload(screen.getByLabelText("Arquivo CSV"), file);
+  }
+
+  it("offers a template, and needs a file before it checks or imports", async () => {
+    mockApi((url) => (url === "/api/auth/me" ? { status: 200, body: profile } : empty));
+    renderAt("/companies/c1/parties");
+
+    await screen.findByRole("heading", { name: "Importar de um arquivo CSV" });
+    const template = screen.getByRole("link", { name: "Baixar modelo" });
+    expect(template).toHaveAttribute("download", "clientes-e-fornecedores.csv");
+    expect(decodeURIComponent(template.getAttribute("href") ?? "")).toContain("name,document,email");
+    expect(screen.getByRole("button", { name: "Verificar arquivo" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Importar" })).toBeDisabled();
+  });
+
+  it("checks the file without writing, listing every problem with its row", async () => {
+    const fetchMock = mockApi((url) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (url.includes("/parties/import")) {
+        return {
+          status: 200,
+          body: {
+            dry_run: true,
+            valid: 1,
+            created: 0,
+            skipped: [],
+            refused: [
+              { row: 3, message: "document is not a valid CPF or CNPJ" },
+              { row: 4, message: "the same document as row 2" },
+            ],
+          },
+        };
+      }
+      return empty;
+    });
+    await chooseFile(csv());
+    await userEvent.click(screen.getByRole("button", { name: "Verificar arquivo" }));
+
+    expect(await screen.findByText(/Nada foi importado: 2 linhas têm problema/)).toBeInTheDocument();
+    // The input gets the keyboard back after it was emptied.
+    expect(screen.getByLabelText("Arquivo CSV")).toHaveFocus();
+    expect(screen.getByText("Linha 3: document is not a valid CPF or CNPJ")).toBeInTheDocument();
+    expect(screen.getByText("Linha 4: the same document as row 2")).toBeInTheDocument();
+    const [url, init] = imports(fetchMock)[0];
+    expect(String(url)).toBe("/api/companies/c1/parties/import?dry_run=true");
+    expect(init?.method).toBe("POST");
+    expect(new Headers(init?.headers).get("Content-Type")).toBe("text/csv");
+    // The file goes as it is, not read into text and sent again.
+    expect(init?.body).toBeInstanceOf(File);
+    // A file with problems is let go: the fixed one is chosen again.
+    expect(screen.getByRole("button", { name: "Importar" })).toBeDisabled();
+  });
+
+  it("imports, says what was skipped, and reloads the list", async () => {
+    let imported = false;
+    const fetchMock = mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (url.includes("/parties/import")) {
+        imported = true;
+        expect(url).not.toContain("dry_run");
+        return {
+          status: 200,
+          body: {
+            dry_run: false,
+            valid: 3,
+            created: 2,
+            skipped: [{ row: 2, message: "a party with this document already exists" }],
+            refused: [],
+          },
+        };
+      }
+      expect(init?.method).toBeUndefined();
+      return imported
+        ? { status: 200, body: { items: [party("Ana"), party("Bruno")], next_cursor: null } }
+        : empty;
+    });
+    await chooseFile(csv());
+    await userEvent.click(screen.getByRole("button", { name: "Importar" }));
+
+    expect(await screen.findByText("2 cadastros criados; 1 linha ignorada.")).toBeInTheDocument();
+    expect(screen.getByText("Linha 2: a party with this document already exists")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Alterar Bruno" })).toBeInTheDocument();
+    expect(imports(fetchMock)).toHaveLength(1);
+    // The file is let go once it was imported, so it is not sent twice by a second click.
+    expect(screen.getByRole("button", { name: "Importar" })).toBeDisabled();
+  });
+
+  it("shows why a file that cannot be read was refused", async () => {
+    mockApi((url) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (url.includes("/parties/import")) {
+        return {
+          status: 422,
+          body: { error: "the file has columns this import does not know: phone" },
+        };
+      }
+      return empty;
+    });
+    await chooseFile(csv("name,phone\nAna,1\n"));
+    await userEvent.click(screen.getByRole("button", { name: "Importar" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("does not know: phone");
+    // The file is let go, so the fixed one has to be chosen again.
+    expect(screen.getByRole("button", { name: "Importar" })).toBeDisabled();
   });
 });

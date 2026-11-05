@@ -14,6 +14,7 @@ import { ListRow } from "../components/ListRow";
 import { Notice, type NoticeTone } from "../components/Notice";
 import { PartyForm } from "../components/PartyForm";
 import { Button } from "../components/Button";
+import { CsvImport } from "../components/CsvImport";
 import { ChevronDownIcon } from "../components/icons/chevron-down";
 import { HistoryIcon } from "../components/icons/history";
 import { RefreshCWIcon } from "../components/icons/refresh-cw";
@@ -354,9 +355,37 @@ export function PartiesPage() {
         />
       </aside>
       </div>
+      <CsvImport
+        title="Importar de um arquivo CSV"
+        template={PARTIES_TEMPLATE}
+        templateName="clientes-e-fornecedores.csv"
+        run={(file, dryRun) => api.importParties(companyId, file, dryRun)}
+        onImported={() => void loadFirstPage()}
+      >
+        <p>
+          A primeira linha dá o nome das colunas, em qualquer ordem; a vírgula ou o ponto e vírgula
+          separam. Só <code>name</code> é obrigatória, e ao menos uma de <code>customer</code>,{" "}
+          <code>supplier</code>, <code>carrier</code> e <code>seller</code> diz o que o cadastro é
+          (<code>sim</code> ou <code>não</code>). O endereço é <code>postal_code</code>,{" "}
+          <code>street</code>, <code>number</code>, <code>complement</code>, <code>district</code>,{" "}
+          <code>city</code> e <code>state</code>; as etiquetas vão em <code>tags</code>, separadas por{" "}
+          <code>|</code>. Contatos se adicionam depois, um a um.
+        </p>
+        <p>
+          Nada é importado enquanto uma linha tiver problema. Quem já tem o mesmo documento é
+          ignorado, nunca sobrescrito. Os CNPJs não são consultados na Receita: use "Verificar de
+          novo" depois.
+        </p>
+      </CsvImport>
     </>
   );
 }
+
+const PARTIES_TEMPLATE = [
+  "name,document,email,customer,supplier,carrier,seller,postal_code,street,number,complement,district,city,state,tags",
+  "Padaria Central,11.222.333/0001-81,contato@padaria.example,sim,não,não,não,01310-100,Avenida Paulista,1000,,Bela Vista,São Paulo,SP,vip|atacado",
+  "",
+].join("\n");
 
 interface RegistryNotice {
   message: string;

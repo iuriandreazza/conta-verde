@@ -35,7 +35,7 @@ Registers:
 - [x] Products and services: SKU, unit, NCM, prices, minimum stock, active flag ([ADR 0019](adr/0019-products-and-services.md)) — registering, editing and deactivating with a history; stock balances come with Phase 5
 - [x] Categories as a tree with DRE group mapping; cost centers ([ADR 0012](adr/0012-managerial-accounting-model.md)) — the tree, its groups, the default template and the flat cost centers; entries and the DRE come with Phases 2 and 6
 - [x] Bank accounts (checking, savings, cash, card), payment methods, payment terms ([ADR 0021](adr/0021-bank-accounts-payment-methods-and-terms.md)) — registers only: opening balances, applying a term to an amount and the fiscal payment codes come later
-- [ ] CSV import for parties and products
+- [ ] CSV import for parties and products ([ADR 0025](adr/0025-csv-import.md)) — parties are in (check everything first, then write row by row, skip what is registered); products come next
 - [x] Web app skeleton: login, company switcher, register screens ([ADR 0005](adr/0005-spa-frontend.md)) — sign in, sign up, company picker, and the parties list and form, with the AGPL "Source code" footer link
 - [x] UX pass: sidebar shell, shared design tokens ([docs/design](design/README.md)) and a company dashboard with sample data ([ADR 0020](adr/0020-app-shell-charts-and-sample-data.md)); the numbers become real in Phase 2
 

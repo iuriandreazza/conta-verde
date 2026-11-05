@@ -78,6 +78,22 @@ export interface PostalCodeEntry {
   state: string;
 }
 
+/** A row of an import file with something to say about it; the number is the one a spreadsheet shows. */
+export interface ImportNote {
+  row: number;
+  message: string;
+}
+
+/** What an import did, or with `dry_run` would do. Nothing is created while a row is refused. */
+export interface ImportResult {
+  dry_run: boolean;
+  valid: number;
+  created: number;
+  /** Rows whose document or SKU is already registered: never overwritten. */
+  skipped: ImportNote[];
+  refused: ImportNote[];
+}
+
 export interface PartyPage {
   items: Party[];
   next_cursor: string | null;
@@ -370,7 +386,7 @@ export function setSessionLostHandler(handler: (() => void) | null) {
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
-  if (init.body !== undefined) {
+  if (init.body !== undefined && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
   const response = await fetch(`/api${path}`, { ...init, headers });
@@ -425,6 +441,12 @@ export const api = {
   lookupPostalCode: (companyId: string, postalCode: string) =>
     request<PostalCodeEntry>(
       `/companies/${companyId}/postal-codes/${postalCode.replace(/\D/g, "")}`,
+    ),
+  /** The file goes as it is, bytes and all: the API says if it is not UTF-8. */
+  importParties: (companyId: string, file: File, dryRun: boolean) =>
+    request<ImportResult>(
+      `/companies/${companyId}/parties/import${dryRun ? "?dry_run=true" : ""}`,
+      { method: "POST", headers: { "Content-Type": "text/csv" }, body: file },
     ),
   partyHistory: (companyId: string, partyId: string) =>
     request<HistoryEntry[]>(`/companies/${companyId}/parties/${partyId}/history`),

@@ -19,6 +19,7 @@ axum.workspace = true
 conta-verde-application.workspace = true
 conta-verde-domain.workspace = true
 conta-verde-infrastructure.workspace = true
+csv.workspace = true
 serde.workspace = true
 tokio.workspace = true
 tracing.workspace = true

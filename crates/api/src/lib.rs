@@ -3,12 +3,14 @@ mod auth;
 mod bank_accounts;
 mod categories;
 mod cost_centers;
+mod csv_import;
 mod cursor;
 mod error;
 mod history;
 mod json;
 mod list_params;
 mod parties;
+mod parties_import;
 mod payment_methods;
 mod payment_terms;
 mod postal_codes;
@@ -101,6 +103,10 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         .route(
             "/companies/{company_id}/parties",
             get(parties::list_parties::<X>).post(parties::register_party::<X>),
+        )
+        .route(
+            "/companies/{company_id}/parties/import",
+            post(parties_import::import_parties::<X>),
         )
         .route(
             "/companies/{company_id}/parties/{party_id}",
@@ -975,6 +981,234 @@ mod tests {
         )
         .await;
         assert_eq!(reply.status, StatusCode::CONFLICT);
+    }
+
+    fn csv_request(uri: &str, cookie: Option<&str>, body: impl Into<Body>) -> Request<Body> {
+        let mut builder = Request::post(uri).header(header::CONTENT_TYPE, "text/csv");
+        if let Some(cookie) = cookie {
+            builder = builder.header(header::COOKIE, cookie);
+        }
+        builder.body(body.into()).unwrap()
+    }
+
+    fn import_uri(company_id: Uuid, query: &str) -> String {
+        format!("/companies/{company_id}/parties/import{query}")
+    }
+
+    #[tokio::test]
+    async fn imports_parties_from_a_csv_file_with_semicolons_roles_tags_and_an_address() {
+        let app = app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let file = "\u{feff}Name;Document;Email;Customer;Supplier;Postal_Code;Street;City;State;Tags\n\
+                    Padaria Central;11.222.333/0001-81;contato@padaria.example;sim;;;;;;VIP|atacado\n\
+                    Ana Souza;529.982.247-25;;sim;não;01310-100;Avenida Paulista;São Paulo;sp;\n\
+                    \"Silva; Filhos\";;;;s;;;;;\n";
+        let reply = send(
+            &app,
+            csv_request(&import_uri(company_id, ""), Some(&cookie), file),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert_eq!(reply.body["created"], 3);
+        assert_eq!(reply.body["valid"], 3);
+        assert_eq!(reply.body["dry_run"], false);
+        assert_eq!(reply.body["refused"], json!([]));
+
+        let listed = send(&app, get_request(&parties_uri(company_id), Some(&cookie))).await;
+        let items = listed.body["items"].as_array().unwrap();
+        let names: Vec<&str> = items.iter().map(|i| i["name"].as_str().unwrap()).collect();
+        assert_eq!(names, ["Ana Souza", "Padaria Central", "Silva; Filhos"]);
+        assert_eq!(items[0]["address"]["state"], "SP");
+        assert_eq!(items[0]["address"]["postal_code"], "01310100");
+        assert_eq!(items[1]["tags"], json!(["atacado", "vip"]));
+        assert_eq!(items[2]["is_supplier"], true);
+        // The registry knows this CNPJ, but the import does not ask it: the check stays open.
+        assert_eq!(items[1]["document_check"]["status"], "unverified");
+        assert_eq!(items[0]["document_check"]["status"], "not_applicable");
+
+        let history = send(
+            &app,
+            get_request(
+                &format!(
+                    "{}/{}/history",
+                    parties_uri(company_id),
+                    items[0]["id"].as_str().unwrap()
+                ),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(history.body.as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_dry_run_and_a_file_with_a_bad_row_write_nothing_and_name_every_bad_row() {
+        let app = app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let good = "name,document,customer\nAna,529.982.247-25,sim\n";
+        let dry = send(
+            &app,
+            csv_request(
+                &import_uri(company_id, "?dry_run=true"),
+                Some(&cookie),
+                good,
+            ),
+        )
+        .await;
+        assert_eq!(dry.body["dry_run"], true);
+        assert_eq!(
+            (dry.body["valid"].clone(), dry.body["created"].clone()),
+            (json!(1), json!(0))
+        );
+
+        let bad = "name,document,customer,supplier\n\
+                   Ana,529.982.247-25,sim,\n\
+                   Bruno,111.111.111-11,sim,\n\
+                   Ana de novo,52998224725,sim,\n\
+                   Carla,,talvez,\n\
+                   Dani,,,\n";
+        let reply = send(
+            &app,
+            csv_request(&import_uri(company_id, ""), Some(&cookie), bad),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::OK);
+        assert_eq!(reply.body["created"], 0);
+        assert_eq!(
+            reply.body["refused"],
+            json!([
+                { "row": 3, "message": "document is not a valid CPF or CNPJ" },
+                { "row": 4, "message": "the same document as row 2" },
+                { "row": 5, "message": "customer must be sim or não" },
+                { "row": 6, "message": "party must be a customer, a supplier, a carrier or a seller" },
+            ])
+        );
+        let listed = send(&app, get_request(&parties_uri(company_id), Some(&cookie))).await;
+        assert!(listed.body["items"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_row_with_an_unquoted_separator_is_refused_for_its_row_and_blank_rows_are_ignored() {
+        let app = app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let file = "name;customer;\nAna;sim;\nSilva; Filhos;sim;\n;;\nBruno;sim;\n";
+        let reply = send(
+            &app,
+            csv_request(&import_uri(company_id, ""), Some(&cookie), file),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert_eq!(reply.body["created"], 0);
+        let refused = reply.body["refused"].as_array().unwrap();
+        assert_eq!(refused.len(), 1);
+        assert_eq!(refused[0]["row"], 3);
+        assert!(
+            refused[0]["message"]
+                .as_str()
+                .unwrap()
+                .contains("goes in quotes")
+        );
+
+        // Quoted, and with the empty row and the empty column left out, the file goes through and
+        // keeps the numbers a spreadsheet shows.
+        let fixed = "name;customer;\nAna;sim;\n\"Silva; Filhos\";sim;\n;;\nBruno;sim;\n";
+        let reply = send(
+            &app,
+            csv_request(&import_uri(company_id, ""), Some(&cookie), fixed),
+        )
+        .await;
+        assert_eq!(reply.body["created"], 3);
+    }
+
+    #[tokio::test]
+    async fn a_document_already_registered_is_skipped_and_never_overwritten() {
+        let app = app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let mut body = party_body();
+        body["document"] = json!("529.982.247-25");
+        body["name"] = json!("Ana original");
+        send(
+            &app,
+            json_request("POST", &parties_uri(company_id), Some(&cookie), body),
+        )
+        .await;
+
+        let file = "name,document,customer\nAna do arquivo,529.982.247-25,sim\nBruno,,sim\n";
+        let reply = send(
+            &app,
+            csv_request(&import_uri(company_id, ""), Some(&cookie), file),
+        )
+        .await;
+        assert_eq!(reply.body["created"], 1);
+        assert_eq!(
+            reply.body["skipped"],
+            json!([{ "row": 2, "message": "a party with this document already exists" }])
+        );
+        let listed = send(&app, get_request(&parties_uri(company_id), Some(&cookie))).await;
+        let names: Vec<&str> = listed.body["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["Ana original", "Bruno"]);
+    }
+
+    #[tokio::test]
+    async fn a_file_that_cannot_be_read_is_refused_with_what_to_change() {
+        let app = app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let post = |query: &str, body: Vec<u8>| {
+            csv_request(&import_uri(company_id, query), Some(&cookie), body)
+        };
+        let cases: [(Vec<u8>, &str); 4] = [
+            (
+                b"name,customer,phone\nAna,sim,1\n".to_vec(),
+                "does not know: phone",
+            ),
+            (
+                b"name,document\nAna,\n".to_vec(),
+                "at least one of the columns customer",
+            ),
+            (vec![0xff, 0xfe, b'n'], "not UTF-8"),
+            (b"name,customer\n".to_vec(), "no rows"),
+        ];
+        for (file, expected) in cases {
+            let reply = send(&app, post("", file)).await;
+            assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "{expected}");
+            assert!(
+                reply.body["error"].as_str().unwrap().contains(expected),
+                "{expected}"
+            );
+        }
+        let too_big = send(&app, post("", vec![b'a'; 1024 * 1024 + 1])).await;
+        assert_eq!(too_big.status, StatusCode::PAYLOAD_TOO_LARGE);
+        assert!(too_big.body["error"].as_str().unwrap().contains("1 MiB"));
+        let typo = send(
+            &app,
+            post("?dryrun=true", b"name,customer\nAna,sim\n".to_vec()),
+        )
+        .await;
+        assert_eq!(typo.status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn an_import_needs_a_session_and_a_company_of_the_caller() {
+        let app = app();
+        let (_, company_id) = sign_up(&app, "ana@example.com").await;
+        let (stranger, _) = sign_up(&app, "bia@example.com").await;
+        let file = "name,customer\nAna,sim\n";
+        let uri = import_uri(company_id, "");
+        assert_eq!(
+            send(&app, csv_request(&uri, None, file)).await.status,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            send(&app, csv_request(&uri, Some(&stranger), file))
+                .await
+                .status,
+            StatusCode::NOT_FOUND
+        );
     }
 
     async fn register_party(app: &Router, document: Option<&str>) -> Reply {

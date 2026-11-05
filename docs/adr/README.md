@@ -40,6 +40,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0022](0022-party-roles-address-and-editing.md) | Party roles, address and editing | accepted | 1 |
 | [0023](0023-party-contacts-and-tags.md) | Party contacts and tags | accepted | 1 |
 | [0024](0024-postal-code-lookup.md) | Postal code (CEP) lookup behind a port | accepted | 1 |
+| [0025](0025-csv-import.md) | CSV import of registers | accepted | 1 |
 
 ## Template
 
