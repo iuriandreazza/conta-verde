@@ -46,12 +46,18 @@ Customer-facing links (payment page, quote approval) are signed tokens served by
 
 ## Implementation notes
 
-Phase 1 ships the e-mail half only, and not yet the jobs: the `EmailSender` port, a **log** adapter
-that writes the message to the server's log (the default, for an installation without a mail
-server), and fakes for tests. Invitations ([ADR 0027](0027-invitations.md)) send inline in the
+Phase 1 ships the e-mail half only, and not yet the jobs: the `EmailSender` port, an **SMTP** adapter
+(`SMTP_URL` and `SMTP_FROM`, both or neither: the URL says how to reach the server and how to trust it,
+`smtp://` in the clear for a local catcher, `?tls=required` for STARTTLS, `smtps://` for TLS from the first
+byte; a password is refused on a connection that is not encrypted unless the server is this machine; the whole
+send is bounded by a 10 s timeout of our own, since the library's only bounds opening the connection, not the
+greeting, the handshake or any command: a timeout can therefore report as not sent a message the server did accept), a **log** adapter that writes the message to the server's log and says it was
+not sent (the default, for an installation without a mail server), and fakes for tests. Development uses
+[Mailpit](https://mailpit.axllent.org) from `docker compose`, which catches everything the app sends. Invitations ([ADR 0027](0027-invitations.md)) send inline in the
 request, which this ADR says not to, because there are no background jobs yet; a send that fails
-never fails what asked for it. The SMTP adapter, the `notifications` table and the WhatsApp port
-come as they are needed.
+never fails what asked for it. The `notifications` table and the WhatsApp port come as they are needed. There is no rate limit on
+sending yet: an admin can invite many addresses through the operator's mail identity, each request waiting up to the
+timeout. A limiter in front of the API, or the job queue, is the remedy before the app is exposed.
 
 ## Revisit when
 

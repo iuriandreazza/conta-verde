@@ -13,11 +13,12 @@ accepting the `proposed` ADRs it depends on.
 pnpm install                 # once: installs husky and enables the pre-commit hook
 pnpm check                   # Rust fmt/clippy/tests plus web typecheck/tests (what the hook runs)
 docker compose up -d db      # PostgreSQL for local runs and ignored tests
+docker compose up -d mailpit # catches the e-mail the app sends, at http://localhost:8025 (SMTP on 1025)
 export $(cat .env.example | xargs)
 cargo test --workspace -- --ignored   # Postgres integration tests (need DATABASE_URL)
 cargo run -p conta-verde-api
 pnpm --filter conta-verde-web dev     # web app on http://localhost:5173, proxies /api to the API
-pnpm dev                     # database + API + web on free ports (also: pnpm db, pnpm api, pnpm web)
+pnpm dev                     # database + Mailpit + API + web on free ports (also: pnpm db, pnpm api, pnpm web)
 ```
 
 CI (`.github/workflows/ci.yml`) runs the same checks plus the ignored tests against a Postgres service, and builds the web app.
@@ -68,7 +69,7 @@ Rules that are easy to break:
 ## Gotchas
 
 - Auth is cookie sessions (ADR 0007). Every `/companies/{company_id}/...` handler must take the `CompanyAccess` extractor (before any `Json`/`Query`); missing sessions get `401`, non-members and unknown companies both get `404`, and a member whose role does not reach the route gets `403`.
-- An invitation's link carries a 256-bit token whose SHA-256 digest is all the database keeps, is shown once, and gives nothing by itself: accepting needs the session of the address it was sent to (ADR 0027). `GET /invitations/{token}` is the one route that needs no session. Sending the e-mail never fails the invitation (`EmailSender`, ADR 0014); the default adapter only logs the message, and the log then holds the link. Tokens come from `SecretService::new_token` and are stored as `digest_token`, never raw.
+- An invitation's link carries a 256-bit token whose SHA-256 digest is all the database keeps, is shown once, and gives nothing by itself: accepting needs the session of the address it was sent to (ADR 0027). `GET /invitations/{token}` is the one route that needs no session. Sending the e-mail never fails the invitation (`EmailSender`, ADR 0014): `SMTP_URL` and `SMTP_FROM` (both or neither, or the server does not start) send it through `SmtpEmailSender`, and without them the log adapter only logs it and says it was not sent, and the log then holds the link. Tests never reach a mail server: use `InMemoryEmailSender` or the fake SMTP server in `smtp_email_sender.rs`. Tokens come from `SecretService::new_token` and are stored as `digest_token`, never raw.
 - What a role may do is decided by `CompanyAccess` from the **route**, not by the handler (ADR 0026): the area is the segment after `{company_id}` and the access is the method (`GET` reads, anything else writes). A new family of company routes needs its segment added to `area_of` in `access.rs`, or it is refused to everybody; the table is `Role::access_to` in the domain, and the web app reads `permissions` from `/auth/me` instead of knowing it.
 - Not built yet: password reset, login rate limiting, removing a member or changing a role. The API still binds to `127.0.0.1` by default and needs a TLS proxy plus `COOKIE_SECURE=true` before being exposed. Do not change the default bind address.
 - The foreign key `parties.company_id -> companies` fails on old dev databases holding orphan parties: `docker compose down -v` resets it.

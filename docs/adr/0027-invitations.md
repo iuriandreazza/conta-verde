@@ -67,7 +67,7 @@ one, what its link may give to whoever holds it, and how the e-mail goes out
 - **Sending never fails the invitation.** The invitation exists whether or not the message went
   out, and the answer says `emailed: true` or `false`; the web page shows the link either way so
   the person who invited can pass it on.
-- The default adapter **writes the message to the server's log**, sends nothing and says so (it answers that the message was not sent, so the page shows the link instead of claiming an e-mail went out). The log then
+- With `SMTP_URL` set the message goes through SMTP ([ADR 0014](0014-notifications.md)); otherwise the default adapter **writes the message to the server's log**, sends nothing and says so (it answers that the message was not sent, so the page shows the link instead of claiming an e-mail went out). The log then
   holds the link, which, by the rule above, accepts nothing for anyone but the address it names.
   A real SMTP adapter and a local mail catcher come next, behind the same port.
 - Sending is inline in the request, which ADR 0014 says it should not be: there are no background
