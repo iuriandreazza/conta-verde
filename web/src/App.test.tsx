@@ -1123,7 +1123,8 @@ describe("categories", () => {
     mockApi((url) => (url === "/api/auth/me" ? { status: 200, body: profile } : listed(flat)));
     renderAt("/companies/c1/categories");
 
-    const select = await screen.findByLabelText("Subcategoria de");
+    await screen.findByRole("table");
+    const select = screen.getByLabelText("Subcategoria de");
     const options = within(select).getAllByRole("option").map((option) => option.textContent);
     expect(options).toEqual(["Nenhuma: categoria principal", "Despesas", "— Aluguel", "Receitas", "— Vendas"]);
   });
