@@ -57,8 +57,30 @@ splits an amount.
 
 ### Payment terms
 
-Not decided here. They are a register with child rows and a rule that spans rows (installments that
-sum to exactly 100), so they are decided with their own change, which adds the decision to this ADR.
+A name and an ordered list of installments, each a number of **days** after the date the term is
+applied to and a **percentage** of the amount ("30/60/90", "50% now, 50% in 30 days").
+
+- **Days only.** "The same day of next month" is a different rule (it depends on the calendar) and
+  is left for when it is needed. Day 0 is "à vista".
+- **Rules of the term**, checked by the domain, each with its own error: at least one and at most 24
+  installments; days from 0 to 3650, strictly increasing; every percentage more than 0 and at most
+  100, with at most **two decimals**; and the percentages add up to **exactly 100**.
+- **No rounding.** A percentage with more than two decimals is refused, never rounded. Splitting an
+  amount into shares that do not come out even is the rule of whoever applies the term (the
+  remainder goes to the last installment, [ADR 0003](0003-money-as-decimal.md)); the web form
+  applies the same rule to fill in "33.33, 33.33, 33.34" for three equal installments, and the
+  domain only checks that the sum is whole. Percentages travel as strings and are kept without
+  trailing zeros (`50.00` is `50`), so every adapter reads the same.
+- **Storage:** a child table keyed by (term, position) whose foreign key carries the company, so an
+  installment cannot be in another company than its term. The installments are replaced as a whole
+  inside the transaction that writes the term and its audit entry, so a refused edit (a duplicate
+  name) leaves the old installments in place. The database refuses what a row can show (position
+  1 to 24, days 0 to 3650, percent above 0 and at most 100, the same day twice); **the sum and the
+  order are the domain's alone**, so a write that bypasses the domain could store a term that does
+  not add up.
+- **Audit:** the installments are one field in the trail, in a canonical text (`0:50,30:50`), so an
+  edit that changes nothing compares equal and one that changes them records the before and after.
+- Applying a term to an amount and a date, and splitting the amount, is the entries' job (Phase 2).
 
 ## Consequences
 
