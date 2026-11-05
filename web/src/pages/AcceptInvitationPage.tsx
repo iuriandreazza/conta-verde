@@ -58,7 +58,7 @@ export function AcceptInvitationPage() {
     }
   }
 
-  if (loaded.status === "loading") {
+  if (loaded.status === "loading" || session.status === "loading") {
     return (
       <p role="status" className="status">
         <Spinner /> Carregando…

@@ -59,9 +59,17 @@ pub trait InvitationRepository: Send + Sync {
         id: InvitationId,
     ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
 
-    /// Marks an open invitation as accepted. `NotFound` when it is not open.
-    fn mark_accepted(
+    /// Takes an open invitation that has not expired at `now_millis`, marking it accepted, in one
+    /// step: of an accept and a revoke that race, one wins and the other finds it gone. `NotFound`
+    /// when it is not open, or has expired.
+    fn claim(
         &self,
         id: InvitationId,
+        now_millis: i64,
     ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
+
+    /// Opens again an invitation that was just claimed, because what the claim was for (the
+    /// membership) could not be written. `NotFound` when it is not an accepted one.
+    fn release(&self, id: InvitationId)
+    -> impl Future<Output = Result<(), RepositoryError>> + Send;
 }

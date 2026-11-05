@@ -9,17 +9,17 @@ use conta_verde_application::{
     SecretService,
 };
 use conta_verde_application::{
-    ImportRow, InvitationRepository, Invited, MemberService, NewAccount, PaymentTermQuery,
-    PaymentTermRepository, PaymentTermService,
+    ImportRow, InvitationRepository, InvitationState, Invited, MemberService, NewAccount,
+    NewInvitation, PaymentTermQuery, PaymentTermRepository, PaymentTermService,
 };
 use conta_verde_domain::{
     Account, AccountDraft, Actor, AddressDraft, AuditAction, AuditEntity, AuditEntry, BankAccount,
     BankAccountDraft, BankAccountId, BankAccountKind, CashFlowGroup, Category, CategoryId,
     CompanyId, Contact, ContactDraft, CostCenter, CostCenterDraft, CostCenterId, DocumentCheck,
-    DomainError, DreGroup, FieldChange, Party, PartyDraft, PartyId, PaymentMethod,
-    PaymentMethodDraft, PaymentMethodId, PaymentMethodKind, PaymentTerm, PaymentTermDraft,
-    PaymentTermId, Product, ProductDraft, ProductId, ProductKind, Role, Tag, UserId,
-    bank_account_changes, bank_account_creation_changes, category_changes,
+    DomainError, DreGroup, FieldChange, Invitation, InvitationId, Party, PartyDraft, PartyId,
+    PaymentMethod, PaymentMethodDraft, PaymentMethodId, PaymentMethodKind, PaymentTerm,
+    PaymentTermDraft, PaymentTermId, Product, ProductDraft, ProductId, ProductKind, Role, Tag,
+    UserId, bank_account_changes, bank_account_creation_changes, category_changes,
     category_creation_changes, cost_center_changes, cost_center_creation_changes, creation_changes,
     document_check_changes, payment_method_changes, payment_method_creation_changes,
     product_changes, product_creation_changes,
@@ -1610,6 +1610,138 @@ pub async fn runs_the_invitation_lifecycle<I, M, S>(
         .filter(|invitation| invitation.email().as_str() == eva_email)
         .count();
     assert_eq!(evas, 1);
+}
+
+/// Claiming an invitation is one step that takes it once, not after it expired or was withdrawn, and
+/// that can be given back when what it was for could not be done.
+pub async fn claims_an_invitation_once_and_only_while_it_lasts<I, M>(
+    invitations: &I,
+    identities: &M,
+) where
+    I: InvitationRepository,
+    M: IdentityRepository,
+{
+    let unique = Uuid::new_v4();
+    let ana = Account::new(
+        UserId::generate(),
+        CompanyId::generate(),
+        AccountDraft {
+            user_name: "Ana".into(),
+            email: format!("ana-{unique}@example.com"),
+            company_name: "Padaria".into(),
+        },
+    )
+    .unwrap();
+    identities
+        .register_account(&NewAccount {
+            account: ana.clone(),
+            password_hash: "not a real hash".into(),
+        })
+        .await
+        .unwrap();
+    let now = 1_800_000_000_000_i64;
+    let digest = |label: &str| format!("{label}-{unique}");
+    let invite = |email: &str| {
+        let invitation = Invitation::new(
+            InvitationId::generate(),
+            ana.company.id(),
+            &format!("{email}-{unique}@example.com"),
+            Role::Sales,
+            ana.user.id(),
+            now,
+            60_000,
+        )
+        .unwrap();
+        (invitation.clone(), digest(email))
+    };
+    let state_of = |digest: String| async move {
+        invitations
+            .find_by_token_digest(&digest)
+            .await
+            .unwrap()
+            .unwrap()
+            .state
+    };
+
+    // Taken once; a second claim, and a release of one that was never claimed, find nothing.
+    let (first, first_digest) = invite("bia");
+    invitations
+        .create(
+            &NewInvitation {
+                invitation: first.clone(),
+                token_digest: first_digest.clone(),
+            },
+            now,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        invitations.release(first.id()).await.unwrap_err(),
+        RepositoryError::NotFound
+    );
+    invitations.claim(first.id(), now + 1_000).await.unwrap();
+    assert_eq!(
+        state_of(first_digest.clone()).await,
+        InvitationState::Accepted
+    );
+    assert_eq!(
+        invitations
+            .claim(first.id(), now + 1_000)
+            .await
+            .unwrap_err(),
+        RepositoryError::NotFound
+    );
+    // Given back, it can be taken again.
+    invitations.release(first.id()).await.unwrap();
+    assert_eq!(state_of(first_digest.clone()).await, InvitationState::Open);
+    invitations.claim(first.id(), now + 1_000).await.unwrap();
+
+    // Not after it expired, and it stays open for whoever lists it.
+    let (late, late_digest) = invite("cris");
+    invitations
+        .create(
+            &NewInvitation {
+                invitation: late.clone(),
+                token_digest: late_digest.clone(),
+            },
+            now,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        invitations
+            .claim(late.id(), now + 60_000)
+            .await
+            .unwrap_err(),
+        RepositoryError::NotFound
+    );
+    assert_eq!(state_of(late_digest).await, InvitationState::Open);
+
+    // Not after it was withdrawn, and a withdrawn one cannot be given back by a release.
+    let (gone, gone_digest) = invite("dani");
+    invitations
+        .create(
+            &NewInvitation {
+                invitation: gone.clone(),
+                token_digest: gone_digest.clone(),
+            },
+            now,
+        )
+        .await
+        .unwrap();
+    invitations
+        .revoke(ana.company.id(), gone.id())
+        .await
+        .unwrap();
+    assert_eq!(
+        invitations.claim(gone.id(), now + 1_000).await.unwrap_err(),
+        RepositoryError::NotFound
+    );
+    assert_eq!(
+        invitations.release(gone.id()).await.unwrap_err(),
+        RepositoryError::NotFound
+    );
+    assert_eq!(state_of(gone_digest).await, InvitationState::Revoked);
 }
 
 /// Expects an `AuthService` whose sessions last zero seconds.

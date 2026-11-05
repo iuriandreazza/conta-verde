@@ -38,16 +38,26 @@ one, what its link may give to whoever holds it, and how the e-mail goes out
   database keeps only its **SHA-256 digest**, so a leaked database leaks no usable link, and the
   link is shown to the person who invites **once**, in the answer that creates it. Listing the
   open invitations never shows it.
-- **A link alone gives nothing.** Accepting needs a session, and the session must be the
-  **address the invitation was sent to** (`403` otherwise). A link that is forwarded, guessed or
-  read in a log therefore makes nobody a member; the person who holds it only learns what it is for
-  (the company, the address and the role), which the preview, the one route that needs no session,
-  shows so that someone without an account yet can see what they are asked to join.
-- Accepting makes the user a member in the invitation's role and marks the invitation used. The
-  membership is written **first** and the mark after: if the mark is lost the invitation stays open
-  and accepting again finds the membership and finishes, instead of an invitation that is used up
-  and made nobody a member. The two are not one transaction because the identity and invitation
-  stores are separate ports.
+- **The token is the secret; the address only binds it.** Accepting needs a session, and the
+  session must be the **address the invitation was sent to** (`403` otherwise), so a link meant for
+  one address is of no use to an account with another. But **there is no e-mail verification yet**,
+  so owning an account with that address proves nothing about its mailbox: whoever holds the
+  link and the address can register it (if it is free) and accept. The link is therefore **as
+  sensitive as the e-mail that carries it**, and so is **the server's log while it is the only
+  carrier** (below). What the check does give: someone who only knows or guesses an address cannot
+  accept, since the 256-bit token comes only to the person who invites and to the mailbox. Real
+  protection, e-mail verification, or treating a sign-up made through the link as proof of the
+  mailbox, is for a later ADR.
+- The one route that needs no session, the preview, shows what the link is for (the company, the
+  address and the role) to whoever holds the token, so that someone without an account yet can see
+  what they are asked to join.
+- Accepting **claims the invitation first**, in one atomic step that also checks it is still open
+  and unexpired, and **then** makes the membership. An accept that races a withdrawal, or the end
+  of the invitation's time, loses, and no membership is made behind a refusal. If the membership
+  then cannot be written, the claim is given back so the person can try again; if the user is
+  already a member (a second accept that raced the first), the company is theirs and the answer is
+  success. The two are not one transaction because the identity and invitation stores are
+  separate ports.
 
 ### The e-mail
 
@@ -79,6 +89,14 @@ afterwards, and only to an invitation: a crafted `next` goes nowhere else), then
   they end up with an empty company of their own beside the one they joined. The accept page says
   the name can be their own. Joining straight from the invitation, without creating a company, is
   the first thing to improve.
+- **An address can be squatted.** With no e-mail verification, someone who registers an address
+  before its owner does keeps the real person from signing up with it, and from accepting an
+  invitation sent to it (`403`). Without the token the squatter gains nothing else, but the
+  invitee is locked out until verification exists.
+- The names that go into the message (who invited, the company) are typed by people and are put on
+  **one line** (every control character becomes a space), and an e-mail address with a control
+  character is refused, so neither can add a header to a message or forge a line in a log once a
+  real mail server sends it.
 - There is no rate limit on the preview, which needs no session; a token of 256 bits makes
   guessing pointless, and a limiter in front of the API is the remedy for the rest, as for the CNPJ
   and CEP lookups.

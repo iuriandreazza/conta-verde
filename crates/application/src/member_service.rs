@@ -129,6 +129,10 @@ where
             .find(|membership| membership.company.id() == company_id)
             .map(|membership| membership.company.name().to_owned())
             .unwrap_or_default();
+        // The names are typed by people: a line break in one would add headers to the message or
+        // forge lines in a log.
+        let inviter_name = one_line(inviter_name);
+        let company_name = one_line(&company_name);
         let message = EmailMessage {
             to: invitation.email().clone(),
             subject: format!("{inviter_name} convidou você para {company_name} no conta-verde"),
@@ -175,32 +179,40 @@ where
     }
 
     /// Makes the signed-in user a member of the invitation's company, in its role. The user must
-    /// be the address it was sent to: a link that leaks, or is forwarded, gives nothing to anyone
-    /// who has not that address's account.
+    /// be the address it was sent to: a link that leaks, or is forwarded, ties the invitation to
+    /// that address and no one else's account, but does not prove who owns the mailbox: the token
+    /// is what does ([ADR 0027]).
     pub async fn accept(&self, token: &str, user: &User) -> Result<CompanyId, ApplicationError> {
         let stored = self.usable(token).await?;
         let invitation = stored.invitation;
         if user.email() != invitation.email() {
             return Err(ApplicationError::InvitationForAnotherEmail);
         }
-        // Membership first and the mark after: if the mark is lost the invitation stays open, and
-        // accepting it again finds the membership already there and finishes, instead of an
-        // invitation consumed that made nobody a member.
-        match self
-            .identities
-            .add_membership(user.id(), invitation.company_id(), invitation.role())
-            .await
-        {
-            Ok(()) | Err(RepositoryError::DuplicateMembership) => {}
-            Err(error) => return Err(error.into()),
-        }
+        // The invitation is claimed first, in one atomic step that also checks it is still open and
+        // unexpired: an accept that races a withdrawal, or the end of its time, loses, and no
+        // membership is made behind a refusal. If the membership then cannot be written the claim is
+        // given back, so the person can try again.
         self.invitations
-            .mark_accepted(invitation.id())
+            .claim(invitation.id(), now_millis())
             .await
             .map_err(|error| match error {
                 RepositoryError::NotFound => ApplicationError::InvitationNoLongerValid,
                 other => other.into(),
             })?;
+        match self
+            .identities
+            .add_membership(user.id(), invitation.company_id(), invitation.role())
+            .await
+        {
+            // Already a member (a second accept that raced the first): the company is theirs.
+            Ok(()) | Err(RepositoryError::DuplicateMembership) => {}
+            Err(error) => {
+                // Best effort: if even this fails the invitation stays used, and the person asks
+                // for a new one.
+                let _ = self.invitations.release(invitation.id()).await;
+                return Err(error.into());
+            }
+        }
         Ok(invitation.company_id())
     }
 
@@ -218,6 +230,13 @@ where
         }
         Ok(stored)
     }
+}
+
+/// The text on one line: every control character, a line break included, becomes a space.
+fn one_line(text: &str) -> String {
+    text.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
 }
 
 fn now_millis() -> i64 {

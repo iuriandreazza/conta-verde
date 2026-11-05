@@ -64,8 +64,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let payment_terms = PaymentTermService::new(PostgresPaymentTermRepository::new(pool.clone()));
     let postal_codes = PostalCodeService::new(postal_code_directory_from_env()?);
     // Invitation links lead to the web app, which is where the person accepts.
-    let public_url =
-        std::env::var("PUBLIC_URL").unwrap_or_else(|_| "http://localhost:5173".to_owned());
+    let public_url = std::env::var("PUBLIC_URL").unwrap_or_else(|_| {
+        tracing::warn!(
+            "PUBLIC_URL is not set: invitation links will lead to http://localhost:5173"
+        );
+        "http://localhost:5173".to_owned()
+    });
     let members = MemberService::new(
         PostgresInvitationRepository::new(pool.clone()),
         PostgresIdentityRepository::new(pool.clone()),

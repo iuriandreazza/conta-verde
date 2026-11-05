@@ -130,10 +130,27 @@ impl InvitationRepository for PostgresInvitationRepository {
         Ok(())
     }
 
-    async fn mark_accepted(&self, id: InvitationId) -> Result<(), RepositoryError> {
+    async fn claim(&self, id: InvitationId, now_millis: i64) -> Result<(), RepositoryError> {
         let result = sqlx::query(
             "UPDATE invitations SET accepted_at = now() \
-             WHERE id = $1 AND accepted_at IS NULL AND revoked_at IS NULL",
+             WHERE id = $1 AND accepted_at IS NULL AND revoked_at IS NULL \
+             AND expires_at > to_timestamp($2::double precision / 1000)",
+        )
+        .bind(id.as_uuid())
+        .bind(now_millis)
+        .execute(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        if result.rows_affected() == 0 {
+            return Err(RepositoryError::NotFound);
+        }
+        Ok(())
+    }
+
+    async fn release(&self, id: InvitationId) -> Result<(), RepositoryError> {
+        let result = sqlx::query(
+            "UPDATE invitations SET accepted_at = NULL \
+             WHERE id = $1 AND accepted_at IS NOT NULL AND revoked_at IS NULL",
         )
         .bind(id.as_uuid())
         .execute(&self.pool)
@@ -199,6 +216,17 @@ mod tests {
             &service(Duration::from_secs(7 * 86_400)),
             &service(Duration::from_millis(1)),
             &emails,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn claims_an_invitation_once_and_only_while_it_lasts() {
+        let pool = contract::test_pool().await;
+        contract::claims_an_invitation_once_and_only_while_it_lasts(
+            &PostgresInvitationRepository::new(pool.clone()),
+            &PostgresIdentityRepository::new(pool),
         )
         .await;
     }

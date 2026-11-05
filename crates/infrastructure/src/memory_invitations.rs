@@ -115,14 +115,30 @@ impl InvitationRepository for InMemoryInvitationRepository {
         }
     }
 
-    async fn mark_accepted(&self, id: InvitationId) -> Result<(), RepositoryError> {
+    async fn claim(&self, id: InvitationId, now_millis: i64) -> Result<(), RepositoryError> {
         let mut stored = self.invitations.lock().expect("repository lock poisoned");
-        let found = stored
-            .iter_mut()
-            .find(|other| other.state == InvitationState::Open && other.invitation.id() == id);
+        let found = stored.iter_mut().find(|other| {
+            other.state == InvitationState::Open
+                && other.invitation.id() == id
+                && !other.invitation.is_expired_at(now_millis)
+        });
         match found {
             Some(other) => {
                 other.state = InvitationState::Accepted;
+                Ok(())
+            }
+            None => Err(RepositoryError::NotFound),
+        }
+    }
+
+    async fn release(&self, id: InvitationId) -> Result<(), RepositoryError> {
+        let mut stored = self.invitations.lock().expect("repository lock poisoned");
+        let found = stored
+            .iter_mut()
+            .find(|other| other.state == InvitationState::Accepted && other.invitation.id() == id);
+        match found {
+            Some(other) => {
+                other.state = InvitationState::Open;
                 Ok(())
             }
             None => Err(RepositoryError::NotFound),
@@ -205,6 +221,14 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn claims_an_invitation_once_and_only_while_it_lasts() {
+        let identities = InMemoryIdentityRepository::default();
+        let invitations = InMemoryInvitationRepository::new(identities.clone());
+        contract::claims_an_invitation_once_and_only_while_it_lasts(&invitations, &identities)
+            .await;
+    }
+
+    #[tokio::test]
     async fn an_email_that_cannot_be_sent_does_not_fail_the_invitation() {
         let identities = InMemoryIdentityRepository::default();
         let auth = AuthService::new(identities.clone(), secrets(), Duration::from_secs(3600));
@@ -244,5 +268,54 @@ mod tests {
         // The invitation exists and its link is there to pass on; only the e-mail was not sent.
         assert!(!invited.emailed);
         assert!(invited.link.starts_with("https://erp.example/invitations/"));
+    }
+
+    #[tokio::test]
+    async fn a_line_break_in_a_name_cannot_add_a_header_or_forge_a_log_line() {
+        let identities = InMemoryIdentityRepository::default();
+        let auth = AuthService::new(identities.clone(), secrets(), Duration::from_secs(3600));
+        let ana = auth
+            .register(
+                AccountDraft {
+                    user_name: "Ana\r\nBcc: x@example.com".into(),
+                    email: "ana@example.com".into(),
+                    company_name: "Padaria\nSubject: oops".into(),
+                },
+                "correct horse",
+            )
+            .await
+            .unwrap()
+            .profile;
+        let emails = InMemoryEmailSender::default();
+        let service = MemberService::new(
+            InMemoryInvitationRepository::new(identities.clone()),
+            identities,
+            emails.clone(),
+            secrets(),
+            Duration::from_secs(86_400),
+            "https://erp.example",
+        );
+        let actor = Actor::User {
+            id: ana.user.id(),
+            name: ana.user.name().to_owned(),
+        };
+        service
+            .invite(
+                ana.memberships[0].company.id(),
+                &actor,
+                "bia@example.com",
+                Role::Viewer,
+            )
+            .await
+            .unwrap();
+        let message = &emails.sent()[0];
+        assert!(
+            !message.subject.chars().any(char::is_control),
+            "{:?}",
+            message.subject
+        );
+        // Only the template's own line breaks are left in the body.
+        assert!(!message.body.contains('\r'));
+        assert_eq!(message.body.matches('\n').count(), 6, "{:?}", message.body);
     }
 }
