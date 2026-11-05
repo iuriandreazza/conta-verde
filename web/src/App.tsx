@@ -2,7 +2,9 @@ import { Route, Routes } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { RequireAuth } from "./components/RequireAuth";
 import { AuthPage } from "./pages/AuthPage";
+import { CategoriesPage } from "./pages/CategoriesPage";
 import { CompaniesPage } from "./pages/CompaniesPage";
+import { CostCentersPage } from "./pages/CostCentersPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { PartiesPage } from "./pages/PartiesPage";
 import { ProductsPage } from "./pages/ProductsPage";
@@ -18,6 +20,8 @@ export function App() {
           <Route path="/companies/:companyId" element={<DashboardPage />} />
           <Route path="/companies/:companyId/parties" element={<PartiesPage />} />
           <Route path="/companies/:companyId/products" element={<ProductsPage />} />
+          <Route path="/companies/:companyId/categories" element={<CategoriesPage />} />
+          <Route path="/companies/:companyId/cost-centers" element={<CostCentersPage />} />
         </Route>
       </Route>
     </Routes>

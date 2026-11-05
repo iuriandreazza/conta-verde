@@ -1,20 +1,18 @@
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use conta_verde_application::{
-    ApplicationError, CnpjRegistry, IdentityRepository, MAX_SEARCH_CHARS, NameSort, PartyKind,
-    PartyQuery, PartyRepository, ProductRepository, SecretService,
-};
+use conta_verde_application::{ApplicationError, PartyKind, PartyQuery};
 use conta_verde_domain::{DocumentCheck, Party, PartyDraft, PartyId};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::SharedState;
 use crate::access::CompanyAccess;
 use crate::cursor::{decode_cursor, encode_cursor};
 use crate::error::ApiError;
 use crate::history::HistoryEntryResponse;
 use crate::json::{ApiJson, ApiQuery};
+use crate::list_params;
+use crate::{Ports, SharedState};
 
 #[derive(Deserialize)]
 pub(crate) struct RegisterPartyRequest {
@@ -52,10 +50,7 @@ pub(crate) struct ListQuery {
 impl ListQuery {
     fn party_query(&self) -> Result<PartyQuery, ApiError> {
         let mut query = PartyQuery::default();
-        if let Some(text) = &self.q {
-            if text.chars().count() > MAX_SEARCH_CHARS {
-                return Err(ApiError::InvalidQuery("invalid q: at most 100 characters"));
-            }
+        if let Some(text) = list_params::search(self.q.as_deref())? {
             query = query.searching(text);
         }
         query = match self.kind.as_deref() {
@@ -68,15 +63,7 @@ impl ListQuery {
                 ));
             }
         };
-        Ok(match self.sort.as_deref() {
-            None | Some("name") => query,
-            Some("-name") => query.sorted(NameSort::NameDesc),
-            Some(_) => {
-                return Err(ApiError::InvalidQuery(
-                    "invalid sort: expected name or -name",
-                ));
-            }
-        })
+        Ok(query.sorted(list_params::sort(self.sort.as_deref())?))
     }
 }
 
@@ -150,18 +137,11 @@ pub(crate) struct PartyPageResponse {
     next_cursor: Option<String>,
 }
 
-pub(crate) async fn register_party<R, C, I, S, P>(
-    State(state): State<SharedState<R, C, I, S, P>>,
+pub(crate) async fn register_party<X: Ports>(
+    State(state): State<SharedState<X>>,
     CompanyAccess(company_id, actor): CompanyAccess,
     ApiJson(request): ApiJson<RegisterPartyRequest>,
-) -> Result<(StatusCode, Json<PartyResponse>), ApiError>
-where
-    R: PartyRepository,
-    C: CnpjRegistry,
-    I: IdentityRepository,
-    S: SecretService,
-    P: ProductRepository,
-{
+) -> Result<(StatusCode, Json<PartyResponse>), ApiError> {
     let party = state
         .parties
         .register(company_id, &actor, request.into())
@@ -178,18 +158,11 @@ fn parse_party_id(raw: &str) -> Result<PartyId, ApiError> {
 }
 
 /// Asks the registry again about a party's CNPJ and returns the party with the new answer.
-pub(crate) async fn verify_document<R, C, I, S, P>(
-    State(state): State<SharedState<R, C, I, S, P>>,
+pub(crate) async fn verify_document<X: Ports>(
+    State(state): State<SharedState<X>>,
     CompanyAccess(company_id, actor): CompanyAccess,
     Path((_, party_id)): Path<(Uuid, String)>,
-) -> Result<Json<PartyResponse>, ApiError>
-where
-    R: PartyRepository,
-    C: CnpjRegistry,
-    I: IdentityRepository,
-    S: SecretService,
-    P: ProductRepository,
-{
+) -> Result<Json<PartyResponse>, ApiError> {
     let party_id = parse_party_id(&party_id)?;
     let party = state
         .parties
@@ -198,18 +171,11 @@ where
     Ok(Json(PartyResponse::from(&party)))
 }
 
-pub(crate) async fn party_history<R, C, I, S, P>(
-    State(state): State<SharedState<R, C, I, S, P>>,
+pub(crate) async fn party_history<X: Ports>(
+    State(state): State<SharedState<X>>,
     CompanyAccess(company_id, _): CompanyAccess,
     Path((_, party_id)): Path<(Uuid, String)>,
-) -> Result<Json<Vec<HistoryEntryResponse>>, ApiError>
-where
-    R: PartyRepository,
-    C: CnpjRegistry,
-    I: IdentityRepository,
-    S: SecretService,
-    P: ProductRepository,
-{
+) -> Result<Json<Vec<HistoryEntryResponse>>, ApiError> {
     let party_id = parse_party_id(&party_id)?;
     let history = state.parties.history(company_id, party_id).await?;
     Ok(Json(
@@ -217,18 +183,11 @@ where
     ))
 }
 
-pub(crate) async fn list_parties<R, C, I, S, P>(
-    State(state): State<SharedState<R, C, I, S, P>>,
+pub(crate) async fn list_parties<X: Ports>(
+    State(state): State<SharedState<X>>,
     CompanyAccess(company_id, _): CompanyAccess,
     ApiQuery(query): ApiQuery<ListQuery>,
-) -> Result<Json<PartyPageResponse>, ApiError>
-where
-    R: PartyRepository,
-    C: CnpjRegistry,
-    I: IdentityRepository,
-    S: SecretService,
-    P: ProductRepository,
-{
+) -> Result<Json<PartyPageResponse>, ApiError> {
     let filter = query.party_query()?;
     let after = query.after.as_deref().map(decode_cursor).transpose()?;
     let page = state

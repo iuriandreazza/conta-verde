@@ -1,14 +1,12 @@
 use axum::extract::{FromRequestParts, RawPathParams};
 use axum::http::request::Parts;
-use conta_verde_application::{
-    AuthError, CnpjRegistry, IdentityRepository, PartyRepository, ProductRepository, SecretService,
-};
+use conta_verde_application::AuthError;
 use conta_verde_domain::{Actor, CompanyId};
 use uuid::Uuid;
 
-use crate::SharedState;
 use crate::error::ApiError;
 use crate::session::require_token;
+use crate::{Ports, SharedState};
 
 /// Proof that the caller's session belongs to a member of the `{company_id}` in the route, and who the
 /// caller is, for the audit trail.
@@ -18,19 +16,12 @@ use crate::session::require_token;
 /// cannot be written without choosing whether to check access.
 pub(crate) struct CompanyAccess(pub CompanyId, pub Actor);
 
-impl<R, C, I, S, P> FromRequestParts<SharedState<R, C, I, S, P>> for CompanyAccess
-where
-    R: PartyRepository + 'static,
-    C: CnpjRegistry + 'static,
-    I: IdentityRepository + 'static,
-    S: SecretService + 'static,
-    P: ProductRepository + 'static,
-{
+impl<X: Ports> FromRequestParts<SharedState<X>> for CompanyAccess {
     type Rejection = ApiError;
 
     async fn from_request_parts(
         parts: &mut Parts,
-        state: &SharedState<R, C, I, S, P>,
+        state: &SharedState<X>,
     ) -> Result<Self, ApiError> {
         // Owned, because extracting the path below borrows `parts` mutably.
         let token = require_token(&parts.headers)?.to_owned();

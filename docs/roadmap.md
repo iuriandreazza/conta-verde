@@ -31,7 +31,7 @@ Registers:
 - [x] Parties: CNPJ checked against the federal registry and alphanumeric CNPJ support ([ADR 0017](adr/0017-cnpj-registry-lookup.md)); a flagged party ("unverified", "not found", inactive) can be checked again by hand
 - [ ] Parties: addresses with CEP lookup, contacts, carrier and seller types, tags
 - [x] Products and services: SKU, unit, NCM, prices, minimum stock, active flag ([ADR 0019](adr/0019-products-and-services.md)) — registering, editing and deactivating with a history; stock balances come with Phase 5
-- [ ] Categories as a tree with DRE group mapping; cost centers ([ADR 0012](adr/0012-managerial-accounting-model.md))
+- [x] Categories as a tree with DRE group mapping; cost centers ([ADR 0012](adr/0012-managerial-accounting-model.md)) — the tree, its groups, the default template and the flat cost centers; entries and the DRE come with Phases 2 and 6
 - [ ] Bank accounts (checking, savings, cash, card), payment methods, payment terms
 - [ ] CSV import for parties and products
 - [x] Web app skeleton: login, company switcher, register screens ([ADR 0005](adr/0005-spa-frontend.md)) — sign in, sign up, company picker, and the parties list and form, with the AGPL "Source code" footer link
