@@ -72,7 +72,7 @@ export function ProductForm({
   }
 
   return (
-    <form onSubmit={handleSubmit}>
+    <form className="form-grid" onSubmit={handleSubmit}>
       <label>
         Tipo
         {/* Stock and fiscal data hang from the kind, so it is chosen once. */}

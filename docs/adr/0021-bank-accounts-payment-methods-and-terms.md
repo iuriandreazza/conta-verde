@@ -1,11 +1,11 @@
 ---
-title: "ADR 0020: Bank accounts, payment methods and payment terms"
+title: "ADR 0021: Bank accounts, payment methods and payment terms"
 status: accepted
 date: 2026-11-05
 tags: [adr, registers, finance]
 ---
 
-# ADR 0020: Bank accounts, payment methods and payment terms
+# ADR 0021: Bank accounts, payment methods and payment terms
 
 ## Context
 

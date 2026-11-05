@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Clientes e fornecedores</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#14201a;background:#f5f7f6}
+h1,h2,p{margin:0}
+.card{background:#fff;border:1px solid #e1e8e4;border-radius:12px;box-shadow:0 1px 2px rgba(20,32,26,.05)}
+.nav{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:8px;color:#cfe3d6;font-size:15px}
+.lbl{display:flex;flex-direction:column;gap:5px;font-size:14px;font-weight:500;color:#3f4f47}
+.in{height:44px;border:1px solid #c9d5ce;border-radius:8px;background:#fff;box-sizing:border-box;padding:0 12px;display:flex;align-items:center;font-weight:400;color:#7f8c85}
+.badge{display:inline-flex;align-items:center;gap:4px;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:600}
+th{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:#5d6b64;background:#f8faf9;text-align:left;padding:12px 14px}
+td{padding:13px 14px;border-top:1px solid #e1e8e4;font-size:15px}
+.ghost{display:inline-flex;align-items:center;min-height:32px;padding:0 10px;border:1px solid #c9d5ce;border-radius:8px;font-size:13px;font-weight:600;color:#17603c;margin-left:6px}
+</style>
+</helmet>
+<div style="width:1440px;height:780px;display:flex;box-sizing:border-box;overflow:hidden">
+
+<div style="width:256px;flex:none;background:linear-gradient(180deg,#0f2a1e,#17392a);color:#e6f2ea;padding:20px 16px;box-sizing:border-box;display:flex;flex-direction:column;gap:24px">
+<b style="font-size:18px;color:#fff">conta<span style="color:#8fd9b3">-verde</span></b>
+<div style="padding:12px 14px;border:1px solid rgba(255,255,255,.12);border-radius:8px;background:rgba(255,255,255,.06)"><p style="font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#a9c7b6">Empresa</p><b style="font-size:15px">Mercearia Teste</b></div>
+<div style="display:flex;flex-direction:column;gap:2px">
+<div class="nav">Painel</div>
+<div class="nav" style="background:rgba(255,255,255,.12);color:#fff;font-weight:600;box-shadow:inset 3px 0 0 #8fd9b3">Clientes e fornecedores</div>
+<div class="nav">Produtos e serviços</div>
+</div>
+</div>
+
+<div style="flex:1;min-width:0;padding:32px 40px;box-sizing:border-box;display:flex;flex-direction:column;gap:24px">
+<div><h1 style="font-size:28px;letter-spacing:-.015em">Clientes e fornecedores</h1><p style="color:#5d6b64;margin-top:4px">Quem compra de você e de quem você compra.</p></div>
+
+<div style="display:grid;grid-template-columns:minmax(0,1fr) 352px;gap:20px;align-items:start">
+
+<div class="card" style="overflow:hidden">
+<div style="padding:20px 24px 4px"><h2 style="font-size:17px">Cadastrados</h2></div>
+<div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:12px;padding:12px 24px 16px">
+<div class="lbl">Buscar<div class="in">Nome, documento ou e-mail</div></div>
+<div class="lbl">Mostrar<div class="in" style="color:#14201a">Todos</div></div>
+<div class="lbl">Ordem<div class="in" style="color:#14201a">Nome (A–Z)</div></div>
+</div>
+<table style="width:100%;border-collapse:collapse">
+<thead><tr><th style="padding-left:24px">Nome</th><th>Documento</th><th>E-mail</th><th>Tipo</th><th></th></tr></thead>
+<tbody>
+<tr><td style="padding-left:24px">Padaria Estrela</td><td>12.345.678/0001-95 <span class="badge" style="background:#e6f4ec;color:#17603c">Verificado</span></td><td>contato@estrela.example</td><td>Cliente</td><td><span class="ghost">Histórico</span></td></tr>
+<tr><td style="padding-left:24px">Distribuidora Sul</td><td>98.765.432/0001-10 <span class="badge" style="background:#fff4d6;color:#8a5a00">Não encontrado</span><span class="ghost">Verificar de novo</span></td><td>—</td><td>Fornecedor</td><td><span class="ghost">Histórico</span></td></tr>
+<tr><td style="padding-left:24px">Maria Souza</td><td>123.456.789-09</td><td>maria@example.test</td><td>Cliente · Fornecedor</td><td><span class="ghost">Histórico</span></td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="card" style="padding:20px 24px;display:flex;flex-direction:column;gap:14px">
+<h2 style="font-size:17px">Novo cliente ou fornecedor</h2>
+<div class="lbl">Nome<div class="in"></div></div>
+<div class="lbl">CPF ou CNPJ<div class="in"></div></div>
+<div class="lbl">E-mail<div class="in"></div></div>
+<div style="border:1px solid #c9d5ce;border-radius:8px;padding:10px 14px;display:flex;gap:20px;font-size:14px"><span>☑ Cliente</span><span>☐ Fornecedor</span></div>
+<div style="min-height:44px;border-radius:8px;background:#1f7a4d;color:#fff;font-weight:600;display:flex;align-items:center;justify-content:center">+ Adicionar</div>
+</div>
+
+</div>
+<p style="font-size:13px;color:#5d6b64">A lista vem primeiro e o formulário fica ao lado, fixo ao rolar. Abaixo de 64rem o formulário desce para depois da lista.</p>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":780}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

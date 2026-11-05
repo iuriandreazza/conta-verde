@@ -35,7 +35,8 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0017](0017-cnpj-registry-lookup.md) | CNPJ checked against the federal registry behind a port | accepted | 1 |
 | [0018](0018-list-endpoints-search-filter-sort.md) | List endpoints share one search, filter and sort convention | accepted | 1 |
 | [0019](0019-products-and-services.md) | Products and services as one register | accepted | 1 |
-| [0020](0020-bank-accounts-payment-methods-and-terms.md) | Bank accounts, payment methods and payment terms | accepted | 1 |
+| [0020](0020-app-shell-charts-and-sample-data.md) | Sidebar app shell, hand-drawn SVG charts and a sample-data boundary | accepted | 1, 2 |
+| [0021](0021-bank-accounts-payment-methods-and-terms.md) | Bank accounts, payment methods and payment terms | accepted | 1 |
 
 ## Template
 

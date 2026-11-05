@@ -11,8 +11,8 @@ import {
 } from "../api";
 import { BankAccountHistory } from "../components/BankAccountHistory";
 import { Button } from "../components/Button";
-import { CompanyNav } from "../components/CompanyNav";
 import { ListRow } from "../components/ListRow";
+import { PageHeader } from "../components/PageHeader";
 import { Notice } from "../components/Notice";
 import { Spinner } from "../components/Spinner";
 import { BriefcaseBusinessIcon } from "../components/icons/briefcase-business";
@@ -100,104 +100,9 @@ export function BankAccountsPage() {
 
   return (
     <>
-      <h1>Contas bancárias</h1>
-      <CompanyNav companyId={companyId} />
-
-      <section className="card">
-        <h2>{editing === null ? "Nova conta" : `Alterar ${editing.name}`}</h2>
-        <form
-          // A new key starts the form over for another account, or an empty one after a save.
-          key={`${editing?.id ?? "new"}-${formVersion}`}
-          onSubmit={(event) => void handleSubmit(event)}
-        >
-          <label>
-            Tipo
-            {/* What an account is asked for depends on its kind, so it is chosen once. */}
-            <select
-              value={editing?.kind ?? kind}
-              disabled={editing !== null}
-              onChange={(event) => setKind(event.target.value as BankAccountKind)}
-            >
-              {BANK_ACCOUNT_KINDS.map((option) => (
-                <option key={option.key} value={option.key}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Nome
-            <input
-              name="name"
-              required
-              maxLength={200}
-              autoComplete="off"
-              // After a save or when editing, the person is in the form: put the cursor back in it.
-              autoFocus={editing !== null || formVersion > 0}
-              defaultValue={editing?.name}
-            />
-          </label>
-          <label>
-            Código do banco
-            <input
-              name="bank_code"
-              inputMode="numeric"
-              autoComplete="off"
-              maxLength={8}
-              placeholder="3 dígitos (ou 8, o ISPB)"
-              disabled={!hasBank}
-              defaultValue={editing?.bank_code ?? ""}
-            />
-          </label>
-          <label>
-            Agência
-            <input
-              name="branch"
-              autoComplete="off"
-              spellCheck={false}
-              maxLength={14}
-              disabled={!hasBank}
-              defaultValue={editing?.branch ?? ""}
-            />
-          </label>
-          <label>
-            Conta
-            <input
-              name="number"
-              autoComplete="off"
-              spellCheck={false}
-              maxLength={24}
-              placeholder="com o dígito"
-              disabled={!hasBank}
-              defaultValue={editing?.number ?? ""}
-            />
-          </label>
-          <label className="inline">
-            <input name="active" type="checkbox" defaultChecked={editing?.active ?? true} /> Ativa
-          </label>
-          <Notice message={formError} />
-          <div className="form-actions">
-            <Button type="submit" icon={editing === null ? PlusIcon : CheckIcon} pending={saving}>
-              {editing === null ? "Adicionar" : "Salvar alterações"}
-            </Button>
-            {editing !== null && (
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => {
-                  setEditing(null);
-                  setFormError(null);
-                }}
-              >
-                Cancelar
-              </Button>
-            )}
-          </div>
-        </form>
-        <Notice message={saved} tone="success" />
-      </section>
-
-      <section className="card">
+      <PageHeader title="Contas bancárias" description="Onde o dinheiro da empresa fica e circula: bancos, caixa e cartões." />
+      <div className="split">
+      <section className="card list-card">
         <h2>Cadastradas</h2>
         <div className="filters" role="search">
           <label>
@@ -367,6 +272,101 @@ export function BankAccountsPage() {
           </Button>
         )}
       </section>
+      <aside className="card form-card">
+        <h2>{editing === null ? "Nova conta" : `Alterar ${editing.name}`}</h2>
+        <form
+          // A new key starts the form over for another account, or an empty one after a save.
+          key={`${editing?.id ?? "new"}-${formVersion}`}
+          onSubmit={(event) => void handleSubmit(event)}
+        >
+          <label>
+            Tipo
+            {/* What an account is asked for depends on its kind, so it is chosen once. */}
+            <select
+              value={editing?.kind ?? kind}
+              disabled={editing !== null}
+              onChange={(event) => setKind(event.target.value as BankAccountKind)}
+            >
+              {BANK_ACCOUNT_KINDS.map((option) => (
+                <option key={option.key} value={option.key}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Nome
+            <input
+              name="name"
+              required
+              maxLength={200}
+              autoComplete="off"
+              // After a save or when editing, the person is in the form: put the cursor back in it.
+              autoFocus={editing !== null || formVersion > 0}
+              defaultValue={editing?.name}
+            />
+          </label>
+          <label>
+            Código do banco
+            <input
+              name="bank_code"
+              inputMode="numeric"
+              autoComplete="off"
+              maxLength={8}
+              placeholder="3 dígitos (ou 8, o ISPB)"
+              disabled={!hasBank}
+              defaultValue={editing?.bank_code ?? ""}
+            />
+          </label>
+          <label>
+            Agência
+            <input
+              name="branch"
+              autoComplete="off"
+              spellCheck={false}
+              maxLength={14}
+              disabled={!hasBank}
+              defaultValue={editing?.branch ?? ""}
+            />
+          </label>
+          <label>
+            Conta
+            <input
+              name="number"
+              autoComplete="off"
+              spellCheck={false}
+              maxLength={24}
+              placeholder="com o dígito"
+              disabled={!hasBank}
+              defaultValue={editing?.number ?? ""}
+            />
+          </label>
+          <label className="inline">
+            <input name="active" type="checkbox" defaultChecked={editing?.active ?? true} /> Ativa
+          </label>
+          <Notice message={formError} />
+          <div className="form-actions">
+            <Button type="submit" icon={editing === null ? PlusIcon : CheckIcon} pending={saving}>
+              {editing === null ? "Adicionar" : "Salvar alterações"}
+            </Button>
+            {editing !== null && (
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => {
+                  setEditing(null);
+                  setFormError(null);
+                }}
+              >
+                Cancelar
+              </Button>
+            )}
+          </div>
+        </form>
+        <Notice message={saved} tone="success" />
+      </aside>
+      </div>
+
     </>
   );
 }

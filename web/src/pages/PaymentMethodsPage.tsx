@@ -9,8 +9,8 @@ import {
   type PaymentMethodKind,
 } from "../api";
 import { Button } from "../components/Button";
-import { CompanyNav } from "../components/CompanyNav";
 import { ListRow } from "../components/ListRow";
+import { PageHeader } from "../components/PageHeader";
 import { Notice } from "../components/Notice";
 import { PaymentMethodHistory } from "../components/PaymentMethodHistory";
 import { Spinner } from "../components/Spinner";
@@ -91,65 +91,9 @@ export function PaymentMethodsPage() {
 
   return (
     <>
-      <h1>Formas de pagamento</h1>
-      <CompanyNav companyId={companyId} />
-
-      <section className="card">
-        <h2>{editing === null ? "Nova forma de pagamento" : `Alterar ${editing.name}`}</h2>
-        <form
-          // A new key starts the form over for another method, or an empty one after a save.
-          key={`${editing?.id ?? "new"}-${formVersion}`}
-          onSubmit={(event) => void handleSubmit(event)}
-        >
-          <label>
-            Tipo
-            <select name="kind" defaultValue={editing?.kind ?? "pix"}>
-              {PAYMENT_METHOD_KINDS.map((option) => (
-                <option key={option.key} value={option.key}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Nome
-            <input
-              name="name"
-              required
-              maxLength={200}
-              autoComplete="off"
-              placeholder="Como aparece nas vendas, por exemplo Cartão Visa"
-              // After a save or when editing, the person is in the form: put the cursor back in it.
-              autoFocus={editing !== null || formVersion > 0}
-              defaultValue={editing?.name}
-            />
-          </label>
-          <label className="inline">
-            <input name="active" type="checkbox" defaultChecked={editing?.active ?? true} /> Ativa
-          </label>
-          <Notice message={formError} />
-          <div className="form-actions">
-            <Button type="submit" icon={editing === null ? PlusIcon : CheckIcon} pending={saving}>
-              {editing === null ? "Adicionar" : "Salvar alterações"}
-            </Button>
-            {editing !== null && (
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => {
-                  setEditing(null);
-                  setFormError(null);
-                }}
-              >
-                Cancelar
-              </Button>
-            )}
-          </div>
-        </form>
-        <Notice message={saved} tone="success" />
-      </section>
-
-      <section className="card">
+      <PageHeader title="Formas de pagamento" description="Como a empresa paga e recebe: Pix, boleto, dinheiro, cartões." />
+      <div className="split">
+      <section className="card list-card">
         <h2>Cadastradas</h2>
         <div className="filters" role="search">
           <label>
@@ -313,6 +257,62 @@ export function PaymentMethodsPage() {
           </Button>
         )}
       </section>
+      <aside className="card form-card">
+        <h2>{editing === null ? "Nova forma de pagamento" : `Alterar ${editing.name}`}</h2>
+        <form
+          // A new key starts the form over for another method, or an empty one after a save.
+          key={`${editing?.id ?? "new"}-${formVersion}`}
+          onSubmit={(event) => void handleSubmit(event)}
+        >
+          <label>
+            Tipo
+            <select name="kind" defaultValue={editing?.kind ?? "pix"}>
+              {PAYMENT_METHOD_KINDS.map((option) => (
+                <option key={option.key} value={option.key}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Nome
+            <input
+              name="name"
+              required
+              maxLength={200}
+              autoComplete="off"
+              placeholder="Como aparece nas vendas, por exemplo Cartão Visa"
+              // After a save or when editing, the person is in the form: put the cursor back in it.
+              autoFocus={editing !== null || formVersion > 0}
+              defaultValue={editing?.name}
+            />
+          </label>
+          <label className="inline">
+            <input name="active" type="checkbox" defaultChecked={editing?.active ?? true} /> Ativa
+          </label>
+          <Notice message={formError} />
+          <div className="form-actions">
+            <Button type="submit" icon={editing === null ? PlusIcon : CheckIcon} pending={saving}>
+              {editing === null ? "Adicionar" : "Salvar alterações"}
+            </Button>
+            {editing !== null && (
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => {
+                  setEditing(null);
+                  setFormError(null);
+                }}
+              >
+                Cancelar
+              </Button>
+            )}
+          </div>
+        </form>
+        <Notice message={saved} tone="success" />
+      </aside>
+      </div>
+
     </>
   );
 }
