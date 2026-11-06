@@ -72,6 +72,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0054](0054-stock-movements.md) | Stock movements, balances and the average cost | accepted | 5 |
 | [0055](0055-minimum-stock-and-the-sale-block.md) | Minimum stock alerts and the block of a sale without balance | accepted | 5 |
 | [0056](0056-inventory-count.md) | Inventory count and adjustment | accepted | 5 |
+| [0057](0057-purchase-entry-from-nfe-xml.md) | Purchase entry from a supplier's NF-e XML | accepted | 5 |
 
 ## Template
 

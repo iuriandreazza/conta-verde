@@ -28,6 +28,7 @@ mod postal_codes;
 mod price_lists;
 mod products;
 mod products_import;
+mod purchase_imports;
 mod purchase_orders;
 mod quote_pdf;
 mod quotes;
@@ -740,6 +741,14 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         .route(
             "/companies/{company_id}/inventory-counts/{count_id}/cancel",
             post(inventory_counts::cancel_count::<X>),
+        )
+        .route(
+            "/companies/{company_id}/purchase-imports",
+            post(purchase_imports::enter_invoice::<X>),
+        )
+        .route(
+            "/companies/{company_id}/purchase-imports/preview",
+            post(purchase_imports::preview_invoice::<X>),
         )
         .route(
             "/companies/{company_id}/purchase-orders",
@@ -9899,6 +9908,269 @@ mod tests {
             send(&app, get_request(&uri, Some(&other))).await.status,
             StatusCode::NOT_FOUND
         );
+    }
+
+    /// An NF-e of the issuer 11.222.333/0001-81 (series 1, number 4321) with two items and two installments, whose
+    /// access key has the right check digit.
+    fn invoice_xml() -> String {
+        let key = "35261111222333000181550010000043211123456781";
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<nfeProc xmlns="http://www.portalfiscal.inf.br/nfe" versao="4.00"><NFe>
+<infNFe Id="NFe{key}" versao="4.00">
+<ide><mod>55</mod><serie>1</serie><nNF>4321</nNF><dhEmi>2026-11-06T10:30:00-03:00</dhEmi><finNFe>1</finNFe></ide>
+<emit><CNPJ>11222333000181</CNPJ><xNome>Torrefação Boa Ltda</xNome></emit>
+<det nItem="1"><prod><cProd>CAFE-500</cProd><xProd>Café 500g</xProd><NCM>09012100</NCM><uCom>UN</uCom><qCom>10.0000</qCom><vUnCom>10.00</vUnCom><vProd>100.00</vProd></prod>
+<imposto><IPI><IPITrib><vIPI>2.50</vIPI></IPITrib></IPI></imposto></det>
+<det nItem="2"><prod><cProd>PAO-1</cProd><xProd>Pão francês</xProd><NCM>19059090</NCM><uCom>KG</uCom><qCom>3.0000</qCom><vUnCom>3.33</vUnCom><vProd>9.99</vProd><vDesc>0.99</vDesc></prod><imposto/></det>
+<total><ICMSTot><vProd>109.99</vProd><vDesc>0.99</vDesc><vIPI>2.50</vIPI><vNF>111.50</vNF></ICMSTot></total>
+<cobr><dup><nDup>001</nDup><dVenc>2026-12-06</dVenc><vDup>55.75</vDup></dup><dup><nDup>002</nDup><dVenc>2027-01-06</dVenc><vDup>55.75</vDup></dup></cobr>
+</infNFe></NFe></nfeProc>"#
+        )
+    }
+
+    #[tokio::test]
+    async fn a_purchase_xml_creates_payables_and_stock_and_a_sale_takes_it_at_the_average_cost() {
+        let app = entry_app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let category = revenue_category(&app, &cookie, company_id).await;
+        let supplier = send(
+            &app,
+            json_request(
+                "POST",
+                &parties_uri(company_id),
+                Some(&cookie),
+                json!({ "name": "Torrefação Boa", "document": "11.222.333/0001-81",
+                        "is_customer": true, "is_supplier": true }),
+            ),
+        )
+        .await;
+        assert_eq!(supplier.status, StatusCode::CREATED, "{}", supplier.body);
+        let supplier = supplier.body["id"].as_str().unwrap().to_owned();
+        let mut product_ids = Vec::new();
+        for (name, sku) in [("Café 500g", "CAFE-500"), ("Pão francês", "PAO-1")] {
+            let mut body = product_body();
+            body["name"] = json!(name);
+            body["sku"] = json!(sku);
+            let made = post_product(&app, &cookie, company_id, body).await;
+            assert_eq!(made.status, StatusCode::CREATED, "{}", made.body);
+            product_ids.push(made.body["id"].as_str().unwrap().to_owned());
+        }
+        let imports = format!("/companies/{company_id}/purchase-imports");
+        let post = |uri: String, xml: String| {
+            let app = app.clone();
+            let cookie = cookie.clone();
+            async move {
+                send(
+                    &app,
+                    file_request(
+                        "POST",
+                        &uri,
+                        Some(&cookie),
+                        "application/xml",
+                        xml.into_bytes(),
+                    ),
+                )
+                .await
+            }
+        };
+
+        // Looked at first: what the invoice is, its supplier and the products its codes find.
+        let preview = post(format!("{imports}/preview"), invoice_xml()).await;
+        assert_eq!(preview.status, StatusCode::OK, "{}", preview.body);
+        assert_eq!(preview.body["total"], "111.5");
+        assert_eq!(preview.body["supplier_id"], supplier);
+        assert_eq!(preview.body["items"][0]["product_id"], product_ids[0]);
+        assert_eq!(preview.body["items"][0]["cost"], "102.5");
+        assert_eq!(preview.body["items"][1]["cost"], "9");
+        assert_eq!(preview.body["installments"].as_array().unwrap().len(), 2);
+        assert!(preview.body["entered"].is_null());
+
+        // Entered: a purchase received whole, a payable on the invoice's installments, the goods in stock.
+        let uri = format!("{imports}?category_id={category}&received_on=2026-11-10");
+        let entered = post(uri.clone(), invoice_xml()).await;
+        assert_eq!(entered.status, StatusCode::CREATED, "{}", entered.body);
+        assert_eq!(entered.body["status"], "received");
+        assert_eq!(entered.body["already_entered"], false);
+        let payable = entered.body["receipt"]["payable_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let entry = send(
+            &app,
+            get_request(
+                &format!("{}/{payable}", entries_uri(company_id)),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(entry.body["kind"], "payable");
+        assert_eq!(entry.body["party_id"], supplier);
+        assert_eq!(entry.body["total"], "111.5");
+        assert_eq!(entry.body["installments"][0]["due_date"], "2026-12-06");
+        assert_eq!(entry.body["installments"][1]["due_date"], "2027-01-06");
+        let positions = format!("/companies/{company_id}/stock/positions");
+        let stock = send(&app, get_request(&positions, Some(&cookie))).await;
+        let position = |body: &Value, product: &str| -> Value {
+            body["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["product_id"] == product)
+                .unwrap()
+                .clone()
+        };
+        let coffee = position(&stock.body, &product_ids[0]);
+        assert_eq!(
+            (
+                &coffee["quantity"],
+                &coffee["value"],
+                &coffee["average_cost"]
+            ),
+            (&json!("10"), &json!("102.5"), &json!("10.25"))
+        );
+
+        // The same file again changes nothing.
+        let again = post(uri, invoice_xml()).await;
+        assert_eq!(again.status, StatusCode::OK, "{}", again.body);
+        assert_eq!(again.body["already_entered"], true);
+        assert_eq!(again.body["purchase_id"], entered.body["purchase_id"]);
+        let payables = send(
+            &app,
+            get_request(
+                &format!("{}?kind=payable", entries_uri(company_id)),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(payables.body["items"].as_array().unwrap().len(), 1);
+        let preview = post(format!("{imports}/preview"), invoice_xml()).await;
+        assert_eq!(preview.body["entered"]["status"], "received");
+
+        // A sale of 4 coffees takes them at the average: 102.50 x 4/10 = 41.00.
+        let customer = send(
+            &app,
+            json_request(
+                "POST",
+                &parties_uri(company_id),
+                Some(&cookie),
+                json!({ "name": "Cliente", "is_customer": true, "is_supplier": false }),
+            ),
+        )
+        .await;
+        let sale = send(
+            &app,
+            json_request(
+                "POST",
+                &sales_uri(company_id),
+                Some(&cookie),
+                json!({
+                    "customer_id": customer.body["id"],
+                    "sold_on": "2026-11-12",
+                    "category_id": category,
+                    "lines": [{ "product_id": product_ids[0], "description": "Café 500g",
+                                "quantity": "4", "unit_price": "15" }],
+                }),
+            ),
+        )
+        .await;
+        assert_eq!(sale.status, StatusCode::CREATED, "{}", sale.body);
+        let sale_uri = format!(
+            "{}/{}",
+            sales_uri(company_id),
+            sale.body["id"].as_str().unwrap()
+        );
+        let done = send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{sale_uri}/complete"),
+                Some(&cookie),
+                Value::Null,
+            ),
+        )
+        .await;
+        assert_eq!(done.status, StatusCode::OK, "{}", done.body);
+        let stock = send(&app, get_request(&positions, Some(&cookie))).await;
+        let coffee = position(&stock.body, &product_ids[0]);
+        assert_eq!(
+            (
+                &coffee["quantity"],
+                &coffee["value"],
+                &coffee["average_cost"]
+            ),
+            (&json!("6"), &json!("61.5"), &json!("10.25"))
+        );
+
+        // What is not an NF-e, or is hostile, is refused with a message; an issuer nobody registered is too.
+        for (xml, status) in [
+            ("not xml".to_owned(), StatusCode::UNPROCESSABLE_ENTITY),
+            (
+                "<!DOCTYPE a [<!ENTITY x SYSTEM \"file:///etc/passwd\">]><a>&x;</a>".to_owned(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                invoice_xml().replace("<vNF>111.50</vNF>", "<vNF>111.51</vNF>"),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+        ] {
+            assert_eq!(post(format!("{imports}/preview"), xml).await.status, status);
+        }
+        // An issuer nobody registered: the key says who issued it, so the file is another invoice altogether, and
+        // one whose key is right still has no supplier to be entered for.
+        let stranger = invoice_xml().replace("11222333000181", "11444777000161");
+        assert_eq!(
+            post(format!("{imports}?category_id={category}"), stranger)
+                .await
+                .status,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let big = post(format!("{imports}/preview"), " ".repeat(1024 * 1024 + 10)).await;
+        assert_eq!(big.status, StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(
+            post(format!("{imports}?received_on=2026-11-10"), invoice_xml())
+                .await
+                .status,
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn invoice_imports_follow_the_purchases_role() {
+        use conta_verde_domain::Role;
+
+        let (app, identities, _) = app_with_mailbox();
+        let (_, company_id) = sign_up(&app, "dona@example.com").await;
+        let imports = format!("/companies/{company_id}/purchase-imports");
+        for (role, may_write) in [
+            (Role::Admin, true),
+            (Role::Stock, true),
+            (Role::Financial, false),
+            (Role::Sales, false),
+            (Role::Viewer, false),
+        ] {
+            let cookie = member_with_role(&app, &identities, company_id, role).await;
+            let reply = send(
+                &app,
+                file_request(
+                    "POST",
+                    &format!("{imports}/preview"),
+                    Some(&cookie),
+                    "application/xml",
+                    b"not xml".to_vec(),
+                ),
+            )
+            .await;
+            assert_eq!(
+                reply.status,
+                if may_write {
+                    StatusCode::UNPROCESSABLE_ENTITY
+                } else {
+                    StatusCode::FORBIDDEN
+                },
+                "{role:?}"
+            );
+        }
     }
 
     fn contracts_uri(company_id: Uuid) -> String {

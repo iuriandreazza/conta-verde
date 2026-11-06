@@ -125,6 +125,15 @@ pub enum DomainError {
     TooManyCountLines,
     DuplicateCountLine,
     InvalidCountQuantity,
+    InvalidAccessKey,
+    InvoiceKeyMismatch(&'static str),
+    InvoiceTotalsMismatch(&'static str),
+    InvalidInvoiceAmount(&'static str),
+    InvoiceHasNoItems,
+    TooManyInvoiceItems,
+    InvoiceQuantityTooPrecise,
+    InvoiceInstallmentsMismatch,
+    ScheduleDoesNotMatchReceipt,
 }
 
 impl fmt::Display for DomainError {
@@ -372,6 +381,29 @@ impl fmt::Display for DomainError {
             Self::CountIsLocked => {
                 f.write_str("only a count that is open can change, be applied or be cancelled")
             }
+            Self::InvalidAccessKey => f.write_str(
+                "the access key must be the 44 digits of the invoice, with a right check digit",
+            ),
+            Self::InvoiceKeyMismatch(what) => {
+                write!(f, "the invoice's {what} is not the one its access key says")
+            }
+            Self::InvoiceTotalsMismatch(what) => {
+                write!(f, "the invoice's {what} does not add up to what it declares")
+            }
+            Self::InvalidInvoiceAmount(what) => {
+                write!(f, "the invoice has an invalid {what}")
+            }
+            Self::InvoiceHasNoItems => f.write_str("the invoice has no items"),
+            Self::TooManyInvoiceItems => f.write_str("a purchase has at most 100 items"),
+            Self::InvoiceQuantityTooPrecise => f.write_str(
+                "an item's quantity has more than 3 decimals, which stock does not keep",
+            ),
+            Self::InvoiceInstallmentsMismatch => f.write_str(
+                "the invoice's installments must add up to its value and not go back in time",
+            ),
+            Self::ScheduleDoesNotMatchReceipt => f.write_str(
+                "when a receipt is paid on given days, the parts must add up to its value, each above 0, in days that never go back",
+            ),
             Self::NoCountLines => f.write_str("a count needs at least one product"),
             Self::TooManyCountLines => f.write_str("a count has at most 500 products"),
             Self::DuplicateCountLine => f.write_str("a product is counted once in a count"),

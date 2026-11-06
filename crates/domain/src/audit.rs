@@ -938,6 +938,10 @@ fn purchase_order_fields(order: &PurchaseOrder) -> Fields {
         ("notes", order.notes().map(str::to_owned)),
         ("lines", Some(lines_text(order.lines()))),
         ("status", Some(order.status().as_str().to_owned())),
+        (
+            "invoice_key",
+            order.invoice_key().map(|key| key.as_str().to_owned()),
+        ),
     ]
 }
 
@@ -959,6 +963,17 @@ pub fn purchase_receipt_creation_changes(receipt: &PurchaseReceipt) -> Vec<Field
         ),
         ("received_on", Some(receipt.received_on().to_string())),
         ("notes", receipt.notes().map(str::to_owned)),
+        (
+            "schedule",
+            (!receipt.schedule().is_empty()).then(|| {
+                receipt
+                    .schedule()
+                    .iter()
+                    .map(|(due, amount)| format!("{due}:{amount}"))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            }),
+        ),
         (
             "items",
             Some(

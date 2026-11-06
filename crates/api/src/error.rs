@@ -94,6 +94,7 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
             | RepositoryError::SaleChanged
             | RepositoryError::PurchaseChanged
             | RepositoryError::CountChanged
+            | RepositoryError::DuplicateInvoice
             | RepositoryError::StockChanged
             | RepositoryError::StockInsufficient
             | RepositoryError::DuplicateReversal
@@ -125,7 +126,9 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
         | ApplicationError::CategoryHasActiveChildren
         | ApplicationError::CategoriesAlreadyExist
         | ApplicationError::CategoryLimitReached => (StatusCode::CONFLICT, error.to_string()),
-        ApplicationError::ParentCategoryNotFound => {
+        ApplicationError::ParentCategoryNotFound
+        | ApplicationError::SupplierNotRegistered
+        | ApplicationError::InvoiceItemNeedsAProduct(_) => {
             (StatusCode::UNPROCESSABLE_ENTITY, error.to_string())
         }
         ApplicationError::ProductNotFound

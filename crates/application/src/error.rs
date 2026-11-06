@@ -40,6 +40,8 @@ pub enum RepositoryError {
     PurchaseChanged,
     /// The count is no longer in the status the write was made from.
     CountChanged,
+    /// The NF-e already has its purchase order.
+    DuplicateInvoice,
     /// A receipt would take in more of a line than was ordered.
     ReceiptTooMuch,
     /// A product has another balance than the one the movements were valued against.
@@ -162,6 +164,10 @@ pub enum ApplicationError {
     },
     /// A movement a document made is undone through the document.
     StockMovementFollowsADocument,
+    /// No supplier of the company has the registry number the invoice names: it is registered first.
+    SupplierNotRegistered,
+    /// An item of the invoice was not given the product it becomes.
+    InvoiceItemNeedsAProduct(u16),
     /// No inventory count with this id in the company (another company's looks the same).
     CountNotFound,
     /// The count was changed while this was being done.
@@ -293,6 +299,7 @@ impl fmt::Display for RepositoryError {
             Self::SaleChanged => f.write_str("the sale was changed meanwhile"),
             Self::PurchaseChanged => f.write_str("the purchase order was changed meanwhile"),
             Self::CountChanged => f.write_str("the count was changed meanwhile"),
+            Self::DuplicateInvoice => f.write_str("this invoice was already entered"),
             Self::ReceiptTooMuch => f.write_str("a receipt cannot be of more than was ordered"),
             Self::StockChanged => f.write_str("the stock changed meanwhile"),
             Self::StockInsufficient => f.write_str("not enough stock"),
@@ -366,6 +373,12 @@ impl fmt::Display for ApplicationError {
             Self::SaleChanged => f.write_str("the sale was changed meanwhile: read it again"),
             Self::PurchaseNotFound => f.write_str("purchase order not found"),
             Self::CountNotFound => f.write_str("count not found"),
+            Self::SupplierNotRegistered => f.write_str(
+                "no supplier is registered with the issuer's CNPJ or CPF of the invoice: register it first",
+            ),
+            Self::InvoiceItemNeedsAProduct(number) => {
+                write!(f, "item {number} of the invoice needs the product it becomes")
+            }
             Self::CountChanged => f.write_str("the count was changed meanwhile: read it again"),
             Self::StockMovementNotFound => f.write_str("stock movement not found"),
             Self::StockChanged => f.write_str("the stock changed meanwhile: try again"),

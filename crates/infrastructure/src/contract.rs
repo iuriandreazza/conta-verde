@@ -8580,7 +8580,7 @@ where
         PartyDraft {
             is_customer: false,
             is_supplier: true,
-            ..party_draft("Fornecedor Fábio", None)
+            ..party_draft("Fornecedor Fábio", Some("11.222.333/0001-81"))
         },
     )
     .unwrap();
@@ -8589,16 +8589,16 @@ where
         .await
         .unwrap();
     let mut saved = Vec::new();
-    for (name, active, kind) in [
-        ("Café", true, ProductKind::Product),
-        ("Pão", true, ProductKind::Product),
-        ("Descontinuado", false, ProductKind::Product),
-        ("Consultoria", true, ProductKind::Service),
+    for (name, active, kind, sku) in [
+        ("Café", true, ProductKind::Product, Some("CAFE-500")),
+        ("Pão", true, ProductKind::Product, Some("PAO-1")),
+        ("Descontinuado", false, ProductKind::Product, None),
+        ("Consultoria", true, ProductKind::Service, None),
     ] {
         let product = Product::new(
             ProductId::generate(),
             company,
-            product_draft(name, kind, None, active),
+            product_draft(name, kind, sku, active),
         )
         .unwrap();
         let entry = product_entry(
@@ -8691,6 +8691,39 @@ pub async fn document_references_say_what_is_usable<R: DocumentReferences>(
             .supplier_is_usable(other_company, seed.supplier)
             .await
             .unwrap()
+    );
+    let issuer = conta_verde_domain::Document::parse("11.222.333/0001-81").unwrap();
+    assert_eq!(
+        references
+            .party_with_document(company, &issuer)
+            .await
+            .unwrap(),
+        Some(seed.supplier)
+    );
+    assert_eq!(
+        references
+            .party_with_document(other_company, &issuer)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        references
+            .product_with_code(company, "cafe-500")
+            .await
+            .unwrap(),
+        Some(seed.product)
+    );
+    assert_eq!(
+        references.product_with_code(company, "CAFE").await.unwrap(),
+        None
+    );
+    assert_eq!(
+        references
+            .product_with_code(other_company, "CAFE-500")
+            .await
+            .unwrap(),
+        None
     );
     assert!(
         references
@@ -13968,6 +14001,194 @@ pub async fn runs_the_inventory_count<C, M, P, St>(
                 None,
                 None
             )
+            .await
+            .unwrap()
+            .items
+            .len(),
+        3
+    );
+}
+
+/// A supplier's NF-e entered as a purchase ([ADR 0057]): payables on the installments the invoice gives, stock at
+/// what each item costs, and the same invoice again changes nothing.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub async fn enters_a_supplier_invoice_once<P, E, F, R, T, M, Pr, St>(
+    purchases: &PurchaseService<P, E, F, R, T>,
+    stock: &StockService<M, Pr, St>,
+    entries: &FinancialEntryService<E, F>,
+    company: CompanyId,
+    entry_seed: &EntrySeed,
+    seed: &SalesSeed,
+) where
+    P: PurchaseOrderRepository,
+    E: FinancialEntryRepository,
+    F: EntryReferences,
+    R: DocumentReferences,
+    T: DocumentStock,
+    M: StockMovementRepository,
+    Pr: ProductRepository,
+    St: StockSettingsRepository,
+{
+    use crate::nfe_xml::{parse_nfe, tests::sample};
+    use conta_verde_application::InvoiceEntry;
+    let ana = actor();
+    let cnpj = "11222333000181";
+    let entry = || InvoiceEntry {
+        category_id: entry_seed.category,
+        cost_center_id: Some(entry_seed.cost_center),
+        payment_term_id: None,
+        received_on: Some("2026-11-10".into()),
+        supplier_id: None,
+        products: Vec::new(),
+    };
+    let draft =
+        |series: u32, number: u32| parse_nfe(sample(cnpj, series, number).as_bytes()).unwrap();
+
+    // Looked at before it is entered: the supplier and the products its codes find, and that it is new.
+    let preview = purchases
+        .preview_invoice(company, draft(1, 4321))
+        .await
+        .unwrap();
+    assert_eq!(preview.supplier, Some(seed.supplier));
+    assert_eq!(
+        preview.products,
+        [Some(seed.product), Some(seed.other_product)]
+    );
+    assert!(preview.entered.is_none());
+    assert_eq!(preview.invoice.total().to_string(), "111.5");
+
+    // Entered: a purchase received whole, its payable on the installments the invoice gives, the goods in stock at
+    // what each item costs (100 + 2.5 of IPI for the coffee, 9.99 - 0.99 for the bread).
+    let outcome = purchases
+        .enter_invoice(company, &ana, draft(1, 4321), entry())
+        .await
+        .unwrap();
+    assert!(!outcome.already_entered);
+    assert_eq!(outcome.order.status(), PurchaseStatus::Received);
+    assert_eq!(outcome.order.supplier_id(), seed.supplier);
+    assert_eq!(outcome.order.total().to_string(), "111.5");
+    assert_eq!(
+        outcome.order.invoice_key().map(|key| key.as_str()),
+        Some(preview.invoice.access_key().as_str())
+    );
+    let payable = outcome.receipt.payable.clone().unwrap();
+    assert_eq!(payable.party_id(), Some(seed.supplier));
+    assert_eq!(payable.competence_date().to_string(), "2026-11-10");
+    assert_eq!(
+        payable.installments_text(),
+        "1:2026-12-06:55.75,2:2027-01-06:55.75"
+    );
+    let held = |balance: conta_verde_domain::StockBalance| {
+        (balance.quantity().to_string(), balance.value().to_string())
+    };
+    assert_eq!(
+        held(stock.balance_of(company, seed.product).await.unwrap()),
+        ("10".into(), "102.5".into())
+    );
+    assert_eq!(
+        held(stock.balance_of(company, seed.other_product).await.unwrap()),
+        ("3".into(), "9".into())
+    );
+    assert_eq!(
+        purchases
+            .preview_invoice(company, draft(1, 4321))
+            .await
+            .unwrap()
+            .entered
+            .map(|order| order.id()),
+        Some(outcome.order.id())
+    );
+
+    // The same file again, in sequence and at the same moment, adds nothing.
+    let again = purchases
+        .enter_invoice(company, &ana, draft(1, 4321), entry())
+        .await
+        .unwrap();
+    assert!(again.already_entered);
+    assert_eq!(again.order.id(), outcome.order.id());
+    assert_eq!(again.receipt.receipt.id(), outcome.receipt.receipt.id());
+    let (a, b) = tokio::join!(
+        purchases.enter_invoice(company, &ana, draft(1, 4322), entry()),
+        purchases.enter_invoice(company, &ana, draft(1, 4322), entry())
+    );
+    let (a, b) = (a.unwrap(), b.unwrap());
+    assert_eq!(a.order.id(), b.order.id());
+    assert_eq!(u8::from(a.already_entered) + u8::from(b.already_entered), 1);
+    assert_eq!(
+        entries
+            .list(company, &FinancialEntryQuery::default(), None, None)
+            .await
+            .unwrap()
+            .items
+            .len(),
+        2
+    );
+    assert_eq!(
+        held(stock.balance_of(company, seed.product).await.unwrap()),
+        ("20".into(), "205".into())
+    );
+    assert_eq!(
+        purchases
+            .list(company, &PurchaseOrderQuery::default(), None, None)
+            .await
+            .unwrap()
+            .items
+            .len(),
+        2
+    );
+
+    // What cannot be entered leaves nothing: an issuer nobody registered, an item with no product, an invoice
+    // whose totals do not add up.
+    let stranger = parse_nfe(sample("11444777000161", 1, 4321).as_bytes()).unwrap();
+    assert_eq!(
+        purchases
+            .enter_invoice(company, &ana, stranger, entry())
+            .await
+            .unwrap_err(),
+        ApplicationError::SupplierNotRegistered
+    );
+    let unknown_code = parse_nfe(
+        sample(cnpj, 1, 4323)
+            .replace("CAFE-500", "DESCONHECIDO")
+            .as_bytes(),
+    )
+    .unwrap();
+    assert_eq!(
+        purchases
+            .enter_invoice(company, &ana, unknown_code.clone(), entry())
+            .await
+            .unwrap_err(),
+        ApplicationError::InvoiceItemNeedsAProduct(1)
+    );
+    // ... until the person says which product it is.
+    let mapped = purchases
+        .enter_invoice(
+            company,
+            &ana,
+            unknown_code,
+            InvoiceEntry {
+                products: vec![Some(seed.product), None],
+                ..entry()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(!mapped.already_entered);
+    let broken = parse_nfe(
+        sample(cnpj, 1, 4324)
+            .replace("<vNF>111.50</vNF>", "<vNF>111.51</vNF>")
+            .as_bytes(),
+    )
+    .unwrap();
+    assert!(
+        purchases
+            .enter_invoice(company, &ana, broken, entry())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        purchases
+            .list(company, &PurchaseOrderQuery::default(), None, None)
             .await
             .unwrap()
             .items

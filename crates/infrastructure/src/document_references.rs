@@ -1,7 +1,8 @@
 use conta_verde_application::{
-    DocumentReferences, PartyRepository, PaymentTermRepository, ProductRepository, RepositoryError,
+    DocumentReferences, PartyQuery, PartyRepository, PaymentTermRepository, ProductQuery,
+    ProductRepository, RepositoryError,
 };
-use conta_verde_domain::{CompanyId, PartyId, PaymentTerm, PaymentTermId, ProductId};
+use conta_verde_domain::{CompanyId, Document, PartyId, PaymentTerm, PaymentTermId, ProductId};
 
 /// Answers what a quote, a sale, a contract or a purchase order may point at by asking the registers themselves, so one
 /// implementation serves every adapter, like `RegisterReferences` does for entries. A record of
@@ -70,6 +71,42 @@ where
             .find(company_id, id)
             .await?
             .is_some_and(|party| party.is_supplier()))
+    }
+
+    async fn party_with_document(
+        &self,
+        company_id: CompanyId,
+        document: &Document,
+    ) -> Result<Option<PartyId>, RepositoryError> {
+        let query = PartyQuery::default().searching(document.as_str());
+        let found = self
+            .parties
+            .list_by_company(company_id, &query, None, 20)
+            .await?;
+        Ok(found
+            .iter()
+            .find(|party| party.document() == Some(document))
+            .map(|party| party.id()))
+    }
+
+    async fn product_with_code(
+        &self,
+        company_id: CompanyId,
+        code: &str,
+    ) -> Result<Option<ProductId>, RepositoryError> {
+        let query = ProductQuery::default().searching(code);
+        let found = self
+            .products
+            .list_by_company(company_id, &query, None, 50)
+            .await?;
+        Ok(found
+            .iter()
+            .find(|product| {
+                product
+                    .sku()
+                    .is_some_and(|sku| sku.eq_ignore_ascii_case(code.trim()))
+            })
+            .map(|product| product.id()))
     }
 
     async fn seller_is_usable(

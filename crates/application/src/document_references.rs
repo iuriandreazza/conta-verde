@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use conta_verde_domain::{CompanyId, PartyId, PaymentTerm, PaymentTermId, ProductId};
+use conta_verde_domain::{CompanyId, Document, PartyId, PaymentTerm, PaymentTermId, ProductId};
 
 use crate::RepositoryError;
 
@@ -34,6 +34,20 @@ pub trait DocumentReferences: Send + Sync {
         company_id: CompanyId,
         id: PartyId,
     ) -> impl Future<Output = Result<bool, RepositoryError>> + Send;
+
+    /// The party of the company with this registry number, if one is registered ([ADR 0057]).
+    fn party_with_document(
+        &self,
+        company_id: CompanyId,
+        document: &Document,
+    ) -> impl Future<Output = Result<Option<PartyId>, RepositoryError>> + Send;
+
+    /// The product of the company whose SKU is this code (compared without regard to case), if one is.
+    fn product_with_code(
+        &self,
+        company_id: CompanyId,
+        code: &str,
+    ) -> impl Future<Output = Result<Option<ProductId>, RepositoryError>> + Send;
 
     /// The party exists in the company and is a seller.
     fn seller_is_usable(

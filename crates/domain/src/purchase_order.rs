@@ -4,9 +4,9 @@ use crate::financial_entry::clean_description;
 use crate::line::{lines_total, validated_lines};
 use crate::name::{optional_line, optional_text};
 use crate::{
-    Amount, CalendarDate, CategoryId, CompanyId, CostCenterId, DomainError, EntryInstallmentDraft,
-    EntryKind, FinancialEntryDraft, Line, LineDraft, PartyId, PaymentTerm, PaymentTermId,
-    PurchaseOrderId, PurchaseReceiptId, round_to_cents,
+    AccessKey, Amount, CalendarDate, CategoryId, CompanyId, CostCenterId, DomainError,
+    EntryInstallmentDraft, EntryKind, FinancialEntryDraft, Line, LineDraft, PartyId, PaymentTerm,
+    PaymentTermId, PurchaseOrderId, PurchaseReceiptId, round_to_cents,
 };
 
 const MAX_NOTES_CHARS: usize = 2000;
@@ -82,6 +82,8 @@ pub struct PurchaseOrder {
     notes: Option<String>,
     lines: Vec<Line>,
     status: PurchaseStatus,
+    /// The NF-e the order was entered from, which never changes ([ADR 0057]).
+    invoice_key: Option<AccessKey>,
 }
 
 impl PurchaseOrder {
@@ -118,7 +120,24 @@ impl PurchaseOrder {
             notes,
             lines: validated_lines(&draft.lines)?,
             status: PurchaseStatus::Draft,
+            invoice_key: None,
         })
+    }
+
+    /// The same order, said to have been entered from an NF-e.
+    pub fn from_invoice(mut self, key: AccessKey) -> Self {
+        self.invoice_key = Some(key);
+        self
+    }
+
+    /// The order as it was stored, with the NF-e it was entered from.
+    pub fn with_invoice_key(mut self, key: Option<AccessKey>) -> Self {
+        self.invoice_key = key;
+        self
+    }
+
+    pub fn invoice_key(&self) -> Option<&AccessKey> {
+        self.invoice_key.as_ref()
     }
 
     /// The order as it was stored: its number and its status.
@@ -139,7 +158,9 @@ impl PurchaseOrder {
         if self.status != PurchaseStatus::Draft {
             return Err(DomainError::PurchaseIsLocked);
         }
-        Ok(Self::new(self.id, self.company_id, draft)?.restored(self.number, self.status))
+        Ok(Self::new(self.id, self.company_id, draft)?
+            .restored(self.number, self.status)
+            .with_invoice_key(self.invoice_key.clone()))
     }
 
     /// The order with only its status changed: what a store does when it records a transition.
@@ -216,12 +237,23 @@ impl PurchaseOrder {
         term: Option<&PaymentTerm>,
     ) -> Result<FinancialEntryDraft, DomainError> {
         let total = receipt.total();
-        let installments = match term {
-            Some(term) => term.split(total, receipt.received_on)?,
-            None => vec![EntryInstallmentDraft {
-                due_date: receipt.received_on.to_string(),
-                amount: total.to_string(),
-            }],
+        let installments = if !receipt.schedule.is_empty() {
+            receipt
+                .schedule
+                .iter()
+                .map(|(due, amount)| EntryInstallmentDraft {
+                    due_date: due.to_string(),
+                    amount: amount.to_string(),
+                })
+                .collect()
+        } else {
+            match term {
+                Some(term) => term.split(total, receipt.received_on)?,
+                None => vec![EntryInstallmentDraft {
+                    due_date: receipt.received_on.to_string(),
+                    amount: total.to_string(),
+                }],
+            }
         };
         Ok(FinancialEntryDraft {
             kind: EntryKind::Payable,
@@ -324,6 +356,15 @@ pub struct PurchaseReceipt {
     received_on: CalendarDate,
     notes: Option<String>,
     items: Vec<ReceiptItem>,
+    /// When the payable falls due and how much, when the receipt says; empty means the order's payment term decides.
+    schedule: Vec<(CalendarDate, Amount)>,
+}
+
+/// When one part of a payable falls due, as asked for.
+#[derive(Debug, Clone)]
+pub struct ScheduleDraft {
+    pub due_date: String,
+    pub amount: String,
 }
 
 impl PurchaseReceipt {
@@ -384,7 +425,34 @@ impl PurchaseReceipt {
             received_on,
             notes,
             items,
+            schedule: Vec::new(),
         })
+    }
+
+    /// The same receipt, said to be paid on these days instead of by the order's payment term. The parts must add
+    /// up to what the receipt is worth, each above 0, in days that never go back.
+    pub fn paid_in(mut self, schedule: &[ScheduleDraft]) -> Result<Self, DomainError> {
+        let mut parts: Vec<(CalendarDate, Amount)> = Vec::with_capacity(schedule.len());
+        for part in schedule {
+            let due =
+                CalendarDate::parse(&part.due_date).ok_or(DomainError::InvalidDate("due_date"))?;
+            let amount = Amount::in_cents(part.amount.trim())
+                .filter(|amount| amount.as_decimal() > Decimal::ZERO)
+                .ok_or(DomainError::InvalidAmount("amount"))?;
+            if parts.last().is_some_and(|(last, _)| due < *last) {
+                return Err(DomainError::ScheduleDoesNotMatchReceipt);
+            }
+            parts.push((due, amount));
+        }
+        let sum: Decimal = parts.iter().map(|(_, amount)| amount.as_decimal()).sum();
+        if parts.is_empty()
+            || parts.len() > crate::MAX_ENTRY_INSTALLMENTS
+            || sum.normalize() != self.total()
+        {
+            return Err(DomainError::ScheduleDoesNotMatchReceipt);
+        }
+        self.schedule = parts;
+        Ok(self)
     }
 
     /// A receipt as it was stored: what it was worth is a fact of the day it was made, not worked out again.
@@ -395,6 +463,7 @@ impl PurchaseReceipt {
         received_on: CalendarDate,
         notes: Option<String>,
         items: Vec<ReceiptItem>,
+        schedule: Vec<(CalendarDate, Amount)>,
     ) -> Self {
         Self {
             id,
@@ -403,7 +472,13 @@ impl PurchaseReceipt {
             received_on,
             notes,
             items,
+            schedule,
         }
+    }
+
+    /// When the payable falls due, if the receipt says.
+    pub fn schedule(&self) -> &[(CalendarDate, Amount)] {
+        &self.schedule
     }
 
     pub fn id(&self) -> PurchaseReceiptId {
@@ -608,6 +683,59 @@ mod tests {
             .unwrap_err(),
             DomainError::PurchaseIsNotReceivable
         );
+    }
+
+    #[test]
+    fn a_receipt_can_say_when_it_falls_due_and_then_the_term_is_not_asked() {
+        let order = order(vec![line("3", "33.33", "0")]).approved().unwrap();
+        let receipt = PurchaseReceipt::new(
+            PurchaseReceiptId::generate(),
+            &order,
+            receipt_draft(&[(1, "3")]),
+            &[],
+        )
+        .unwrap();
+        let part = |due: &str, amount: &str| ScheduleDraft {
+            due_date: due.into(),
+            amount: amount.into(),
+        };
+        let paid = receipt
+            .clone()
+            .paid_in(&[part("2026-12-01", "60"), part("2027-01-01", "39.99")])
+            .unwrap();
+        let entry = order.payable_of(&paid, None).unwrap();
+        let shown: Vec<_> = entry
+            .installments
+            .iter()
+            .map(|i| (i.due_date.as_str(), i.amount.as_str()))
+            .collect();
+        assert_eq!(shown, [("2026-12-01", "60"), ("2027-01-01", "39.99")]);
+        for bad in [
+            vec![],
+            vec![part("2026-12-01", "99.98")],
+            vec![part("2026-12-01", "60"), part("2026-11-01", "39.99")],
+            vec![part("2026-12-01", "0"), part("2027-01-01", "99.99")],
+        ] {
+            assert_eq!(
+                receipt.clone().paid_in(&bad).unwrap_err(),
+                if bad.iter().any(|p| p.amount == "0") {
+                    DomainError::InvalidAmount("amount")
+                } else {
+                    DomainError::ScheduleDoesNotMatchReceipt
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn an_order_entered_from_an_invoice_keeps_its_key_when_replaced() {
+        let key =
+            AccessKey::parse(&crate::invoice::tests::key_for("11222333000181", 1, 4321)).unwrap();
+        let entered = order(vec![line("1", "1", "0")]).from_invoice(key.clone());
+        let replaced = entered
+            .replaced_with(draft(vec![line("2", "1", "0")]))
+            .unwrap();
+        assert_eq!(replaced.invoice_key(), Some(&key));
     }
 
     #[test]
