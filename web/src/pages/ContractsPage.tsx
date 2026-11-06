@@ -23,7 +23,7 @@ import { Notice } from "../components/Notice";
 import { ContractForm } from "../components/ContractForm";
 import { Sheet } from "../components/Sheet";
 import { useCreation, useOnCreated } from "../creation/CreationProvider";
-import { useContractTargets } from "../lib/useContractTargets";
+import { useSalesTargets } from "../lib/useSalesTargets";
 import { useLastValue } from "../lib/useLastValue";
 import { PageHeader } from "../components/PageHeader";
 import { Spinner } from "../components/Spinner";
@@ -64,7 +64,7 @@ export function ContractsPage() {
   const [panel, setPanel] = useState<Panel | null>(null);
   const [acting, setActing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const targets = useContractTargets(companyId);
+  const targets = useSalesTargets(companyId);
   const { names, error: targetsError, loaded: targetsLoaded } = targets;
 
   const { items, setItems, nextCursor, loading, loadingMore, error, applied, reload, loadMore } =

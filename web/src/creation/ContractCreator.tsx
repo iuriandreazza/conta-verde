@@ -2,12 +2,12 @@ import { useEffect, useState } from "react";
 import { api, errorMessage, type ContractInput } from "../api";
 import { ContractForm } from "../components/ContractForm";
 import { Spinner } from "../components/Spinner";
-import { useContractTargets } from "../lib/useContractTargets";
+import { useSalesTargets } from "../lib/useSalesTargets";
 import type { CreatorProps } from "./CreationProvider";
 
 /** The form of a new contract, with what it points at read for the company, and the call that saves it. */
 export function ContractCreator({ companyId, onBusyChange, onCreated, onCancel }: CreatorProps) {
-  const targets = useContractTargets(companyId);
+  const targets = useSalesTargets(companyId);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
