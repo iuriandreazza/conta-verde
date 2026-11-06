@@ -200,8 +200,8 @@ function DueBlock({
           <p className="muted">Em {formatDate(today)}</p>
         </div>
         {canWrite && (
-          <Button type="button" variant="ghost" icon={PlusIcon} onClick={() => openCreate("entry")}>
-            Novo lançamento
+          <Button type="button" variant="ghost" icon={PlusIcon} onClick={() => openCreate("entry", { kind })}>
+            {kind === "receivable" ? "Nova receita" : "Nova despesa"}
           </Button>
         )}
       </div>

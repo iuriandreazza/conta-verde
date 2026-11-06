@@ -19,7 +19,7 @@ import { UsersIcon } from "./icons/users";
 import { WalletIcon } from "./icons/wallet";
 import { MenuButton, type MenuItem } from "./MenuButton";
 import type { Area, Company } from "../api";
-import { useCreation, type CreateKind } from "../creation/CreationProvider";
+import { useCreation, type CreateKind, type CreateOptions } from "../creation/CreationProvider";
 
 interface AppTopbarProps {
   userName: string;
@@ -38,13 +38,13 @@ interface AppTopbarProps {
  * products people come from.
  */
 const SHORTCUTS: Partial<Record<string, string>> = {
-  entry: "L",
+  revenue: "R",
+  expense: "D",
   transfer: "T",
   quote: "O",
   sale: "V",
   party: "C",
   category: "K",
-  recurrence: "R",
   invite: "M",
   bankAccount: "B",
   product: "P",
@@ -53,10 +53,11 @@ const SHORTCUTS: Partial<Record<string, string>> = {
 /** What a person can start from anywhere: only the registers their role may write. */
 function creationItems(
   permissions: AppTopbarProps["permissions"],
-  openCreate: (kind: CreateKind) => void,
+  openCreate: (kind: CreateKind, options?: CreateOptions) => void,
 ): MenuItem[] {
-  const items: (MenuItem & { area: Area; creates?: CreateKind })[] = [
-    { key: "entry", label: "Novo lançamento", icon: CircleDollarSignIcon, creates: "entry", area: "finance" },
+  const items: (MenuItem & { area: Area; creates?: CreateKind; options?: CreateOptions })[] = [
+    { key: "revenue", label: "Nova receita", icon: CircleDollarSignIcon, creates: "entry", options: { kind: "receivable" }, area: "finance" },
+    { key: "expense", label: "Nova despesa", icon: CircleDollarSignIcon, creates: "entry", options: { kind: "payable" }, area: "finance" },
     { key: "transfer", label: "Nova transferência", icon: SendIcon, creates: "transfer", area: "finance" },
     { key: "quote", label: "Novo orçamento", icon: FileTextIcon, creates: "quote", area: "sales" },
     { key: "sale", label: "Novo pedido", icon: HandCoinsIcon, creates: "sale", area: "sales" },
@@ -79,10 +80,10 @@ function creationItems(
   return items
     .filter((item) => permissions?.[item.area] === "write")
     // A register with a sheet opens it over the page that is showing; the others still go to their page.
-    .map(({ creates, area: _area, ...item }) => ({
+    .map(({ creates, options, area: _area, ...item }) => ({
       ...item,
       shortcut: SHORTCUTS[item.key],
-      ...(creates ? { onSelect: () => openCreate(creates) } : {}),
+      ...(creates ? { onSelect: () => openCreate(creates, options) } : {}),
     }));
 }
 

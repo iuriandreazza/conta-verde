@@ -1,5 +1,5 @@
 import { Fragment, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import {
   NO_ENTRY_FILTERS,
   api,
@@ -8,6 +8,7 @@ import {
   type EntryFilters,
   type EntryInput,
 } from "../api";
+import { entryKindOf } from "../lib/entryKind";
 import { PlusIcon } from "../components/icons/plus";
 import { Sheet } from "../components/Sheet";
 import { useCreation, useOnCreated } from "../creation/CreationProvider";
@@ -52,13 +53,35 @@ function describeDue(entry: Entry): string {
     : `${entry.installments.length} parcelas, de ${formatDate(first.due_date)} a ${formatDate(last.due_date)}`;
 }
 
+const PAGE_TEXT = {
+  "": {
+    title: "Lançamentos",
+    description: "O que a empresa tem a receber e a pagar, dividido em parcelas.",
+    create: "Novo lançamento",
+  },
+  receivable: {
+    title: "Contas a receber",
+    description: "O que os clientes ainda vão pagar, dividido em parcelas.",
+    create: "Nova receita",
+  },
+  payable: {
+    title: "Contas a pagar",
+    description: "O que a empresa ainda vai pagar, dividido em parcelas.",
+    create: "Nova despesa",
+  },
+} as const;
+
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one
 // instance: the old list is dropped and a reply still in flight for another company lands on an
 // unmounted component.
 export function EntriesPage() {
   const { companyId = "" } = useParams();
   const canWrite = useCanWrite("finance");
-  const [filters, setFilters] = useState<EntryFilters>(NO_ENTRY_FILTERS);
+  // "Contas a receber" and "Contas a pagar" are this list with the kind in the address, as people expect to find them.
+  const [params, setParams] = useSearchParams();
+  const pageKind = entryKindOf(params.toString());
+  const [typedFilters, setFilters] = useState<EntryFilters>(NO_ENTRY_FILTERS);
+  const filters: EntryFilters = { ...typedFilters, kind: pageKind };
   const [editing, setEditing] = useState<Entry | null>(null);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -68,6 +91,17 @@ export function EntriesPage() {
   const [settlementsOpenFor, setSettlementsOpenFor] = useState<string | null>(null);
   const [attachmentsOpenFor, setAttachmentsOpenFor] = useState<string | null>(null);
   const [chargesOpenFor, setChargesOpenFor] = useState<string | null>(null);
+  // Layout keeps this page mounted when only `?tipo=` changes, so what belongs to the other list is dropped here.
+  const [shownKind, setShownKind] = useState(pageKind);
+  if (shownKind !== pageKind) {
+    setShownKind(pageKind);
+    setSaved(null);
+    setHighlightedId(null);
+    setHistoryOpenFor(null);
+    setSettlementsOpenFor(null);
+    setAttachmentsOpenFor(null);
+    setChargesOpenFor(null);
+  }
   const { banks, methods, categories, costCenters, parties, names, error: targetsError, loaded: targetsLoaded } = useEntryTargets(companyId);
 
   const {
@@ -86,7 +120,8 @@ export function EntriesPage() {
     filters,
   );
   const today = todayIso();
-  const isFiltered = applied.q !== "" || applied.kind !== "" || applied.category !== "";
+  // The kind comes from the address, so "Limpar filtros" could not clear it: it is not counted here.
+  const isFiltered = applied.q !== "" || applied.category !== "";
 
   /**
    * Reads one entry again and puts it where it is in the list, so a settlement does not send the
@@ -139,14 +174,11 @@ export function EntriesPage() {
 
   return (
     <>
-      <PageHeader
-        title="Lançamentos"
-        description="O que a empresa tem a receber e a pagar, dividido em parcelas."
-      />
+      <PageHeader title={PAGE_TEXT[pageKind].title} description={PAGE_TEXT[pageKind].description} />
       {canWrite && (
         <div className="list-actions">
-          <Button type="button" icon={PlusIcon} onClick={() => openCreate("entry")}>
-            Novo lançamento
+          <Button type="button" icon={PlusIcon} onClick={() => openCreate("entry", pageKind === "" ? {} : { kind: pageKind })}>
+            {PAGE_TEXT[pageKind].create}
           </Button>
         </div>
       )}
@@ -163,16 +195,20 @@ export function EntriesPage() {
                 placeholder="Descrição"
                 autoComplete="off"
                 maxLength={100}
-                onChange={(event) => setFilters({ ...filters, q: event.target.value })}
+                onChange={(event) => setFilters({ ...typedFilters, q: event.target.value })}
               />
             </label>
             <label>
               Mostrar
               <select
                 value={filters.kind}
-                onChange={(event) =>
-                  setFilters({ ...filters, kind: event.target.value as EntryFilters["kind"] })
-                }
+                onChange={(event) => {
+                  // The kind lives in the address, so that a reload or a shared link shows the same list.
+                  const next = new URLSearchParams(params);
+                  if (event.target.value === "") next.delete("tipo");
+                  else next.set("tipo", event.target.value);
+                  setParams(next, { replace: true });
+                }}
               >
                 <option value="">Todos</option>
                 <option value="receivable">Só a receber</option>
@@ -183,7 +219,7 @@ export function EntriesPage() {
               Categoria
               <select
                 value={filters.category}
-                onChange={(event) => setFilters({ ...filters, category: event.target.value })}
+                onChange={(event) => setFilters({ ...typedFilters, category: event.target.value })}
               >
                 <option value="">Todas</option>
                 {treeRows(categories).map(({ category, depth }) => (
@@ -199,7 +235,7 @@ export function EntriesPage() {
               <select
                 value={filters.sort}
                 onChange={(event) =>
-                  setFilters({ ...filters, sort: event.target.value as EntryFilters["sort"] })
+                  setFilters({ ...typedFilters, sort: event.target.value as EntryFilters["sort"] })
                 }
               >
                 <option value="-competence_date">Mais recentes</option>

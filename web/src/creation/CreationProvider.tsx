@@ -34,6 +34,8 @@ export interface Created {
 /** What a page may ask a creator to start with: the parent of a new subcategory. */
 export interface CreateOptions {
   parentId?: string;
+  /** An entry starts as a receivable or a payable: "Nova receita", "Nova despesa". */
+  kind?: "receivable" | "payable";
 }
 
 export interface CreatorProps {
@@ -45,8 +47,13 @@ export interface CreatorProps {
   onCancel: () => void;
 }
 
-const CREATORS: Record<CreateKind, { title: string; Creator: (props: CreatorProps) => ReactNode }> = {
-  entry: { title: "Novo lançamento", Creator: EntryCreator },
+const ENTRY_TITLES = { receivable: "Nova receita", payable: "Nova despesa" } as const;
+
+const CREATORS: Record<
+  CreateKind,
+  { title: string | ((options: CreateOptions) => string); Creator: (props: CreatorProps) => ReactNode }
+> = {
+  entry: { title: (options) => (options.kind ? ENTRY_TITLES[options.kind] : "Novo lançamento"), Creator: EntryCreator },
   sale: { title: "Novo pedido", Creator: SaleCreator },
   purchase: { title: "Nova compra", Creator: PurchaseCreator },
   stockMovement: { title: "Novo movimento de estoque", Creator: StockMovementCreator },
@@ -134,7 +141,7 @@ export function CreationProvider({ companyId, children }: { companyId: string | 
     <CreationContext.Provider value={value}>
       {children}
       {companyId !== undefined && (
-        <Sheet open={kind !== null} title={current?.title ?? ""} onClose={closeUnlessSaving} explicitClose={result !== null} locked={saving}>
+        <Sheet open={kind !== null} title={current === null ? "" : typeof current.title === "function" ? current.title(options) : current.title} onClose={closeUnlessSaving} explicitClose={result !== null} locked={saving}>
           {kind !== null && current !== null && result !== null && (
             <div className="creation-result">
               {result}
