@@ -2,6 +2,7 @@ import { Button } from "./Button";
 import { BoxIcon } from "./icons/box";
 import { CalendarDaysIcon } from "./icons/calendar-days";
 import { CreditCardIcon } from "./icons/credit-card";
+import { FolderTreeIcon } from "./icons/folder-tree";
 import { LayersIcon } from "./icons/layers";
 import { CircleDollarSignIcon } from "./icons/circle-dollar-sign";
 import { FileTextIcon } from "./icons/file-text";
@@ -41,6 +42,7 @@ function creationItems(
     { key: "quote", label: "Novo orçamento", icon: FileTextIcon, to: `${base}/quotes`, area: "sales" },
     { key: "sale", label: "Nova venda", icon: HandCoinsIcon, to: `${base}/sales`, area: "sales" },
     { key: "party", label: "Novo cliente ou fornecedor", icon: UsersIcon, creates: "party", area: "parties" },
+    { key: "category", label: "Nova categoria", icon: FolderTreeIcon, creates: "category", area: "finance" },
     { key: "recurrence", label: "Nova recorrência", icon: RotateCCWIcon, creates: "recurrence", area: "finance" },
     { key: "invite", label: "Convidar alguém", icon: UserPlusIcon, creates: "invite", area: "members" },
     { key: "bankAccount", label: "Nova conta bancária", icon: WalletIcon, creates: "bankAccount", area: "finance" },
