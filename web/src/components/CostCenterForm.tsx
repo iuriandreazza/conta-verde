@@ -1,6 +1,7 @@
 import type { FormEvent } from "react";
 import type { CostCenter, CostCenterInput } from "../api";
 import { Button } from "./Button";
+import { BackButton } from "./BackButton";
 import { CheckIcon } from "./icons/check";
 import { PlusIcon } from "./icons/plus";
 import { Notice } from "./Notice";
@@ -39,9 +40,7 @@ export function CostCenterForm({ costCenter, pending, error, onSubmit, onCancel 
       </section>
       <Notice message={error} />
       <div className="form-footer">
-        <Button type="button" variant="ghost" disabled={pending} onClick={onCancel}>
-          Voltar
-        </Button>
+        <BackButton disabled={pending} onClick={onCancel} />
         <Button type="submit" icon={costCenter === null ? PlusIcon : CheckIcon} pending={pending}>
           {costCenter === null ? "Adicionar" : "Salvar alterações"}
         </Button>

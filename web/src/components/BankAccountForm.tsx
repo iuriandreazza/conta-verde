@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import type { BankAccount, BankAccountInput, BankAccountKind } from "../api";
 import { BANK_ACCOUNT_KINDS } from "../lib/kinds";
 import { Button } from "./Button";
+import { BackButton } from "./BackButton";
 import { CheckIcon } from "./icons/check";
 import { PlusIcon } from "./icons/plus";
 import { Notice } from "./Notice";
@@ -104,9 +105,7 @@ export function BankAccountForm({ account, pending, error, onSubmit, onCancel }:
       </section>
       <Notice message={error} />
       <div className="form-footer">
-        <Button type="button" variant="ghost" disabled={pending} onClick={onCancel}>
-          Voltar
-        </Button>
+        <BackButton disabled={pending} onClick={onCancel} />
         <Button type="submit" icon={account === null ? PlusIcon : CheckIcon} pending={pending}>
           {account === null ? "Adicionar" : "Salvar alterações"}
         </Button>

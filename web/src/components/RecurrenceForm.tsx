@@ -5,6 +5,7 @@ import { isAmbiguousDecimal, toInputDecimal } from "../lib/decimal";
 import { centsToApi, isIsoDate, toCents } from "../lib/entryInstallments";
 import { FREQUENCIES } from "../lib/recurrence";
 import { Button } from "./Button";
+import { BackButton } from "./BackButton";
 import { CheckIcon } from "./icons/check";
 import { PlusIcon } from "./icons/plus";
 import { Notice } from "./Notice";
@@ -179,9 +180,7 @@ export function RecurrenceForm({ recurrence, targets, pending, error, onSubmit, 
       </section>
       <Notice message={fieldError ?? error} />
       <div className="form-footer">
-        <Button type="button" variant="ghost" disabled={pending} onClick={onCancel}>
-          Voltar
-        </Button>
+        <BackButton disabled={pending} onClick={onCancel} />
         <Button type="submit" icon={recurrence === null ? PlusIcon : CheckIcon} pending={pending}>
           {recurrence === null ? "Adicionar" : "Salvar alterações"}
         </Button>
