@@ -100,6 +100,7 @@ const SECTIONS: NavSection[] = [
       { path: "/transfers", label: "Transferências", icon: SendIcon },
       { path: "/reconciliation", label: "Conciliação", icon: CheckIcon },
       { path: "/recurrences", label: "Recorrências", icon: RotateCCWIcon },
+      { path: "/collection", label: "Cobrança", icon: CreditCardIcon },
     ],
   },
   {

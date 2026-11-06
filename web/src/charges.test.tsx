@@ -40,10 +40,15 @@ const pixCharge: Charge = {
   pix_payload: "00020126580014br.gov.bcb.pix",
   payment_url: null,
   issued_by: "Ana",
+  paid_on: null,
+  paid_amount: null,
+  fee: null,
+  note: null,
 };
 
 function serve(options: {
   provider?: string | null;
+  account?: string | null;
   charges: Charge[];
   onIssue?: (body: unknown) => Reply;
   onCancel?: () => Reply;
@@ -53,6 +58,15 @@ function serve(options: {
     if (url === "/api/auth/me") return { status: 200, body: profile };
     if (url.endsWith("/collection")) {
       return { status: 200, body: { provider: options.provider === undefined ? "fake" : options.provider } };
+    }
+    if (url.endsWith("/collection/settings")) {
+      return {
+        status: 200,
+        body: {
+          bank_account_id: options.account === undefined ? "b1" : options.account,
+          fee_category_id: null,
+        },
+      };
     }
     if (url.endsWith("/entries/e1/charges") && init?.method === "POST") {
       const reply = options.onIssue?.(JSON.parse(String(init.body)));
@@ -164,4 +178,34 @@ it("copies the Pix text", async () => {
   expect(writeText).toHaveBeenCalledWith("00020126580014br.gov.bcb.pix");
   expect(await panel.findByText("Copiado.")).toBeInTheDocument();
   expect(panel.getByText(/Provedor de teste/)).toBeInTheDocument();
+});
+
+it("says what was paid, and warns when the payment could not settle the installment", async () => {
+  serve({
+    charges: [
+      {
+        ...pixCharge,
+        status: "paid",
+        paid_on: "2026-12-09",
+        paid_amount: "62",
+        fee: "1.99",
+        note: "the installment was already settled",
+      },
+    ],
+  });
+  const panel = await openPanel();
+
+  const item = await panel.findByRole("listitem");
+  expect(item).toHaveTextContent("Paga");
+  expect(item).toHaveTextContent("Paga em 09/12/2026: R$ 62,00, taxa R$ 1,99.");
+  expect(await panel.findByText(/houve um problema ao lançá-lo: a parcela já estava baixada\./)).toBeInTheDocument();
+});
+
+it("asks for the account charges are paid into before offering to issue one", async () => {
+  serve({ account: null, charges: [] });
+  const panel = await openPanel();
+
+  expect(await panel.findByText(/Escolha antes a conta/)).toBeInTheDocument();
+  expect(panel.getByRole("link", { name: "Cobrança" })).toHaveAttribute("href", "/companies/c1/collection");
+  expect(panel.queryByRole("button", { name: "Emitir cobrança" })).not.toBeInTheDocument();
 });

@@ -9,8 +9,9 @@ use conta_verde_application::{
     SalesReportService, TransferService,
 };
 use conta_verde_application::{
-    ChargeService, EmailError, EmailMessage, EmailSender, PaymentProvider, ProviderCharge,
-    ProviderChargeRequest, ProviderError,
+    ChargeService, CollectionService, EmailError, EmailMessage, EmailSender, PaymentProvider,
+    PaymentWebhookService, ProviderCharge, ProviderChargeRequest, ProviderError, ProviderEvent,
+    WebhookError, WebhookHeaders,
 };
 use conta_verde_infrastructure::{
     Argon2SecretService, BrasilApiCnpjRegistry, BrasilApiPostalCodeDirectory, CachedCnpjRegistry,
@@ -25,6 +26,7 @@ use conta_verde_infrastructure::{
 };
 use conta_verde_infrastructure::{
     FakePaymentProvider, NoPaymentProvider, PostgresChargeRepository,
+    PostgresCollectionSettingsRepository, PostgresPaymentEventRepository,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -55,6 +57,8 @@ impl Ports for PostgresPorts {
     type Blobs = LocalBlobStore;
     type Charges = PostgresChargeRepository;
     type Provider = ConfiguredPaymentProvider;
+    type CollectionSettings = PostgresCollectionSettingsRepository;
+    type PaymentEvents = PostgresPaymentEventRepository;
     type Transfers = PostgresTransferRepository;
     type Openings = PostgresOpeningRepository;
     type Recurrences = PostgresRecurrenceRepository;
@@ -121,11 +125,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         LocalBlobStore::new(attachments_dir_from_env()),
         PostgresFinancialEntryRepository::new(pool.clone()),
     );
+    let payment_provider = payment_provider_from_env()?;
     let charges = ChargeService::new(
         PostgresChargeRepository::new(pool.clone()),
         PostgresFinancialEntryRepository::new(pool.clone()),
         PostgresPartyRepository::new(pool.clone()),
-        payment_provider_from_env()?,
+        payment_provider.clone(),
+        PostgresCollectionSettingsRepository::new(pool.clone()),
+    );
+    let webhooks = PaymentWebhookService::new(
+        payment_provider,
+        PostgresChargeRepository::new(pool.clone()),
+        PostgresPaymentEventRepository::new(pool.clone()),
+        PostgresCollectionSettingsRepository::new(pool.clone()),
+        FinancialEntryService::new(
+            PostgresFinancialEntryRepository::new(pool.clone()),
+            references(),
+        ),
+    );
+    let collection = CollectionService::new(
+        PostgresCollectionSettingsRepository::new(pool.clone()),
+        references(),
     );
     let transfers =
         TransferService::new(PostgresTransferRepository::new(pool.clone()), references());
@@ -249,6 +269,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 entries,
                 attachments,
                 charges,
+                webhooks,
+                collection,
                 transfers,
                 recurrences,
                 quotes,
@@ -337,6 +359,7 @@ where
 
 /// The payment provider the operator chose with `PAYMENT_PROVIDER`: `fake` for development, and off when it
 /// is not set (ADR 0044).
+#[derive(Clone)]
 enum ConfiguredPaymentProvider {
     Off(NoPaymentProvider),
     Fake(FakePaymentProvider),
@@ -373,6 +396,17 @@ impl PaymentProvider for ConfiguredPaymentProvider {
             Self::Fake(provider) => provider.cancel_charge(external_id).await,
         }
     }
+
+    fn verify_webhook(
+        &self,
+        headers: &WebhookHeaders,
+        body: &[u8],
+    ) -> Result<Vec<ProviderEvent>, WebhookError> {
+        match self {
+            Self::Off(provider) => provider.verify_webhook(headers, body),
+            Self::Fake(provider) => provider.verify_webhook(headers, body),
+        }
+    }
 }
 
 fn payment_provider_from_env()
@@ -385,8 +419,18 @@ fn payment_provider_from_env()
         }
         Some("fake") => {
             tracing::warn!("PAYMENT_PROVIDER=fake: charges are made up and cannot be paid");
+            // Its webhooks are signed with a secret of the operator's, or with a random one nobody knows.
+            let secret = std::env::var("FAKE_PAYMENT_WEBHOOK_SECRET")
+                .ok()
+                .filter(|secret| !secret.trim().is_empty())
+                .unwrap_or_else(|| {
+                    tracing::warn!(
+                        "FAKE_PAYMENT_WEBHOOK_SECRET is not set: no webhook can be signed"
+                    );
+                    uuid::Uuid::new_v4().to_string()
+                });
             Ok(ConfiguredPaymentProvider::Fake(
-                FakePaymentProvider::default(),
+                FakePaymentProvider::with_webhook_secret(secret),
             ))
         }
         Some(other) => Err(format!("PAYMENT_PROVIDER={other} is not a known provider").into()),

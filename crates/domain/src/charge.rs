@@ -7,6 +7,7 @@ const MAX_EXTERNAL_ID_CHARS: usize = 200;
 const MAX_DIGITABLE_LINE_CHARS: usize = 100;
 const MAX_PIX_PAYLOAD_CHARS: usize = 1000;
 const MAX_URL_CHARS: usize = 2000;
+const MAX_NOTE_CHARS: usize = 200;
 
 /// How the customer is asked to pay ([ADR 0045]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,6 +80,18 @@ pub struct ChargePayment {
     pub payment_url: Option<String>,
 }
 
+/// What the provider said was paid ([ADR 0046]): the day, what the customer paid (which can be more or less
+/// than the charge, with interest or a discount the provider applied), the fee it kept, and why the
+/// installment was not settled when it was not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChargeReceipt {
+    pub paid_on: CalendarDate,
+    pub paid_amount: Amount,
+    pub fee: Amount,
+    /// Set when the payment could not settle the installment: the person has to look at it.
+    pub note: Option<String>,
+}
+
 /// Unvalidated description of a charge once the provider has made it.
 #[derive(Debug, Clone)]
 pub struct ChargeDraft {
@@ -108,6 +121,7 @@ pub struct Charge {
     external_id: String,
     payment: ChargePayment,
     issued_by: Actor,
+    receipt: Option<ChargeReceipt>,
 }
 
 fn is_provider_key(raw: &str) -> bool {
@@ -182,6 +196,7 @@ impl Charge {
             external_id,
             payment,
             issued_by,
+            receipt: None,
         })
     }
 
@@ -189,6 +204,41 @@ impl Charge {
     pub fn with_status(mut self, status: ChargeStatus) -> Self {
         self.status = status;
         self
+    }
+
+    /// The same charge with its receipt: what storage hands back for a paid one.
+    pub fn with_receipt(mut self, receipt: Option<ChargeReceipt>) -> Self {
+        self.receipt = receipt;
+        self
+    }
+
+    /// The charge as paid, from whatever it was: a customer can pay a boleto that was called off a moment
+    /// before the provider heard of it, and the money is received all the same. Paying twice is not a move.
+    pub fn paid(&self, mut receipt: ChargeReceipt) -> Result<Self, DomainError> {
+        if self.status == ChargeStatus::Paid {
+            return Err(DomainError::ChargeIsPaid);
+        }
+        // The database says the same: a charge that was paid was paid for something.
+        if receipt.paid_amount.as_decimal().is_zero() {
+            return Err(DomainError::InvalidChargeAmount);
+        }
+        receipt.note = optional_text(
+            receipt.note.as_deref(),
+            MAX_NOTE_CHARS,
+            DomainError::InvalidChargeNote,
+        )?;
+        Ok(self
+            .clone()
+            .with_status(ChargeStatus::Paid)
+            .with_receipt(Some(receipt)))
+    }
+
+    /// The charge as expired at the provider. Only an open charge can be.
+    pub fn expired(&self) -> Result<Self, DomainError> {
+        if self.status != ChargeStatus::Open {
+            return Err(DomainError::ChargeIsNotOpen);
+        }
+        Ok(self.clone().with_status(ChargeStatus::Expired))
     }
 
     /// Calls the charge off. Only an open charge can be.
@@ -246,6 +296,11 @@ impl Charge {
     /// Who issued it: the settlement it leads to is made in their name, there being no system user.
     pub fn issued_by(&self) -> &Actor {
         &self.issued_by
+    }
+
+    /// What was paid, once it was.
+    pub fn receipt(&self) -> Option<&ChargeReceipt> {
+        self.receipt.as_ref()
     }
 }
 
@@ -413,6 +468,38 @@ mod tests {
         let cancelled = charge.cancelled().unwrap();
         assert_eq!(cancelled.status(), ChargeStatus::Cancelled);
         assert_eq!(cancelled.cancelled(), Err(DomainError::ChargeIsNotOpen));
+    }
+
+    #[test]
+    fn a_charge_is_paid_from_any_status_but_paid_and_keeps_its_receipt() {
+        let receipt = |note: Option<&str>| ChargeReceipt {
+            paid_on: CalendarDate::parse("2026-12-09").unwrap(),
+            paid_amount: Amount::in_cents("152").unwrap(),
+            fee: Amount::in_cents("1.99").unwrap(),
+            note: note.map(str::to_owned),
+        };
+        let open = build(draft(ChargeMethod::Pix, payment(None, Some("0002"), None))).unwrap();
+        for before in [
+            open.clone(),
+            open.cancelled().unwrap(),
+            open.expired().unwrap(),
+        ] {
+            let paid = before.paid(receipt(Some("  already settled "))).unwrap();
+            assert_eq!(paid.status(), ChargeStatus::Paid);
+            assert_eq!(
+                paid.receipt().unwrap().note.as_deref(),
+                Some("already settled")
+            );
+            assert_eq!(paid.paid(receipt(None)), Err(DomainError::ChargeIsPaid));
+        }
+        assert_eq!(
+            open.paid(receipt(Some(&"a".repeat(201)))),
+            Err(DomainError::InvalidChargeNote)
+        );
+        assert_eq!(
+            open.expired().unwrap().expired(),
+            Err(DomainError::ChargeIsNotOpen)
+        );
     }
 
     #[test]

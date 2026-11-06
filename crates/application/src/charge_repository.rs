@@ -42,6 +42,30 @@ pub trait ChargeRepository: Send + Sync {
         entry_id: EntryId,
     ) -> impl Future<Output = Result<Vec<Charge>, RepositoryError>> + Send;
 
+    /// The charge the provider knows as `external_id`, only if it is the company's.
+    fn find_by_external(
+        &self,
+        company_id: CompanyId,
+        provider: &str,
+        external_id: &str,
+    ) -> impl Future<Output = Result<Option<Charge>, RepositoryError>> + Send;
+
+    /// Stores that a charge was paid, with its receipt and its audit entry, atomically. `NotFound` when
+    /// the company has no such charge or it is paid already, so a payment is recorded once.
+    fn mark_paid(
+        &self,
+        paid: &Charge,
+        audit: &AuditEntry,
+    ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
+
+    /// Stores that an open charge expired, with its audit entry, atomically. `NotFound` when the company
+    /// has no such charge or it is not open.
+    fn expire(
+        &self,
+        expired: &Charge,
+        audit: &AuditEntry,
+    ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
+
     /// What was recorded about the charge, oldest first. Empty for another company's.
     fn history(
         &self,

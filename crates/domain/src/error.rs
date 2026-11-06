@@ -53,6 +53,9 @@ pub enum DomainError {
     InvalidChargeProvider,
     InvalidChargePayment,
     ChargeIsNotOpen,
+    ChargeIsPaid,
+    InvalidChargeNote,
+    InvalidPaymentEvent,
     UnsupportedAttachmentType,
     InvalidAttachmentSize,
     InvalidOpeningBalance,
@@ -215,6 +218,9 @@ impl fmt::Display for DomainError {
                 f.write_str("the charge's payment details do not fit its method")
             }
             Self::ChargeIsNotOpen => f.write_str("the charge is not open"),
+            Self::ChargeIsPaid => f.write_str("the charge is paid already"),
+            Self::InvalidChargeNote => f.write_str("a charge's note is one short line"),
+            Self::InvalidPaymentEvent => f.write_str("the provider's notice is not valid"),
             Self::InvalidAttachmentName => f.write_str(
                 "file name must be one line of at most 200 characters, with no slash or control characters",
             ),

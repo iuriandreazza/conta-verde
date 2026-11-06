@@ -527,6 +527,18 @@ export interface Charge {
   /** The provider's page: the boleto's paper or the card checkout. */
   payment_url: string | null;
   issued_by: string;
+  /** What the provider said was paid, once it was (ADR 0046). */
+  paid_on: string | null;
+  paid_amount: string | null;
+  fee: string | null;
+  /** Why the installment was not settled by the payment, when it was not: someone has to look at it. */
+  note: string | null;
+}
+
+/** Where the money of a paid charge lands, and what the provider's fee is entered under (ADR 0046). */
+export interface CollectionSettings {
+  bank_account_id: string | null;
+  fee_category_id: string | null;
 }
 
 export interface ChargeInput {
@@ -1439,6 +1451,16 @@ export const api = {
   /** The provider charges are made at, or `null` when the operator configured none. */
   getCollection: (companyId: string) =>
     request<{ provider: string | null }>(`/companies/${companyId}/collection`),
+  getCollectionSettings: (companyId: string) =>
+    request<CollectionSettings>(`/companies/${companyId}/collection/settings`),
+  replaceCollectionSettings: (
+    companyId: string,
+    settings: { bank_account_id: string; fee_category_id: string | null },
+  ) =>
+    request<CollectionSettings>(`/companies/${companyId}/collection/settings`, {
+      method: "PUT",
+      body: JSON.stringify(settings),
+    }),
   listCharges: (companyId: string, entryId: string) =>
     request<{ items: Charge[] }>(`/companies/${companyId}/entries/${entryId}/charges`),
   issueCharge: (companyId: string, entryId: string, input: ChargeInput) =>

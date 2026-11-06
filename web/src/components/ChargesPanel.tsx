@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { Link } from "react-router-dom";
 import {
   api,
   errorMessage,
@@ -28,6 +29,19 @@ const STATUS_LABELS: Record<ChargeStatus, string> = {
   expired: "Expirada",
 };
 
+/** What the server says in English when it kept a payment without settling it, in words for the person. */
+const NOTES: Record<string, string> = {
+  "the installment was already settled": "a parcela já estava baixada.",
+  "the installment was settled meanwhile": "a parcela foi baixada nesse meio tempo.",
+  "the charge was already paid": "a cobrança já tinha sido paga.",
+  "the notice says nothing was paid": "o aviso diz que nada foi pago.",
+  "the fee category can no longer be used": "a categoria da taxa não pode mais ser usada.",
+  "the bank account can no longer be used": "a conta de recebimento não pode mais ser usada.",
+  "the entry was cancelled": "o lançamento foi cancelado.",
+  "the account charges are paid into is not set": "a conta de recebimento não está configurada.",
+  "the installment no longer exists": "a parcela não existe mais.",
+};
+
 const STATUS_BADGES: Record<ChargeStatus, string> = {
   open: "badge badge-dot badge-warning",
   paid: "badge badge-dot badge-ok",
@@ -50,6 +64,8 @@ export function ChargesPanel({ companyId, entry, canWrite }: ChargesPanelProps) 
   const [charges, setCharges] = useState<Charge[] | null>(null);
   const [provider, setProvider] = useState<string | null | undefined>(undefined);
   const [providerError, setProviderError] = useState<string | null>(null);
+  // Whether the account charges are paid into is chosen: until it is, none can be issued.
+  const [accountChosen, setAccountChosen] = useState<boolean | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
@@ -76,6 +92,10 @@ export function ChargesPanel({ companyId, entry, canWrite }: ChargesPanelProps) 
     api
       .getCollection(companyId)
       .then((collection) => current && setProvider(collection.provider))
+      .catch((failure) => current && setProviderError(errorMessage(failure)));
+    api
+      .getCollectionSettings(companyId)
+      .then((settings) => current && setAccountChosen(settings.bank_account_id !== null))
       .catch((failure) => current && setProviderError(errorMessage(failure)));
     return () => {
       current = false;
@@ -141,7 +161,8 @@ export function ChargesPanel({ companyId, entry, canWrite }: ChargesPanelProps) 
     }
   }
 
-  const canIssue = canWrite && provider !== null && provider !== undefined && !entry.voided;
+  const canIssue =
+    canWrite && provider !== null && provider !== undefined && accountChosen === true && !entry.voided;
 
   return (
     <div className="charges">
@@ -172,6 +193,24 @@ export function ChargesPanel({ companyId, entry, canWrite }: ChargesPanelProps) 
                   {formatMoney(charge.amount)}, vence em {formatDate(charge.due_on)}{" "}
                   <span className={STATUS_BADGES[charge.status]}>{STATUS_LABELS[charge.status]}</span>
                   {charge.status === "open" && <PaymentDetails charge={charge} />}
+                  {charge.paid_on !== null && charge.paid_amount !== null && charge.fee !== null && (
+                    <span className="muted">
+                      {" "}
+                      Paga em {formatDate(charge.paid_on)}: {formatMoney(charge.paid_amount)}, taxa{" "}
+                      {formatMoney(charge.fee)}.
+                    </span>
+                  )}
+                  <Notice
+                    tone="warning"
+                    message={
+                      charge.note === null
+                        ? null
+                        : `Pagamento recebido, mas houve um problema ao lançá-lo: ${charge.note
+                            .split("; ")
+                            .map((note) => NOTES[note] ?? note)
+                            .join(" ")}`
+                    }
+                  />
                   {canWrite && charge.status === "open" && (
                     <Button
                       type="button"
@@ -192,6 +231,12 @@ export function ChargesPanel({ companyId, entry, canWrite }: ChargesPanelProps) 
           {provider === null && (
             <p className="muted">
               Cobrança por boleto, Pix ou link de cartão não está configurada nesta instalação.
+            </p>
+          )}
+          {provider !== null && provider !== undefined && accountChosen === false && (
+            <p className="muted">
+              Escolha antes a conta em que o dinheiro das cobranças cai, em{" "}
+              <Link to={`/companies/${companyId}/collection`}>Cobrança</Link>.
             </p>
           )}
           {canIssue &&

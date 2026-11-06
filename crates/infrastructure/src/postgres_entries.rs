@@ -7,9 +7,9 @@ use conta_verde_application::{
 };
 use conta_verde_domain::{
     Amount, AuditEntity, AuditEntry, AuditRecord, BankAccountId, CalendarDate, CategoryId,
-    CompanyId, CostCenterId, Decimal, EntryId, EntryInstallmentDraft, EntryKind, EntryOrigin,
-    FinancialEntry, FinancialEntryDraft, PartyId, PaymentMethodId, RecurrenceId, RecurrenceOrigin,
-    SaleId, SaleReturnId, Settlement, SettlementDraft, SettlementId,
+    ChargeId, CompanyId, CostCenterId, Decimal, EntryId, EntryInstallmentDraft, EntryKind,
+    EntryOrigin, FinancialEntry, FinancialEntryDraft, PartyId, PaymentMethodId, RecurrenceId,
+    RecurrenceOrigin, SaleId, SaleReturnId, Settlement, SettlementDraft, SettlementId,
 };
 use sqlx::postgres::PgRow;
 use sqlx::{PgConnection, PgPool, Postgres, QueryBuilder, Row};
@@ -19,16 +19,20 @@ use crate::postgres::{snapshot, storage_error};
 use crate::postgres_audit;
 
 /// The unique indexes that say an origin already has its entry.
-const ORIGIN_UNIQUE_INDEXES: [&str; 3] = [
+const ORIGIN_UNIQUE_INDEXES: [&str; 4] = [
     "financial_entries_occurrence_key",
     "financial_entries_sale_key",
     "financial_entries_sale_return_key",
+    "financial_entries_charge_fee_key",
 ];
+
+/// The unique index that gives a charge at most one settlement (ADR 0046).
+const CHARGE_SETTLEMENT_INDEX: &str = "entry_settlements_charge_key";
 
 const SELECT_ENTRIES: &str = "SELECT id, company_id, kind, description, party_id, category_id, \
      cost_center_id, to_char(competence_date, 'YYYY-MM-DD') AS competence_date, recurrence_id, \
-     to_char(occurrence_on, 'YYYY-MM-DD') AS occurrence_on, sale_id, sale_return_id, voided \
-     FROM financial_entries";
+     to_char(occurrence_on, 'YYYY-MM-DD') AS occurrence_on, sale_id, sale_return_id, \
+     charge_fee_id, voided FROM financial_entries";
 
 pub struct PostgresFinancialEntryRepository {
     pool: PgPool,
@@ -78,8 +82,8 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
         sqlx::query(
             "INSERT INTO financial_entries \
              (id, company_id, kind, description, party_id, category_id, cost_center_id, competence_date, \
-              recurrence_id, occurrence_on, sale_id, sale_return_id) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, CAST($8 AS DATE), $9, CAST($10 AS DATE), $11, $12)",
+              recurrence_id, occurrence_on, sale_id, sale_return_id, charge_fee_id) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, CAST($8 AS DATE), $9, CAST($10 AS DATE), $11, $12, $13)",
         )
         .bind(entry.id().as_uuid())
         .bind(entry.company_id().as_uuid())
@@ -103,6 +107,10 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
         })
         .bind(match entry.origin() {
             Some(EntryOrigin::SaleReturn(id)) => Some(id.as_uuid()),
+            _ => None,
+        })
+        .bind(match entry.origin() {
+            Some(EntryOrigin::ChargeFee(id)) => Some(id.as_uuid()),
             _ => None,
         })
         .execute(&mut *tx)
@@ -247,6 +255,20 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
         if locked.is_none() {
             return Err(RepositoryError::NotFound);
         }
+        // A charge settles once: asked before the balance, so a notice that races itself is told apart
+        // from a payment that has nothing left to settle.
+        if let Some(charge) = settlement.charge_id() {
+            let settled: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM entry_settlements WHERE charge_id = $1)",
+            )
+            .bind(charge.as_uuid())
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(storage_error)?;
+            if settled {
+                return Err(RepositoryError::DuplicateOrigin);
+            }
+        }
         let fits: bool = sqlx::query_scalar(
             "SELECT i.amount - COALESCE(( \
                  SELECT SUM(s.applied) FROM entry_settlements s \
@@ -268,9 +290,9 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
         sqlx::query(
             "INSERT INTO entry_settlements \
              (id, company_id, entry_id, installment, settled_on, applied, interest, fine, discount, \
-              bank_account_id, payment_method_id, reversed) \
+              bank_account_id, payment_method_id, reversed, charge_id) \
              VALUES ($1, $2, $3, $4, CAST($5 AS DATE), CAST($6 AS NUMERIC), CAST($7 AS NUMERIC), \
-                     CAST($8 AS NUMERIC), CAST($9 AS NUMERIC), $10, $11, false)",
+                     CAST($8 AS NUMERIC), CAST($9 AS NUMERIC), $10, $11, false, $12)",
         )
         .bind(settlement.id().as_uuid())
         .bind(settlement.company_id().as_uuid())
@@ -283,9 +305,15 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
         .bind(settlement.discount().to_string())
         .bind(settlement.bank_account_id().as_uuid())
         .bind(settlement.payment_method_id().map(|id| id.as_uuid()))
+        .bind(settlement.charge_id().map(|id| id.as_uuid()))
         .execute(&mut *tx)
         .await
-        .map_err(storage_error)?;
+        .map_err(|error| match &error {
+            sqlx::Error::Database(db) if db.constraint() == Some(CHARGE_SETTLEMENT_INDEX) => {
+                RepositoryError::DuplicateOrigin
+            }
+            _ => storage_error(error),
+        })?;
         postgres_audit::insert(&mut tx, audit).await?;
         tx.commit().await.map_err(storage_error)
     }
@@ -696,6 +724,7 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
         let (column, value) = match origin {
             EntryOrigin::Sale(id) => ("sale_id", id.as_uuid()),
             EntryOrigin::SaleReturn(id) => ("sale_return_id", id.as_uuid()),
+            EntryOrigin::ChargeFee(id) => ("charge_fee_id", id.as_uuid()),
             EntryOrigin::Recurrence(_) => {
                 return Err(RepositoryError::Storage(
                     "an entry is looked up by sale or return, never by occurrence".to_owned(),
@@ -817,7 +846,7 @@ pub(crate) fn sort_report(rows: &mut [ReportRow]) {
 const SELECT_SETTLEMENTS: &str = "SELECT id, company_id, entry_id, installment, \
      to_char(settled_on, 'YYYY-MM-DD') AS settled_on, applied::text AS applied, \
      interest::text AS interest, fine::text AS fine, discount::text AS discount, \
-     bank_account_id, payment_method_id, reversed FROM entry_settlements";
+     bank_account_id, payment_method_id, reversed, charge_id FROM entry_settlements";
 
 fn settlement_from_row(row: &PgRow) -> Result<Settlement, RepositoryError> {
     let id = SettlementId::from_uuid(row.try_get("id").map_err(storage_error)?);
@@ -840,8 +869,13 @@ fn settlement_from_row(row: &PgRow) -> Result<Settlement, RepositoryError> {
     let company_id = CompanyId::from_uuid(row.try_get("company_id").map_err(storage_error)?);
     let entry_id = EntryId::from_uuid(row.try_get("entry_id").map_err(storage_error)?);
     let reversed: bool = row.try_get("reversed").map_err(storage_error)?;
+    let charge: Option<Uuid> = row.try_get("charge_id").map_err(storage_error)?;
     Settlement::new(id, company_id, entry_id, draft)
-        .map(|settlement| settlement.with_reversed(reversed))
+        .map(|settlement| {
+            settlement
+                .with_reversed(reversed)
+                .with_charge(charge.map(ChargeId::from_uuid))
+        })
         .map_err(|error| {
             RepositoryError::Storage(format!("stored settlement {id:?} is invalid: {error}"))
         })
@@ -960,21 +994,24 @@ fn entry_from_row(
     let occurrence: Option<String> = row.try_get("occurrence_on").map_err(storage_error)?;
     let sale: Option<Uuid> = row.try_get("sale_id").map_err(storage_error)?;
     let sale_return: Option<Uuid> = row.try_get("sale_return_id").map_err(storage_error)?;
+    let charge_fee: Option<Uuid> = row.try_get("charge_fee_id").map_err(storage_error)?;
     let voided: bool = row.try_get("voided").map_err(storage_error)?;
     let origin = match (
         recurrence,
         occurrence.as_deref().and_then(CalendarDate::parse),
         sale,
         sale_return,
+        charge_fee,
     ) {
-        (Some(recurrence_id), Some(occurrence_on), _, _) => {
+        (Some(recurrence_id), Some(occurrence_on), _, _, _) => {
             Some(EntryOrigin::Recurrence(RecurrenceOrigin {
                 recurrence_id: RecurrenceId::from_uuid(recurrence_id),
                 occurrence_on,
             }))
         }
-        (_, _, Some(id), _) => Some(EntryOrigin::Sale(SaleId::from_uuid(id))),
-        (_, _, _, Some(id)) => Some(EntryOrigin::SaleReturn(SaleReturnId::from_uuid(id))),
+        (_, _, Some(id), _, _) => Some(EntryOrigin::Sale(SaleId::from_uuid(id))),
+        (_, _, _, Some(id), _) => Some(EntryOrigin::SaleReturn(SaleReturnId::from_uuid(id))),
+        (_, _, _, _, Some(id)) => Some(EntryOrigin::ChargeFee(ChargeId::from_uuid(id))),
         _ => None,
     };
     let entry = entry.with_voided(voided);

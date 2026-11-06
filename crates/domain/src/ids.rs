@@ -32,6 +32,7 @@ uuid_id!(CostCenterId);
 uuid_id!(EntryId);
 uuid_id!(InvitationId);
 uuid_id!(PartyId);
+uuid_id!(PaymentEventId);
 uuid_id!(PaymentMethodId);
 uuid_id!(PaymentTermId);
 uuid_id!(PriceListId);

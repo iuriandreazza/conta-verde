@@ -7,6 +7,7 @@ mod bank_account;
 mod calendar_date;
 mod category;
 mod charge;
+mod collection_settings;
 mod commission;
 mod contact;
 mod contract;
@@ -21,6 +22,7 @@ mod invitation;
 mod line;
 mod name;
 mod party;
+mod payment_event;
 mod payment_method;
 mod payment_term;
 mod price_list;
@@ -43,10 +45,11 @@ pub use audit::{
     Actor, AuditAction, AuditEntity, AuditEntry, AuditRecord, Audited, FieldChange,
     attachment_changes, attachment_creation_changes, bank_account_changes,
     bank_account_creation_changes, category_changes, category_creation_changes, charge_changes,
-    charge_creation_changes, commission_rule_changes, commission_rule_creation_changes,
-    contract_changes, contract_creation_changes, cost_center_changes, cost_center_creation_changes,
-    creation_changes, document_check_changes, entry_changes, entry_creation_changes,
-    opening_changes, opening_creation_changes, party_changes, payment_method_changes,
+    charge_creation_changes, collection_settings_changes, collection_settings_creation_changes,
+    commission_rule_changes, commission_rule_creation_changes, contract_changes,
+    contract_creation_changes, cost_center_changes, cost_center_creation_changes, creation_changes,
+    document_check_changes, entry_changes, entry_creation_changes, opening_changes,
+    opening_creation_changes, party_changes, payment_method_changes,
     payment_method_creation_changes, payment_term_changes, payment_term_creation_changes,
     price_list_changes, price_list_creation_changes, product_changes, product_creation_changes,
     quote_changes, quote_creation_changes, recurrence_changes, recurrence_creation_changes,
@@ -57,7 +60,8 @@ pub use audit::{
 pub use bank_account::{BankAccount, BankAccountDraft, BankAccountKind};
 pub use calendar_date::CalendarDate;
 pub use category::{CashFlowGroup, Category, DreGroup, MAX_CATEGORY_LEVELS, default_template};
-pub use charge::{Charge, ChargeDraft, ChargeMethod, ChargePayment, ChargeStatus};
+pub use charge::{Charge, ChargeDraft, ChargeMethod, ChargePayment, ChargeReceipt, ChargeStatus};
+pub use collection_settings::CollectionSettings;
 pub use commission::{
     CommissionRule, CommissionRuleDraft, SaleCommission, applicable_rule, commission_of_sale,
 };
@@ -74,13 +78,16 @@ pub use financial_entry::{
 };
 pub use ids::{
     AttachmentId, BankAccountId, CategoryId, ChargeId, CommissionRuleId, CompanyId, ContractId,
-    CostCenterId, EntryId, InvitationId, PartyId, PaymentMethodId, PaymentTermId, PriceListId,
-    ProductId, QuoteId, RecurrenceId, SaleId, SaleReturnId, SettlementId, StatementLineId,
-    TransferId, UserId,
+    CostCenterId, EntryId, InvitationId, PartyId, PaymentEventId, PaymentMethodId, PaymentTermId,
+    PriceListId, ProductId, QuoteId, RecurrenceId, SaleId, SaleReturnId, SettlementId,
+    StatementLineId, TransferId, UserId,
 };
 pub use invitation::Invitation;
 pub use line::{Line, LineDraft, MAX_LINES, lines_total};
 pub use party::{Party, PartyDraft};
+pub use payment_event::{
+    MAX_EVENT_BYTES, PaymentEvent, PaymentEventKind, PaymentEventOutcome, event_note,
+};
 pub use payment_method::{PaymentMethod, PaymentMethodDraft, PaymentMethodKind};
 pub use payment_term::{
     Installment, InstallmentDraft, MAX_INSTALLMENT_DAYS, MAX_INSTALLMENTS, PaymentTerm,
