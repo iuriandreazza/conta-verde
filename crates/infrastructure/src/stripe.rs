@@ -20,8 +20,9 @@ const BRAZIL_OFFSET_SECONDS: i64 = 3 * 3600;
 const MAX_BOLETO_DAYS: i64 = 60;
 const MIN_PIX_SECONDS: i64 = 60;
 const MAX_PIX_SECONDS: i64 = 1_209_600;
-/// A Checkout Session lasts a day at most.
-const CHECKOUT_SECONDS: i64 = 86_400;
+/// A Checkout Session lasts a day at most; a margin keeps a clock a little ahead of Stripe's from making the
+/// request refused.
+const CHECKOUT_SECONDS: i64 = 23 * 3600;
 
 fn unix_now() -> i64 {
     SystemTime::now()
@@ -195,7 +196,19 @@ impl StripeProvider {
                     "a Stripe boleto needs the customer's CPF or CNPJ and address".to_owned(),
                 ));
             };
-            let days = (request.due_on.to_unix_days() - brazil_day(now)).clamp(0, MAX_BOLETO_DAYS);
+            // Stripe takes a boleto up to 60 days ahead; a later due day is refused rather than quietly cut, which
+            // would expire the charge before it is due. One already past expires at the end of today.
+            if !document.chars().all(|c| c.is_ascii_digit()) {
+                return Err(ProviderError::Rejected(
+                    "Stripe takes a CPF or CNPJ of digits only".to_owned(),
+                ));
+            }
+            let days = (request.due_on.to_unix_days() - brazil_day(now)).max(0);
+            if days > MAX_BOLETO_DAYS {
+                return Err(ProviderError::Rejected(
+                    "a Stripe boleto is for at most 60 days ahead".to_owned(),
+                ));
+            }
             form.extend(pairs(&[
                 ("payment_method_data[boleto][tax_id]", document.clone()),
                 (
@@ -227,7 +240,12 @@ impl StripeProvider {
             // Until the end of the due day, in Brazil.
             let end_of_due_day =
                 (request.due_on.to_unix_days() + 1) * 86_400 + BRAZIL_OFFSET_SECONDS;
-            let seconds = (end_of_due_day - now).clamp(MIN_PIX_SECONDS, MAX_PIX_SECONDS);
+            let seconds = (end_of_due_day - now).max(MIN_PIX_SECONDS);
+            if seconds > MAX_PIX_SECONDS {
+                return Err(ProviderError::Rejected(
+                    "a Stripe Pix is for at most 14 days ahead".to_owned(),
+                ));
+            }
             form.push((
                 "payment_method_options[pix][expires_after_seconds]".to_owned(),
                 seconds.to_string(),
@@ -288,10 +306,7 @@ impl StripeProvider {
                 "payment_intent_data[metadata][charge_id]",
                 charge_id.clone(),
             ),
-            (
-                "expires_at",
-                ((self.now)() + CHECKOUT_SECONDS - 60).to_string(),
-            ),
+            ("expires_at", ((self.now)() + CHECKOUT_SECONDS).to_string()),
         ]);
         if let Some(email) = &request.payer.email {
             form.push(("customer_email".to_owned(), email.clone()));
@@ -752,7 +767,7 @@ mod tests {
             form["client_reference_id"],
             asked.charge_id.as_uuid().to_string()
         );
-        assert_eq!(form["expires_at"], (NOW + 86_400 - 60).to_string());
+        assert_eq!(form["expires_at"], (NOW + 23 * 3600).to_string());
     }
 
     #[tokio::test]
@@ -794,6 +809,26 @@ mod tests {
                 .await,
             Err(ProviderError::Unavailable(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn refuses_a_due_day_further_than_stripe_takes_and_a_document_that_is_not_digits() {
+        let fake = Shared::default();
+        let addr = serve(fake.clone()).await;
+        let stripe = provider(addr, KEY);
+        let mut far_boleto = request(ChargeMethod::Boleto);
+        far_boleto.due_on = CalendarDate::parse("2027-03-01").unwrap();
+        let mut far_pix = request(ChargeMethod::Pix);
+        far_pix.due_on = CalendarDate::parse("2026-12-25").unwrap();
+        let mut alphanumeric = request(ChargeMethod::Boleto);
+        alphanumeric.payer.document = Some("12ABC34501DE35".into());
+        for asked in [far_boleto, far_pix, alphanumeric] {
+            assert!(matches!(
+                stripe.create_charge(&asked).await,
+                Err(ProviderError::Rejected(_))
+            ));
+        }
+        assert!(fake.lock().unwrap().forms.is_empty());
     }
 
     #[tokio::test]

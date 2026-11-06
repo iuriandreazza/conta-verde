@@ -31,11 +31,14 @@ refused before asking, with the reason.
 
 - **Boleto**: a PaymentIntent in `brl`, confirmed at once, with the billing details and `boleto[tax_id]`. The voucher
   is read from `next_action.boleto_display_details`: `number` is the digitable line and `hosted_voucher_url` the
-  paper. The days to the due date are `expires_after_days` (0 to 60), counted by the clock in Brazil.
+  paper. The days to the due date are `expires_after_days` (0 to 60), counted by the clock in Brazil; a due day further than
+  that is **refused** with the reason, not quietly cut (it would expire the charge before it is due), and so is a
+  document that is not digits (Stripe does not take an alphanumeric CNPJ).
 - **Pix**: a PaymentIntent confirmed at once, its copy-and-paste text from `next_action.pix_display_qr_code.data`;
-  it expires at the end of the due day in Brazil (`expires_after_seconds`, from one minute to fourteen days).
+  it expires at the end of the due day in Brazil (`expires_after_seconds`, from one minute to fourteen days; a
+  later due day is refused).
 - **Card page**: a Checkout Session in `payment` mode (`url` is the page), carrying the charge id as client
-  reference and metadata; it lasts **a day**, the most Stripe allows.
+  reference and metadata; it lasts **a day** (23 hours, so a clock a little ahead does not get the request refused), the most Stripe allows.
 
 Amounts are the whole number of centavos Stripe takes, computed from the exact decimal. The adapter reads the
 clock for the relative expiries above and for the webhook's tolerance, as ADR 0044 allows for a provider's own needs;
@@ -64,6 +67,12 @@ and does nothing without the key, as ADR 0049's.
 
 ## Consequences
 
+- **A boleto is paid in the notice's day, not the payer's.** Stripe sends `payment_intent.succeeded` for a boleto the
+  next business day, and the payment is dated by the event: a boleto paid on a Friday is settled on the Monday. Its
+  own date would need another call (the charge).
+- A boleto that cannot be cancelled stays open here until it expires, so another charge for the same installment
+  (a Pix, say) cannot be issued meanwhile; if the answer to its creation is lost, or storing it fails, it cannot be
+  taken back and a payment of it arrives as that of an unknown charge (acknowledged and left, ADR 0046).
 - The three methods work with Stripe, with the limits above: no fee, a card page that lasts a day (a reminder weeks
   later leads to a page that has expired; the charge is then to be called off and made again), a boleto that cannot be
   cancelled.
