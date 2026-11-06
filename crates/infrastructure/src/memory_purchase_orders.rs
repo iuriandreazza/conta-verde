@@ -253,12 +253,12 @@ mod tests {
     use conta_verde_application::StockService;
 
     use super::*;
-    use crate::InMemoryStockMovementRepository;
     use crate::memory_entries::tests::Registers;
     use crate::{
         InMemoryFinancialEntryRepository, InMemoryPaymentTermRepository, InMemoryProductRepository,
         RegisterDocumentReferences, contract,
     };
+    use crate::{InMemoryStockMovementRepository, InMemoryStockSettingsRepository};
 
     #[tokio::test]
     async fn runs_the_purchase_lifecycle() {
@@ -282,7 +282,11 @@ mod tests {
                 products.clone(),
                 terms.clone(),
             ),
-            StockService::new(InMemoryStockMovementRepository::default(), products.clone()),
+            StockService::new(
+                InMemoryStockMovementRepository::default(),
+                products.clone(),
+                InMemoryStockSettingsRepository::default(),
+            ),
         );
         let entries = FinancialEntryService::new(entry_store, registers.references());
         contract::runs_the_purchase_lifecycle(

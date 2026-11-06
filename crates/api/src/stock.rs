@@ -4,6 +4,7 @@ use axum::http::StatusCode;
 use conta_verde_application::{ApplicationError, ProductQuery, StockMovementQuery, StockPosition};
 use conta_verde_domain::{
     CalendarDate, ProductId, StockMovement, StockMovementDraft, StockMovementId, StockMovementKind,
+    StockSettings,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -11,6 +12,7 @@ use uuid::Uuid;
 use crate::access::CompanyAccess;
 use crate::cursor::{decode_cursor, decode_date_cursor, encode_cursor, encode_date_cursor};
 use crate::error::ApiError;
+use crate::history::HistoryEntryResponse;
 use crate::json::{ApiJson, ApiQuery};
 use crate::list_params;
 use crate::{Ports, SharedState};
@@ -284,5 +286,103 @@ pub(crate) async fn list_positions<X: Ports>(
     Ok(Json(PositionPageResponse {
         items: page.items.iter().map(PositionResponse::from).collect(),
         next_cursor: page.next.as_ref().map(encode_cursor),
+    }))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SettingsRequest {
+    /// Whether a sale that the stock cannot cover is refused.
+    block_sale_without_balance: bool,
+}
+
+#[derive(Serialize)]
+pub(crate) struct SettingsResponse {
+    block_sale_without_balance: bool,
+}
+
+impl From<&StockSettings> for SettingsResponse {
+    fn from(settings: &StockSettings) -> Self {
+        Self {
+            block_sale_without_balance: settings.blocks_sales_without_balance(),
+        }
+    }
+}
+
+pub(crate) async fn get_settings<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, _): CompanyAccess,
+) -> Result<Json<SettingsResponse>, ApiError> {
+    let settings = state.stock.settings(company_id).await?;
+    Ok(Json((&settings).into()))
+}
+
+/// Replaces the settings; nothing is written when nothing changes.
+pub(crate) async fn put_settings<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, actor): CompanyAccess,
+    ApiJson(request): ApiJson<SettingsRequest>,
+) -> Result<Json<SettingsResponse>, ApiError> {
+    let settings = state
+        .stock
+        .replace_settings(company_id, &actor, request.block_sale_without_balance)
+        .await?;
+    Ok(Json((&settings).into()))
+}
+
+/// What was recorded about the settings, oldest first.
+pub(crate) async fn settings_history<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, _): CompanyAccess,
+) -> Result<Json<Vec<HistoryEntryResponse>>, ApiError> {
+    let history = state.stock.settings_history(company_id).await?;
+    Ok(Json(
+        history.iter().map(HistoryEntryResponse::from).collect(),
+    ))
+}
+
+#[derive(Serialize)]
+pub(crate) struct AlertResponse {
+    product_id: Uuid,
+    name: String,
+    sku: Option<String>,
+    unit: String,
+    quantity: String,
+    minimum_stock: String,
+    /// What is missing to reach the minimum.
+    shortfall: String,
+}
+
+#[derive(Serialize)]
+pub(crate) struct AlertListResponse {
+    items: Vec<AlertResponse>,
+}
+
+/// The active products that have less than their minimum now, by name.
+pub(crate) async fn list_alerts<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, _): CompanyAccess,
+) -> Result<Json<AlertListResponse>, ApiError> {
+    let alerts = state.stock.alerts(company_id).await?;
+    Ok(Json(AlertListResponse {
+        items: alerts
+            .iter()
+            .map(|alert| {
+                let minimum = alert
+                    .product
+                    .minimum_stock()
+                    .map(|amount| amount.as_decimal())
+                    .unwrap_or_default();
+                AlertResponse {
+                    product_id: alert.product.id().as_uuid(),
+                    name: alert.product.name().to_owned(),
+                    sku: alert.product.sku().map(str::to_owned),
+                    unit: alert.product.unit().to_owned(),
+                    quantity: alert.quantity.normalize().to_string(),
+                    minimum_stock: minimum.normalize().to_string(),
+                    shortfall: (minimum - alert.quantity).normalize().to_string(),
+                }
+            })
+            .collect(),
     }))
 }

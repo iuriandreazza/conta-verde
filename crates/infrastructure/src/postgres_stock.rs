@@ -3,11 +3,12 @@ use std::str::FromStr;
 
 use conta_verde_application::{
     DateCursor, RepositoryError, StockFloor, StockMovementQuery, StockMovementRepository,
-    ensure_audit_describes,
+    StockSettingsRepository, ensure_audit_describes,
 };
 use conta_verde_domain::{
-    AuditEntry, CalendarDate, CompanyId, Decimal, ProductId, StockBalance, StockMovement,
-    StockMovementId, StockMovementKind, StockOrigin, StockOriginKind,
+    AuditEntity, AuditEntry, AuditRecord, CalendarDate, CompanyId, Decimal, ProductId,
+    StockBalance, StockMovement, StockMovementId, StockMovementKind, StockOrigin, StockOriginKind,
+    StockSettings,
 };
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Postgres, QueryBuilder, Row};
@@ -314,6 +315,60 @@ fn movement_from_row(row: &PgRow) -> Result<StockMovement, RepositoryError> {
     ))
 }
 
+pub struct PostgresStockSettingsRepository {
+    pool: PgPool,
+}
+
+impl PostgresStockSettingsRepository {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+impl StockSettingsRepository for PostgresStockSettingsRepository {
+    async fn find(&self, company_id: CompanyId) -> Result<Option<StockSettings>, RepositoryError> {
+        let blocked: Option<bool> = sqlx::query_scalar(
+            "SELECT block_sale_without_balance FROM stock_settings WHERE company_id = $1",
+        )
+        .bind(company_id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        Ok(blocked.map(|blocked| StockSettings::new(company_id, blocked)))
+    }
+
+    async fn save(
+        &self,
+        settings: &StockSettings,
+        audit: &AuditEntry,
+    ) -> Result<(), RepositoryError> {
+        ensure_audit_describes(audit, settings)?;
+        let mut tx = self.pool.begin().await.map_err(storage_error)?;
+        sqlx::query(
+            "INSERT INTO stock_settings (company_id, block_sale_without_balance) VALUES ($1, $2) \
+             ON CONFLICT (company_id) DO UPDATE \
+             SET block_sale_without_balance = EXCLUDED.block_sale_without_balance",
+        )
+        .bind(settings.company_id().as_uuid())
+        .bind(settings.blocks_sales_without_balance())
+        .execute(&mut *tx)
+        .await
+        .map_err(storage_error)?;
+        postgres_audit::insert(&mut tx, audit).await?;
+        tx.commit().await.map_err(storage_error)
+    }
+
+    async fn history(&self, company_id: CompanyId) -> Result<Vec<AuditRecord>, RepositoryError> {
+        postgres_audit::history(
+            &self.pool,
+            company_id,
+            AuditEntity::StockSettings,
+            company_id.as_uuid(),
+        )
+        .await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use conta_verde_application::{
@@ -345,6 +400,7 @@ mod tests {
         let stock = StockService::new(
             PostgresStockMovementRepository::new(pool.clone()),
             PostgresProductRepository::new(pool.clone()),
+            PostgresStockSettingsRepository::new(pool.clone()),
         );
         contract::runs_the_stock_ledger(&stock, company, other_company, &seed).await;
     }
@@ -374,6 +430,7 @@ mod tests {
             StockService::new(
                 PostgresStockMovementRepository::new(pool.clone()),
                 PostgresProductRepository::new(pool.clone()),
+                PostgresStockSettingsRepository::new(pool.clone()),
             )
         };
         let entry_seed = contract::seed_entry_records(
@@ -418,6 +475,70 @@ mod tests {
             &sales,
             &stock_of(),
             company,
+            &entry_seed,
+            &seed,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn blocks_a_sale_without_balance_when_the_company_says_so() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let other_company = contract::create_company(&pool).await;
+        let references = || {
+            RegisterReferences::new(
+                PostgresCategoryRepository::new(pool.clone()),
+                PostgresCostCenterRepository::new(pool.clone()),
+                PostgresPartyRepository::new(pool.clone()),
+                PostgresBankAccountRepository::new(pool.clone()),
+                PostgresPaymentMethodRepository::new(pool.clone()),
+            )
+        };
+        let stock_of = || {
+            StockService::new(
+                PostgresStockMovementRepository::new(pool.clone()),
+                PostgresProductRepository::new(pool.clone()),
+                PostgresStockSettingsRepository::new(pool.clone()),
+            )
+        };
+        let entry_seed = contract::seed_entry_records(
+            &PostgresCategoryRepository::new(pool.clone()),
+            &PostgresCostCenterRepository::new(pool.clone()),
+            &PostgresPartyRepository::new(pool.clone()),
+            &PostgresBankAccountRepository::new(pool.clone()),
+            &PostgresPaymentMethodRepository::new(pool.clone()),
+            company,
+        )
+        .await;
+        let seed = contract::seed_sales_records(
+            &PostgresPartyRepository::new(pool.clone()),
+            &PostgresProductRepository::new(pool.clone()),
+            &PostgresPaymentTermRepository::new(pool.clone()),
+            company,
+        )
+        .await;
+        let sales = SaleService::new(
+            PostgresSaleRepository::new(pool.clone()),
+            PostgresQuoteRepository::new(pool.clone()),
+            FinancialEntryService::new(
+                PostgresFinancialEntryRepository::new(pool.clone()),
+                references(),
+            ),
+            references(),
+            RegisterDocumentReferences::new(
+                PostgresPartyRepository::new(pool.clone()),
+                PostgresProductRepository::new(pool.clone()),
+                PostgresPaymentTermRepository::new(pool.clone()),
+            ),
+            stock_of(),
+        );
+        contract::blocks_a_sale_without_balance_when_the_company_says_so(
+            &sales,
+            &stock_of(),
+            company,
+            other_company,
             &entry_seed,
             &seed,
         )

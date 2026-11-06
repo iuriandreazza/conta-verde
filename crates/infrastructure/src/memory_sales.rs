@@ -273,13 +273,13 @@ mod tests {
     use conta_verde_application::StockService;
 
     use super::*;
-    use crate::InMemoryStockMovementRepository;
     use crate::memory_entries::tests::Registers;
     use crate::{
         Argon2SecretService, InMemoryEmailSender, InMemoryFinancialEntryRepository,
         InMemoryPaymentTermRepository, InMemoryProductRepository, InMemoryQuoteRepository,
         RegisterDocumentReferences, contract,
     };
+    use crate::{InMemoryStockMovementRepository, InMemoryStockSettingsRepository};
 
     #[tokio::test]
     async fn voids_entries() {
@@ -320,7 +320,11 @@ mod tests {
             FinancialEntryService::new(entry_store.clone(), registers.references()),
             registers.references(),
             document_references(),
-            StockService::new(InMemoryStockMovementRepository::default(), products.clone()),
+            StockService::new(
+                InMemoryStockMovementRepository::default(),
+                products.clone(),
+                InMemoryStockSettingsRepository::default(),
+            ),
         );
         let quotes = QuoteService::new(
             quote_store,

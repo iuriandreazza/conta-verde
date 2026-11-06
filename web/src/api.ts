@@ -1188,6 +1188,23 @@ export interface StockReverseInput {
   note?: string;
 }
 
+/** An active product with less than its minimum on hand now (ADR 0055); every figure a decimal string. */
+export interface StockAlert {
+  product_id: string;
+  name: string;
+  sku: string | null;
+  unit: string;
+  quantity: string;
+  minimum_stock: string;
+  /** What is missing to reach the minimum. */
+  shortfall: string;
+}
+
+export interface StockSettings {
+  /** Whether completing a sale that the stock cannot cover is refused. */
+  block_sale_without_balance: boolean;
+}
+
 export type BillingCycle = "monthly" | "bimonthly" | "quarterly" | "semiannual" | "yearly";
 export type ContractStatus = "active" | "paused" | "terminated";
 
@@ -1893,6 +1910,15 @@ export const api = {
     post<StockMovement>(`/companies/${companyId}/stock/movements`, input),
   reverseStockMovement: (companyId: string, id: string, input: StockReverseInput) =>
     post<StockMovement>(`/companies/${companyId}/stock/movements/${id}/reverse`, input),
+  getStockAlerts: (companyId: string) => request<{ items: StockAlert[] }>(`/companies/${companyId}/stock/alerts`),
+  getStockSettings: (companyId: string) => request<StockSettings>(`/companies/${companyId}/stock/settings`),
+  putStockSettings: (companyId: string, settings: StockSettings) =>
+    request<StockSettings>(`/companies/${companyId}/stock/settings`, {
+      method: "PUT",
+      body: JSON.stringify(settings),
+    }),
+  stockSettingsHistory: (companyId: string) =>
+    request<HistoryEntry[]>(`/companies/${companyId}/stock/settings/history`),
   /** The OFX file goes as it is, bytes and all: the API reads the charset. */
   importStatement: (companyId: string, accountId: string, file: File, dryRun: boolean) =>
     request<ImportResult>(

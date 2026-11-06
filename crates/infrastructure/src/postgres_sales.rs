@@ -597,7 +597,6 @@ mod tests {
     use conta_verde_application::StockService;
 
     use super::*;
-    use crate::PostgresStockMovementRepository;
     use crate::{
         Argon2SecretService, InMemoryEmailSender, PostgresBankAccountRepository,
         PostgresCategoryRepository, PostgresCostCenterRepository, PostgresFinancialEntryRepository,
@@ -605,6 +604,7 @@ mod tests {
         PostgresProductRepository, PostgresQuoteRepository, RegisterDocumentReferences,
         RegisterReferences, contract,
     };
+    use crate::{PostgresStockMovementRepository, PostgresStockSettingsRepository};
 
     fn references(
         pool: &PgPool,
@@ -695,6 +695,7 @@ mod tests {
             StockService::new(
                 PostgresStockMovementRepository::new(pool.clone()),
                 PostgresProductRepository::new(pool.clone()),
+                PostgresStockSettingsRepository::new(pool.clone()),
             ),
         );
         let quotes = QuoteService::new(

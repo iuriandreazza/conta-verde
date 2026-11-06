@@ -181,6 +181,25 @@ describe("sales", () => {
     expect(await screen.findByRole("row", { name: /Mercado Boa Compra.*Venda concluída/ })).toBeInTheDocument();
   });
 
+  it("shows the API's refusal when the stock cannot cover the sale, and leaves the order open", async () => {
+    mockApi(
+      answer([order], (url, init) =>
+        url.endsWith("/sales/s1/complete") && init?.method === "POST"
+          ? { status: 409, body: { error: "not enough stock of Café: 2 on hand" } }
+          : undefined,
+      ),
+    );
+    renderAt("/companies/c1/sales");
+    await userEvent.click(await screen.findByRole("button", { name: "Concluir a venda 3" }));
+    const region = within(screen.getByRole("region", { name: "Conclusão da venda 3" }));
+    await userEvent.click(region.getByRole("button", { name: "Concluir venda" }));
+
+    expect(await region.findByRole("alert")).toHaveTextContent("not enough stock of Café: 2 on hand");
+    expect(screen.getByRole("row", { name: /Mercado Boa Compra.*Pedido/ })).toBeInTheDocument();
+    // The person can try again once there is stock.
+    expect(region.getByRole("button", { name: "Concluir venda" })).toBeEnabled();
+  });
+
   it("cancels a completed sale, saying that its receivable goes with it, and shows why when it is refused", async () => {
     let refuse = true;
     mockApi(

@@ -515,13 +515,13 @@ mod tests {
     use conta_verde_application::StockService;
 
     use super::*;
-    use crate::PostgresStockMovementRepository;
     use crate::{
         PostgresBankAccountRepository, PostgresCategoryRepository, PostgresCostCenterRepository,
         PostgresFinancialEntryRepository, PostgresPartyRepository, PostgresPaymentMethodRepository,
         PostgresPaymentTermRepository, PostgresProductRepository, RegisterDocumentReferences,
         RegisterReferences, contract,
     };
+    use crate::{PostgresStockMovementRepository, PostgresStockSettingsRepository};
 
     fn references(
         pool: &PgPool,
@@ -589,6 +589,7 @@ mod tests {
             StockService::new(
                 PostgresStockMovementRepository::new(pool.clone()),
                 PostgresProductRepository::new(pool.clone()),
+                PostgresStockSettingsRepository::new(pool.clone()),
             ),
         );
         let entries = FinancialEntryService::new(

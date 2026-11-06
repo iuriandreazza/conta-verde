@@ -23,8 +23,8 @@ use conta_verde_infrastructure::{
     PostgresPaymentMethodRepository, PostgresPaymentTermRepository, PostgresPriceListRepository,
     PostgresProductRepository, PostgresPurchaseOrderRepository, PostgresQuoteRepository,
     PostgresRecurrenceRepository, PostgresSaleRepository, PostgresStatementLineRepository,
-    PostgresStockMovementRepository, PostgresTransferRepository, RegisterDocumentReferences,
-    RegisterReferences, SmtpEmailSender, connect_and_migrate,
+    PostgresStockMovementRepository, PostgresStockSettingsRepository, PostgresTransferRepository,
+    RegisterDocumentReferences, RegisterReferences, SmtpEmailSender, connect_and_migrate,
 };
 use conta_verde_infrastructure::{
     AsaasProvider, NoMessageSender, PostgresDunningPlanRepository, PostgresNotificationRepository,
@@ -82,6 +82,7 @@ impl Ports for PostgresPorts {
     type Sales = PostgresSaleRepository;
     type Purchases = PostgresPurchaseOrderRepository;
     type StockMovements = PostgresStockMovementRepository;
+    type StockSettings = PostgresStockSettingsRepository;
     type Contracts = PostgresContractRepository;
     type CommissionRules = PostgresCommissionRuleRepository;
     type Statements = PostgresStatementLineRepository;
@@ -246,6 +247,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         StockService::new(
             PostgresStockMovementRepository::new(pool.clone()),
             PostgresProductRepository::new(pool.clone()),
+            PostgresStockSettingsRepository::new(pool.clone()),
         )
     };
     let sale_service = || {

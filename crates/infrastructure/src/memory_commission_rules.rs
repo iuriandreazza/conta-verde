@@ -104,12 +104,12 @@ mod tests {
     use conta_verde_application::StockService;
 
     use super::*;
-    use crate::InMemoryStockMovementRepository;
     use crate::memory_entries::tests::Registers;
     use crate::{
         InMemoryFinancialEntryRepository, InMemoryPaymentTermRepository, InMemoryProductRepository,
         InMemoryQuoteRepository, InMemorySaleRepository, RegisterDocumentReferences, contract,
     };
+    use crate::{InMemoryStockMovementRepository, InMemoryStockSettingsRepository};
 
     #[tokio::test]
     async fn computes_commission_statements() {
@@ -139,7 +139,11 @@ mod tests {
             ),
             registers.references(),
             references(),
-            StockService::new(InMemoryStockMovementRepository::default(), products.clone()),
+            StockService::new(
+                InMemoryStockMovementRepository::default(),
+                products.clone(),
+                InMemoryStockSettingsRepository::default(),
+            ),
         );
         let commissions = CommissionService::new(
             InMemoryCommissionRuleRepository::default(),

@@ -39,6 +39,7 @@ mod sales_report;
 mod settlement;
 mod statement_line;
 mod stock;
+mod stock_settings;
 mod tag;
 mod transfer;
 
@@ -62,7 +63,8 @@ pub use audit::{
     quote_creation_changes, recurrence_changes, recurrence_creation_changes, sale_changes,
     sale_creation_changes, sale_return_creation_changes, settlement_changes,
     settlement_creation_changes, statement_line_changes, statement_line_creation_changes,
-    stock_movement_creation_changes, transfer_changes, transfer_creation_changes,
+    stock_movement_creation_changes, stock_settings_changes, stock_settings_creation_changes,
+    transfer_changes, transfer_creation_changes,
 };
 pub use bank_account::{BankAccount, BankAccountDraft, BankAccountKind};
 pub use calendar_date::CalendarDate;
@@ -127,5 +129,6 @@ pub use stock::{
     StockBalance, StockMovement, StockMovementDraft, StockMovementKind, StockOrigin,
     StockOriginKind,
 };
+pub use stock_settings::StockSettings;
 pub use tag::{MAX_TAGS, Tag};
 pub use transfer::{AccountOpening, Transfer, TransferDraft};

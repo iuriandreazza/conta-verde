@@ -1,11 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { isAmbiguousSigned, isBelowMinimum, isNegative, signedQuantity, toSignedDecimal, trimCost } from "./stock";
+import { isAmbiguousSigned, isNegative, signedQuantity, toSignedDecimal, trimCost } from "./stock";
 
 describe("stock quantities", () => {
-  it("compares decimals exactly", () => {
-    expect(isBelowMinimum("0.299", "0.3")).toBe(true);
-    expect(isBelowMinimum("0.3", "0.3")).toBe(false);
-    expect(isBelowMinimum("10", null)).toBe(false);
+  it("tells a negative balance exactly", () => {
     expect(isNegative("-0.001")).toBe(true);
     expect(isNegative("0")).toBe(false);
   });

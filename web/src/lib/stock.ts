@@ -1,7 +1,7 @@
 import { isAmbiguousDecimal, toApiDecimal } from "./decimal";
 
-// Stock quantities are decimal strings with up to three decimals (a minimum may have more): compared as whole
-// numbers in millionths in a `bigint`, never as a `Number` (ADR 0003).
+// Stock quantities are decimal strings with up to three decimals: compared as whole numbers in millionths in a
+// `bigint`, never as a `Number` (ADR 0003).
 const SCALE = 6;
 
 function toMillionths(text: string): bigint | null {
@@ -15,14 +15,6 @@ function toMillionths(text: string): bigint | null {
 export function isNegative(quantity: string): boolean {
   const amount = toMillionths(quantity);
   return amount !== null && amount < 0n;
-}
-
-/** What is on hand is under the product's minimum (when it has one). */
-export function isBelowMinimum(quantity: string, minimum: string | null): boolean {
-  if (minimum === null) return false;
-  const amount = toMillionths(quantity);
-  const floor = toMillionths(minimum);
-  return amount !== null && floor !== null && amount < floor;
 }
 
 /** A cost with six decimals shortened by dropping zeros at the end, never below two decimals: `6.000000` is `6.00`. */

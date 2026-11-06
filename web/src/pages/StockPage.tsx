@@ -1,18 +1,21 @@
-import { Fragment, useMemo, useState, type FormEvent } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   NO_MOVEMENT_FILTERS,
   NO_POSITION_FILTERS,
   api,
   errorMessage,
   type Product,
+  type StockAlert,
   type StockMovement,
   type StockMovementFilters,
   type StockMovementKind,
   type StockOriginKind,
   type StockPosition,
   type StockPositionFilters,
+  type StockSettings,
 } from "../api";
 import { Button } from "../components/Button";
+import { History } from "../components/History";
 import { BoxIcon } from "../components/icons/box";
 import { ChevronDownIcon } from "../components/icons/chevron-down";
 import { PlusIcon } from "../components/icons/plus";
@@ -25,13 +28,13 @@ import { useCreation, useOnCreated } from "../creation/CreationProvider";
 import { formatDecimal, formatMoney } from "../lib/decimal";
 import { formatDate, isIsoDate } from "../lib/entryInstallments";
 import { todayIso } from "../lib/settlement";
-import { isBelowMinimum, isNegative, signedQuantity, trimCost } from "../lib/stock";
+import { isNegative, signedQuantity, trimCost } from "../lib/stock";
 import { useCanWrite } from "../lib/useCanWrite";
 import { usePagedList } from "../lib/usePagedList";
 import { useStockProducts } from "../lib/useStockProducts";
 import { useParams } from "react-router-dom";
 
-type View = "positions" | "movements";
+type View = "positions" | "movements" | "alerts" | "settings";
 
 const KIND_LABELS: Record<StockMovementKind, string> = {
   in: "Entrada",
@@ -56,6 +59,21 @@ export function StockPage() {
   const { openCreate } = useCreation();
   const [view, setView] = useState<View>("positions");
   const { products, error: productsError } = useStockProducts(companyId);
+  const [alerts, setAlerts] = useState<StockAlert[] | null>(null);
+  const [alertsError, setAlertsError] = useState<string | null>(null);
+
+  // Read on entry and again when a movement is written: what falls below the minimum is news to the whole page.
+  const loadAlerts = useCallback(() => {
+    api
+      .getStockAlerts(companyId)
+      .then((reply) => {
+        setAlerts(reply.items);
+        setAlertsError(null);
+      })
+      .catch((failure: unknown) => setAlertsError(errorMessage(failure)));
+  }, [companyId]);
+  useEffect(loadAlerts, [loadAlerts]);
+  useOnCreated("stockMovement", loadAlerts);
 
   return (
     <>
@@ -77,18 +95,28 @@ export function StockPage() {
         <button type="button" aria-pressed={view === "movements"} onClick={() => setView("movements")}>
           Movimentações
         </button>
+        <button type="button" aria-pressed={view === "alerts"} onClick={() => setView("alerts")}>
+          Abaixo do mínimo{alerts !== null && alerts.length > 0 && ` (${alerts.length})`}
+        </button>
+        <button type="button" aria-pressed={view === "settings"} onClick={() => setView("settings")}>
+          Configurações
+        </button>
       </div>
       <Notice message={productsError} />
       {view === "positions" ? (
-        <PositionsView companyId={companyId} />
-      ) : (
+        <PositionsView companyId={companyId} lowIds={new Set((alerts ?? []).map((alert) => alert.product_id))} />
+      ) : view === "movements" ? (
         <MovementsView companyId={companyId} products={products} canWrite={canWrite} />
+      ) : view === "alerts" ? (
+        <AlertsView alerts={alerts} error={alertsError} />
+      ) : (
+        <SettingsView companyId={companyId} canWrite={canWrite} />
       )}
     </>
   );
 }
 
-function PositionsView({ companyId }: { companyId: string }) {
+function PositionsView({ companyId, lowIds }: { companyId: string; lowIds: Set<string> }) {
   const [filters, setFilters] = useState<StockPositionFilters>(NO_POSITION_FILTERS);
   const { items, nextCursor, loading, loadingMore, error, applied, reload, loadMore } = usePagedList<StockPosition, StockPositionFilters>(
     (applied, after) => api.listStockPositions(companyId, { ...applied, on: wholeDate(applied.on) }, after),
@@ -163,7 +191,7 @@ function PositionsView({ companyId }: { companyId: string }) {
                         <span className="badge badge-dot badge-critical">Saldo negativo</span>
                       </div>
                     ) : (
-                      isBelowMinimum(position.quantity, position.minimum_stock) && (
+                      lowIds.has(position.product_id) && (
                         <div>
                           <span className="badge badge-dot badge-warning">Abaixo do mínimo</span>
                         </div>
@@ -388,5 +416,144 @@ function ReversePanel({ companyId, movement, onDone }: { companyId: string; move
         Desfazer movimento
       </Button>
     </form>
+  );
+}
+
+/** The products that have less than their minimum, as the server worked them out. */
+function AlertsView({ alerts, error }: { alerts: StockAlert[] | null; error: string | null }) {
+  return (
+    <section className="card list-card">
+      <h2>Abaixo do mínimo</h2>
+      <Notice message={error} />
+      {alerts === null ? (
+        error === null && (
+          <p role="status" className="status">
+            <Spinner /> Carregando…
+          </p>
+        )
+      ) : alerts.length === 0 ? (
+        <div className="empty">
+          <BoxIcon size={40} aria-hidden />
+          <p>Nenhum produto abaixo do mínimo.</p>
+          <p className="muted">O mínimo de cada produto é definido no cadastro de produtos.</p>
+        </div>
+      ) : (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Produto</th>
+                <th className="num">Em estoque</th>
+                <th className="num">Mínimo</th>
+                <th className="num">Falta</th>
+              </tr>
+            </thead>
+            <tbody>
+              {alerts.map((alert, index) => (
+                <ListRow key={alert.product_id} index={index} highlighted={false}>
+                  <td>
+                    <div className="cell-title">{alert.name}</div>
+                    {alert.sku !== null && <div className="muted">{alert.sku}</div>}
+                  </td>
+                  <td className="num">
+                    {formatDecimal(alert.quantity)} {alert.unit}
+                  </td>
+                  <td className="num">
+                    {formatDecimal(alert.minimum_stock)} {alert.unit}
+                  </td>
+                  <td className="num">
+                    {formatDecimal(alert.shortfall)} {alert.unit}
+                  </td>
+                </ListRow>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+const SETTING_LABELS: Record<string, string> = { block_sale_without_balance: "Bloquear venda sem saldo" };
+
+const settingValue = (field: string, value: string | null) =>
+  field === "block_sale_without_balance" ? (value === "true" ? "Ligado" : "Desligado") : (value ?? "—");
+
+/** The company's stock rules: today, whether a sale the stock cannot cover is refused. */
+function SettingsView({ companyId, canWrite }: { companyId: string; canWrite: boolean }) {
+  const [settings, setSettings] = useState<StockSettings | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  // Bumped by a save so the trail below reads again.
+  const [version, setVersion] = useState(0);
+
+  useEffect(() => {
+    let current = true;
+    api
+      .getStockSettings(companyId)
+      .then((stored) => current && setSettings(stored))
+      .catch((failure: unknown) => current && setError(errorMessage(failure)));
+    return () => {
+      current = false;
+    };
+  }, [companyId]);
+
+  async function change(block: boolean) {
+    if (saving) return;
+    setSaving(true);
+    setError(null);
+    setSaved(null);
+    try {
+      setSettings(await api.putStockSettings(companyId, { block_sale_without_balance: block }));
+      setVersion((current) => current + 1);
+      setSaved("Configuração salva.");
+    } catch (failure) {
+      setError(errorMessage(failure));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `version` only makes the trail read again after a save
+  const historyLoader = useCallback(() => api.stockSettingsHistory(companyId), [companyId, version]);
+
+  return (
+    <section className="card">
+      <h2>Configurações do estoque</h2>
+      <Notice message={error} />
+      <Notice message={saved} tone="success" />
+      {settings === null ? (
+        error === null && (
+          <p role="status" className="status">
+            <Spinner /> Carregando…
+          </p>
+        )
+      ) : (
+        <>
+          <label className="inline">
+            <input
+              type="checkbox"
+              role="switch"
+              checked={settings.block_sale_without_balance}
+              disabled={!canWrite || saving}
+              onChange={(event) => void change(event.target.checked)}
+            />{" "}
+            Bloquear venda sem saldo
+          </label>
+          <p className="muted">
+            Ligado, concluir uma venda que o estoque não cobre é recusado: o pedido continua aberto e nada é lançado.
+            Desligado, a venda sai e o saldo do produto pode ficar negativo.
+          </p>
+          <h3>Histórico</h3>
+          <History
+            load={historyLoader}
+            fieldLabel={(field) => SETTING_LABELS[field] ?? field}
+            valueLabel={settingValue}
+            emptyMessage="Sem registros."
+          />
+        </>
+      )}
+    </section>
   );
 }
