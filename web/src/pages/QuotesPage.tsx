@@ -303,10 +303,10 @@ export function QuotesPage() {
                                 aria-label={`Alterar o orçamento ${quote.number}`}
                                 disabled={saving}
                                 onClick={() => {
-                                setEditing(quote);
-                                setFormError(null);
-                                setSaved(null);
-                              }}
+                                  setEditing(quote);
+                                  setFormError(null);
+                                  setSaved(null);
+                                }}
                               >
                                 Alterar
                               </Button>
