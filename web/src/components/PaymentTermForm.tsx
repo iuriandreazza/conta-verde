@@ -13,6 +13,7 @@ import { BackButton } from "./BackButton";
 import { CheckIcon } from "./icons/check";
 import { PlusIcon } from "./icons/plus";
 import { Notice } from "./Notice";
+import { useSheetDirty } from "./Sheet";
 
 /** An installment being typed: both fields are text until the form is sent. */
 interface Row {
@@ -54,6 +55,12 @@ export function PaymentTermForm({
       ? [newRow("0", "100")]
       : term.installments.map((item) => newRow(String(item.days), toInputDecimal(item.percent))),
   );
+  const markDirty = useSheetDirty();
+  // A row added, removed or generated is a click, not typing: the sheet must still know something was changed.
+  const editRows: typeof setRows = (update) => {
+    markDirty();
+    setRows(update);
+  };
   const [fieldError, setFieldError] = useState<string | null>(null);
 
   const percents = rows.map((row) => row.percent);
@@ -74,7 +81,7 @@ export function PaymentTermForm({
   }
 
   function addRow() {
-    setRows((current) => {
+    editRows((current) => {
       const last = current[current.length - 1];
       const proposed = last && /^\d+$/.test(last.days) ? Number(last.days) + NEXT_DUE_STEP_DAYS : null;
       // A proposal past the limit would only be refused: leave the days for the person to fill.
@@ -85,7 +92,7 @@ export function PaymentTermForm({
 
   function splitEqually() {
     const shares = splitEvenly(rows.length);
-    setRows((current) =>
+    editRows((current) =>
       current.map((row, index) => ({ ...row, percent: toInputDecimal(shares[index]) })),
     );
   }
@@ -168,7 +175,7 @@ export function PaymentTermForm({
               className="btn-small"
               aria-label={`Remover parcela ${index + 1}`}
               disabled={rows.length === 1}
-              onClick={() => setRows((current) => current.filter((item) => item.key !== row.key))}
+              onClick={() => editRows((current) => current.filter((item) => item.key !== row.key))}
             >
               Remover
             </Button>

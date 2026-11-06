@@ -15,6 +15,7 @@ import { BackButton } from "./BackButton";
 import { CheckIcon } from "./icons/check";
 import { PlusIcon } from "./icons/plus";
 import { Notice } from "./Notice";
+import { useSheetDirty } from "./Sheet";
 
 /** An installment being typed: both fields are text until the form is sent. */
 interface Row {
@@ -63,6 +64,12 @@ export function EntryForm({
       ? [newRow("", "")]
       : entry.installments.map((item) => newRow(item.due_date, toInputDecimal(item.amount))),
   );
+  const markDirty = useSheetDirty();
+  // A row added, removed or generated is a click, not typing: the sheet must still know something was changed.
+  const editRows: typeof setRows = (update) => {
+    markDirty();
+    setRows(update);
+  };
   const [fieldError, setFieldError] = useState<string | null>(null);
   const [generator, setGenerator] = useState({ total: "", count: "1", first: "" });
 
@@ -109,7 +116,7 @@ export function EntryForm({
       return;
     }
     setFieldError(null);
-    setRows(shares.map((share, index) => newRow(dates[index], toInputDecimal(share))));
+    editRows(shares.map((share, index) => newRow(dates[index], toInputDecimal(share))));
   }
 
   /** Enter in a field of the generator makes the installments, and never sends the entry. */
@@ -289,7 +296,7 @@ export function EntryForm({
               className="btn-small"
               aria-label={`Remover parcela ${index + 1}`}
               disabled={rows.length === 1}
-              onClick={() => setRows((current) => current.filter((item) => item.key !== row.key))}
+              onClick={() => editRows((current) => current.filter((item) => item.key !== row.key))}
             >
               Remover
             </Button>
@@ -302,7 +309,7 @@ export function EntryForm({
             className="btn-small"
             icon={PlusIcon}
             disabled={rows.length >= MAX_INSTALLMENTS}
-            onClick={() => setRows((current) => [...current, newRow("", "")])}
+            onClick={() => editRows((current) => [...current, newRow("", "")])}
           >
             Adicionar parcela
           </Button>

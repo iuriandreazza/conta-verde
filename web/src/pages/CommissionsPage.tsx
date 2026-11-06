@@ -93,6 +93,7 @@ export function CommissionsPage() {
         products={products}
         names={names}
         targetsLoaded={targetsLoaded}
+        targetsError={targetsError}
       />
     </>
   );
@@ -225,9 +226,10 @@ interface RulesSectionProps {
   products: Product[];
   names: Map<string, string>;
   targetsLoaded: boolean;
+  targetsError: string | null;
 }
 
-function RulesSection({ companyId, canWrite, parties, products, names, targetsLoaded }: RulesSectionProps) {
+function RulesSection({ companyId, canWrite, parties, products, names, targetsLoaded, targetsError }: RulesSectionProps) {
   const [filters, setFilters] = useState<CommissionRuleFilters>(NO_COMMISSION_RULE_FILTERS);
   const [editing, setEditing] = useState<CommissionRule | null>(null);
   const [saving, setSaving] = useState(false);
@@ -435,10 +437,12 @@ function RulesSection({ companyId, canWrite, parties, products, names, targetsLo
                 onSubmit={(input) => void handleSubmit(input)}
                 onCancel={closeSheet}
               />
-            ) : (
+            ) : targetsError === null ? (
               <p role="status" className="status">
                 <Spinner /> Carregando…
               </p>
+            ) : (
+              <p role="alert">{targetsError}</p>
             ))}
         </Sheet>
       )}

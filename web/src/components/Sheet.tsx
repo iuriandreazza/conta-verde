@@ -1,14 +1,22 @@
 import { AnimatePresence, motion } from "motion/react";
-import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "./Button";
 import { XIcon } from "./icons/x";
 
 /** Closing, or going back, asks first when something was typed: the way out of the sheet runs through it. */
-const SheetGuard = createContext<(action: () => void) => void>((action) => action());
+const SheetGuard = createContext<{ guard: (action: () => void) => void; markDirty: () => void }>({
+  guard: (action) => action(),
+  markDirty: () => undefined,
+});
 
 export function useSheetGuard() {
-  return useContext(SheetGuard);
+  return useContext(SheetGuard).guard;
+}
+
+/** For a change that is a click, not typing (a row added, a row removed): it counts as something to lose. */
+export function useSheetDirty() {
+  return useContext(SheetGuard).markDirty;
 }
 
 interface SheetProps {
@@ -33,20 +41,21 @@ export function Sheet({ open, title, onClose, explicitClose = false, locked = fa
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   const opener = useRef<HTMLElement | null>(null);
-  const [dirty, setDirty] = useState(false);
+  // A ref, not state: typing must not re-render what the sheet holds (a controlled field would lose its change).
+  const dirty = useRef(false);
   const [confirming, setConfirming] = useState<(() => void) | null>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
 
   // Each time it opens it starts clean; and what is shown after a save (a link to read) holds nothing to lose.
   useEffect(() => {
     if (open) {
-      setDirty(false);
+      dirty.current = false;
       setConfirming(null);
     }
   }, [open]);
   useEffect(() => {
     if (explicitClose) {
-      setDirty(false);
+      dirty.current = false;
       setConfirming(null);
     }
   }, [explicitClose]);
@@ -67,11 +76,15 @@ export function Sheet({ open, title, onClose, explicitClose = false, locked = fa
   const guard = useCallback(
     (action: () => void) => {
       if (locked) return;
-      if (dirty) setConfirming(() => action);
+      if (dirty.current) setConfirming(() => action);
       else action();
     },
-    [dirty, locked],
+    [locked],
   );
+  const markDirty = useCallback(() => {
+    dirty.current = true;
+  }, []);
+  const guardValue = useMemo(() => ({ guard, markDirty }), [guard, markDirty]);
 
   useEffect(() => {
     if (!open) return;
@@ -150,8 +163,8 @@ export function Sheet({ open, title, onClose, explicitClose = false, locked = fa
                 Fechar
               </Button>
             </header>
-            <SheetGuard.Provider value={guard}>
-              <div className="sheet-body" inert={confirming !== null || undefined} onInput={() => setDirty(true)} onChange={() => setDirty(true)}>
+            <SheetGuard.Provider value={guardValue}>
+              <div className="sheet-body" inert={confirming !== null || undefined} onInput={markDirty} onChange={markDirty}>
                 {children}
               </div>
             </SheetGuard.Provider>

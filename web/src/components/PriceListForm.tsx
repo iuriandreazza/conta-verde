@@ -5,6 +5,7 @@ import { BackButton } from "./BackButton";
 import { Button } from "./Button";
 import { CheckIcon } from "./icons/check";
 import { PlusIcon } from "./icons/plus";
+import { useSheetDirty } from "./Sheet";
 import { Notice } from "./Notice";
 
 /** The most prices a list holds (the API's bound). */
@@ -39,10 +40,17 @@ export function PriceListForm({ list, products, pending, error, onSubmit, onCanc
     list === null ? [newRow()] : list.items.map((item) => newRow(item.product_id, toInputDecimal(item.price))),
   );
   const [fieldError, setFieldError] = useState<string | null>(null);
+  const markDirty = useSheetDirty();
 
   const inList = new Set(rows.map((row) => row.product_id));
   const productChoices = products.filter((product) => product.active || inList.has(product.id));
   const missing = products.filter((product) => product.active && product.sale_price !== null && !inList.has(product.id));
+
+  // Adding or removing a row is a click, not typing: the sheet must still know something was changed.
+  function editRows(update: (current: Row[]) => Row[]) {
+    markDirty();
+    setRows(update);
+  }
 
   const change = (key: number, patch: Partial<Row>) =>
     setRows((current) => current.map((row) => (row.key === key ? { ...row, ...patch } : row)));
@@ -54,7 +62,7 @@ export function PriceListForm({ list, products, pending, error, onSubmit, onCanc
   }
 
   function addAllProducts() {
-    setRows((current) => [
+    editRows((current) => [
       ...current.filter((row) => row.product_id !== "" || row.price !== ""),
       ...missing.map((product) => newRow(product.id, toInputDecimal(product.sale_price))),
     ]);
@@ -102,8 +110,7 @@ export function PriceListForm({ list, products, pending, error, onSubmit, onCanc
       </section>
       <section className="form-section" aria-labelledby="price-list-items">
         <h3 id="price-list-items">Preços</h3>
-        <fieldset className="lines">
-          <legend>Preços</legend>
+        <fieldset className="lines" aria-labelledby="price-list-items">
           {rows.map((row, index) => (
             <div className="line-row" key={row.key}>
               <label className="span-all">
@@ -140,7 +147,7 @@ export function PriceListForm({ list, products, pending, error, onSubmit, onCanc
                 className="btn-small"
                 aria-label={`Remover o preço ${index + 1}`}
                 disabled={rows.length === 1}
-                onClick={() => setRows((current) => current.filter((item) => item.key !== row.key))}
+                onClick={() => editRows((current) => current.filter((item) => item.key !== row.key))}
               >
                 Remover
               </Button>
@@ -153,7 +160,7 @@ export function PriceListForm({ list, products, pending, error, onSubmit, onCanc
               className="btn-small"
               icon={PlusIcon}
               disabled={rows.length >= MAX_PRICES}
-              onClick={() => setRows((current) => [...current, newRow()])}
+              onClick={() => editRows((current) => [...current, newRow()])}
             >
               Adicionar produto
             </Button>
