@@ -1,7 +1,7 @@
 import { fireEvent, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, vi } from "vitest";
-import type { Product, StockMovement, StockPosition } from "./api";
+import type { Product, StockAlert, StockMovement, StockPosition } from "./api";
 import { OWNER_PERMISSIONS, mockApi, profile, renderAt, type Reply } from "./testSupport";
 
 beforeEach(() => vi.restoreAllMocks());
@@ -47,15 +47,27 @@ const movement = (patch: Partial<StockMovement>): StockMovement => ({
   ...patch,
 });
 
+const alert = (patch: Partial<StockAlert>): StockAlert => ({
+  product_id: "pr2",
+  name: "Filtro de papel",
+  sku: "filtro",
+  unit: "UN",
+  quantity: "3",
+  minimum_stock: "10",
+  shortfall: "7",
+  ...patch,
+});
+
 const calls = (fetchMock: ReturnType<typeof mockApi>, method: string) =>
   fetchMock.mock.calls.filter(([, init]) => init?.method === method);
 
 const answer =
-  (extra: (url: string, init?: RequestInit) => Reply | undefined = () => undefined, positions: StockPosition[] = [position({})], movements: StockMovement[] = []) =>
+  (extra: (url: string, init?: RequestInit) => Reply | undefined = () => undefined, positions: StockPosition[] = [position({})], movements: StockMovement[] = [], alerts: StockAlert[] = []) =>
   (url: string, init?: RequestInit): Reply => {
     const special = extra(url, init);
     if (special) return special;
     if (url === "/api/auth/me") return { status: 200, body: profile };
+    if (url.endsWith("/stock/alerts")) return { status: 200, body: { items: alerts } };
     if (url.includes("/stock/positions")) return { status: 200, body: { items: positions, next_cursor: null } };
     if (url.includes("/stock/movements")) return { status: 200, body: { items: movements, next_cursor: null } };
     if (url.includes("/products")) return { status: 200, body: { items: [beans], next_cursor: null } };
@@ -81,13 +93,13 @@ const openSheet = async () => {
 };
 
 describe("stock positions", () => {
-  it("shows what is on hand with its unit, average cost and value, and flags what is low or negative", async () => {
+  it("shows what is on hand with its unit, average cost and value, and flags what the server says is low, or negative", async () => {
     mockApi(
       answer(undefined, [
         position({}),
         position({ product_id: "pr2", name: "Filtro de papel", sku: null, unit: "UN", quantity: "3", value: "9", average_cost: "3.333333", minimum_stock: "10" }),
         position({ product_id: "pr3", name: "Açúcar", sku: null, quantity: "-2", value: "0", average_cost: null, minimum_stock: null }),
-      ]),
+      ], [], [alert({})]),
     );
     renderAt("/companies/c1/stock");
 
@@ -263,5 +275,66 @@ describe("stock for a role that only reads", () => {
     await userEvent.click(screen.getByRole("button", { name: "Movimentações" }));
     await screen.findByRole("row", { name: /Manual/ });
     expect(screen.queryByRole("button", { name: /Desfazer/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("stock alerts", () => {
+  it("counts the products below their minimum on the tab and lists them with what is missing", async () => {
+    mockApi(answer(undefined, [], [], [alert({}), alert({ product_id: "pr1", name: "Grão de café 1kg", sku: null, unit: "KG", quantity: "0.5", minimum_stock: "5", shortfall: "4.5" })]));
+    renderAt("/companies/c1/stock");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Abaixo do mínimo (2)" }));
+    const filter = await screen.findByRole("row", { name: /Filtro de papel/ });
+    expect(filter).toHaveTextContent("filtro");
+    expect(filter).toHaveTextContent("3 UN");
+    expect(filter).toHaveTextContent("10 UN");
+    expect(filter).toHaveTextContent("7 UN");
+    expect(screen.getByRole("row", { name: /Grão de café 1kg/ })).toHaveTextContent("4,5 KG");
+  });
+
+  it("says so when nothing is below the minimum", async () => {
+    mockApi(answer());
+    renderAt("/companies/c1/stock");
+    await userEvent.click(await screen.findByRole("button", { name: "Abaixo do mínimo" }));
+    expect(await screen.findByText("Nenhum produto abaixo do mínimo.")).toBeInTheDocument();
+  });
+});
+
+describe("stock settings", () => {
+  const history = [
+    { at: 1_700_000_000_000, actor: { kind: "user", id: "u1", name: "Ana" }, action: "updated", changes: [{ field: "block_sale_without_balance", from: "false", to: "true" }] },
+  ];
+  const withSettings =
+    (stored: boolean, extra: (url: string, init?: RequestInit) => Reply | undefined = () => undefined) =>
+    (url: string, init?: RequestInit): Reply | undefined => {
+      if (url.endsWith("/stock/settings/history")) return { status: 200, body: history };
+      if (url.endsWith("/stock/settings") && init?.method === "PUT") return { status: 200, body: JSON.parse(String(init.body)) };
+      if (url.endsWith("/stock/settings")) return { status: 200, body: { block_sale_without_balance: stored } };
+      return extra(url, init);
+    };
+
+  it("turns the block on with the whole setting in the body, and shows its trail", async () => {
+    const fetchMock = mockApi(answer(withSettings(false)));
+    renderAt("/companies/c1/stock");
+    await userEvent.click(within(await screen.findByRole("group", { name: "Visão do estoque" })).getByRole("button", { name: "Configurações" }));
+
+    const toggle = await screen.findByRole("switch", { name: "Bloquear venda sem saldo" });
+    expect(toggle).not.toBeChecked();
+    expect(screen.getByText(/concluir uma venda que o estoque não cobre é recusado/)).toBeInTheDocument();
+    expect(await screen.findByText(/Desligado → Ligado/)).toBeInTheDocument();
+    await userEvent.click(toggle);
+
+    expect(await screen.findByText("Configuração salva.")).toBeInTheDocument();
+    expect(JSON.parse(String(calls(fetchMock, "PUT")[0][1]?.body))).toEqual({ block_sale_without_balance: true });
+    expect(screen.getByRole("switch", { name: "Bloquear venda sem saldo" })).toBeChecked();
+  });
+
+  it("shows the switch to a role that only reads, disabled", async () => {
+    mockApi(answer((url, init) => readOnly(url) ?? withSettings(true)(url, init)));
+    renderAt("/companies/c1/stock");
+    await userEvent.click(within(await screen.findByRole("group", { name: "Visão do estoque" })).getByRole("button", { name: "Configurações" }));
+    const toggle = await screen.findByRole("switch", { name: "Bloquear venda sem saldo" });
+    expect(toggle).toBeChecked();
+    expect(toggle).toBeDisabled();
   });
 });
