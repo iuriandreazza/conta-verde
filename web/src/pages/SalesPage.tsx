@@ -248,7 +248,7 @@ export function SalesPage() {
                                 type="button"
                                 variant="ghost"
                                 aria-label={`Alterar o pedido ${sale.number}`}
-                                disabled={saving}
+                                disabled={saving || acting}
                                 onClick={() => {
                                   setEditing(sale);
                                   setFormError(null);
