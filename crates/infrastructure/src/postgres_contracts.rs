@@ -248,7 +248,7 @@ impl ContractRepository for PostgresContractRepository {
     ) -> Result<Vec<Contract>, RepositoryError> {
         let mut tx = snapshot(&self.pool).await?;
         let rows = sqlx::query(&format!(
-            "{SELECT_CONTRACTS} WHERE status = 'active' AND starts_on <= CAST($1 AS DATE) \
+            "{SELECT_CONTRACTS} WHERE status IN ('active', 'terminated') AND starts_on <= CAST($1 AS DATE) \
              AND (billed_through IS NULL OR billed_through < CAST($1 AS DATE)) \
              AND (ends_on IS NULL OR billed_through IS NULL OR billed_through < ends_on) \
              AND ($2::uuid IS NULL OR id > $2) ORDER BY id LIMIT $3"

@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::access::CompanyAccess;
-use crate::clock::today;
+use crate::clock::customer_today;
 use crate::cursor::{decode_cursor, encode_cursor};
 use crate::error::ApiError;
 use crate::history::HistoryEntryResponse;
@@ -210,7 +210,12 @@ pub(crate) async fn register_contract<X: Ports>(
 ) -> Result<(StatusCode, Json<ContractResponse>), ApiError> {
     let contract = state
         .contracts
-        .register(company_id, &actor, request.into_draft(Some(true))?, today())
+        .register(
+            company_id,
+            &actor,
+            request.into_draft(Some(true))?,
+            customer_today(),
+        )
         .await?;
     Ok((StatusCode::CREATED, Json(ContractResponse::from(&contract))))
 }
@@ -238,7 +243,7 @@ pub(crate) async fn update_contract<X: Ports>(
             &actor,
             parse_id(&id)?,
             request.into_draft(None)?,
-            today(),
+            customer_today(),
         )
         .await?;
     Ok(Json(ContractResponse::from(&contract)))
@@ -267,7 +272,13 @@ pub(crate) async fn terminate_contract<X: Ports>(
 ) -> Result<Json<ContractResponse>, ApiError> {
     let contract = state
         .contracts
-        .terminate(company_id, &actor, parse_id(&id)?, &request.on)
+        .terminate(
+            company_id,
+            &actor,
+            parse_id(&id)?,
+            &request.on,
+            customer_today(),
+        )
         .await?;
     Ok(Json(ContractResponse::from(&contract)))
 }

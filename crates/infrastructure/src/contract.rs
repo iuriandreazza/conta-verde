@@ -10242,7 +10242,7 @@ pub async fn bills_contracts_every_cycle<C, S, Q, E, F, R>(
 
     // Terminated: nothing more is billed and nothing changes.
     let ended = contracts
-        .terminate(company, &ana, rent.id(), "2027-04-20")
+        .terminate(company, &ana, rent.id(), "2027-04-20", day("2027-04-10"))
         .await
         .unwrap();
     assert_eq!(ended.status(), ContractStatus::Terminated);
@@ -10250,7 +10250,7 @@ pub async fn bills_contracts_every_cycle<C, S, Q, E, F, R>(
     assert_eq!(billed_by(sales, company, rent.id()).await.len(), 4);
     for attempt in [
         contracts
-            .terminate(company, &ana, rent.id(), "2027-04-21")
+            .terminate(company, &ana, rent.id(), "2027-04-21", day("2027-04-10"))
             .await
             .map(|_| ()),
         contracts
@@ -10273,6 +10273,74 @@ pub async fn bills_contracts_every_cycle<C, S, Q, E, F, R>(
             ApplicationError::Domain(DomainError::ContractIsTerminated)
         );
     }
+
+    // Terminated ahead of its last day, it is fixed but still bills the cycles that fall due up to that day,
+    // each on its own, and none after it.
+    let ahead = contracts
+        .register(
+            company,
+            &ana,
+            contract_draft(entry_seed, seed, "2027-05-05", None),
+            day("2027-05-10"),
+        )
+        .await
+        .unwrap();
+    contracts
+        .terminate(company, &ana, ahead.id(), "2027-07-31", day("2027-05-10"))
+        .await
+        .unwrap();
+    assert_eq!(
+        billed_by(sales, company, ahead.id()).await,
+        cycles(&[("2027-05-05", "200")])
+    );
+    contracts.bill_all_due(day("2027-12-01")).await.unwrap();
+    assert_eq!(
+        billed_by(sales, company, ahead.id()).await,
+        cycles(&[
+            ("2027-05-05", "200"),
+            ("2027-06-05", "200"),
+            ("2027-07-05", "200")
+        ])
+    );
+
+    // A sale of a cycle that a person cancelled is consumed: the cycles after it are still billed.
+    let hole = contracts
+        .register(
+            company,
+            &ana,
+            contract_draft(entry_seed, seed, "2027-08-05", None),
+            day("2027-08-05"),
+        )
+        .await
+        .unwrap();
+    let only = sales
+        .list(
+            company,
+            &SaleQuery::default().of_contract(hole.id()),
+            None,
+            None,
+        )
+        .await
+        .unwrap()
+        .items
+        .remove(0);
+    sales.cancel(company, &ana, only.id()).await.unwrap();
+    contracts.bill_all_due(day("2027-10-05")).await.unwrap();
+    let after_hole: Vec<String> = sales
+        .list(
+            company,
+            &SaleQuery::default().of_contract(hole.id()),
+            None,
+            None,
+        )
+        .await
+        .unwrap()
+        .items
+        .iter()
+        .map(|sale| sale.cycle().unwrap().cycle_on.to_string())
+        .collect();
+    assert_eq!(after_hole.len(), 3);
+    assert!(after_hole.contains(&"2027-10-05".to_owned()));
 
     // One that starts in the past catches up when it is written, clipping the day of a short month, and
     // never past its last day.
@@ -10365,7 +10433,7 @@ pub async fn bills_contracts_every_cycle<C, S, Q, E, F, R>(
         .list(company, &ContractQuery::default(), None, None)
         .await
         .unwrap();
-    assert_eq!(all.items.len(), 2);
+    assert_eq!(all.items.len(), 4);
     let live = contracts
         .list(
             company,
@@ -10375,7 +10443,7 @@ pub async fn bills_contracts_every_cycle<C, S, Q, E, F, R>(
         )
         .await
         .unwrap();
-    assert_eq!(live.items.len(), 1);
+    assert_eq!(live.items.len(), 2);
     assert_eq!(
         contracts
             .list(
@@ -10388,6 +10456,6 @@ pub async fn bills_contracts_every_cycle<C, S, Q, E, F, R>(
             .unwrap()
             .items
             .len(),
-        2
+        4
     );
 }

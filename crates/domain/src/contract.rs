@@ -156,6 +156,11 @@ impl Contract {
             MAX_NOTES_CHARS,
             DomainError::InvalidQuoteNotes,
         )?;
+        let lines = validated_lines(&draft.lines)?;
+        // A cycle that bills nothing has no receivable to make: it would fail every time it fell due.
+        if lines_total(&lines) <= Decimal::ZERO {
+            return Err(DomainError::SaleIsEmpty);
+        }
         Ok(Self {
             id,
             company_id,
@@ -166,7 +171,7 @@ impl Contract {
             category_id: draft.category_id,
             cost_center_id: draft.cost_center_id,
             notes,
-            lines: validated_lines(&draft.lines)?,
+            lines,
             cycle: draft.cycle,
             starts_on,
             ends_on,
@@ -203,7 +208,9 @@ impl Contract {
             return Err(DomainError::ContractIsTerminated);
         }
         let mut replaced = Self::new(self.id, self.company_id, draft, saved_by)?;
-        replaced.billed_through = self.billed_through;
+        // Nothing was billed while the watermark is before the first day: correcting the schedule then starts
+        // from the top, instead of losing the cycles between the new first day and where the job had got to.
+        replaced.billed_through = self.billed_through.filter(|done| *done >= self.starts_on);
         Ok(replaced)
     }
 
@@ -218,7 +225,8 @@ impl Contract {
         }
     }
 
-    /// The contract ended on `on`: nothing is billed after it, and it never changes again.
+    /// The contract ended on `on`: it never changes again, and the cycles that fall due up to `on` are still
+    /// billed on their days, but none after it.
     pub fn terminated_on(&self, on: &str, saved_by: Actor) -> Result<Self, DomainError> {
         if self.status == ContractStatus::Terminated {
             return Err(DomainError::ContractIsTerminated);
@@ -254,8 +262,16 @@ impl Contract {
                 ..line.to_draft()
             })
             .collect::<Vec<_>>();
+        // A price that went to nothing, or a cycle that would bill nothing, is not an adjustment anyone meant.
+        let lines = validated_lines(&lines)?;
+        let went_to_nothing = lines.iter().zip(&self.lines).any(|(new, old)| {
+            new.unit_price().as_decimal().is_zero() && !old.unit_price().as_decimal().is_zero()
+        });
+        if went_to_nothing || lines_total(&lines) <= Decimal::ZERO {
+            return Err(DomainError::InvalidAdjustment);
+        }
         Ok(Self {
-            lines: validated_lines(&lines)?,
+            lines,
             saved_by,
             ..self.clone()
         })
@@ -500,6 +516,42 @@ mod tests {
         assert_eq!(
             heavy.adjusted_by("-50", actor()).unwrap_err(),
             DomainError::DiscountExceedsLine
+        );
+    }
+
+    #[test]
+    fn a_cycle_that_bills_nothing_is_not_a_contract_and_a_correction_before_billing_starts_over() {
+        let mut free = draft(BillingCycle::Monthly, "2026-11-05", None);
+        free.lines[0].discount = "200.2".into();
+        assert_eq!(
+            Contract::new(ContractId::generate(), CompanyId::generate(), free, actor())
+                .unwrap_err(),
+            DomainError::SaleIsEmpty
+        );
+        // Nothing billed yet (the watermark is before the first day): a corrected first day keeps no watermark.
+        let early = contract(BillingCycle::Monthly, "2027-01-05", None)
+            .restored(ContractStatus::Active, CalendarDate::parse("2026-11-06"));
+        let moved = early
+            .replaced_with(draft(BillingCycle::Monthly, "2026-11-05", None), actor())
+            .unwrap();
+        assert_eq!(moved.billed_through(), None);
+        // Once cycles were billed, a change keeps where it got to.
+        let billed = contract(BillingCycle::Monthly, "2026-11-05", None)
+            .restored(ContractStatus::Active, CalendarDate::parse("2026-12-06"));
+        let kept = billed
+            .replaced_with(draft(BillingCycle::Monthly, "2026-11-05", None), actor())
+            .unwrap();
+        assert_eq!(kept.billed_through(), CalendarDate::parse("2026-12-06"));
+        // A cut that takes a price to nothing is refused, however small the price.
+        let mut tiny = draft(BillingCycle::Monthly, "2026-11-05", None);
+        tiny.lines[0].unit_price = "0.004".into();
+        tiny.lines[0].quantity = "1000".into();
+        tiny.lines[0].discount = "0".into();
+        let small =
+            Contract::new(ContractId::generate(), CompanyId::generate(), tiny, actor()).unwrap();
+        assert_eq!(
+            small.adjusted_by("-10", actor()).unwrap_err(),
+            DomainError::InvalidAdjustment
         );
     }
 

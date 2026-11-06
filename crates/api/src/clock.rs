@@ -13,7 +13,8 @@ pub fn today() -> CalendarDate {
         .unwrap_or(CalendarDate::EARLIEST)
 }
 
-/// The day a customer's answer is judged against: yesterday by the server's UTC clock. UTC changes day at 21:00
+/// The day a customer's answer is judged against, and a contract's cycles are billed up to: yesterday by the
+/// server's UTC clock. UTC changes day at 21:00
 /// in Brazil, and a customer approving on the last day of a quote's validity in the evening must still be
 /// in time; the cost is that one east of Greenwich may answer a few hours late ([ADR 0038]).
 pub fn customer_today() -> CalendarDate {

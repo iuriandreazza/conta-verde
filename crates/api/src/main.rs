@@ -279,7 +279,10 @@ where
     let mut tick = tokio::time::interval(JOB_INTERVAL);
     loop {
         tick.tick().await;
-        match service.bill_all_due(conta_verde_api::today()).await {
+        match service
+            .bill_all_due(conta_verde_api::customer_today())
+            .await
+        {
             Ok(report) if report.billed > 0 || report.failed > 0 => {
                 tracing::info!(
                     billed = report.billed,

@@ -158,6 +158,11 @@ where
                 }
             }
         };
+        // A cycle whose sale was cancelled by a person is consumed: it is not billed again, and it does not stop
+        // the cycles after it.
+        if sale.status() == SaleStatus::Cancelled {
+            return Ok(sale);
+        }
         self.complete(company_id, actor, sale.id()).await
     }
 

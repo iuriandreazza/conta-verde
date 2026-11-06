@@ -57,7 +57,7 @@ pub struct ApiConfig {
 
 /// The adapters the use cases run on, named once so that a handler has one type parameter however
 /// many registers there are. Generic rather than `dyn`, like the use cases themselves.
-pub use clock::today;
+pub use clock::{customer_today, today};
 
 pub trait Ports: 'static {
     type Parties: PartyRepository + 'static;

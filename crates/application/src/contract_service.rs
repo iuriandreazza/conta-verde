@@ -127,6 +127,7 @@ where
         actor: &Actor,
         id: ContractId,
         on: &str,
+        today: CalendarDate,
     ) -> Result<Contract, ApplicationError> {
         let before = self.find(company_id, id).await?;
         let after = before.terminated_on(on, actor.clone())?;
@@ -137,7 +138,8 @@ where
             contract_changes(&before, &after),
         );
         self.write(&after, &audit).await?;
-        Ok(after)
+        // The cycles that already fell due up to the last day are billed now; the later ones, on their days.
+        self.bill_one(after, today).await
     }
 
     pub async fn get(
@@ -210,12 +212,11 @@ where
     /// Bills the cycles between where the contract was billed through and `today`, each as a completed sale.
     /// A cycle that already has its sale is only finished, which is what makes a pass safe to repeat and to
     /// run in two places at once.
-    async fn bill(
-        &self,
-        contract: &Contract,
-        today: CalendarDate,
-    ) -> Result<usize, ApplicationError> {
-        if contract.status() != ContractStatus::Active {
+    async fn bill(&self, stale: &Contract, today: CalendarDate) -> Result<usize, ApplicationError> {
+        // Read again: the job's batch may be older than a pause, an adjustment or a termination.
+        let contract = &self.find(stale.company_id(), stale.id()).await?;
+        // A terminated contract still bills the cycles that fall due up to its last day.
+        if contract.status() == ContractStatus::Paused {
             return Ok(0);
         }
         let days = contract.cycles_after(contract.billed_through(), today, MAX_PER_PASS);

@@ -128,7 +128,7 @@ pub trait ContractRepository: Send + Sync {
         limit: usize,
     ) -> impl Future<Output = Result<Vec<Contract>, RepositoryError>> + Send;
 
-    /// At most `limit` active contracts of **any company** that may have a cycle to bill up to `until`: started,
+    /// At most `limit` contracts of **any company** that are not paused that may have a cycle to bill up to `until`: started,
     /// not billed through `until` and not through their last day, by id after `after`. For the scheduled job.
     fn list_to_bill(
         &self,

@@ -131,7 +131,7 @@ impl ContractRepository for InMemoryContractRepository {
             .iter()
             .filter(|stored| {
                 let done = stored.billed_through();
-                stored.status() == ContractStatus::Active
+                stored.status() != ContractStatus::Paused
                     && after.is_none_or(|last| stored.id().as_uuid() > last.as_uuid())
                     && stored.starts_on() <= until
                     && done.is_none_or(|day| day < until)

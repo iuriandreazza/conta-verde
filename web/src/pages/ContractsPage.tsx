@@ -201,6 +201,10 @@ export function ContractsPage() {
     try {
       const updated = await run();
       setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      // A form open for this contract would save its old prices or its old status over what was just done.
+      if (editing?.id === updated.id) {
+        startEditing(null);
+      }
       setPanel(null);
       setSaved(message(updated));
     } catch (failure) {
