@@ -3,10 +3,10 @@ import { api, errorMessage, type BankAccount, type Category, type CostCenter, ty
 import { readUpTo } from "./readUpTo";
 
 /**
- * What an entry points at, read once for a company: the categories, cost centers, parties, bank
- * accounts and payment methods. The list page and the "new entry" sheet both need them.
+ * What an entry (or a recurrence) points at, read once for a company: the categories, cost centers and
+ * parties, and, unless `payments` is false, the bank accounts and payment methods that settling an entry uses.
  */
-export function useEntryTargets(companyId: string) {
+export function useEntryTargets(companyId: string, { payments = true }: { payments?: boolean } = {}) {
   const [banks, setBanks] = useState<BankAccount[]>([]);
   const [methods, setMethods] = useState<PaymentMethod[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -21,8 +21,8 @@ export function useEntryTargets(companyId: string) {
       api.listCategories(companyId),
       readUpTo((after) => api.listCostCenters(companyId, { q: "", active: "", sort: "name" }, after)),
       readUpTo((after) => api.listParties(companyId, undefined, after)),
-      readUpTo((after) => api.listBankAccounts(companyId, undefined, after)),
-      readUpTo((after) => api.listPaymentMethods(companyId, undefined, after)),
+      payments ? readUpTo((after) => api.listBankAccounts(companyId, undefined, after)) : Promise.resolve([]),
+      payments ? readUpTo((after) => api.listPaymentMethods(companyId, undefined, after)) : Promise.resolve([]),
     ])
       .then(([categoryList, costCenterList, partyList, bankList, methodList]) => {
         if (current) {
@@ -38,7 +38,7 @@ export function useEntryTargets(companyId: string) {
     return () => {
       current = false;
     };
-  }, [companyId]);
+  }, [companyId, payments]);
 
   const names = useMemo(() => {
     const byId = new Map<string, string>();

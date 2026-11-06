@@ -255,4 +255,63 @@ describe("creating from the top bar", () => {
     expect(await screen.findByText("Caixa da loja cadastrada.")).toBeInTheDocument();
     await waitFor(() => expect(balanceReads).toBeGreaterThan(before));
   });
+
+  it("invites from the top bar and keeps the link on screen until the person is done", async () => {
+    const invited = { id: "i1", email: "bia@example.com", role: "viewer", expires_at: Date.UTC(2026, 11, 1), link: "https://erp.example/invitations/abc", emailed: true };
+    mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "POST" && url.endsWith("/invitations")) return { status: 201, body: invited };
+      return { status: 200, body: { items: [], next_cursor: null } };
+    });
+    renderAt("/companies/c1/parties");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Novo registro" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Convidar alguém" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Convidar alguém" }));
+    await userEvent.type(await dialog.findByLabelText("E-mail"), "bia@example.com");
+    await userEvent.click(dialog.getByRole("button", { name: "Convidar" }));
+
+    // The link is shown once: the sheet stays on it, and no confirmation takes its place.
+    expect(await dialog.findByLabelText("Link do convite")).toHaveValue("https://erp.example/invitations/abc");
+    // A stray key does not throw the link away; only "Concluir" (or "Fechar") does.
+    await userEvent.keyboard("{Escape}");
+    expect(screen.getByRole("dialog", { name: "Convidar alguém" })).toBeInTheDocument();
+    await userEvent.click(dialog.getByRole("button", { name: "Concluir" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("registers a recurrence from the top bar and says what was generated", async () => {
+    const category = { id: "k1", company_id: "c1", parent_id: null, name: "Aluguel", dre_group: "operating_expenses", cash_flow_group: "operating", level: 1, active: true };
+    const created = { id: "r1", company_id: "c1", kind: "payable", description: "Aluguel mensal", party_id: null, category_id: "k1", cost_center_id: null, amount: "2500", frequency: "monthly", starts_on: "2999-01-10", ends_on: null, active: true };
+    mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (url.endsWith("/categories")) return { status: 200, body: { items: [category] } };
+      if (init?.method === "POST" && url.endsWith("/recurrences")) return { status: 201, body: created };
+      return { status: 200, body: { items: [], next_cursor: null } };
+    });
+    renderAt("/companies/c1/parties");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Novo registro" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Nova recorrência" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Nova recorrência" }));
+    await userEvent.type(await dialog.findByLabelText("Descrição"), "Aluguel mensal");
+    await userEvent.selectOptions(dialog.getByLabelText("Categoria"), "k1");
+    await userEvent.type(dialog.getByLabelText("Valor de cada vez"), "2500");
+    fireEvent.change(dialog.getByLabelText("Primeiro vencimento"), { target: { value: "2999-01-10" } });
+    await userEvent.click(dialog.getByRole("button", { name: "Adicionar" }));
+
+    expect(await screen.findByText(/Aluguel mensal cadastrada: os lançamentos que vencem/)).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("offers no invite button to a role that only reads the members", async () => {
+    const reader = { ...profile, companies: [{ ...profile.companies[0], permissions: { members: "read" as const } }] };
+    mockApi((url) =>
+      url === "/api/auth/me" ? { status: 200, body: reader } : { status: 200, body: [] },
+    );
+    renderAt("/companies/c1/members");
+
+    await screen.findByRole("heading", { name: "Membros" });
+    expect(screen.queryByRole("button", { name: "Convidar alguém" })).not.toBeInTheDocument();
+  });
 });

@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { api, errorMessage, type Invitation, type Invited, type Member, type Role } from "../api";
+import { api, errorMessage, type Invitation, type Member, type Role } from "../api";
 import { Button } from "../components/Button";
 import { Notice } from "../components/Notice";
 import { PageHeader } from "../components/PageHeader";
 import { Spinner } from "../components/Spinner";
 import { useAuth } from "../auth";
+import { useCreation, useOnCreated } from "../creation/CreationProvider";
+import { useCanWrite } from "../lib/useCanWrite";
 import { UserPlusIcon } from "../components/icons/user-plus";
-import { ASSIGNABLE_ROLES, ROLE_HINTS, ROLE_LABELS } from "../lib/roles";
+import { ASSIGNABLE_ROLES, ROLE_LABELS } from "../lib/roles";
 
 const formatDate = (millis: number) => new Date(millis).toLocaleDateString("pt-BR");
 
@@ -16,6 +18,7 @@ const formatDate = (millis: number) => new Date(millis).toLocaleDateString("pt-B
 export function MembersPage() {
   const { companyId = "" } = useParams();
   const { session } = useAuth();
+  const canWrite = useCanWrite("members");
   // Someone who changes or removes themselves here would lose this page under their feet: the owner
   // (or another admin) does it for them.
   const ownId = session.status === "authenticated" ? session.profile.user.id : null;
@@ -23,16 +26,10 @@ export function MembersPage() {
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [role, setRole] = useState<Role>("viewer");
-  const [sending, setSending] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [invited, setInvited] = useState<Invited | null>(null);
   const [revokingId, setRevokingId] = useState<string | null>(null);
   // One member is changed at a time, and removing asks first.
   const [changingId, setChangingId] = useState<string | null>(null);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
-  // Bumped after an invitation so the e-mail field starts over.
-  const [formVersion, setFormVersion] = useState(0);
 
   const load = useCallback(async () => {
     setError(null);
@@ -53,26 +50,6 @@ export function MembersPage() {
   useEffect(() => {
     void load();
   }, [load]);
-
-  async function handleInvite(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (sending) {
-      return;
-    }
-    const email = String(new FormData(event.currentTarget).get("email") ?? "").trim();
-    setSending(true);
-    setFormError(null);
-    setInvited(null);
-    try {
-      setInvited(await api.invite(companyId, email, role));
-      setFormVersion((version) => version + 1);
-      await load();
-    } catch (failure) {
-      setFormError(errorMessage(failure));
-    } finally {
-      setSending(false);
-    }
-  }
 
   async function changeMember(member: Member, change: () => Promise<void>) {
     if (changingId !== null) {
@@ -102,8 +79,6 @@ export function MembersPage() {
     setError(null);
     try {
       await api.revokeInvitation(companyId, invitation.id);
-      // Said about the invitation just made, which may be this one: its link no longer works.
-      setInvited((current) => (current?.id === invitation.id ? null : current));
       await load();
     } catch (failure) {
       setError(errorMessage(failure));
@@ -112,13 +87,24 @@ export function MembersPage() {
     }
   }
 
+  const { openCreate } = useCreation();
+  // An invitation made from the top bar or from here: read the lists again.
+  useOnCreated("invite", () => void load());
+
   return (
     <>
       <PageHeader
         title="Membros"
         description="Quem participa desta empresa e o que cada um pode fazer."
       />
-      <div className="split">
+      {canWrite && (
+        <div className="list-actions">
+          <Button type="button" icon={UserPlusIcon} onClick={() => openCreate("invite")}>
+            Convidar alguém
+          </Button>
+        </div>
+      )}
+      <div>
         <div className="stack">
           <section className="card list-card">
             <h2>Participantes</h2>
@@ -276,63 +262,6 @@ export function MembersPage() {
           </section>
         </div>
 
-        <aside className="card form-card">
-          <h2>Convidar alguém</h2>
-          <form onSubmit={handleInvite} key={formVersion}>
-            <label>
-              E-mail
-              <input
-                name="email"
-                type="email"
-                required
-                autoComplete="off"
-                autoFocus={formVersion > 0}
-              />
-            </label>
-            <label>
-              Papel
-              <select value={role} onChange={(event) => setRole(event.target.value as Role)}>
-                {ASSIGNABLE_ROLES.map((option) => (
-                  <option key={option} value={option}>
-                    {ROLE_LABELS[option]}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <p className="muted" aria-live="polite">
-              {ROLE_HINTS[role]}
-            </p>
-            <Notice message={formError} />
-            <Button type="submit" icon={UserPlusIcon} pending={sending}>
-              Convidar
-            </Button>
-          </form>
-
-          {invited && (
-            <div className="invite-result">
-              <Notice
-                tone={invited.emailed ? "success" : "warning"}
-                message={
-                  invited.emailed
-                    ? `Convite enviado para ${invited.email}.`
-                    : `Convite criado, mas o e-mail não foi enviado. Passe o link para ${invited.email}.`
-                }
-              />
-              <label>
-                Link do convite
-                <input
-                  readOnly
-                  value={invited.link}
-                  onFocus={(event) => event.currentTarget.select()}
-                />
-              </label>
-              <p className="muted">
-                Este link só aparece agora e só vale para quem entrar com {invited.email}. Vale até{" "}
-                {formatDate(invited.expires_at)}.
-              </p>
-            </div>
-          )}
-        </aside>
       </div>
     </>
   );

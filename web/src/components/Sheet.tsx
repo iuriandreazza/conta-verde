@@ -8,6 +8,8 @@ interface SheetProps {
   open: boolean;
   title: string;
   onClose: () => void;
+  /** Only the close button closes it: for what must be read first, a stray click or key must not. */
+  explicitClose?: boolean;
   children: ReactNode;
 }
 
@@ -18,7 +20,7 @@ const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), selec
  * leaving the list. A dialog for assistive technology: the focus goes in, stays in until it closes,
  * Escape and the shade close it, and the focus returns to what opened it.
  */
-export function Sheet({ open, title, onClose, children }: SheetProps) {
+export function Sheet({ open, title, onClose, explicitClose = false, children }: SheetProps) {
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   const opener = useRef<HTMLElement | null>(null);
@@ -49,7 +51,7 @@ export function Sheet({ open, title, onClose, children }: SheetProps) {
   function keep(event: KeyboardEvent) {
     if (event.key === "Escape") {
       event.stopPropagation();
-      onClose();
+      if (!explicitClose) onClose();
       return;
     }
     if (event.key !== "Tab") return;
@@ -77,7 +79,7 @@ export function Sheet({ open, title, onClose, children }: SheetProps) {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
-            onClick={onClose}
+            onClick={explicitClose ? undefined : onClose}
           />
           <motion.aside
             ref={panelRef}

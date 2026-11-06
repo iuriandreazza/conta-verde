@@ -1,12 +1,9 @@
-import { Fragment, useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { Fragment, useCallback, useState } from "react";
 import { useParams } from "react-router-dom";
 import {
   NO_RECURRENCE_FILTERS,
   api,
   errorMessage,
-  type Category,
-  type CostCenter,
-  type EntryKind,
   type Recurrence,
   type RecurrenceFilters,
   type RecurrenceFrequency,
@@ -14,7 +11,6 @@ import {
 } from "../api";
 import { Button } from "../components/Button";
 import { History } from "../components/History";
-import { CheckIcon } from "../components/icons/check";
 import { ChevronDownIcon } from "../components/icons/chevron-down";
 import { HistoryIcon } from "../components/icons/history";
 import { PlusIcon } from "../components/icons/plus";
@@ -22,21 +18,20 @@ import { RotateCCWIcon } from "../components/icons/rotate-ccw";
 import { SquarePenIcon } from "../components/icons/square-pen";
 import { ListRow } from "../components/ListRow";
 import { Notice } from "../components/Notice";
+import { RecurrenceForm } from "../components/RecurrenceForm";
+import { Sheet } from "../components/Sheet";
+import { useCreation, useOnCreated } from "../creation/CreationProvider";
+import { frequencyLabel } from "../lib/recurrence";
+import { useEntryTargets } from "../lib/useEntryTargets";
+import { useLastValue } from "../lib/useLastValue";
 import { PageHeader } from "../components/PageHeader";
 import { Spinner } from "../components/Spinner";
 import { StatusBadge } from "../components/StatusBadge";
-import { treeRows } from "../lib/categoryTree";
-import { formatMoney, isAmbiguousDecimal, toInputDecimal } from "../lib/decimal";
-import { centsToApi, formatDate, isIsoDate, toCents } from "../lib/entryInstallments";
-import { readUpTo } from "../lib/readUpTo";
+import { formatMoney } from "../lib/decimal";
+import { formatDate } from "../lib/entryInstallments";
 import { useCanWrite } from "../lib/useCanWrite";
 import { usePagedList } from "../lib/usePagedList";
 
-const FREQUENCIES: { key: RecurrenceFrequency; label: string }[] = [
-  { key: "weekly", label: "Toda semana" },
-  { key: "monthly", label: "Todo mês" },
-  { key: "yearly", label: "Todo ano" },
-];
 
 const FIELD_LABELS: Record<string, string> = {
   kind: "Tipo",
@@ -51,8 +46,6 @@ const FIELD_LABELS: Record<string, string> = {
   active: "Situação",
 };
 
-const frequencyLabel = (frequency: RecurrenceFrequency) =>
-  FREQUENCIES.find((option) => option.key === frequency)?.label ?? frequency;
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one
 // instance: the old list is dropped and a reply still in flight for another company lands on an
@@ -62,48 +55,12 @@ export function RecurrencesPage() {
   const canWrite = useCanWrite("finance");
   const [filters, setFilters] = useState<RecurrenceFilters>(NO_RECURRENCE_FILTERS);
   const [editing, setEditing] = useState<Recurrence | null>(null);
-  // Bumped after a save so the form starts over, empty or for another recurrence.
-  const [formVersion, setFormVersion] = useState(0);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const [historyOpenFor, setHistoryOpenFor] = useState<string | null>(null);
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [costCenters, setCostCenters] = useState<CostCenter[]>([]);
-  const [parties, setParties] = useState<{ id: string; name: string }[]>([]);
-  const [targetsError, setTargetsError] = useState<string | null>(null);
-  const [targetsLoaded, setTargetsLoaded] = useState(false);
-
-  // What a recurrence points at is read once: the form needs it, and so do the names in the list.
-  useEffect(() => {
-    let current = true;
-    Promise.all([
-      api.listCategories(companyId),
-      readUpTo((after) => api.listCostCenters(companyId, { q: "", active: "", sort: "name" }, after)),
-      readUpTo((after) => api.listParties(companyId, undefined, after)),
-    ])
-      .then(([categoryList, costCenterList, partyList]) => {
-        if (current) {
-          setCategories(categoryList.items);
-          setCostCenters(costCenterList);
-          setParties(partyList.map(({ id, name }) => ({ id, name })));
-          setTargetsLoaded(true);
-        }
-      })
-      .catch((failure: unknown) => current && setTargetsError(errorMessage(failure)));
-    return () => {
-      current = false;
-    };
-  }, [companyId]);
-
-  const names = useMemo(() => {
-    const byId = new Map<string, string>();
-    for (const category of categories) byId.set(category.id, category.name);
-    for (const center of costCenters) byId.set(center.id, center.name);
-    for (const party of parties) byId.set(party.id, party.name);
-    return byId;
-  }, [categories, costCenters, parties]);
+  const { categories, costCenters, parties, names, error: targetsError, loaded: targetsLoaded } = useEntryTargets(companyId, { payments: false });
 
   const { items, setItems, nextCursor, loading, loadingMore, error, applied, reload, loadMore } =
     usePagedList<Recurrence, RecurrenceFilters>(
@@ -112,80 +69,33 @@ export function RecurrencesPage() {
     );
   const isFiltered = applied.q !== "" || applied.kind !== "" || applied.active !== "";
 
-  // What is in use, plus what the recurrence already points at, so that changing one whose category was
-  // deactivated since still shows it.
-  const categoryRows = treeRows(categories).filter(
-    ({ category }) =>
-      category.id === editing?.category_id || (category.active && category.dre_group !== "transfers"),
-  );
-  const costCenterChoices = costCenters.filter(
-    (center) => center.id === editing?.cost_center_id || center.active,
-  );
-  const partyChoices =
-    editing?.party_id && !parties.some((party) => party.id === editing.party_id)
-      ? [...parties, { id: editing.party_id, name: names.get(editing.party_id) ?? editing.party_id }]
-      : parties;
+  const { openCreate } = useCreation();
+  const shown = useLastValue(editing);
+  // A recurrence made from the top bar or from here: read the list again and flash the new row.
+  useOnCreated("recurrence", (created) => {
+    setSaved(null);
+    setHighlightedId(created.id);
+    void reload();
+  });
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (saving) {
-      return;
-    }
-    const form = new FormData(event.currentTarget);
-    const field = (name: string) => String(form.get(name) ?? "").trim();
-    const typedAmount = field("amount");
-    // `1.000` could be a thousand or one: the person says which, as in every amount field.
-    const cents = isAmbiguousDecimal(typedAmount) ? null : toCents(typedAmount);
-    if (cents === null || cents === 0n) {
-      setFormError("Informe o valor em reais e centavos, por exemplo 1.234,50.");
-      return;
-    }
-    if (!isIsoDate(field("starts_on"))) {
-      setFormError("Informe o primeiro vencimento.");
-      return;
-    }
-    if (field("ends_on") !== "" && !isIsoDate(field("ends_on"))) {
-      setFormError("O último dia não é uma data.");
-      return;
-    }
-    if (field("ends_on") !== "" && field("ends_on") < field("starts_on")) {
-      setFormError("O último dia não pode ser antes do primeiro vencimento.");
-      return;
-    }
-    const input: RecurrenceInput = {
-      kind: field("kind") as EntryKind,
-      description: field("description"),
-      party_id: field("party_id") || undefined,
-      category_id: field("category_id"),
-      cost_center_id: field("cost_center_id") || undefined,
-      amount: centsToApi(cents),
-      frequency: field("frequency") as RecurrenceFrequency,
-      starts_on: field("starts_on"),
-      ends_on: field("ends_on") || undefined,
-      active: form.get("active") === "on",
-    };
+  function closeSheet() {
+    // A change on its way finishes first: closing now would hide what a failure has to say.
+    if (saving) return;
+    setEditing(null);
+    setFormError(null);
+  }
+
+  async function handleSubmit(input: RecurrenceInput) {
+    if (editing === null) return;
     setSaving(true);
     setFormError(null);
     setSaved(null);
     try {
-      if (editing === null) {
-        const created = await api.createRecurrence(companyId, input);
-        setHighlightedId(created.id);
-        setSaved(
-          created.active
-            ? `${created.description} cadastrada: os lançamentos que vencem nos próximos dois meses já foram gerados.`
-            : `${created.description} cadastrada, pausada: nada será gerado até ativá-la.`,
-        );
-        setFormVersion((version) => version + 1);
-        await reload();
-      } else {
-        const updated = await api.updateRecurrence(companyId, editing.id, input);
-        // In place: the list keeps its page and its filters.
-        setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)));
-        setEditing(null);
-        setSaved(`${updated.description} atualizada. O que já foi gerado não muda.`);
-        setFormVersion((version) => version + 1);
-      }
+      const updated = await api.updateRecurrence(companyId, editing.id, input);
+      // In place: the list keeps its page and its filters.
+      setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      setEditing(null);
+      setSaved(`${updated.description} atualizada. O que já foi gerado não muda.`);
     } catch (failure) {
       setFormError(errorMessage(failure));
     } finally {
@@ -204,7 +114,15 @@ export function RecurrencesPage() {
         title="Recorrências"
         description="Aluguel, assinaturas, mensalidades: o que se repete. Os lançamentos dos próximos dois meses são gerados sozinhos."
       />
-      <div className={canWrite ? "split" : "split split-single"}>
+      {canWrite && (
+        <div className="list-actions">
+          <Button type="button" icon={PlusIcon} onClick={() => openCreate("recurrence")}>
+            Nova recorrência
+          </Button>
+        </div>
+      )}
+      <Notice message={saved} tone="success" />
+      <div>
         <section className="card list-card">
           <h2>Cadastradas</h2>
           <div className="filters" role="search">
@@ -358,126 +276,26 @@ export function RecurrencesPage() {
           )}
         </section>
         {canWrite && (
-          <aside className="card form-card">
-            <h2>{editing === null ? "Nova recorrência" : `Alterar ${editing.description}`}</h2>
-            {targetsLoaded && (
-              <form
-                // A new key starts the form over for another recurrence, or an empty one after a save.
-                key={`${editing?.id ?? "new"}-${formVersion}`}
-                onSubmit={(event) => void handleSubmit(event)}
-              >
-                <label>
-                  Tipo
-                  <select name="kind" defaultValue={editing?.kind ?? "payable"}>
-                    <option value="payable">A pagar</option>
-                    <option value="receivable">A receber</option>
-                  </select>
-                </label>
-                <label>
-                  Descrição
-                  <input
-                    name="description"
-                    required
-                    maxLength={200}
-                    autoComplete="off"
-                    autoFocus={editing !== null || formVersion > 0}
-                    defaultValue={editing?.description}
-                  />
-                </label>
-                <label>
-                  Categoria
-                  <select name="category_id" required defaultValue={editing?.category_id ?? ""}>
-                    <option value="" disabled>
-                      Escolha uma categoria
-                    </option>
-                    {categoryRows.map(({ category, depth }) => (
-                      <option key={category.id} value={category.id}>
-                        {"— ".repeat(depth)}
-                        {category.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Centro de custo
-                  <select name="cost_center_id" defaultValue={editing?.cost_center_id ?? ""}>
-                    <option value="">Nenhum</option>
-                    {costCenterChoices.map((center) => (
-                      <option key={center.id} value={center.id}>
-                        {center.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Cliente ou fornecedor
-                  <select name="party_id" defaultValue={editing?.party_id ?? ""}>
-                    <option value="">Nenhum</option>
-                    {partyChoices.map((party) => (
-                      <option key={party.id} value={party.id}>
-                        {party.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Valor de cada vez
-                  <input
-                    name="amount"
-                    inputMode="decimal"
-                    autoComplete="off"
-                    required
-                    placeholder="0,00"
-                    defaultValue={editing ? toInputDecimal(editing.amount) : ""}
-                  />
-                </label>
-                <label>
-                  Frequência
-                  <select name="frequency" defaultValue={editing?.frequency ?? "monthly"}>
-                    {FREQUENCIES.map((option) => (
-                      <option key={option.key} value={option.key}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Primeiro vencimento
-                  <input name="starts_on" type="date" required defaultValue={editing?.starts_on ?? ""} />
-                </label>
-                <label>
-                  Último dia (opcional)
-                  <input name="ends_on" type="date" defaultValue={editing?.ends_on ?? ""} />
-                </label>
-                <label className="inline">
-                  <input name="active" type="checkbox" defaultChecked={editing?.active ?? true} /> Ativa
-                </label>
-                <p className="muted">
-                  Mudar a recorrência vale para os próximos lançamentos; os que já foram gerados não mudam.
+          <Sheet open={editing !== null} title={`Alterar ${shown?.description ?? ""}`} onClose={closeSheet}>
+            {shown !== null &&
+              (targetsLoaded ? (
+                <RecurrenceForm
+                  key={shown.id}
+                  recurrence={shown}
+                  targets={{ categories, costCenters, parties, names }}
+                  pending={saving}
+                  error={formError}
+                  onSubmit={(input) => void handleSubmit(input)}
+                  onCancel={closeSheet}
+                />
+              ) : targetsError === null ? (
+                <p role="status" className="status">
+                  <Spinner /> Carregando…
                 </p>
-                <Notice message={formError} />
-                <div className="form-actions">
-                  <Button type="submit" icon={editing === null ? PlusIcon : CheckIcon} pending={saving}>
-                    {editing === null ? "Adicionar" : "Salvar alterações"}
-                  </Button>
-                  {editing !== null && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      disabled={saving}
-                      onClick={() => {
-                        setEditing(null);
-                        setFormError(null);
-                      }}
-                    >
-                      Cancelar
-                    </Button>
-                  )}
-                </div>
-              </form>
-            )}
-            <Notice message={saved} tone="success" />
-          </aside>
+              ) : (
+                <p role="alert">{targetsError}</p>
+              ))}
+          </Sheet>
         )}
       </div>
     </>

@@ -8,7 +8,9 @@ import { FileTextIcon } from "./icons/file-text";
 import { HandCoinsIcon } from "./icons/hand-coins";
 import { LogoutIcon } from "./icons/logout";
 import { PlusIcon } from "./icons/plus";
+import { RotateCCWIcon } from "./icons/rotate-ccw";
 import { SendIcon } from "./icons/send";
+import { UserPlusIcon } from "./icons/user-plus";
 import { UsersIcon } from "./icons/users";
 import { WalletIcon } from "./icons/wallet";
 import { MenuButton, type MenuItem } from "./MenuButton";
@@ -39,6 +41,8 @@ function creationItems(
     { key: "quote", label: "Novo orçamento", icon: FileTextIcon, to: `${base}/quotes`, area: "sales" },
     { key: "sale", label: "Nova venda", icon: HandCoinsIcon, to: `${base}/sales`, area: "sales" },
     { key: "party", label: "Novo cliente ou fornecedor", icon: UsersIcon, creates: "party", area: "parties" },
+    { key: "recurrence", label: "Nova recorrência", icon: RotateCCWIcon, creates: "recurrence", area: "finance" },
+    { key: "invite", label: "Convidar alguém", icon: UserPlusIcon, creates: "invite", area: "members" },
     { key: "bankAccount", label: "Nova conta bancária", icon: WalletIcon, creates: "bankAccount", area: "finance" },
     { key: "costCenter", label: "Novo centro de custo", icon: LayersIcon, creates: "costCenter", area: "finance" },
     { key: "paymentMethod", label: "Nova forma de pagamento", icon: CreditCardIcon, creates: "paymentMethod", area: "finance" },
