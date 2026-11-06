@@ -85,6 +85,7 @@ where
         if after == before {
             return Ok(before);
         }
+        self.ensure_not_adjusted(company_id, id).await?;
         self.check_products(&after, Some(&before)).await?;
         let audit = audit_entry(
             &after,
@@ -127,8 +128,16 @@ where
             .set_status(&after, CountStatus::Open, &audit)
             .await
         {
-            // Someone applied it a moment ago: the adjustments are written once, so it is done.
-            Ok(()) | Err(RepositoryError::CountChanged) => Ok(after),
+            Ok(()) => Ok(after),
+            // Someone applied it a moment ago, which is done; one who cancelled it first won, and the answer says so.
+            Err(RepositoryError::CountChanged) => {
+                let stored = self.find(company_id, id).await?;
+                if stored.status() == CountStatus::Applied {
+                    Ok(stored)
+                } else {
+                    Err(ApplicationError::CountChanged)
+                }
+            }
             Err(error) => Err(changed_or_missing(error)),
         }
     }
@@ -142,6 +151,7 @@ where
     ) -> Result<InventoryCount, ApplicationError> {
         let before = self.find(company_id, id).await?;
         let after = before.cancelled()?;
+        self.ensure_not_adjusted(company_id, id).await?;
         let audit = audit_entry(
             &after,
             actor,
@@ -167,7 +177,10 @@ where
         match count.status() {
             CountStatus::Open => {
                 let ids: Vec<ProductId> = count.lines().iter().map(|l| l.product_id()).collect();
-                let held = self.stock.quantities(company_id, &ids).await?;
+                let held = self
+                    .stock
+                    .quantities(company_id, &ids, count.counted_on())
+                    .await?;
                 for (line, (_, on_hand)) in count.lines().iter().zip(held) {
                     lines.push(CountLineView {
                         product_id: line.product_id(),
@@ -232,6 +245,20 @@ where
             .await?;
         let (items, next) = split_page(rows, limit);
         Ok(InventoryCountPage { items, next })
+    }
+
+    /// A count whose adjustments are written is applied in all but its status: it does not change or get cancelled,
+    /// asking to apply it again finishes it.
+    async fn ensure_not_adjusted(
+        &self,
+        company_id: CompanyId,
+        id: InventoryCountId,
+    ) -> Result<(), ApplicationError> {
+        if self.stock.adjusted_by(company_id, id).await?.is_empty() {
+            Ok(())
+        } else {
+            Err(DomainError::CountIsLocked.into())
+        }
     }
 
     async fn find(

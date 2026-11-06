@@ -30,11 +30,12 @@ pub trait CountStock: Send + Sync {
         product_id: ProductId,
     ) -> impl Future<Output = Result<(), ApplicationError>> + Send;
 
-    /// What each product holds now, in the order asked.
+    /// What each product held through a day, in the order asked.
     fn quantities(
         &self,
         company_id: CompanyId,
         products: &[ProductId],
+        on: CalendarDate,
     ) -> impl Future<Output = Result<Vec<(ProductId, Decimal)>, ApplicationError>> + Send;
 
     /// What a count adjusted, as `(line, quantity)`; a line that agreed with the stock has none.
@@ -471,8 +472,17 @@ where
                 let balance = books.entry(item.draft.product_id).or_default();
                 let mut draft = item.draft.clone();
                 if let Some(counted) = item.counted {
-                    // A count adjusts to what was found: nothing is written when the stock already holds it.
-                    let difference = counted - balance.quantity();
+                    // A count says what was found on its day: the adjustment, booked on that day, is the difference to
+                    // what the stock held **through that day**. Nothing is written when it already held it.
+                    let day = CalendarDate::parse(&draft.occurred_on)
+                        .ok_or(DomainError::InvalidDate("occurred_on"))?;
+                    let held = self
+                        .movements
+                        .balances(company_id, &[draft.product_id], Some(day))
+                        .await?
+                        .first()
+                        .map_or(Decimal::ZERO, |(_, held)| held.quantity());
+                    let difference = counted - held;
                     if difference.is_zero() {
                         continue;
                     }
@@ -836,10 +846,11 @@ where
         &self,
         company_id: CompanyId,
         products: &[ProductId],
+        on: CalendarDate,
     ) -> Result<Vec<(ProductId, Decimal)>, ApplicationError> {
         Ok(self
             .movements
-            .balances(company_id, products, None)
+            .balances(company_id, products, Some(on))
             .await?
             .into_iter()
             .map(|(product, balance)| (product, balance.quantity()))
