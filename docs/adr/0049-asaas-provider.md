@@ -60,8 +60,9 @@ not the company's is left out, ADR 0046). The webhook address to register is `{h
 shown on the Cobrança page.
 
 **Tests** use a local stand-in for the Asaas API (the key checked, the bodies kept, refusals and failures on
-demand), never the real one. A test against the **sandbox** is in the suite but `#[ignore]`d (it needs
-`ASAAS_SANDBOX_API_KEY`): it is the homologation ADR 0010 asks for, run by hand.
+demand), never the real one. A test against the **sandbox** is in the suite, `#[ignore]`d and a no-op unless
+`ASAAS_SANDBOX_API_KEY` is set (CI runs the ignored tests and has no key): it is the homologation ADR 0010 asks
+for, run by hand.
 
 ## Consequences
 
