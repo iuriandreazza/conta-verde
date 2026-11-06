@@ -292,7 +292,9 @@ export function RecurrencesPage() {
                 <p role="status" className="status">
                   <Spinner /> Carregando…
                 </p>
-              ) : null)}
+              ) : (
+                <p role="alert">{targetsError}</p>
+              ))}
           </Sheet>
         )}
       </div>

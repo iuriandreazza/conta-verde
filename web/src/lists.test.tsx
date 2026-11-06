@@ -273,6 +273,9 @@ describe("creating from the top bar", () => {
 
     // The link is shown once: the sheet stays on it, and no confirmation takes its place.
     expect(await dialog.findByLabelText("Link do convite")).toHaveValue("https://erp.example/invitations/abc");
+    // A stray key does not throw the link away; only "Concluir" (or "Fechar") does.
+    await userEvent.keyboard("{Escape}");
+    expect(screen.getByRole("dialog", { name: "Convidar alguém" })).toBeInTheDocument();
     await userEvent.click(dialog.getByRole("button", { name: "Concluir" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });

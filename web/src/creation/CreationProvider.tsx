@@ -70,7 +70,10 @@ export function CreationProvider({ companyId, children }: { companyId: string | 
   const confirmations = useRef(0);
   const listeners = useRef(new Map<CreateKind, Set<(created: Created) => void>>());
 
-  const openCreate = useCallback((wanted: CreateKind) => setKind(wanted), []);
+  const openCreate = useCallback((wanted: CreateKind) => {
+    setResult(null);
+    setKind(wanted);
+  }, []);
   const closeUnlessSaving = useCallback(() => {
     if (busy.current) return;
     setKind(null);
@@ -105,7 +108,7 @@ export function CreationProvider({ companyId, children }: { companyId: string | 
     <CreationContext.Provider value={value}>
       {children}
       {companyId !== undefined && (
-        <Sheet open={kind !== null} title={current?.title ?? ""} onClose={closeUnlessSaving}>
+        <Sheet open={kind !== null} title={current?.title ?? ""} onClose={closeUnlessSaving} explicitClose={result !== null}>
           {kind !== null && current !== null && result !== null && (
             <div className="creation-result">
               {result}
@@ -127,7 +130,14 @@ export function CreationProvider({ companyId, children }: { companyId: string | 
               onCancel={closeUnlessSaving}
               onCreated={(created) => {
                 busy.current = false;
-                listeners.current.get(kind)?.forEach((listener) => listener(created));
+                // The record exists: a listener that fails must not turn that into a failed save.
+                listeners.current.get(kind)?.forEach((listener) => {
+                  try {
+                    listener(created);
+                  } catch (failure) {
+                    console.error(failure);
+                  }
+                });
                 if (created.result !== undefined) {
                   // The sheet stays, now showing what must be read; the page behind already has the news.
                   setResult(created.result);
