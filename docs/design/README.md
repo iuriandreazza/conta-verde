@@ -16,7 +16,7 @@ The canvas in [`canvas/`](canvas/project/canvas.json) shows the design system an
 | Artboard | What it shows |
 |----------|---------------|
 | [`Main.dc.html`](canvas/project/Main.dc.html) | Colors, type, shape, components and chart rules |
-| [`Dashboard.dc.html`](canvas/project/Dashboard.dc.html) | The company dashboard (sample data) |
+| [`Dashboard.dc.html`](canvas/project/Dashboard.dc.html) | The company dashboard (layout; the page now shows real figures, see ADR 0043) |
 | [`Registers.dc.html`](canvas/project/Registers.dc.html) | Parties list with the form beside it |
 | [`Login.dc.html`](canvas/project/Login.dc.html) | Signed-out split layout |
 
