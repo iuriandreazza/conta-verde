@@ -18,8 +18,8 @@ pub(crate) enum ApiError {
     InvalidField(&'static str),
     /// An import file that cannot be read as a whole; the message says what to change.
     InvalidFile(String),
-    /// An import file past the size this API reads.
-    FileTooLarge,
+    /// A file past the size this API reads; the message says how large that is.
+    FileTooLarge(&'static str),
 }
 
 impl From<ApplicationError> for ApiError {
@@ -44,10 +44,7 @@ impl IntoResponse for ApiError {
             }
             Self::InvalidQuery(message) => (StatusCode::BAD_REQUEST, (*message).to_owned()),
             Self::InvalidFile(message) => (StatusCode::UNPROCESSABLE_ENTITY, message.clone()),
-            Self::FileTooLarge => (
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "the file is larger than 1 MiB: split it".to_owned(),
-            ),
+            Self::FileTooLarge(message) => (StatusCode::PAYLOAD_TOO_LARGE, (*message).to_owned()),
             Self::Application(error) => describe(error),
         };
         (status, Json(ErrorBody { error: message })).into_response()
@@ -109,10 +106,11 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
         | ApplicationError::StatementLineNotFound
         | ApplicationError::RecurrenceNotFound
         | ApplicationError::SettlementNotFound
+        | ApplicationError::AttachmentNotFound
         | ApplicationError::TransferNotFound => (StatusCode::NOT_FOUND, error.to_string()),
-        ApplicationError::SettlementExceedsBalance | ApplicationError::EntryIsSettled => {
-            (StatusCode::CONFLICT, error.to_string())
-        }
+        ApplicationError::SettlementExceedsBalance
+        | ApplicationError::EntryIsSettled
+        | ApplicationError::TooManyAttachments => (StatusCode::CONFLICT, error.to_string()),
         ApplicationError::AlreadyMatched | ApplicationError::LineChanged => {
             (StatusCode::CONFLICT, error.to_string())
         }

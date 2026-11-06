@@ -73,6 +73,11 @@ pub enum ApplicationError {
     PaymentTermNotFound,
     /// No financial entry with this id in the company (another company's looks the same).
     EntryNotFound,
+    /// No attachment with this id in the entry (another company's looks the same), or it was removed
+    /// already.
+    AttachmentNotFound,
+    /// An entry holds a limited number of files at once.
+    TooManyAttachments,
     /// A cash flow was asked for a span that is not one or is too long to cut.
     InvalidSpan(&'static str),
     /// No statement line with this id in the company (another company's looks the same).
@@ -212,6 +217,10 @@ impl fmt::Display for ApplicationError {
             Self::PaymentMethodNotFound => f.write_str("payment method not found"),
             Self::PaymentTermNotFound => f.write_str("payment term not found"),
             Self::EntryNotFound => f.write_str("entry not found"),
+            Self::AttachmentNotFound => f.write_str("attachment not found"),
+            Self::TooManyAttachments => {
+                f.write_str("an entry holds at most 20 attachments; remove one to attach another")
+            }
             Self::SettlementNotFound => f.write_str("settlement not found"),
             Self::TransferNotFound => f.write_str("transfer not found"),
             Self::RecurrenceNotFound => f.write_str("recurrence not found"),

@@ -4885,7 +4885,7 @@ where
     }
 }
 
-fn entry_draft(
+pub fn entry_draft(
     seed: &EntrySeed,
     description: &str,
     competence: &str,
@@ -8162,4 +8162,321 @@ pub async fn reports_the_entries<R, F>(
     .await
     .unwrap();
     assert_eq!(halves[0].payable.to_string(), "1");
+}
+
+use conta_verde_application::{AttachmentRepository, AttachmentService, BlobStore};
+use conta_verde_domain::{Attachment, AttachmentDraft, AttachmentId, MAX_ENTRY_ATTACHMENTS};
+
+/// A blob store keeps what is put under a company and an id, apart by company, and takes a delete
+/// twice.
+pub async fn keeps_blobs<B: BlobStore>(store: &B, company: CompanyId, other_company: CompanyId) {
+    let id = AttachmentId::generate();
+    assert_eq!(store.get(company, id).await.unwrap(), None);
+    store.put(company, id, b"first").await.unwrap();
+    assert_eq!(
+        store.get(company, id).await.unwrap(),
+        Some(b"first".to_vec())
+    );
+    // Putting again replaces; another company's id finds nothing.
+    store.put(company, id, b"second, longer").await.unwrap();
+    assert_eq!(
+        store.get(company, id).await.unwrap(),
+        Some(b"second, longer".to_vec())
+    );
+    assert_eq!(store.get(other_company, id).await.unwrap(), None);
+    store.delete(other_company, id).await.unwrap();
+    assert!(store.get(company, id).await.unwrap().is_some());
+    store.delete(company, id).await.unwrap();
+    assert_eq!(store.get(company, id).await.unwrap(), None);
+    store.delete(company, id).await.unwrap();
+}
+
+pub async fn attaches_files<R, B, E, F>(
+    service: &AttachmentService<R, B, E>,
+    store: &R,
+    blobs: &B,
+    entries: &FinancialEntryService<E, F>,
+    company: CompanyId,
+    other_company: CompanyId,
+    seed: &EntrySeed,
+) where
+    R: AttachmentRepository,
+    B: BlobStore,
+    E: FinancialEntryRepository,
+    F: EntryReferences,
+{
+    let ana = actor();
+    let register = |description: &str| {
+        entries.register(
+            company,
+            &ana,
+            entry_draft(seed, description, "2026-11-10", &[("2026-11-20", "100")]),
+        )
+    };
+    let entry = register("Compra de farinha").await.unwrap();
+    let other_entry = register("Outra compra").await.unwrap();
+
+    let invoice = attach_file(
+        service,
+        company,
+        &ana,
+        &entry,
+        "Nota 123.pdf",
+        "application/pdf",
+        b"%PDF-1.4 nota",
+    )
+    .await
+    .unwrap();
+    let receipt = attach_file(
+        service,
+        company,
+        &ana,
+        &entry,
+        "Recibo.png",
+        "IMAGE/PNG",
+        b"\x89PNG recibo",
+    )
+    .await
+    .unwrap();
+    assert_eq!(invoice.file_name(), "Nota 123.pdf");
+    assert_eq!(receipt.content_type(), "image/png");
+    assert_eq!(invoice.size(), 13);
+    assert_eq!(
+        service.list(company, entry.id()).await.unwrap(),
+        vec![invoice.clone(), receipt.clone()],
+        "in the order they were attached"
+    );
+    assert!(
+        service
+            .list(company, other_entry.id())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // The bytes come back with the record, and only for the company and the entry they belong to.
+    let file = service
+        .download(company, entry.id(), invoice.id())
+        .await
+        .unwrap();
+    assert_eq!(file.attachment, invoice);
+    assert_eq!(file.bytes, b"%PDF-1.4 nota");
+    assert_eq!(blobs.get(other_company, invoice.id()).await.unwrap(), None);
+    for (who, under) in [(other_company, entry.id()), (company, other_entry.id())] {
+        assert_eq!(
+            service
+                .download(who, under, invoice.id())
+                .await
+                .unwrap_err(),
+            ApplicationError::AttachmentNotFound
+        );
+    }
+    assert_eq!(
+        service.list(other_company, entry.id()).await.unwrap_err(),
+        ApplicationError::EntryNotFound
+    );
+    assert_eq!(
+        attach_to_unknown(service, company, &ana).await,
+        ApplicationError::EntryNotFound
+    );
+
+    // What is refused is told why, and leaves nothing.
+    for (name, kind, bytes, error) in [
+        (
+            "a.html",
+            "text/html",
+            &b"<b>"[..],
+            DomainError::UnsupportedAttachmentType,
+        ),
+        (
+            "a.pdf",
+            "application/pdf",
+            &b""[..],
+            DomainError::InvalidAttachmentSize,
+        ),
+        (
+            "a/b.pdf",
+            "application/pdf",
+            &b"x"[..],
+            DomainError::InvalidAttachmentName,
+        ),
+    ] {
+        assert_eq!(
+            attach_file(service, company, &ana, &entry, name, kind, bytes)
+                .await
+                .unwrap_err(),
+            ApplicationError::Domain(error)
+        );
+    }
+    assert_eq!(service.list(company, entry.id()).await.unwrap().len(), 2);
+
+    // Its trail has the creation; a write whose audit entry is about something else is refused whole.
+    let created = store.history(company, invoice.id()).await.unwrap();
+    assert_eq!(created.len(), 1);
+    assert_eq!(created[0].entry.entity, AuditEntity::Attachment);
+    assert_eq!(created[0].entry.action, AuditAction::Created);
+    assert!(
+        store
+            .history(other_company, invoice.id())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let stray = Attachment::new(
+        AttachmentId::generate(),
+        company,
+        entry.id(),
+        AttachmentDraft {
+            file_name: "Estranho.pdf".into(),
+            content_type: "application/pdf".into(),
+            size: 1,
+        },
+    )
+    .unwrap();
+    let wrong_audit = AuditEntry {
+        entity_id: invoice.id().as_uuid(),
+        ..created[0].entry.clone()
+    };
+    assert!(store.save(&stray, &wrong_audit).await.is_err());
+    assert!(
+        store
+            .find(company, entry.id(), stray.id())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(store.history(company, invoice.id()).await.unwrap().len(), 1);
+
+    // Removing takes it off the list and drops the bytes, and the trail keeps both moves.
+    assert_eq!(
+        service
+            .remove(other_company, &ana, entry.id(), invoice.id())
+            .await
+            .unwrap_err(),
+        ApplicationError::AttachmentNotFound
+    );
+    assert_eq!(
+        service
+            .remove(company, &ana, other_entry.id(), invoice.id())
+            .await
+            .unwrap_err(),
+        ApplicationError::AttachmentNotFound
+    );
+    service
+        .remove(company, &ana, entry.id(), invoice.id())
+        .await
+        .unwrap();
+    assert_eq!(
+        service.list(company, entry.id()).await.unwrap(),
+        vec![receipt.clone()]
+    );
+    assert_eq!(blobs.get(company, invoice.id()).await.unwrap(), None);
+    assert_eq!(
+        service
+            .download(company, entry.id(), invoice.id())
+            .await
+            .unwrap_err(),
+        ApplicationError::AttachmentNotFound
+    );
+    assert_eq!(
+        service
+            .remove(company, &ana, entry.id(), invoice.id())
+            .await
+            .unwrap_err(),
+        ApplicationError::AttachmentNotFound
+    );
+    let trail = store.history(company, invoice.id()).await.unwrap();
+    assert_eq!(trail.len(), 2);
+    assert_eq!(trail[1].entry.action, AuditAction::Updated);
+    assert_eq!(
+        trail[1]
+            .entry
+            .changes
+            .iter()
+            .map(|c| c.field.as_str())
+            .collect::<Vec<_>>(),
+        ["removed"]
+    );
+    assert!(
+        store
+            .find(company, entry.id(), invoice.id())
+            .await
+            .unwrap()
+            .is_some_and(|stored| stored.is_removed()),
+        "the record stays, removed"
+    );
+
+    // An entry holds a limited number at once, the ones removed not counting.
+    for number in 1..MAX_ENTRY_ATTACHMENTS {
+        attach_file(
+            service,
+            company,
+            &ana,
+            &entry,
+            &format!("{number}.txt"),
+            "text/plain",
+            b"x",
+        )
+        .await
+        .unwrap();
+    }
+    assert_eq!(
+        service.list(company, entry.id()).await.unwrap().len(),
+        MAX_ENTRY_ATTACHMENTS
+    );
+    assert_eq!(
+        attach_file(service, company, &ana, &entry, "21.txt", "text/plain", b"x")
+            .await
+            .unwrap_err(),
+        ApplicationError::TooManyAttachments
+    );
+    service
+        .remove(company, &ana, entry.id(), receipt.id())
+        .await
+        .unwrap();
+    attach_file(service, company, &ana, &entry, "21.txt", "text/plain", b"x")
+        .await
+        .unwrap();
+}
+
+async fn attach_file<R, B, E>(
+    service: &AttachmentService<R, B, E>,
+    company: CompanyId,
+    ana: &Actor,
+    entry: &FinancialEntry,
+    name: &str,
+    kind: &str,
+    bytes: &[u8],
+) -> Result<Attachment, ApplicationError>
+where
+    R: AttachmentRepository,
+    B: BlobStore,
+    E: FinancialEntryRepository,
+{
+    service
+        .attach(company, ana, entry.id(), name, kind, bytes)
+        .await
+}
+
+async fn attach_to_unknown<R, B, E>(
+    service: &AttachmentService<R, B, E>,
+    company: CompanyId,
+    ana: &Actor,
+) -> ApplicationError
+where
+    R: AttachmentRepository,
+    B: BlobStore,
+    E: FinancialEntryRepository,
+{
+    service
+        .attach(
+            company,
+            ana,
+            EntryId::generate(),
+            "a.pdf",
+            "application/pdf",
+            b"x",
+        )
+        .await
+        .unwrap_err()
 }

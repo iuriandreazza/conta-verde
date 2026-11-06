@@ -21,6 +21,7 @@ macro_rules! uuid_id {
     };
 }
 
+uuid_id!(AttachmentId);
 uuid_id!(BankAccountId);
 uuid_id!(CategoryId);
 uuid_id!(CompanyId);
