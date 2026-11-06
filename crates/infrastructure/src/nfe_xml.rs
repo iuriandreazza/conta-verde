@@ -212,7 +212,7 @@ pub(crate) mod tests {
             .chars()
             .rev()
             .enumerate()
-            .map(|(index, c)| c.to_digit(10).unwrap() * (2 + (index as u32 % 8)))
+            .map(|(index, c)| (u32::from(c) - u32::from('0')) * (2 + (index as u32 % 8)))
             .sum();
         let digit = match sum % 11 {
             0 | 1 => 0,
@@ -268,6 +268,13 @@ pub(crate) mod tests {
         // 100 + 2.5 of IPI, and 9.99 - 0.99.
         let costs: Vec<String> = invoice.costs().iter().map(|c| c.to_string()).collect();
         assert_eq!(costs, ["102.5", "9"]);
+    }
+
+    #[test]
+    fn an_invoice_of_an_alphanumeric_cnpj_is_read_and_accepted() {
+        let draft = parse_nfe(sample("12ABC34501DE35", 1, 4321).as_bytes()).unwrap();
+        assert_eq!(draft.issuer_document, "12ABC34501DE35");
+        assert!(Invoice::new(draft).is_ok());
     }
 
     #[test]

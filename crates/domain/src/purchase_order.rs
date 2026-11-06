@@ -155,7 +155,7 @@ impl PurchaseOrder {
     /// The order with its content replaced by the draft's; only a draft can change. A draft that changes
     /// nothing is the order itself.
     pub fn replaced_with(&self, draft: PurchaseOrderDraft) -> Result<Self, DomainError> {
-        if self.status != PurchaseStatus::Draft {
+        if self.status != PurchaseStatus::Draft || self.invoice_key.is_some() {
             return Err(DomainError::PurchaseIsLocked);
         }
         Ok(Self::new(self.id, self.company_id, draft)?
@@ -728,14 +728,22 @@ mod tests {
     }
 
     #[test]
-    fn an_order_entered_from_an_invoice_keeps_its_key_when_replaced() {
+    fn an_order_entered_from_an_invoice_is_not_edited() {
         let key =
             AccessKey::parse(&crate::invoice::tests::key_for("11222333000181", 1, 4321)).unwrap();
         let entered = order(vec![line("1", "1", "0")]).from_invoice(key.clone());
-        let replaced = entered
-            .replaced_with(draft(vec![line("2", "1", "0")]))
-            .unwrap();
-        assert_eq!(replaced.invoice_key(), Some(&key));
+        assert_eq!(entered.invoice_key(), Some(&key));
+        assert_eq!(
+            entered
+                .replaced_with(draft(vec![line("2", "1", "0")]))
+                .unwrap_err(),
+            DomainError::PurchaseIsLocked
+        );
+        // It can still be cancelled while nothing arrived, which frees the invoice.
+        assert_eq!(
+            entered.cancelled().unwrap().status(),
+            PurchaseStatus::Cancelled
+        );
     }
 
     #[test]

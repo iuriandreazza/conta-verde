@@ -183,6 +183,14 @@ where
         order_id: PurchaseOrderId,
         draft: PurchaseReceiptDraft,
     ) -> Result<ReceiptRecord, ApplicationError> {
+        if self
+            .find(company_id, order_id)
+            .await?
+            .invoice_key()
+            .is_some()
+        {
+            return Err(DomainError::OrderFollowsAnInvoice.into());
+        }
         self.receive_scheduled(company_id, actor, order_id, draft, &[])
             .await
     }

@@ -14138,6 +14138,20 @@ pub async fn enters_a_supplier_invoice_once<P, E, F, R, T, M, Pr, St>(
         Some(outcome.order.id())
     );
 
+    // An order made from an invoice is received by entering the invoice, never on its own.
+    assert_eq!(
+        purchases
+            .receive(
+                company,
+                &ana,
+                outcome.order.id(),
+                receipt_draft("2026-11-12", &[(1, "1")])
+            )
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::OrderFollowsAnInvoice)
+    );
+
     // The same file again, in sequence and at the same moment, adds nothing.
     let again = purchases
         .enter_invoice(company, &ana, draft(1, 4321), entry())

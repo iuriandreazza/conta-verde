@@ -3,11 +3,15 @@
 -- say when its payable falls due (an invoice gives its own installments) instead of the order's payment term.
 
 ALTER TABLE purchase_orders ADD COLUMN invoice_key TEXT;
+-- The issuer's registry number (positions 7 to 20) may hold letters: an alphanumeric CNPJ.
 ALTER TABLE purchase_orders ADD CONSTRAINT purchase_orders_invoice_key_valid CHECK (
-    invoice_key IS NULL OR invoice_key ~ '^[0-9]{44}$'
+    invoice_key IS NULL OR invoice_key ~ '^[0-9]{6}[0-9A-Z]{14}[0-9]{24}$'
 );
+-- A key has at most one order that was not cancelled: cancelling one that was never received frees the invoice to be
+-- entered again.
 CREATE UNIQUE INDEX purchase_orders_invoice_key_key
-    ON purchase_orders (company_id, invoice_key) WHERE invoice_key IS NOT NULL;
+    ON purchase_orders (company_id, invoice_key)
+    WHERE invoice_key IS NOT NULL AND status <> 'cancelled';
 
 CREATE TABLE purchase_receipt_installments (
     company_id UUID     NOT NULL,
