@@ -55,8 +55,8 @@ products people come from: the list is full width and has **no add-record panel 
 button ("Novo lançamento") and a row's edit button open it; a save or "Fechar" closes it and the list shows what
 changed (the new row flashes, a "… adicionado." notice sits above the list). The global "Novo registro" menu (`CreationProvider`) raises the sheet of the register chosen **over the page that is
 open, without leaving it**: a creator component holds that register's form and saves it, the host closes the sheet, says
-so in a confirmation, and the page's list reads again (`useOnCreated`). Every register of the finance, registers and members
-areas has a creator; a creator may hand back something that must be read first (the invitation's link), and the sheet
+so in a confirmation, and the page's list reads again (`useOnCreated`). Every register and document (finance, registers, members, quotes, orders, contracts, commission
+rules, price tables) has a creator; a creator may hand back something that must be read first (the invitation's link), and the sheet
 then stays on it until "Concluir". Closing or going back with something typed asks "Descartar edições?". The menu
 shows an **Alt+letter** shortcut beside the usual items, which starts the same record from anywhere. `Sheet` is a dialog: the focus goes in and stays in,
 Escape and the shade close it, and the focus returns to what opened it.

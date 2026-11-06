@@ -218,6 +218,7 @@ describe("choosing a price list in a document", () => {
   it("fills the price of a new line from the list, falls back to the product's, and prices the lines again when the list changes", async () => {
     mockApi(answer([wholesale], documents));
     renderAt("/companies/c1/contracts");
+    await userEvent.click(await screen.findByRole("button", { name: "Novo contrato" }));
     const form = within((await screen.findByRole("heading", { name: "Novo contrato" })).closest("aside")!);
     await form.findByLabelText("Cliente");
 
@@ -241,6 +242,7 @@ describe("choosing a price list in a document", () => {
   it("does not offer a choice when the company has no price list", async () => {
     mockApi(answer([], documents));
     renderAt("/companies/c1/contracts");
+    await userEvent.click(await screen.findByRole("button", { name: "Novo contrato" }));
     const form = within((await screen.findByRole("heading", { name: "Novo contrato" })).closest("aside")!);
     await form.findByLabelText("Cliente");
 

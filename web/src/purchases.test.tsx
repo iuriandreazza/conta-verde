@@ -153,6 +153,7 @@ describe("purchases", () => {
       ),
     );
     renderAt("/companies/c1/purchases");
+    await userEvent.click(await screen.findByRole("button", { name: "Nova compra" }));
     const form = within((await screen.findByRole("heading", { name: "Nova compra" })).closest("aside")!);
     await form.findByLabelText("Fornecedor");
 
@@ -177,7 +178,7 @@ describe("purchases", () => {
     fireEvent.change(form.getByLabelText("Previsão de entrega"), { target: { value: "2026-11-20" } });
     await userEvent.click(form.getByRole("button", { name: "Criar pedido" }));
 
-    expect(await screen.findByText(/Compra nº 1 criada como rascunho/)).toBeInTheDocument();
+    expect(await screen.findByText("Compra nº 1 criada.")).toBeInTheDocument();
     expect(JSON.parse(String(calls(fetchMock, "POST")[0][1]?.body))).toEqual({
       supplier_id: "p1",
       ordered_on: "2026-11-06",
@@ -341,7 +342,7 @@ describe("purchases", () => {
     renderAt("/companies/c1/purchases");
     await screen.findAllByRole("row", { name: /Torrefação Serra/ });
 
-    expect(screen.queryByRole("heading", { name: "Nova compra" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Nova compra" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /(Alterar|Aprovar|Receber|Encerrar|Cancelar) a compra/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Detalhes da compra 1" })).toBeInTheDocument();
   });

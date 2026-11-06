@@ -52,18 +52,17 @@ const SHORTCUTS: Partial<Record<string, string>> = {
 
 /** What a person can start from anywhere: only the registers their role may write. */
 function creationItems(
-  companyId: string,
   permissions: AppTopbarProps["permissions"],
   openCreate: (kind: CreateKind) => void,
 ): MenuItem[] {
-  const base = `/companies/${companyId}`;
   const items: (MenuItem & { area: Area; creates?: CreateKind })[] = [
     { key: "entry", label: "Novo lançamento", icon: CircleDollarSignIcon, creates: "entry", area: "finance" },
     { key: "transfer", label: "Nova transferência", icon: SendIcon, creates: "transfer", area: "finance" },
-    { key: "quote", label: "Novo orçamento", icon: FileTextIcon, to: `${base}/quotes`, area: "sales" },
-    { key: "sale", label: "Nova venda", icon: HandCoinsIcon, to: `${base}/sales`, area: "sales" },
-    { key: "purchase", label: "Nova compra", icon: BriefcaseBusinessIcon, to: `${base}/purchases`, area: "purchases" },
+    { key: "quote", label: "Novo orçamento", icon: FileTextIcon, creates: "quote", area: "sales" },
+    { key: "sale", label: "Novo pedido", icon: HandCoinsIcon, creates: "sale", area: "sales" },
+    { key: "purchase", label: "Nova compra", icon: BriefcaseBusinessIcon, creates: "purchase", area: "purchases" },
     { key: "party", label: "Novo cliente ou fornecedor", icon: UsersIcon, creates: "party", area: "parties" },
+    { key: "contract", label: "Novo contrato", icon: RotateCCWIcon, creates: "contract", area: "sales" },
     { key: "commissionRule", label: "Nova regra de comissão", icon: HandCoinsIcon, creates: "commissionRule", area: "sales" },
     { key: "priceList", label: "Nova tabela de preço", icon: LayersIcon, creates: "priceList", area: "sales" },
     { key: "category", label: "Nova categoria", icon: FolderTreeIcon, creates: "category", area: "finance" },
@@ -97,7 +96,7 @@ export function AppTopbar({
   onSignOut,
 }: AppTopbarProps) {
   const { openCreate } = useCreation();
-  const creating = companyId ? creationItems(companyId, permissions, openCreate) : [];
+  const creating = companyId ? creationItems(permissions, openCreate) : [];
   const navigate = useNavigate();
   // A new key for the menu closes it: a shortcut used while it is open must not leave it behind the sheet.
   const [menuKey, setMenuKey] = useState(0);

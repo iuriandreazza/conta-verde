@@ -1,18 +1,10 @@
-import { Fragment, useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { Fragment, useCallback, useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
-  NO_FILTERS,
-  NO_PAYMENT_TERM_FILTERS,
-  NO_PRODUCT_FILTERS,
   NO_QUOTE_FILTERS,
   api,
   errorMessage,
-  type Category,
-  type CostCenter,
-  type Party,
   type Sale,
-  type PaymentTerm,
-  type Product,
   type Quote,
   type QuoteFilters,
   type QuoteInput,
@@ -21,7 +13,6 @@ import {
 } from "../api";
 import { Button } from "../components/Button";
 import { History } from "../components/History";
-import { CheckIcon } from "../components/icons/check";
 import { ChevronDownIcon } from "../components/icons/chevron-down";
 import { FileTextIcon } from "../components/icons/file-text";
 import { HistoryIcon } from "../components/icons/history";
@@ -29,16 +20,19 @@ import { PlusIcon } from "../components/icons/plus";
 import { HandCoinsIcon } from "../components/icons/hand-coins";
 import { SendIcon } from "../components/icons/send";
 import { SquarePenIcon } from "../components/icons/square-pen";
-import { LinesEditor, linesProblem, linesToInput, newLine, rowsFromLines, type LineRow } from "../components/LinesEditor";
 import { ListRow } from "../components/ListRow";
 import { Notice } from "../components/Notice";
+import { QuoteForm } from "../components/QuoteForm";
+import { Sheet } from "../components/Sheet";
+import { useCreation, useOnCreated } from "../creation/CreationProvider";
+import { useLastValue } from "../lib/useLastValue";
+import { useSalesTargets } from "../lib/useSalesTargets";
 import { PageHeader } from "../components/PageHeader";
 import { Spinner } from "../components/Spinner";
 import { treeRows } from "../lib/categoryTree";
 import { formatMoney } from "../lib/decimal";
 import { formatDate, isIsoDate } from "../lib/entryInstallments";
 import { QUOTE_STATUS_LABELS } from "../lib/quoteStatus";
-import { readUpTo } from "../lib/readUpTo";
 import { todayIso } from "../lib/settlement";
 import { useCanWrite } from "../lib/useCanWrite";
 import { usePagedList } from "../lib/usePagedList";
@@ -58,21 +52,12 @@ const FIELD_LABELS: Record<string, string> = {
 /** A quote is open to change while it is a draft or waiting for the answer. */
 const isOpen = (quote: Quote) => quote.status === "draft" || quote.status === "sent";
 
-/** `days` after an ISO day, written as one. */
-function plusDays(iso: string, days: number): string {
-  const [year, month, day] = iso.split("-").map(Number);
-  return todayIso(new Date(year, month - 1, day + days));
-}
-
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one instance.
 export function QuotesPage() {
   const { companyId = "" } = useParams();
   const canWrite = useCanWrite("sales");
   const [filters, setFilters] = useState<QuoteFilters>(NO_QUOTE_FILTERS);
   const [editing, setEditing] = useState<Quote | null>(null);
-  // Bumped after a save so the form starts over, empty or for another quote.
-  const [formVersion, setFormVersion] = useState(0);
-  const [rows, setRows] = useState<LineRow[]>(() => [newLine()]);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
@@ -82,119 +67,49 @@ export function QuotesPage() {
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [sent, setSent] = useState<SentQuote | null>(null);
-  const [parties, setParties] = useState<Party[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
-  const [terms, setTerms] = useState<PaymentTerm[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [costCenters, setCostCenters] = useState<CostCenter[]>([]);
   const [convertingFor, setConvertingFor] = useState<string | null>(null);
   const [converting, setConverting] = useState(false);
   const [convertError, setConvertError] = useState<string | null>(null);
   const [converted, setConverted] = useState<Sale | null>(null);
-  const [targetsError, setTargetsError] = useState<string | null>(null);
-  const [targetsLoaded, setTargetsLoaded] = useState(false);
-
   // What a quote points at is read once: the form needs it, and so do the names in the list.
-  useEffect(() => {
-    let current = true;
-    Promise.all([
-      readUpTo((after) => api.listParties(companyId, NO_FILTERS, after)),
-      readUpTo((after) => api.listProducts(companyId, NO_PRODUCT_FILTERS, after)),
-      readUpTo((after) => api.listPaymentTerms(companyId, NO_PAYMENT_TERM_FILTERS, after)),
-      api.listCategories(companyId),
-      readUpTo((after) => api.listCostCenters(companyId, { q: "", active: "", sort: "name" }, after)),
-    ])
-      .then(([partyList, productList, termList, categoryList, centerList]) => {
-        if (current) {
-          setParties(partyList);
-          setProducts(productList);
-          setTerms(termList);
-          setCategories(categoryList.items);
-          setCostCenters(centerList);
-          setTargetsLoaded(true);
-        }
-      })
-      .catch((failure: unknown) => current && setTargetsError(errorMessage(failure)));
-    return () => {
-      current = false;
-    };
-  }, [companyId]);
-
-  const names = useMemo(() => {
-    const byId = new Map<string, string>();
-    for (const party of parties) byId.set(party.id, party.name);
-    for (const term of terms) byId.set(term.id, term.name);
-    for (const product of products) byId.set(product.id, product.name);
-    return byId;
-  }, [parties, terms, products]);
+  const targets = useSalesTargets(companyId);
+  const { categories, costCenters, parties, names, error: targetsError, loaded: targetsLoaded } = targets;
 
   const { items, setItems, nextCursor, loading, loadingMore, error, applied, reload, loadMore } =
     usePagedList<Quote, QuoteFilters>((applied, after) => api.listQuotes(companyId, applied, after), filters);
   const isFiltered = applied.q !== "" || applied.status !== "";
 
-  // What is in use, plus what the quote already points at, so changing one whose product was
-  // deactivated since still shows it.
-  const inQuote = new Set(rows.map((row) => row.product_id));
-  const productChoices = products.filter((product) => product.active || inQuote.has(product.id));
-  const termChoices = terms.filter((term) => term.active || term.id === editing?.payment_term_id);
-
-  function startEditing(quote: Quote | null) {
-    setEditing(quote);
-    setRows(quote === null ? [newLine()] : rowsFromLines(quote.lines));
-    setFormError(null);
+  const { openCreate } = useCreation();
+  const shown = useLastValue(editing);
+  // A quote made from the top bar or from here: read the list again and flash the new row.
+  useOnCreated("quote", (created) => {
     setSaved(null);
-    setFormVersion((version) => version + 1);
+    setHighlightedId(created.id);
+    void reload();
+  });
+
+  function closeSheet() {
+    // A change on its way finishes first: closing now would hide what a failure has to say.
+    if (saving) return;
+    setEditing(null);
+    setFormError(null);
   }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (saving) {
-      return;
-    }
-    const form = new FormData(event.currentTarget);
-    const field = (name: string) => String(form.get(name) ?? "").trim();
-    if (!isIsoDate(field("issued_on")) || !isIsoDate(field("valid_until"))) {
-      setFormError("Informe a data de emissão e a validade.");
-      return;
-    }
-    if (field("valid_until") < field("issued_on")) {
-      setFormError("A validade não pode ser antes da emissão.");
-      return;
-    }
-    const problem = linesProblem(rows);
-    if (problem !== null) {
-      setFormError(problem);
-      return;
-    }
-    const input: QuoteInput = {
-      customer_id: field("customer_id"),
-      issued_on: field("issued_on"),
-      valid_until: field("valid_until"),
-      payment_term_id: field("payment_term_id") || undefined,
-      notes: field("notes") || undefined,
-      lines: linesToInput(rows),
-    };
+  async function handleSubmit(input: QuoteInput) {
+    if (editing === null) return;
     setSaving(true);
     setFormError(null);
     setSaved(null);
     try {
-      if (editing === null) {
-        const created = await api.createQuote(companyId, input);
-        setHighlightedId(created.id);
-        startEditing(null);
-        setSaved(`Orçamento nº ${created.number} criado.`);
-        await reload();
-      } else {
-        const updated = await api.updateQuote(companyId, editing.id, input);
-        // In place: the list keeps its page and its filters.
-        setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)));
-        startEditing(null);
-        setSaved(
-          editing.status === "sent" && updated.status === "draft"
-            ? `Orçamento nº ${updated.number} atualizado. Voltou a ser rascunho e o link enviado deixou de valer: envie de novo.`
-            : `Orçamento nº ${updated.number} atualizado.`,
-        );
-      }
+      const updated = await api.updateQuote(companyId, editing.id, input);
+      // In place: the list keeps its page and its filters.
+      setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      setEditing(null);
+      setSaved(
+        editing.status === "sent" && updated.status === "draft"
+          ? `Orçamento nº ${updated.number} atualizado. Voltou a ser rascunho e o link enviado deixou de valer: envie de novo.`
+          : `Orçamento nº ${updated.number} atualizado.`,
+      );
     } catch (failure) {
       setFormError(errorMessage(failure));
     } finally {
@@ -258,7 +173,15 @@ export function QuotesPage() {
         title="Orçamentos"
         description="Itens com desconto, validade e um link para o cliente aprovar. Aprovado, vira venda."
       />
-      <div className={canWrite ? "split" : "split split-single"}>
+      {canWrite && (
+        <div className="list-actions">
+          <Button type="button" icon={PlusIcon} onClick={() => openCreate("quote")}>
+            Novo orçamento
+          </Button>
+        </div>
+      )}
+      <Notice message={saved} tone="success" />
+      <div>
         <section className="card list-card">
           <h2>Emitidos</h2>
           <div className="filters" role="search">
@@ -379,7 +302,11 @@ export function QuotesPage() {
                                 variant="ghost"
                                 aria-label={`Alterar o orçamento ${quote.number}`}
                                 disabled={saving}
-                                onClick={() => startEditing(quote)}
+                                onClick={() => {
+                                  setEditing(quote);
+                                  setFormError(null);
+                                  setSaved(null);
+                                }}
                               >
                                 Alterar
                               </Button>
@@ -544,76 +471,27 @@ export function QuotesPage() {
           )}
         </section>
         {canWrite && (
-          <aside className="card form-card">
-            <h2>{editing === null ? "Novo orçamento" : `Alterar o orçamento ${editing.number}`}</h2>
-            {targetsLoaded && (
-              <form
-                // A new key starts the form over for another quote, or an empty one after a save.
-                key={`${editing?.id ?? "new"}-${formVersion}`}
-                onSubmit={(event) => void handleSubmit(event)}
-              >
-                <label>
-                  Cliente
-                  <select name="customer_id" required defaultValue={editing?.customer_id ?? ""}>
-                    <option value="" disabled>
-                      Escolha um cliente
-                    </option>
-                    {parties.map((party) => (
-                      <option key={party.id} value={party.id}>
-                        {party.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Emitido em
-                  <input name="issued_on" type="date" required defaultValue={editing?.issued_on ?? todayIso()} />
-                </label>
-                <label>
-                  Válido até
-                  <input
-                    name="valid_until"
-                    type="date"
-                    required
-                    defaultValue={editing?.valid_until ?? plusDays(todayIso(), 15)}
-                  />
-                </label>
-                <label>
-                  Prazo de pagamento
-                  <select name="payment_term_id" defaultValue={editing?.payment_term_id ?? ""}>
-                    <option value="">Não informar</option>
-                    {termChoices.map((term) => (
-                      <option key={term.id} value={term.id}>
-                        {term.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <LinesEditor companyId={companyId} rows={rows} onChange={setRows} products={productChoices} />
-                <label>
-                  Observações
-                  <textarea name="notes" rows={3} maxLength={2000} defaultValue={editing?.notes ?? ""} />
-                </label>
-                {editing?.status === "sent" && (
-                  <p className="muted">
-                    Alterar um orçamento enviado o devolve a rascunho e o link que o cliente recebeu deixa de valer.
-                  </p>
-                )}
-                <Notice message={formError} />
-                <div className="form-actions">
-                  <Button type="submit" icon={editing === null ? PlusIcon : CheckIcon} pending={saving}>
-                    {editing === null ? "Criar orçamento" : "Salvar alterações"}
-                  </Button>
-                  {editing !== null && (
-                    <Button type="button" variant="ghost" disabled={saving} onClick={() => startEditing(null)}>
-                      Cancelar
-                    </Button>
-                  )}
-                </div>
-              </form>
-            )}
-            <Notice message={saved} tone="success" />
-          </aside>
+          <Sheet open={editing !== null} locked={saving} title={`Alterar o orçamento ${shown?.number ?? ""}`} onClose={closeSheet}>
+            {shown !== null &&
+              (targetsLoaded ? (
+                <QuoteForm
+                  key={shown.id}
+                  companyId={companyId}
+                  quote={shown}
+                  targets={targets}
+                  pending={saving}
+                  error={formError}
+                  onSubmit={(input) => void handleSubmit(input)}
+                  onCancel={closeSheet}
+                />
+              ) : targetsError === null ? (
+                <p role="status" className="status">
+                  <Spinner /> Carregando…
+                </p>
+              ) : (
+                <p role="alert">{targetsError}</p>
+              ))}
+          </Sheet>
         )}
       </div>
     </>

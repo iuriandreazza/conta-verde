@@ -79,6 +79,10 @@ const answer =
   };
 
 const formPanel = async (heading: string) => {
+  // A new quote is asked for with the button; a change opens the sheet by itself.
+  if (heading === "Novo orçamento") {
+    await userEvent.click(await screen.findByRole("button", { name: heading }));
+  }
   const panel = within((await screen.findByRole("heading", { name: heading })).closest("aside")!);
   await panel.findByLabelText("Cliente");
   return panel;
@@ -274,7 +278,7 @@ describe("quotes", () => {
     );
     renderAt("/companies/c1/quotes");
     await screen.findByRole("row", { name: /Mercado Boa Compra/ });
-    expect(screen.queryByRole("heading", { name: "Novo orçamento" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Novo orçamento" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Alterar o orçamento/ })).not.toBeInTheDocument();
   });
 

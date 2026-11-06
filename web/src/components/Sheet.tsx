@@ -43,6 +43,11 @@ export function Sheet({ open, title, onClose, explicitClose = false, locked = fa
   const opener = useRef<HTMLElement | null>(null);
   // A ref, not state: typing must not re-render what the sheet holds (a controlled field would lose its change).
   const dirty = useRef(false);
+  // Each opening is a new panel: reopening while the last one still slides away must not bring its old fields back.
+  const openings = useRef(0);
+  const wasOpen = useRef(false);
+  if (open && !wasOpen.current) openings.current += 1;
+  wasOpen.current = open;
   const [confirming, setConfirming] = useState<(() => void) | null>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
 
@@ -146,6 +151,7 @@ export function Sheet({ open, title, onClose, explicitClose = false, locked = fa
             onClick={explicitClose ? undefined : () => guard(onClose)}
           />
           <motion.aside
+            key={openings.current}
             ref={panelRef}
             className="sheet"
             role="dialog"

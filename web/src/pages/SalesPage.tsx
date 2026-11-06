@@ -1,17 +1,10 @@
-import { Fragment, useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { Fragment, useCallback, useEffect, useState, type FormEvent } from "react";
 import { useParams } from "react-router-dom";
 import {
-  NO_FILTERS,
-  NO_PAYMENT_TERM_FILTERS,
-  NO_PRODUCT_FILTERS,
   NO_SALE_FILTERS,
   api,
   errorMessage,
-  type Category,
-  type CostCenter,
-  type Party,
   type PaymentTerm,
-  type Product,
   type Sale,
   type SaleFilters,
   type SaleInput,
@@ -27,15 +20,18 @@ import { HistoryIcon } from "../components/icons/history";
 import { PlusIcon } from "../components/icons/plus";
 import { RotateCCWIcon } from "../components/icons/rotate-ccw";
 import { SquarePenIcon } from "../components/icons/square-pen";
-import { LinesEditor, linesProblem, linesToInput, newLine, rowsFromLines, type LineRow } from "../components/LinesEditor";
 import { ListRow } from "../components/ListRow";
 import { Notice } from "../components/Notice";
+import { SaleForm } from "../components/SaleForm";
+import { Sheet } from "../components/Sheet";
+import { useCreation, useOnCreated } from "../creation/CreationProvider";
+import { useLastValue } from "../lib/useLastValue";
+import { useSalesTargets } from "../lib/useSalesTargets";
 import { PageHeader } from "../components/PageHeader";
 import { Spinner } from "../components/Spinner";
 import { treeRows } from "../lib/categoryTree";
 import { formatDecimal, formatMoney, toApiDecimal } from "../lib/decimal";
 import { centsToApi, formatDate, isIsoDate, toCents } from "../lib/entryInstallments";
-import { readUpTo } from "../lib/readUpTo";
 import { SALE_STATUS_LABELS } from "../lib/saleStatus";
 import { todayIso } from "../lib/settlement";
 import { splitByTerm } from "../lib/termSplit";
@@ -64,8 +60,6 @@ export function SalesPage() {
   const canWrite = useCanWrite("sales");
   const [filters, setFilters] = useState<SaleFilters>(NO_SALE_FILTERS);
   const [editing, setEditing] = useState<Sale | null>(null);
-  const [formVersion, setFormVersion] = useState(0);
-  const [rows, setRows] = useState<LineRow[]>(() => [newLine()]);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
@@ -73,112 +67,42 @@ export function SalesPage() {
   const [panel, setPanel] = useState<Panel | null>(null);
   const [acting, setActing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [parties, setParties] = useState<Party[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
-  const [terms, setTerms] = useState<PaymentTerm[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [costCenters, setCostCenters] = useState<CostCenter[]>([]);
-  const [targetsError, setTargetsError] = useState<string | null>(null);
-  const [targetsLoaded, setTargetsLoaded] = useState(false);
-
   // What a sale points at is read once: the form needs it, and so do the names in the list.
-  useEffect(() => {
-    let current = true;
-    Promise.all([
-      readUpTo((after) => api.listParties(companyId, NO_FILTERS, after)),
-      readUpTo((after) => api.listProducts(companyId, NO_PRODUCT_FILTERS, after)),
-      readUpTo((after) => api.listPaymentTerms(companyId, NO_PAYMENT_TERM_FILTERS, after)),
-      api.listCategories(companyId),
-      readUpTo((after) => api.listCostCenters(companyId, { q: "", active: "", sort: "name" }, after)),
-    ])
-      .then(([partyList, productList, termList, categoryList, centerList]) => {
-        if (current) {
-          setParties(partyList);
-          setProducts(productList);
-          setTerms(termList);
-          setCategories(categoryList.items);
-          setCostCenters(centerList);
-          setTargetsLoaded(true);
-        }
-      })
-      .catch((failure: unknown) => current && setTargetsError(errorMessage(failure)));
-    return () => {
-      current = false;
-    };
-  }, [companyId]);
-
-  const names = useMemo(() => {
-    const byId = new Map<string, string>();
-    for (const item of [...parties, ...terms, ...products, ...categories, ...costCenters]) {
-      byId.set(item.id, item.name);
-    }
-    return byId;
-  }, [parties, terms, products, categories, costCenters]);
+  const targets = useSalesTargets(companyId);
+  const { terms, categories, names, error: targetsError, loaded: targetsLoaded } = targets;
+  // What a return may be booked to: the categories in use that are not the transfers one.
+  const returnCategories = treeRows(categories).filter(({ category }) => category.active && category.dre_group !== "transfers");
 
   const { items, setItems, nextCursor, loading, loadingMore, error, applied, reload, loadMore } =
     usePagedList<Sale, SaleFilters>((applied, after) => api.listSales(companyId, applied, after), filters);
   const isFiltered = applied.q !== "" || applied.status !== "";
 
-  // What is in use, plus what the sale already points at.
-  const inSale = new Set(rows.map((row) => row.product_id));
-  const productChoices = products.filter((product) => product.active || inSale.has(product.id));
-  const termChoices = terms.filter((term) => term.active || term.id === editing?.payment_term_id);
-  const categoryRows = treeRows(categories).filter(
-    ({ category }) => category.id === editing?.category_id || (category.active && category.dre_group !== "transfers"),
-  );
-  const costCenterChoices = costCenters.filter((center) => center.id === editing?.cost_center_id || center.active);
-  const sellers = parties.filter((party) => party.is_seller);
-
-  function startEditing(sale: Sale | null) {
-    setEditing(sale);
-    setRows(sale === null ? [newLine()] : rowsFromLines(sale.lines));
-    setFormError(null);
+  const { openCreate } = useCreation();
+  const shown = useLastValue(editing);
+  // An order made from the top bar or from here: read the list again and flash the new row.
+  useOnCreated("sale", (created) => {
     setSaved(null);
-    setFormVersion((version) => version + 1);
+    setHighlightedId(created.id);
+    void reload();
+  });
+
+  function closeSheet() {
+    // A change on its way finishes first: closing now would hide what a failure has to say.
+    if (saving) return;
+    setEditing(null);
+    setFormError(null);
   }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (saving) {
-      return;
-    }
-    const form = new FormData(event.currentTarget);
-    const field = (name: string) => String(form.get(name) ?? "").trim();
-    if (!isIsoDate(field("sold_on"))) {
-      setFormError("Informe a data da venda.");
-      return;
-    }
-    const problem = linesProblem(rows);
-    if (problem !== null) {
-      setFormError(problem);
-      return;
-    }
-    const input: SaleInput = {
-      customer_id: field("customer_id"),
-      seller_id: field("seller_id") || undefined,
-      sold_on: field("sold_on"),
-      payment_term_id: field("payment_term_id") || undefined,
-      category_id: field("category_id"),
-      cost_center_id: field("cost_center_id") || undefined,
-      notes: field("notes") || undefined,
-      lines: linesToInput(rows),
-    };
+  async function handleSubmit(input: SaleInput) {
+    if (editing === null) return;
     setSaving(true);
     setFormError(null);
     setSaved(null);
     try {
-      if (editing === null) {
-        const created = await api.createSale(companyId, input);
-        setHighlightedId(created.id);
-        startEditing(null);
-        setSaved(`Pedido nº ${created.number} criado. Conclua para gerar a conta a receber.`);
-        await reload();
-      } else {
-        const updated = await api.updateSale(companyId, editing.id, input);
-        setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)));
-        startEditing(null);
-        setSaved(`Pedido nº ${updated.number} atualizado.`);
-      }
+      const updated = await api.updateSale(companyId, editing.id, input);
+      setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      setEditing(null);
+      setSaved(`Pedido nº ${updated.number} atualizado.`);
     } catch (failure) {
       setFormError(errorMessage(failure));
     } finally {
@@ -222,7 +146,15 @@ export function SalesPage() {
         title="Vendas"
         description="Pedidos e vendas: concluir gera a conta a receber pelo prazo de pagamento; devoluções geram a conta a pagar do reembolso."
       />
-      <div className={canWrite ? "split" : "split split-single"}>
+      {canWrite && (
+        <div className="list-actions">
+          <Button type="button" icon={PlusIcon} onClick={() => openCreate("sale")}>
+            Novo pedido
+          </Button>
+        </div>
+      )}
+      <Notice message={saved} tone="success" />
+      <div>
         <section className="card list-card">
           <h2>Pedidos e vendas</h2>
           <div className="filters" role="search">
@@ -317,8 +249,12 @@ export function SalesPage() {
                                 type="button"
                                 variant="ghost"
                                 aria-label={`Alterar o pedido ${sale.number}`}
-                                disabled={saving}
-                                onClick={() => startEditing(sale)}
+                                disabled={saving || acting}
+                                onClick={() => {
+                                  setEditing(sale);
+                                  setFormError(null);
+                                  setSaved(null);
+                                }}
                               >
                                 Alterar
                               </Button>
@@ -414,7 +350,7 @@ export function SalesPage() {
                             <ReturnsPanel
                               companyId={companyId}
                               sale={sale}
-                              categories={categoryRows.map(({ category, depth }) => ({ id: category.id, label: `${"— ".repeat(depth)}${category.name}` }))}
+                              categories={returnCategories.map(({ category, depth }) => ({ id: category.id, label: `${"— ".repeat(depth)}${category.name}` }))}
                               canWrite={canWrite}
                             />
                           </td>
@@ -446,94 +382,27 @@ export function SalesPage() {
           {panel === null && <Notice message={actionError} />}
         </section>
         {canWrite && (
-          <aside className="card form-card">
-            <h2>{editing === null ? "Novo pedido" : `Alterar o pedido ${editing.number}`}</h2>
-            {targetsLoaded && (
-              <form key={`${editing?.id ?? "new"}-${formVersion}`} onSubmit={(event) => void handleSubmit(event)}>
-                <label>
-                  Cliente
-                  <select name="customer_id" required defaultValue={editing?.customer_id ?? ""}>
-                    <option value="" disabled>
-                      Escolha um cliente
-                    </option>
-                    {parties.map((party) => (
-                      <option key={party.id} value={party.id}>
-                        {party.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Vendedor
-                  <select name="seller_id" defaultValue={editing?.seller_id ?? ""}>
-                    <option value="">Nenhum</option>
-                    {sellers.map((party) => (
-                      <option key={party.id} value={party.id}>
-                        {party.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Data da venda
-                  <input name="sold_on" type="date" required defaultValue={editing?.sold_on ?? todayIso()} />
-                </label>
-                <label>
-                  Prazo de pagamento
-                  <select name="payment_term_id" defaultValue={editing?.payment_term_id ?? ""}>
-                    <option value="">À vista, no dia da venda</option>
-                    {termChoices.map((term) => (
-                      <option key={term.id} value={term.id}>
-                        {term.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Categoria da receita
-                  <select name="category_id" required defaultValue={editing?.category_id ?? ""}>
-                    <option value="" disabled>
-                      Escolha uma categoria
-                    </option>
-                    {categoryRows.map(({ category, depth }) => (
-                      <option key={category.id} value={category.id}>
-                        {"— ".repeat(depth)}
-                        {category.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Centro de custo
-                  <select name="cost_center_id" defaultValue={editing?.cost_center_id ?? ""}>
-                    <option value="">Nenhum</option>
-                    {costCenterChoices.map((center) => (
-                      <option key={center.id} value={center.id}>
-                        {center.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <LinesEditor companyId={companyId} rows={rows} onChange={setRows} products={productChoices} />
-                <label>
-                  Observações
-                  <textarea name="notes" rows={3} maxLength={2000} defaultValue={editing?.notes ?? ""} />
-                </label>
-                <Notice message={formError} />
-                <div className="form-actions">
-                  <Button type="submit" icon={editing === null ? PlusIcon : CheckIcon} pending={saving}>
-                    {editing === null ? "Criar pedido" : "Salvar alterações"}
-                  </Button>
-                  {editing !== null && (
-                    <Button type="button" variant="ghost" disabled={saving} onClick={() => startEditing(null)}>
-                      Cancelar edição
-                    </Button>
-                  )}
-                </div>
-              </form>
-            )}
-            <Notice message={saved} tone="success" />
-          </aside>
+          <Sheet open={editing !== null} locked={saving} title={`Alterar o pedido ${shown?.number ?? ""}`} onClose={closeSheet}>
+            {shown !== null &&
+              (targetsLoaded ? (
+                <SaleForm
+                  key={shown.id}
+                  companyId={companyId}
+                  sale={shown}
+                  targets={targets}
+                  pending={saving}
+                  error={formError}
+                  onSubmit={(input) => void handleSubmit(input)}
+                  onCancel={closeSheet}
+                />
+              ) : targetsError === null ? (
+                <p role="status" className="status">
+                  <Spinner /> Carregando…
+                </p>
+              ) : (
+                <p role="alert">{targetsError}</p>
+              ))}
+          </Sheet>
         )}
       </div>
     </>
