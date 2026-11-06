@@ -1,7 +1,8 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it } from "vitest";
+import { BackButton } from "./BackButton";
 import { Sheet } from "./Sheet";
 
 function Page() {
@@ -99,5 +100,101 @@ describe("Sheet with a form that arrives late", () => {
     await userEvent.keyboard("{Escape}");
 
     expect(document.body.style.overflow).toBe("");
+  });
+});
+
+describe("Sheet and what was typed", () => {
+  function Typing() {
+    const [open, setOpen] = useState(true);
+    return (
+      <>
+        <button onClick={() => setOpen(true)}>Reabrir</button>
+        <Sheet open={open} title="Novo" onClose={() => setOpen(false)}>
+          <label>
+            Nome
+            <input />
+          </label>
+          <BackButton onClick={() => setOpen(false)} />
+        </Sheet>
+      </>
+    );
+  }
+
+  it("closes at once when nothing was typed", async () => {
+    render(<Typing />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Fechar" }));
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("asks before throwing typed text away, and lets the person keep editing", async () => {
+    render(<Typing />);
+    await userEvent.type(screen.getByLabelText("Nome"), "Aluguel");
+
+    await userEvent.keyboard("{Escape}");
+    expect(screen.getByRole("alertdialog", { name: "Descartar edições?" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Novo" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Voltar e editar" }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Nome")).toHaveValue("Aluguel");
+  });
+
+  it("closes once the person confirms, whichever way out they took", async () => {
+    render(<Typing />);
+    await userEvent.type(screen.getByLabelText("Nome"), "Aluguel");
+
+    await userEvent.click(screen.getByRole("button", { name: "Voltar" }));
+    await userEvent.click(screen.getByRole("button", { name: "Descartar e fechar" }));
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("starts clean when it opens again", async () => {
+    render(<Typing />);
+    await userEvent.type(screen.getByLabelText("Nome"), "Aluguel");
+    await userEvent.click(screen.getByRole("button", { name: "Fechar" }));
+    await userEvent.click(screen.getByRole("button", { name: "Descartar e fechar" }));
+
+    await userEvent.click(screen.getByRole("button", { name: "Reabrir" }));
+    await userEvent.click(screen.getByRole("button", { name: "Fechar" }));
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("keeps Tab and Escape inside the question, and gives the focus back to the field", async () => {
+    render(<Typing />);
+    const field = screen.getByLabelText("Nome");
+    await userEvent.type(field, "Aluguel");
+    await userEvent.keyboard("{Escape}");
+    expect(screen.getByRole("button", { name: "Voltar e editar" })).toHaveFocus();
+
+    await userEvent.tab();
+    expect(screen.getByRole("button", { name: "Descartar e fechar" })).toHaveFocus();
+    await userEvent.tab();
+    expect(screen.getByRole("button", { name: "Voltar e editar" })).toHaveFocus();
+
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    await waitFor(() => expect(field).toHaveFocus());
+  });
+
+  it("neither closes nor asks while a save is on its way", async () => {
+    function Saving() {
+      return (
+        <Sheet open title="Novo" locked onClose={() => undefined}>
+          <input aria-label="Nome" />
+        </Sheet>
+      );
+    }
+    render(<Saving />);
+    await userEvent.type(screen.getByLabelText("Nome"), "Aluguel");
+
+    await userEvent.click(screen.getByRole("button", { name: "Fechar" }));
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Novo" })).toBeInTheDocument();
   });
 });

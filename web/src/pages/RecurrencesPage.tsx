@@ -276,7 +276,7 @@ export function RecurrencesPage() {
           )}
         </section>
         {canWrite && (
-          <Sheet open={editing !== null} title={`Alterar ${shown?.description ?? ""}`} onClose={closeSheet}>
+          <Sheet open={editing !== null} locked={saving} title={`Alterar ${shown?.description ?? ""}`} onClose={closeSheet}>
             {shown !== null &&
               (targetsLoaded ? (
                 <RecurrenceForm

@@ -4,6 +4,7 @@ import { isAmbiguousDecimal } from "../lib/decimal";
 import { centsToApi, isIsoDate, toCents } from "../lib/entryInstallments";
 import { todayIso } from "../lib/settlement";
 import { Button } from "./Button";
+import { BackButton } from "./BackButton";
 import { SendIcon } from "./icons/send";
 import { Notice } from "./Notice";
 
@@ -98,9 +99,7 @@ export function TransferForm({ accounts, pending, error, onSubmit, onCancel }: T
       </section>
       <Notice message={fieldError ?? error} />
       <div className="form-footer">
-        <Button type="button" variant="ghost" disabled={pending} onClick={onCancel}>
-          Voltar
-        </Button>
+        <BackButton disabled={pending} onClick={onCancel} />
         <Button type="submit" icon={SendIcon} pending={pending}>
           Transferir
         </Button>

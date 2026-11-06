@@ -75,6 +75,7 @@ export function CreationProvider({ companyId, children }: { companyId: string | 
   // What a creator asks the person to read before the sheet goes away.
   const [result, setResult] = useState<ReactNode>(null);
   const busy = useRef(false);
+  const [saving, setSaving] = useState(false);
   const confirmations = useRef(0);
   const listeners = useRef(new Map<CreateKind, Set<(created: Created) => void>>());
 
@@ -93,6 +94,7 @@ export function CreationProvider({ companyId, children }: { companyId: string | 
   // Another company, or a path outside any: what was open belongs to the one that was left.
   useEffect(() => {
     busy.current = false;
+    setSaving(false);
     setKind(null);
     setResult(null);
   }, [companyId]);
@@ -118,7 +120,7 @@ export function CreationProvider({ companyId, children }: { companyId: string | 
     <CreationContext.Provider value={value}>
       {children}
       {companyId !== undefined && (
-        <Sheet open={kind !== null} title={current?.title ?? ""} onClose={closeUnlessSaving} explicitClose={result !== null}>
+        <Sheet open={kind !== null} title={current?.title ?? ""} onClose={closeUnlessSaving} explicitClose={result !== null} locked={saving}>
           {kind !== null && current !== null && result !== null && (
             <div className="creation-result">
               {result}
@@ -137,10 +139,12 @@ export function CreationProvider({ companyId, children }: { companyId: string | 
               options={options}
               onBusyChange={(value) => {
                 busy.current = value;
+                setSaving(value);
               }}
               onCancel={closeUnlessSaving}
               onCreated={(created) => {
                 busy.current = false;
+                setSaving(false);
                 // The record exists: a listener that fails must not turn that into a failed save.
                 listeners.current.get(kind)?.forEach((listener) => {
                   try {

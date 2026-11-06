@@ -3,6 +3,7 @@ import type { CashFlowGroup, Category, DreGroup, NewCategory } from "../api";
 import { treeRows } from "../lib/categoryTree";
 import { CASH_FLOW_GROUPS, DRE_GROUPS, cashFlowLabel, dreLabel } from "../lib/groups";
 import { Button } from "./Button";
+import { BackButton } from "./BackButton";
 import { CheckIcon } from "./icons/check";
 import { PlusIcon } from "./icons/plus";
 import { Notice } from "./Notice";
@@ -174,9 +175,7 @@ export function CategoryForm({
       </section>
       <Notice message={error} />
       <div className="form-footer">
-        <Button type="button" variant="ghost" disabled={pending} onClick={onCancel}>
-          Voltar
-        </Button>
+        <BackButton disabled={pending} onClick={onCancel} />
         <Button type="submit" icon={editing === null ? PlusIcon : CheckIcon} pending={pending}>
           {editing === null ? "Adicionar" : "Salvar alterações"}
         </Button>

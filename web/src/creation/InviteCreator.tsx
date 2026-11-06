@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api, errorMessage, type Invited, type Role } from "../api";
 import { Button } from "../components/Button";
+import { BackButton } from "../components/BackButton";
 import { UserPlusIcon } from "../components/icons/user-plus";
 import { Notice } from "../components/Notice";
 import { ASSIGNABLE_ROLES, ROLE_HINTS, ROLE_LABELS } from "../lib/roles";
@@ -84,9 +85,7 @@ export function InviteCreator({ companyId, onBusyChange, onCreated, onCancel }: 
       </section>
       <Notice message={error} />
       <div className="form-footer">
-        <Button type="button" variant="ghost" disabled={sending} onClick={onCancel}>
-          Voltar
-        </Button>
+        <BackButton disabled={sending} onClick={onCancel} />
         <Button type="submit" icon={UserPlusIcon} pending={sending}>
           Convidar
         </Button>

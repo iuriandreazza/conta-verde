@@ -1,8 +1,15 @@
 import { AnimatePresence, motion } from "motion/react";
-import { useEffect, useId, useRef, type KeyboardEvent, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "./Button";
 import { XIcon } from "./icons/x";
+
+/** Closing, or going back, asks first when something was typed: the way out of the sheet runs through it. */
+const SheetGuard = createContext<(action: () => void) => void>((action) => action());
+
+export function useSheetGuard() {
+  return useContext(SheetGuard);
+}
 
 interface SheetProps {
   open: boolean;
@@ -10,6 +17,8 @@ interface SheetProps {
   onClose: () => void;
   /** Only the close button closes it: for what must be read first, a stray click or key must not. */
   explicitClose?: boolean;
+  /** A save is on its way: nothing closes the sheet, and nothing asks about it, until it ends. */
+  locked?: boolean;
   children: ReactNode;
 }
 
@@ -20,10 +29,49 @@ const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), selec
  * leaving the list. A dialog for assistive technology: the focus goes in, stays in until it closes,
  * Escape and the shade close it, and the focus returns to what opened it.
  */
-export function Sheet({ open, title, onClose, explicitClose = false, children }: SheetProps) {
+export function Sheet({ open, title, onClose, explicitClose = false, locked = false, children }: SheetProps) {
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   const opener = useRef<HTMLElement | null>(null);
+  const [dirty, setDirty] = useState(false);
+  const [confirming, setConfirming] = useState<(() => void) | null>(null);
+  const confirmRef = useRef<HTMLButtonElement>(null);
+
+  // Each time it opens it starts clean; and what is shown after a save (a link to read) holds nothing to lose.
+  useEffect(() => {
+    if (open) {
+      setDirty(false);
+      setConfirming(null);
+    }
+  }, [open]);
+  useEffect(() => {
+    if (explicitClose) {
+      setDirty(false);
+      setConfirming(null);
+    }
+  }, [explicitClose]);
+  // The question takes the focus, and gives it back to what had it when the person goes on editing.
+  const beforeConfirm = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (confirming) {
+      beforeConfirm.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      confirmRef.current?.focus();
+    }
+  }, [confirming]);
+  function keepEditing() {
+    setConfirming(null);
+    // After the question has left the page.
+    requestAnimationFrame(() => beforeConfirm.current?.focus());
+  }
+
+  const guard = useCallback(
+    (action: () => void) => {
+      if (locked) return;
+      if (dirty) setConfirming(() => action);
+      else action();
+    },
+    [dirty, locked],
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -51,11 +99,14 @@ export function Sheet({ open, title, onClose, explicitClose = false, children }:
   function keep(event: KeyboardEvent) {
     if (event.key === "Escape") {
       event.stopPropagation();
-      if (!explicitClose) onClose();
+      if (confirming) keepEditing();
+      else if (!explicitClose) guard(onClose);
       return;
     }
     if (event.key !== "Tab") return;
-    const focusable = Array.from(panelRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? []);
+    // While the question is up, the Tab key goes round inside it and nowhere else.
+    const scope = confirming ? panelRef.current?.querySelector(".sheet-confirm") : panelRef.current;
+    const focusable = Array.from(scope?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? []);
     const [first, last] = [focusable[0], focusable[focusable.length - 1]];
     const onPanel = document.activeElement === panelRef.current;
     if (event.shiftKey && (document.activeElement === first || onPanel)) {
@@ -79,7 +130,7 @@ export function Sheet({ open, title, onClose, explicitClose = false, children }:
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
-            onClick={explicitClose ? undefined : onClose}
+            onClick={explicitClose ? undefined : () => guard(onClose)}
           />
           <motion.aside
             ref={panelRef}
@@ -93,13 +144,40 @@ export function Sheet({ open, title, onClose, explicitClose = false, children }:
             exit={{ y: "100%" }}
             transition={{ type: "spring", stiffness: 380, damping: 40 }}
           >
-            <header className="sheet-head">
+            <header className="sheet-head" inert={confirming !== null || undefined}>
               <h2 id={titleId}>{title}</h2>
-              <Button type="button" variant="ghost" icon={XIcon} onClick={onClose}>
+              <Button type="button" variant="ghost" icon={XIcon} onClick={() => guard(onClose)}>
                 Fechar
               </Button>
             </header>
-            <div className="sheet-body">{children}</div>
+            <SheetGuard.Provider value={guard}>
+              <div className="sheet-body" inert={confirming !== null || undefined} onInput={() => setDirty(true)} onChange={() => setDirty(true)}>
+                {children}
+              </div>
+            </SheetGuard.Provider>
+            {confirming && (
+              <div className="sheet-confirm" role="alertdialog" aria-modal="true" aria-labelledby={`${titleId}-confirm`} aria-describedby={`${titleId}-confirm-text`}>
+                <div className="sheet-confirm-box">
+                  <h3 id={`${titleId}-confirm`}>Descartar edições?</h3>
+                  <p id={`${titleId}-confirm-text`} className="muted">O que você preencheu ainda não foi salvo.</p>
+                  <div className="form-actions">
+                    <Button ref={confirmRef} type="button" variant="ghost" onClick={keepEditing}>
+                      Voltar e editar
+                    </Button>
+                    <Button
+                      type="button"
+                      onClick={() => {
+                        const action = confirming;
+                        setConfirming(null);
+                        action();
+                      }}
+                    >
+                      Descartar e fechar
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
           </motion.aside>
         </div>
       )}

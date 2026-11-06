@@ -359,7 +359,7 @@ export function PartiesPage() {
         )}
       </section>
         {canWrite && (
-          <Sheet open={editing !== null} title={`Alterar ${shown?.name ?? ""}`} onClose={closeSheet}>
+          <Sheet open={editing !== null} locked={saving} title={`Alterar ${shown?.name ?? ""}`} onClose={closeSheet}>
             {shown !== null && (
               <PartyForm
                 key={shown.id}
