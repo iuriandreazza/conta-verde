@@ -183,7 +183,11 @@ impl FinancialEntry {
 /// One line, 1 to 200 characters: a description is read in lists and e-mails.
 fn clean_description(raw: &str) -> Result<String, DomainError> {
     let text = required_text(raw, MAX_DESCRIPTION_CHARS, DomainError::InvalidDescription)?;
-    if text.chars().any(char::is_control) {
+    // The line and paragraph separators are not control characters, and break a line all the same.
+    if text
+        .chars()
+        .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+    {
         return Err(DomainError::InvalidDescription);
     }
     Ok(text)
@@ -330,7 +334,16 @@ mod tests {
 
     #[test]
     fn a_description_is_one_line_of_one_to_two_hundred_characters() {
-        for description in ["", "   ", "a\nb", "a\tb", "a\0b", &"x".repeat(201)] {
+        for description in [
+            "",
+            "   ",
+            "a\nb",
+            "a\tb",
+            "a\0b",
+            "a\u{2028}b",
+            "a\u{2029}b",
+            &"x".repeat(201),
+        ] {
             let mut bad = draft(&[("2026-12-10", "1")]);
             bad.description = description.into();
             assert_eq!(

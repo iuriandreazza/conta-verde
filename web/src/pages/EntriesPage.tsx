@@ -27,8 +27,24 @@ import { formatDate } from "../lib/entryInstallments";
 import { usePagedList } from "../lib/usePagedList";
 import { useCanWrite } from "../lib/useCanWrite";
 
-/** How many parties the form offers to point an entry at: the first of the list, by name. */
-const PARTY_CHOICES = 200;
+/** The most records of a register the form offers to point an entry at: the first by name. */
+const MAX_CHOICES = 200;
+
+/** Reads a list page after page, up to `cap` records: a select cannot be paged. */
+async function readUpTo<T>(
+  fetchPage: (after?: string) => Promise<{ items: T[]; next_cursor: string | null }>,
+  cap: number,
+): Promise<T[]> {
+  const items: T[] = [];
+  let after: string | undefined;
+  while (items.length < cap) {
+    const page = await fetchPage(after);
+    items.push(...page.items);
+    if (page.next_cursor === null) break;
+    after = page.next_cursor;
+  }
+  return items.slice(0, cap);
+}
 
 function describeDue(entry: Entry): string {
   const [first] = entry.installments;
@@ -64,14 +80,14 @@ export function EntriesPage() {
     let current = true;
     Promise.all([
       api.listCategories(companyId),
-      api.listCostCenters(companyId, { q: "", active: "true", sort: "name" }),
-      api.listParties(companyId),
+      readUpTo((after) => api.listCostCenters(companyId, { q: "", active: "true", sort: "name" }, after), MAX_CHOICES),
+      readUpTo((after) => api.listParties(companyId, undefined, after), MAX_CHOICES),
     ])
-      .then(([categoryList, costCenterPage, partyPage]) => {
+      .then(([categoryList, costCenterList, partyList]) => {
         if (current) {
           setCategories(categoryList.items);
-          setCostCenters(costCenterPage.items);
-          setParties(partyPage.items.slice(0, PARTY_CHOICES).map(({ id, name }) => ({ id, name })));
+          setCostCenters(costCenterList);
+          setParties(partyList.map(({ id, name }) => ({ id, name })));
           setTargetsLoaded(true);
         }
       })

@@ -3093,6 +3093,23 @@ describe("financial entries", () => {
     expect(form.getByLabelText("Valor da parcela 1")).toHaveValue("89,90");
   });
 
+  it("offers every party, not only the first page of them, to point an entry at", async () => {
+    mockApi(
+      answer([], (url) => {
+        if (!url.includes("/parties")) return undefined;
+        const party = (name: string) => ({ ...profile, id: name, name });
+        return url.includes("after=p1")
+          ? { status: 200, body: { items: [party("Zélia")], next_cursor: null } }
+          : { status: 200, body: { items: [party("Ana")], next_cursor: "p1" } };
+      }),
+    );
+    renderAt("/companies/c1/entries");
+    const form = await formPanel("Novo lançamento");
+
+    const parties = within(form.getByLabelText("Cliente ou fornecedor")).getAllByRole("option");
+    expect(parties.map((option) => option.textContent)).toEqual(["Nenhum", "Ana", "Zélia"]);
+  });
+
   it("narrows the list by what is typed and chosen, and starts over from the first page", async () => {
     const fetchMock = mockApi(answer([entry]));
     renderAt("/companies/c1/entries");
