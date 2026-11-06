@@ -18,3 +18,15 @@ export function difference(minuend: string, subtrahend: string): string {
   const cents = (toCents(minuend) ?? 0n) - (toCents(subtrahend) ?? 0n);
   return cents < 0n ? `-${centsToApi(-cents)}` : centsToApi(cents);
 }
+
+/** The sum of amounts that may be negative, as the decimal the page prints, or `null` while one is not an amount. */
+export function sumSigned(typed: string[]): string | null {
+  let total = 0n;
+  for (const text of typed) {
+    const negative = text.trim().startsWith("-");
+    const cents = toCents(negative ? text.trim().slice(1) : text);
+    if (cents === null) return null;
+    total += negative ? -cents : cents;
+  }
+  return total < 0n ? `-${centsToApi(-total)}` : centsToApi(total);
+}

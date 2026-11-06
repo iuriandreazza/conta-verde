@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 use conta_verde_application::{
-    DateCursor, RepositoryError, StockFloor, StockMovementQuery, StockMovementRepository,
-    StockSettingsRepository, ensure_audit_describes,
+    DateCursor, MovementTotals, RepositoryError, StockFloor, StockMovementQuery,
+    StockMovementRepository, StockSettingsRepository, ensure_audit_describes,
 };
 use conta_verde_domain::{
     AuditEntity, AuditEntry, AuditRecord, CalendarDate, CompanyId, Decimal, ProductId,
@@ -180,6 +180,53 @@ impl StockMovementRepository for PostgresStockMovementRepository {
         let balances = read_balances(&mut tx, company_id, products, on).await?;
         tx.commit().await.map_err(storage_error)?;
         Ok(balances)
+    }
+
+    async fn totals_by_product(
+        &self,
+        company_id: CompanyId,
+        from: CalendarDate,
+        to: CalendarDate,
+    ) -> Result<Vec<(ProductId, MovementTotals)>, RepositoryError> {
+        let mut tx = snapshot(&self.pool).await?;
+        let rows = sqlx::query(
+            "SELECT product_id, \
+               COALESCE(SUM(quantity) FILTER (WHERE kind = 'in'), 0)::text AS in_quantity, \
+               COALESCE(SUM(value) FILTER (WHERE kind = 'in'), 0)::text AS in_value, \
+               COALESCE(SUM(quantity) FILTER (WHERE kind = 'out'), 0)::text AS out_quantity, \
+               COALESCE(SUM(value) FILTER (WHERE kind = 'out'), 0)::text AS out_value, \
+               COALESCE(SUM(quantity) FILTER (WHERE kind = 'adjustment'), 0)::text AS adj_quantity, \
+               COALESCE(SUM(value) FILTER (WHERE kind = 'adjustment'), 0)::text AS adj_value \
+             FROM stock_movements \
+             WHERE company_id = $1 AND occurred_on BETWEEN CAST($2 AS DATE) AND CAST($3 AS DATE) \
+             GROUP BY product_id",
+        )
+        .bind(company_id.as_uuid())
+        .bind(from.to_string())
+        .bind(to.to_string())
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(storage_error)?;
+        tx.commit().await.map_err(storage_error)?;
+        let figure = |row: &PgRow, column: &str| -> Result<Decimal, RepositoryError> {
+            let raw: String = row.try_get(column).map_err(storage_error)?;
+            decimal(&raw)
+        };
+        rows.iter()
+            .map(|row| {
+                Ok((
+                    ProductId::from_uuid(row.try_get("product_id").map_err(storage_error)?),
+                    MovementTotals {
+                        entered_quantity: figure(row, "in_quantity")?,
+                        entered_value: figure(row, "in_value")?,
+                        exited_quantity: figure(row, "out_quantity")?,
+                        exited_value: figure(row, "out_value")?,
+                        adjusted_quantity: figure(row, "adj_quantity")?,
+                        adjusted_value: figure(row, "adj_value")?,
+                    },
+                ))
+            })
+            .collect()
     }
 
     async fn find(
@@ -540,6 +587,33 @@ mod tests {
             company,
             other_company,
             &entry_seed,
+            &seed,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn reports_the_stock_valuation_and_its_movements() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let other_company = contract::create_company(&pool).await;
+        let seed = contract::seed_sales_records(
+            &PostgresPartyRepository::new(pool.clone()),
+            &PostgresProductRepository::new(pool.clone()),
+            &PostgresPaymentTermRepository::new(pool.clone()),
+            company,
+        )
+        .await;
+        let stock = StockService::new(
+            PostgresStockMovementRepository::new(pool.clone()),
+            PostgresProductRepository::new(pool.clone()),
+            PostgresStockSettingsRepository::new(pool.clone()),
+        );
+        contract::reports_the_stock_valuation_and_its_movements(
+            &stock,
+            company,
+            other_company,
             &seed,
         )
         .await;

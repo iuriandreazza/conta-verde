@@ -1308,6 +1308,54 @@ export interface InvoiceEntry {
   already_entered: boolean;
 }
 
+export interface StockValuationRow {
+  product_id: string;
+  name: string;
+  sku: string | null;
+  unit: string;
+  quantity: string;
+  /** The value over the quantity with six decimals; `null` without something on hand. */
+  average_cost: string | null;
+  value: string;
+  /** Its part of the total value, in percent with at most two decimals. */
+  share: string;
+}
+
+/** What the stock was worth on a day, by product and in all (ADR 0058). */
+export interface StockValuation {
+  on: string;
+  total: string;
+  /** How many products had less than nothing on hand. */
+  negative: number;
+  /** Biggest value first. */
+  rows: StockValuationRow[];
+}
+
+export interface StockMovementSummaryRow {
+  product_id: string;
+  name: string;
+  sku: string | null;
+  unit: string;
+  opening_quantity: string;
+  opening_value: string;
+  entered_quantity: string;
+  entered_value: string;
+  /** What went out, as positive numbers. */
+  exited_quantity: string;
+  exited_value: string;
+  /** What counts and adjustments added; negative when they took away. */
+  adjusted_quantity: string;
+  adjusted_value: string;
+  closing_quantity: string;
+  closing_value: string;
+}
+
+export interface StockMovementSummary {
+  from: string;
+  to: string;
+  items: StockMovementSummaryRow[];
+}
+
 export type BillingCycle = "monthly" | "bimonthly" | "quarterly" | "semiannual" | "yearly";
 export type ContractStatus = "active" | "paused" | "terminated";
 
@@ -2066,6 +2114,10 @@ export const api = {
       body: file,
     });
   },
+  stockValuation: (companyId: string, on: string) =>
+    request<StockValuation>(`/companies/${companyId}/stock-reports/valuation?${new URLSearchParams({ on })}`),
+  stockMovementSummary: (companyId: string, from: string, to: string) =>
+    request<StockMovementSummary>(`/companies/${companyId}/stock-reports/movements?${new URLSearchParams({ from, to })}`),
   /** The OFX file goes as it is, bytes and all: the API reads the charset. */
   importStatement: (companyId: string, accountId: string, file: File, dryRun: boolean) =>
     request<ImportResult>(

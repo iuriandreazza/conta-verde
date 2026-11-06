@@ -14249,3 +14249,130 @@ pub async fn enters_a_supplier_invoice_once<P, E, F, R, T, M, Pr, St>(
         3
     );
 }
+
+/// The position, valuation and movements of the stock on a day and over a span ([ADR 0058]).
+#[allow(clippy::too_many_lines)]
+pub async fn reports_the_stock_valuation_and_its_movements<M, P, St>(
+    stock: &StockService<M, P, St>,
+    company: CompanyId,
+    other_company: CompanyId,
+    seed: &SalesSeed,
+) where
+    M: StockMovementRepository,
+    P: ProductRepository,
+    St: StockSettingsRepository,
+{
+    use conta_verde_domain::StockMovementKind::{Adjustment, In, Out};
+    let ana = actor();
+    let day = |text: &str| CalendarDate::parse(text).unwrap();
+    let entered = |product: ProductId, quantity: &str, unit_cost: &str, when: &str| {
+        let mut draft = stock_draft(product, In, quantity, when);
+        draft.unit_cost = Some(unit_cost.into());
+        draft
+    };
+    for draft in [
+        entered(seed.product, "10", "5", "2026-11-01"),
+        entered(seed.product, "10", "7", "2026-11-06"),
+        stock_draft(seed.product, Out, "5", "2026-11-06"),
+        entered(seed.other_product, "4", "3", "2026-11-10"),
+        stock_draft(seed.product, Adjustment, "-1", "2026-11-12"),
+    ] {
+        stock.record(company, &ana, draft).await.unwrap();
+    }
+    let rows = |valuation: &conta_verde_application::StockValuation| -> Vec<(String, String, String, String)> {
+        valuation
+            .rows
+            .iter()
+            .map(|row| {
+                (
+                    row.product.name().to_owned(),
+                    row.balance.quantity().to_string(),
+                    row.balance.value().to_string(),
+                    row.share.to_string(),
+                )
+            })
+            .collect()
+    };
+
+    // What the stock was worth on a day, by product (biggest value first) and in all.
+    let early = stock.valuation(company, day("2026-11-06")).await.unwrap();
+    assert_eq!(
+        rows(&early),
+        [("Café".into(), "15".into(), "90".into(), "100".into())]
+    );
+    assert_eq!(early.total.to_string(), "90");
+    let later = stock.valuation(company, day("2026-11-10")).await.unwrap();
+    assert_eq!(
+        rows(&later),
+        [
+            ("Café".into(), "15".into(), "90".into(), "88.24".into()),
+            ("Pão".into(), "4".into(), "12".into(), "11.76".into())
+        ]
+    );
+    assert_eq!(later.total.to_string(), "102");
+    let before = stock.valuation(company, day("2026-10-01")).await.unwrap();
+    assert!(before.rows.is_empty());
+    assert_eq!(before.total.to_string(), "0");
+    assert!(
+        stock
+            .valuation(other_company, day("2026-11-10"))
+            .await
+            .unwrap()
+            .rows
+            .is_empty()
+    );
+
+    // What moved over a span, with what each product had before and after: the exits as positive numbers.
+    let summary = stock
+        .movement_summary(company, day("2026-11-05"), day("2026-11-12"))
+        .await
+        .unwrap();
+    let figures = |row: &conta_verde_application::MovementSummary| {
+        [
+            row.opening.quantity().to_string(),
+            row.opening.value().to_string(),
+            row.entered_quantity.to_string(),
+            row.entered_value.to_string(),
+            row.exited_quantity.to_string(),
+            row.exited_value.to_string(),
+            row.adjusted_quantity.to_string(),
+            row.adjusted_value.to_string(),
+            row.closing.quantity().to_string(),
+            row.closing.value().to_string(),
+        ]
+    };
+    let names: Vec<&str> = summary.iter().map(|row| row.product.name()).collect();
+    assert_eq!(names, ["Café", "Pão"]);
+    assert_eq!(
+        figures(&summary[0]),
+        ["10", "50", "10", "70", "5", "30", "-1", "-6", "14", "84"]
+    );
+    assert_eq!(
+        figures(&summary[1]),
+        ["0", "0", "4", "12", "0", "0", "0", "0", "4", "12"]
+    );
+    // A span without movements lists nothing, and a span that is not one is refused.
+    assert!(
+        stock
+            .movement_summary(company, day("2026-12-01"), day("2026-12-31"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        stock
+            .movement_summary(other_company, day("2026-11-05"), day("2026-11-12"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    for (from, to) in [("2026-11-12", "2026-11-05"), ("2025-01-01", "2026-11-12")] {
+        assert!(matches!(
+            stock
+                .movement_summary(company, day(from), day(to))
+                .await
+                .unwrap_err(),
+            ApplicationError::InvalidSpan(_)
+        ));
+    }
+}

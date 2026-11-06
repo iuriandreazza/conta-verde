@@ -30,6 +30,7 @@ import { ReportsPage } from "./pages/ReportsPage";
 import { ReconciliationPage } from "./pages/ReconciliationPage";
 import { RecurrencesPage } from "./pages/RecurrencesPage";
 import { SalesPage } from "./pages/SalesPage";
+import { StockReportsPage } from "./pages/StockReportsPage";
 import { StockPage } from "./pages/StockPage";
 import { TransfersPage } from "./pages/TransfersPage";
 
@@ -52,6 +53,7 @@ export function App() {
           <Route path="/companies/:companyId/purchases" element={<PurchasesPage />} />
           <Route path="/companies/:companyId/stock" element={<StockPage />} />
           <Route path="/companies/:companyId/inventory-counts" element={<InventoryCountsPage />} />
+          <Route path="/companies/:companyId/stock-reports" element={<StockReportsPage />} />
           <Route path="/companies/:companyId/contracts" element={<ContractsPage />} />
           <Route path="/companies/:companyId/commissions" element={<CommissionsPage />} />
           <Route path="/companies/:companyId/price-lists" element={<PriceListsPage />} />

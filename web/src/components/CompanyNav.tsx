@@ -115,6 +115,7 @@ const SECTIONS: NavSection[] = [
       { path: "/purchases", label: "Compras", icon: BriefcaseBusinessIcon },
       { path: "/stock", label: "Estoque", icon: BoxIcon },
       { path: "/inventory-counts", label: "Inventários", icon: LayersIcon },
+      { path: "/stock-reports", label: "Relatórios de estoque", icon: FileTextIcon },
     ],
   },
   {

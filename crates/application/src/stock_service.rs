@@ -130,6 +130,47 @@ pub struct StockAlert {
     pub quantity: Decimal,
 }
 
+/// A product in the valuation of the stock on a day.
+#[derive(Debug, Clone)]
+pub struct ValuationRow {
+    pub product: Product,
+    pub balance: StockBalance,
+    /// Its part of the total value, in percent with at most two decimals; 0 when the total is not above 0.
+    pub share: Decimal,
+}
+
+/// What the stock was worth on a day, by product and in all ([ADR 0058]).
+#[derive(Debug, Clone)]
+pub struct StockValuation {
+    pub on: CalendarDate,
+    /// The products that had something on hand or some value, biggest value first, then by name.
+    pub rows: Vec<ValuationRow>,
+    /// The sum of the values, in cents.
+    pub total: Decimal,
+    /// How many of the rows had less than nothing on hand.
+    pub negative: usize,
+}
+
+/// What happened to a product's stock over a span, with what it had before and after.
+#[derive(Debug, Clone)]
+pub struct MovementSummary {
+    pub product: Product,
+    pub opening: StockBalance,
+    /// What came in, as positive quantity and value.
+    pub entered_quantity: Decimal,
+    pub entered_value: Decimal,
+    /// What went out, as positive quantity and value.
+    pub exited_quantity: Decimal,
+    pub exited_value: Decimal,
+    /// What counts and adjustments added (negative when they took away).
+    pub adjusted_quantity: Decimal,
+    pub adjusted_value: Decimal,
+    pub closing: StockBalance,
+}
+
+/// The longest span a movements report covers, in days.
+const MAX_REPORT_DAYS: i64 = 366;
+
 /// One movement to write, before it is valued.
 struct NewMovement {
     draft: StockMovementDraft,
@@ -367,6 +408,136 @@ where
             .map(|(product, (_, balance))| StockPosition { product, balance })
             .collect();
         Ok(StockPositionPage { items, next })
+    }
+
+    /// Every product of kind product, by name: the products are read a page at a time.
+    async fn all_products(&self, company_id: CompanyId) -> Result<Vec<Product>, ApplicationError> {
+        let query = ProductQuery::default().of_kind(ProductKind::Product);
+        let mut all = Vec::new();
+        let mut after: Option<NameCursor> = None;
+        loop {
+            let page = self
+                .products
+                .list_by_company(company_id, &query, after.as_ref(), 200 + 1)
+                .await?;
+            let (products, next): (Vec<Product>, Option<NameCursor>) = split_page(page, 200);
+            all.extend(products);
+            match next {
+                Some(cursor) => after = Some(cursor),
+                None => return Ok(all),
+            }
+        }
+    }
+
+    /// What the stock was worth on a day: each product with something on hand or some value, and the total.
+    pub async fn valuation(
+        &self,
+        company_id: CompanyId,
+        on: CalendarDate,
+    ) -> Result<StockValuation, ApplicationError> {
+        let products = self.all_products(company_id).await?;
+        let ids: Vec<ProductId> = products.iter().map(Product::id).collect();
+        let balances = self.movements.balances(company_id, &ids, Some(on)).await?;
+        let mut held: Vec<(Product, StockBalance)> = products
+            .into_iter()
+            .zip(balances)
+            .map(|(product, (_, balance))| (product, balance))
+            .filter(|(_, balance)| !balance.quantity().is_zero() || !balance.value().is_zero())
+            .collect();
+        held.sort_by(|(a, x), (b, y)| {
+            y.value()
+                .cmp(&x.value())
+                .then_with(|| a.name().to_lowercase().cmp(&b.name().to_lowercase()))
+                .then_with(|| a.id().as_uuid().cmp(&b.id().as_uuid()))
+        });
+        let total: Decimal = held.iter().map(|(_, balance)| balance.value()).sum();
+        let negative = held
+            .iter()
+            .filter(|(_, balance)| balance.quantity() < Decimal::ZERO)
+            .count();
+        let rows = held
+            .into_iter()
+            .map(|(product, balance)| {
+                let share = if total > Decimal::ZERO {
+                    (balance.value() * Decimal::ONE_HUNDRED / total)
+                        .round_dp(2)
+                        .normalize()
+                } else {
+                    Decimal::ZERO
+                };
+                ValuationRow {
+                    product,
+                    balance,
+                    share,
+                }
+            })
+            .collect();
+        Ok(StockValuation {
+            on,
+            rows,
+            total: total.normalize(),
+            negative,
+        })
+    }
+
+    /// What moved of each product from a day through a day: what came in, went out and was adjusted, with what the
+    /// product had the day before and at the end. Only products with a movement in the span are listed, by name.
+    pub async fn movement_summary(
+        &self,
+        company_id: CompanyId,
+        from: CalendarDate,
+        to: CalendarDate,
+    ) -> Result<Vec<MovementSummary>, ApplicationError> {
+        if from > to {
+            return Err(ApplicationError::InvalidSpan("from is after to"));
+        }
+        if to.to_unix_days() - from.to_unix_days() >= MAX_REPORT_DAYS {
+            return Err(ApplicationError::InvalidSpan("at most 366 days"));
+        }
+        let totals = self
+            .movements
+            .totals_by_product(company_id, from, to)
+            .await?;
+        let moved: Vec<ProductId> = totals.iter().map(|(id, _)| *id).collect();
+        let closing = self
+            .movements
+            .balances(company_id, &moved, Some(to))
+            .await?;
+        let opening = match from.pred() {
+            Some(before) => {
+                self.movements
+                    .balances(company_id, &moved, Some(before))
+                    .await?
+            }
+            None => moved.iter().map(|id| (*id, StockBalance::EMPTY)).collect(),
+        };
+        let products = self.all_products(company_id).await?;
+        let mut rows = Vec::with_capacity(totals.len());
+        for (((id, sums), (_, opened)), (_, closed)) in totals.into_iter().zip(opening).zip(closing)
+        {
+            let Some(product) = products.iter().find(|product| product.id() == id) else {
+                continue;
+            };
+            rows.push(MovementSummary {
+                product: product.clone(),
+                opening: opened,
+                entered_quantity: sums.entered_quantity.normalize(),
+                entered_value: sums.entered_value.normalize(),
+                exited_quantity: (-sums.exited_quantity).normalize(),
+                exited_value: (-sums.exited_value).normalize(),
+                adjusted_quantity: sums.adjusted_quantity.normalize(),
+                adjusted_value: sums.adjusted_value.normalize(),
+                closing: closed,
+            });
+        }
+        rows.sort_by(|a, b| {
+            a.product
+                .name()
+                .to_lowercase()
+                .cmp(&b.product.name().to_lowercase())
+                .then_with(|| a.product.id().as_uuid().cmp(&b.product.id().as_uuid()))
+        });
+        Ok(rows)
     }
 
     /// What a product has now.
