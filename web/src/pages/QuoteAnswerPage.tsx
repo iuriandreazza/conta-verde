@@ -124,13 +124,15 @@ export function QuoteAnswerPage() {
             <FileTextIcon size={16} aria-hidden /> Baixar em PDF
           </a>
         </p>
-        {waiting && quote.expired ? (
-          <Notice tone="warning" message="A validade deste orçamento acabou: peça um novo a quem enviou." />
-        ) : waiting ? (
+        {waiting ? (
           <div className="form-actions">
-            <Button icon={CheckIcon} pending={answering === "approve"} disabled={answering !== null} onClick={() => void answer("approve")}>
-              Aprovar orçamento
-            </Button>
+            {quote.expired ? (
+              <Notice tone="warning" message="A validade deste orçamento acabou: ele já não pode ser aprovado. Peça um novo a quem enviou." />
+            ) : (
+              <Button icon={CheckIcon} pending={answering === "approve"} disabled={answering !== null} onClick={() => void answer("approve")}>
+                Aprovar orçamento
+              </Button>
+            )}
             <Button variant="ghost" pending={answering === "decline"} disabled={answering !== null} onClick={() => void answer("decline")}>
               Recusar
             </Button>

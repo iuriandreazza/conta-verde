@@ -113,18 +113,20 @@ pub fn lines_total(lines: &[Line]) -> Decimal {
     lines.iter().map(Line::total).sum::<Decimal>().normalize()
 }
 
-/// The lines in one canonical text, `product:quantity:unit_price:discount` separated by commas, which
-/// is what the audit trail records: the same lines always read the same.
+/// The lines in one canonical text, `product:quantity:unit_price:discount:description` separated by commas
+/// (the description, which may hold anything, comes last and is read to the end of its entry by the page that
+/// shows the trail), which is what the audit trail records: the same lines always read the same.
 pub(crate) fn lines_text(lines: &[Line]) -> String {
     lines
         .iter()
         .map(|line| {
             format!(
-                "{}:{}:{}:{}",
+                "{}:{}:{}:{}:{}",
                 line.product_id.as_uuid(),
                 line.quantity,
                 line.unit_price,
-                line.discount
+                line.discount,
+                line.description
             )
         })
         .collect::<Vec<_>>()

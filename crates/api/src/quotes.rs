@@ -277,6 +277,7 @@ pub(crate) async fn send_quote<X: Ports>(
             parse_id(&id)?,
             &request.to,
             &company_name,
+            customer_today(),
         )
         .await?;
     Ok(Json(SentResponse {
@@ -373,8 +374,30 @@ pub(crate) struct PublicQuoteResponse {
     payment_term: Option<String>,
     notes: Option<String>,
     status: &'static str,
-    lines: Vec<LineResponse>,
+    lines: Vec<PublicLineResponse>,
     total: String,
+}
+
+/// A line as the customer sees it: no id of the company's books.
+#[derive(Serialize)]
+pub(crate) struct PublicLineResponse {
+    description: String,
+    quantity: String,
+    unit_price: String,
+    discount: String,
+    total: String,
+}
+
+impl From<&Line> for PublicLineResponse {
+    fn from(line: &Line) -> Self {
+        Self {
+            description: line.description().to_owned(),
+            quantity: line.quantity().to_string(),
+            unit_price: line.unit_price().to_string(),
+            discount: line.discount().to_string(),
+            total: line.total().to_string(),
+        }
+    }
 }
 
 async fn public_view<X: Ports>(
@@ -392,7 +415,7 @@ async fn public_view<X: Ports>(
         payment_term: print.payment_term,
         notes: print.notes,
         status: quote.status().as_str(),
-        lines: quote.lines().iter().map(LineResponse::from).collect(),
+        lines: quote.lines().iter().map(PublicLineResponse::from).collect(),
         total: quote.total().to_string(),
     }))
 }
@@ -433,4 +456,16 @@ pub(crate) async fn decline_quote<X: Ports>(
 /// Names are as long as a person typed them; a line of the PDF is not.
 fn clipped(name: &str) -> String {
     name.chars().take(70).collect()
+}
+
+/// What the public routes add to every answer: it holds a customer's data under a secret in the path, so
+/// it is not kept by caches, and the page never hands the token on in a `Referer`.
+pub(crate) async fn keep_private(mut response: Response) -> Response {
+    let headers = response.headers_mut();
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    response
 }

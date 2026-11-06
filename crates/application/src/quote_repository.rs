@@ -104,7 +104,6 @@ impl QuoteQuery {
 /// What a write does to the link that lets the customer answer a quote.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LinkChange {
-    Keep,
     /// The link stops working: what it showed is not what the quote is any more.
     Revoke,
     /// A new link, of which only the digest of the token is kept.
@@ -144,6 +143,17 @@ pub trait QuoteRepository: Send + Sync {
         quote: &Quote,
         expected: QuoteStatus,
         link: LinkChange,
+        audit: &AuditEntry,
+    ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
+
+    /// Records the customer's answer: only the status changes, and only if the quote is still `sent` **and
+    /// its link is still the one with this digest**. A quote that was changed and sent again meanwhile
+    /// has another link, so an answer to what the customer saw before is `QuoteChanged`, never an
+    /// approval of something else, and the content is never rewritten from the answer's snapshot.
+    fn answer(
+        &self,
+        quote: &Quote,
+        link_digest: &str,
         audit: &AuditEntry,
     ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
 

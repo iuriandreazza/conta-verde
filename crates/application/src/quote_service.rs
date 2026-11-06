@@ -86,12 +86,18 @@ where
     ) -> Result<Quote, ApplicationError> {
         let before = self.find(company_id, id).await?;
         let after = before.replaced_with(draft)?;
-        let changes = quote_changes(&before, &after);
-        if changes.is_empty() {
+        // Decided on the quote itself, not on what the trail would say: a change the trail has no field
+        // for must not be dropped in silence.
+        if after == before {
             return Ok(before);
         }
         self.check_references(&after, Some(&before)).await?;
-        let audit = audit_entry(&after, actor, AuditAction::Updated, changes);
+        let audit = audit_entry(
+            &after,
+            actor,
+            AuditAction::Updated,
+            quote_changes(&before, &after),
+        );
         self.repository
             .update(&after, before.status(), LinkChange::Revoke, &audit)
             .await
@@ -108,16 +114,22 @@ where
         id: QuoteId,
         to: &str,
         company_name: &str,
+        today: CalendarDate,
     ) -> Result<SentQuote, ApplicationError> {
         let to = Email::parse(to)?;
         let before = self.find(company_id, id).await?;
         let after = before.sent(actor.clone())?;
+        // A link to a quote that cannot be approved is no use to anyone.
+        if before.is_expired_on(today) {
+            return Err(ApplicationError::QuoteExpired);
+        }
         let token = self.secrets.new_token();
         let mut changes = quote_changes(&before, &after);
         changes.push(FieldChange {
             field: "link".to_owned(),
             from: None,
-            to: Some(format!("sent to {}", to.as_str())),
+            // Not the address: the trail is kept for good and the address is a third party's.
+            to: Some("made and sent".to_owned()),
         });
         let audit = audit_entry(&after, actor, AuditAction::Updated, changes);
         self.repository
@@ -171,7 +183,8 @@ where
     ) -> Result<Quote, ApplicationError> {
         let before = self.by_link(token).await?;
         let after = before.answered(approved)?;
-        if before.is_expired_on(today) {
+        // A quote past its validity is declined all the same: only an approval is refused.
+        if approved && before.is_expired_on(today) {
             return Err(ApplicationError::QuoteExpired);
         }
         let Some(sent_by) = before.sent_by() else {
@@ -185,7 +198,7 @@ where
         });
         let audit = audit_entry(&after, sent_by, AuditAction::Updated, changes);
         self.repository
-            .update(&after, before.status(), LinkChange::Keep, &audit)
+            .answer(&after, &self.secrets.digest_token(token), &audit)
             .await
             .map_err(changed_or_missing)?;
         Ok(after)

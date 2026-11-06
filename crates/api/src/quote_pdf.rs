@@ -8,6 +8,8 @@ const LINE_HEIGHT: u32 = 15;
 /// Where a page stops being written on and the next begins.
 const BOTTOM: u32 = 70;
 const NOTES_WIDTH: usize = 95;
+/// Characters of a description that fit before the figures.
+const DESCRIPTION_WIDTH: usize = 40;
 
 /// One line of the quote as it is printed: every figure already written the way a person reads it.
 pub(crate) struct PdfLine {
@@ -61,19 +63,27 @@ fn encode(text: &str) -> Vec<u8> {
                 bytes.push(b);
             }
             Ok(b) if !c.is_control() => bytes.push(b),
-            _ => bytes.push(b'?'),
+            _ => bytes.push(winansi_extra(c).unwrap_or(b'?')),
         }
     }
     bytes
 }
 
-/// The text cut to fit a column, with an ellipsis when it did not.
-fn clipped(text: &str, width: usize) -> String {
-    if text.chars().count() <= width {
-        return text.to_owned();
-    }
-    let kept: String = text.chars().take(width.saturating_sub(1)).collect();
-    format!("{kept}…")
+/// The characters of Windows-1252 that are not in Latin-1, which people do type: the euro sign, an
+/// ellipsis, curly quotes, a bullet and dashes.
+fn winansi_extra(c: char) -> Option<u8> {
+    Some(match c {
+        '€' => 0x80,
+        '…' => 0x85,
+        '‘' => 0x91,
+        '’' => 0x92,
+        '“' => 0x93,
+        '”' => 0x94,
+        '•' => 0x95,
+        '–' => 0x96,
+        '—' => 0x97,
+        _ => return None,
+    })
 }
 
 /// The text broken into lines of at most `width` characters at spaces; a word longer than a line is cut.
@@ -180,25 +190,35 @@ pub(crate) fn render(quote: &PdfQuote) -> Vec<u8> {
     pages.next_line();
     pages.next_line();
     pages.text(MARGIN, 10, true, "Descrição");
-    pages.text(300, 10, true, "Qtd.");
-    pages.text(345, 10, true, "Preço");
-    pages.text(420, 10, true, "Desconto");
-    pages.text(490, 10, true, "Total");
+    pages.text(260, 10, true, "Qtd.");
+    pages.text(320, 10, true, "Preço");
+    pages.text(395, 10, true, "Desconto");
+    pages.text(470, 10, true, "Total");
     pages.rule();
     for line in &quote.lines {
         pages.next_line();
-        pages.text(MARGIN, 10, false, &clipped(&line.description, 48));
-        pages.text(300, 10, false, &clipped(&line.quantity, 9));
-        pages.text(345, 10, false, &clipped(&line.unit_price, 12));
-        pages.text(420, 10, false, &clipped(&line.discount, 12));
-        pages.text(490, 10, false, &clipped(&line.total, 14));
+        // The figures are never cut: a wrong figure in a document for a customer is worse than a long line.
+        // What is long is the description, which goes on over as many rows as it needs.
+        pages.text(260, 10, false, &line.quantity);
+        pages.text(320, 10, false, &line.unit_price);
+        pages.text(395, 10, false, &line.discount);
+        pages.text(470, 10, false, &line.total);
+        for (row, text) in wrapped(&line.description, DESCRIPTION_WIDTH)
+            .iter()
+            .enumerate()
+        {
+            if row > 0 {
+                pages.next_line();
+            }
+            pages.text(MARGIN, 10, false, text);
+        }
     }
     pages.next_line();
     pages.rule();
     pages.gap();
     pages.next_line();
-    pages.text(420, 11, true, "Total");
-    pages.text(490, 11, true, &format!("R$ {}", quote.total));
+    pages.text(395, 11, true, "Total");
+    pages.text(470, 11, true, &format!("R$ {}", quote.total));
     if let Some(notes) = &quote.notes {
         pages.next_line();
         pages.next_line();
@@ -330,8 +350,9 @@ mod tests {
     fn encodes_accents_and_escapes_what_a_pdf_string_reserves() {
         assert_eq!(encode("Café"), [b'C', b'a', b'f', 0xE9]);
         assert_eq!(encode("a(b)c\\"), b"a\\(b\\)c\\\\");
-        // Not in the font's encoding: a question mark, never a broken file.
-        assert_eq!(encode("€ ok"), b"? ok");
+        // The Windows-1252 extras are written as such; what has no byte at all is a question mark.
+        assert_eq!(encode("€ … ok"), b"\x80 \x85 ok");
+        assert_eq!(encode("日 ok"), b"? ok");
         assert_eq!(encode("a\nb"), b"a?b");
     }
 
@@ -384,11 +405,17 @@ mod tests {
     }
 
     #[test]
-    fn clips_and_wraps_long_text() {
-        assert_eq!(clipped("abcdef", 4), "abc…");
-        assert_eq!(clipped("abc", 4), "abc");
+    fn wraps_long_text_and_never_cuts_a_figure() {
         assert_eq!(wrapped("um dois três", 8), ["um dois", "três"]);
         assert_eq!(wrapped("a\n\nb", 8), ["a", "", "b"]);
         assert_eq!(wrapped("abcdefghij", 4), ["abcd"]);
+
+        let mut long = quote(1);
+        long.lines[0].description = "descrição muito longa ".repeat(10);
+        long.lines[0].unit_price = brl("123456.123456");
+        let pdf = render(&long);
+        assert!(contains(&pdf, b"123.456,123456"));
+        // The description goes over several rows instead of being cut.
+        assert!(contains(&pdf, b"longa descri\xE7\xE3o muito longa"));
     }
 }

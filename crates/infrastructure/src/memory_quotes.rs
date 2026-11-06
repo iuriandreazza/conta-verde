@@ -86,10 +86,35 @@ impl QuoteRepository for InMemoryQuoteRepository {
         // The number is the store's, not the draft's.
         *stored = quote.clone().with_number(stored.number());
         match link {
-            LinkChange::Keep => {}
             LinkChange::Revoke => *stored_link = None,
             LinkChange::Set(digest) => *stored_link = Some(digest),
         }
+        state.audit.record(audit);
+        Ok(())
+    }
+
+    async fn answer(
+        &self,
+        quote: &Quote,
+        link_digest: &str,
+        audit: &AuditEntry,
+    ) -> Result<(), RepositoryError> {
+        ensure_audit_describes(audit, quote)?;
+        let mut state = self.state.lock().expect("repository lock poisoned");
+        let (stored, _) = state
+            .quotes
+            .iter_mut()
+            .find(|(stored, link)| {
+                stored.company_id() == quote.company_id()
+                    && stored.id() == quote.id()
+                    && stored.status() == QuoteStatus::Sent
+                    && link.as_deref() == Some(link_digest)
+            })
+            .ok_or(RepositoryError::QuoteChanged)?;
+        // Only the status moves: what the customer saw stays as it is.
+        *stored = stored
+            .answered(quote.status() == QuoteStatus::Approved)
+            .map_err(|_| RepositoryError::QuoteChanged)?;
         state.audit.record(audit);
         Ok(())
     }
@@ -166,13 +191,22 @@ mod tests {
         contract::sales_references_say_what_is_usable(&references(), company, other_company, &seed)
             .await;
         let emails = InMemoryEmailSender::default();
+        let store = InMemoryQuoteRepository::default();
         let service = QuoteService::new(
-            InMemoryQuoteRepository::default(),
+            store.clone(),
             references(),
             emails.clone(),
             Argon2SecretService::new().unwrap(),
             "https://erp.example",
         );
-        contract::runs_the_quote_lifecycle(&service, &emails, company, other_company, &seed).await;
+        contract::runs_the_quote_lifecycle(
+            &service,
+            &store,
+            &emails,
+            company,
+            other_company,
+            &seed,
+        )
+        .await;
     }
 }

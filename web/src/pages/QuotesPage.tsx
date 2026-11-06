@@ -513,8 +513,9 @@ function displayValue(field: string, value: string | null, names: Map<string, st
     return value
       .split(",")
       .map((line) => {
-        const [product, quantity, price, discount] = line.split(":");
-        const name = names.get(product) ?? "item";
+        // The description comes last and may hold colons of its own.
+        const [product, quantity, price, discount, ...description] = line.split(":");
+        const name = description.length > 0 ? description.join(":") : (names.get(product) ?? "item");
         return `${name} × ${quantity.replace(".", ",")} a ${formatMoney(price)}${discount === "0" ? "" : ` (− ${formatMoney(discount)})`}`;
       })
       .join("; ");

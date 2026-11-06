@@ -260,7 +260,7 @@ describe("quotes", () => {
                   changes: [
                     { field: "customer_id", from: null, to: "p1" },
                     { field: "status", from: null, to: "draft" },
-                    { field: "lines", from: null, to: "pr1:3:10.1:0.3" },
+                    { field: "lines", from: null, to: "pr1:3:10.1:0.3:Café: o torrado" },
                   ],
                 },
               ],
@@ -273,7 +273,7 @@ describe("quotes", () => {
     const history = within(await screen.findByRole("region", { name: "Histórico do orçamento 7" }));
     expect(await history.findByText("Mercado Boa Compra")).toBeInTheDocument();
     expect(history.getByText("Rascunho")).toBeInTheDocument();
-    expect(history.getByText("Café 500g × 3 a R$ 10,10 (− R$ 0,30)")).toBeInTheDocument();
+    expect(history.getByText("Café: o torrado × 3 a R$ 10,10 (− R$ 0,30)")).toBeInTheDocument();
   });
 });
 
@@ -288,7 +288,7 @@ describe("the page a quote's link leads to", () => {
     payment_term: "30/60",
     notes: "Entrega em 5 dias",
     status: "sent",
-    lines: quote.lines,
+    lines: quote.lines.map(({ product_id: _product, ...line }) => line),
     total: "35",
   };
 
@@ -348,6 +348,8 @@ describe("the page a quote's link leads to", () => {
     const first = renderAt("/quote/tok");
     expect(await screen.findByText(/A validade deste orçamento acabou/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Aprovar orçamento" })).not.toBeInTheDocument();
+    // Declining is still possible.
+    expect(screen.getByRole("button", { name: "Recusar" })).toBeInTheDocument();
     first.unmount();
 
     mockApi(anonymous({ ...publicQuote, status: "declined" }));

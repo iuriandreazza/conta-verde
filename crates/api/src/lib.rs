@@ -399,19 +399,6 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
             "/companies/{company_id}/quotes/{quote_id}/pdf",
             get(quotes::quote_pdf::<X>),
         )
-        .route("/public/quotes/{token}", get(quotes::public_quote::<X>))
-        .route(
-            "/public/quotes/{token}/pdf",
-            get(quotes::public_quote_pdf::<X>),
-        )
-        .route(
-            "/public/quotes/{token}/approve",
-            post(quotes::approve_quote::<X>),
-        )
-        .route(
-            "/public/quotes/{token}/decline",
-            post(quotes::decline_quote::<X>),
-        )
         .route(
             "/invitations/{token}",
             get(members::preview_invitation::<X>),
@@ -423,6 +410,23 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         .route(
             "/companies/{company_id}/postal-codes/{code}",
             get(postal_codes::find_postal_code::<X>),
+        )
+        .merge(
+            Router::new()
+                .route("/public/quotes/{token}", get(quotes::public_quote::<X>))
+                .route(
+                    "/public/quotes/{token}/pdf",
+                    get(quotes::public_quote_pdf::<X>),
+                )
+                .route(
+                    "/public/quotes/{token}/approve",
+                    post(quotes::approve_quote::<X>),
+                )
+                .route(
+                    "/public/quotes/{token}/decline",
+                    post(quotes::decline_quote::<X>),
+                )
+                .layer(axum::middleware::map_response(quotes::keep_private)),
         )
         .with_state(state)
 }
@@ -6769,8 +6773,9 @@ mod tests {
         assert_eq!(seen.body["expired"], false);
         assert_eq!(seen.body["total"], "45.1");
         assert_eq!(seen.body["lines"][0]["description"], "Café 500g");
-        // The public page shows no id of the company's books.
+        // The public page shows no id of the company's books, not even a product's.
         assert!(seen.body.get("company_id").is_none() && seen.body.get("id").is_none());
+        assert!(seen.body["lines"][0].get("product_id").is_none());
         for uri in [format!("{public}/pdf"), format!("{one}/pdf")] {
             let request = if uri.starts_with("/public") {
                 get_request(&uri, None)
@@ -6781,6 +6786,11 @@ mod tests {
             assert_eq!(status, StatusCode::OK, "{uri}");
             assert_eq!(headers[header::CONTENT_TYPE], "application/pdf");
             assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+            if uri.starts_with("/public") {
+                // A customer's data under a secret in the path: nothing keeps it, nothing passes it on.
+                assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+                assert_eq!(headers[header::REFERRER_POLICY], "no-referrer");
+            }
             assert!(bytes.starts_with(b"%PDF-1.4"));
             assert!(bytes.windows(9).any(|window| window == b"Or\xE7amento"));
         }
@@ -6822,12 +6832,12 @@ mod tests {
         let last = history.body.as_array().unwrap().last().unwrap().clone();
         assert_eq!(last["actor"]["name"], "Ana");
 
-        // One past its validity is not approved, and says so.
+        // One past its validity cannot be sent, since nobody could approve it.
         let mut old = quote_body(&targets, "2020-02-01");
         old["issued_on"] = json!("2020-01-01");
         let old = send(&app, json_request("POST", &uri, Some(&cookie), old)).await;
         let old_id = old.body["id"].as_str().unwrap();
-        let sent = send(
+        let late = send(
             &app,
             json_request(
                 "POST",
@@ -6837,37 +6847,7 @@ mod tests {
             ),
         )
         .await;
-        let token = sent.body["link"]
-            .as_str()
-            .unwrap()
-            .rsplit('/')
-            .next()
-            .unwrap()
-            .to_owned();
-        let seen = send(&app, get_request(&format!("/public/quotes/{token}"), None)).await;
-        assert_eq!(seen.body["expired"], true);
-        let late = send(
-            &app,
-            json_request(
-                "POST",
-                &format!("/public/quotes/{token}/approve"),
-                None,
-                Value::Null,
-            ),
-        )
-        .await;
         assert_eq!(late.status, StatusCode::GONE);
-        let declined = send(
-            &app,
-            json_request(
-                "POST",
-                &format!("/public/quotes/{token}/decline"),
-                None,
-                Value::Null,
-            ),
-        )
-        .await;
-        assert_eq!(declined.status, StatusCode::GONE);
     }
 
     #[tokio::test]

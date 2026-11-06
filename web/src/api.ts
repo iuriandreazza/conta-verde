@@ -777,7 +777,8 @@ export interface PublicQuote {
   payment_term: string | null;
   notes: string | null;
   status: QuoteStatus;
-  lines: DocumentLine[];
+  /** Without the product: the customer is shown no id of the company's books. */
+  lines: Omit<DocumentLine, "product_id">[];
   total: string;
 }
 

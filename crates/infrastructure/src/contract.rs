@@ -8659,6 +8659,7 @@ fn quote_numbers(page: &QuotePage) -> Vec<i64> {
 /// validity. What it points at has to be usable, and nothing of another company's shows.
 pub async fn runs_the_quote_lifecycle<Q, R, E, S>(
     service: &QuoteService<Q, R, E, S>,
+    store: &Q,
     emails: &InMemoryEmailSender,
     company: CompanyId,
     other_company: CompanyId,
@@ -8877,16 +8878,49 @@ pub async fn runs_the_quote_lifecycle<Q, R, E, S>(
         ApplicationError::QuoteNotFound
     );
 
+    // A change the trail has no field of its own for is still a change: only a line's description.
+    let mut reworded = edit.clone();
+    reworded.lines[0].description = "Café torrado 500g".into();
+    let reworded = service
+        .update(company, &ana, first.id(), reworded)
+        .await
+        .unwrap();
+    assert_eq!(reworded.lines()[0].description(), "Café torrado 500g");
+    assert_eq!(
+        service.get(company, first.id()).await.unwrap().lines()[0].description(),
+        "Café torrado 500g"
+    );
+    assert_eq!(service.history(company, first.id()).await.unwrap().len(), 3);
+    let edit = {
+        let mut back = edit.clone();
+        back.lines[0].description = "Café torrado 500g".into();
+        back
+    };
+
     // Sent: a link of its own, e-mailed, that leads to the quote.
     assert_eq!(
         service
-            .send(company, &ana, first.id(), "not an address", "Padaria")
+            .send(
+                company,
+                &ana,
+                first.id(),
+                "not an address",
+                "Padaria",
+                day("2026-11-10")
+            )
             .await
             .unwrap_err(),
         ApplicationError::Domain(DomainError::InvalidEmail)
     );
     let sent = service
-        .send(company, &ana, first.id(), "cliente@exemplo.com", "Padaria")
+        .send(
+            company,
+            &ana,
+            first.id(),
+            "cliente@exemplo.com",
+            "Padaria",
+            day("2026-11-10"),
+        )
         .await
         .unwrap();
     assert_eq!(sent.quote.status(), QuoteStatus::Sent);
@@ -8904,19 +8938,25 @@ pub async fn runs_the_quote_lifecycle<Q, R, E, S>(
         ApplicationError::QuoteNotFound
     );
     let trail = service.history(company, first.id()).await.unwrap();
-    assert_eq!(trail.len(), 3);
+    assert_eq!(trail.len(), 4);
     assert!(
-        trail[2]
+        trail[3]
             .entry
             .changes
             .iter()
-            .any(|change| change.field == "link"
-                && change.to.as_deref() == Some("sent to cliente@exemplo.com"))
+            .any(|change| change.field == "link" && change.to.as_deref() == Some("made and sent"))
     );
 
     // Sent again, the earlier link stops working and the new one works.
     let resent = service
-        .send(company, &ana, first.id(), "cliente@exemplo.com", "Padaria")
+        .send(
+            company,
+            &ana,
+            first.id(),
+            "cliente@exemplo.com",
+            "Padaria",
+            day("2026-11-10"),
+        )
         .await
         .unwrap();
     let second_token = token_of(&resent.link).to_owned();
@@ -8954,7 +8994,14 @@ pub async fn runs_the_quote_lifecycle<Q, R, E, S>(
 
     // Answered through the link, once, in the name of whoever sent it, and the quote is then fixed.
     let resent = service
-        .send(company, &ana, first.id(), "cliente@exemplo.com", "Padaria")
+        .send(
+            company,
+            &ana,
+            first.id(),
+            "cliente@exemplo.com",
+            "Padaria",
+            day("2026-11-10"),
+        )
         .await
         .unwrap();
     let token = token_of(&resent.link).to_owned();
@@ -8999,7 +9046,14 @@ pub async fn runs_the_quote_lifecycle<Q, R, E, S>(
     );
     assert_eq!(
         service
-            .send(company, &ana, first.id(), "cliente@exemplo.com", "Padaria")
+            .send(
+                company,
+                &ana,
+                first.id(),
+                "cliente@exemplo.com",
+                "Padaria",
+                day("2026-11-10")
+            )
             .await
             .unwrap_err(),
         ApplicationError::Domain(DomainError::QuoteIsLocked)
@@ -9007,7 +9061,14 @@ pub async fn runs_the_quote_lifecycle<Q, R, E, S>(
 
     // Declined, and one past its validity is not approved (its last day is still good).
     let declined = service
-        .send(company, &ana, second.id(), "cliente@exemplo.com", "Padaria")
+        .send(
+            company,
+            &ana,
+            second.id(),
+            "cliente@exemplo.com",
+            "Padaria",
+            day("2026-11-10"),
+        )
         .await
         .unwrap();
     let declined = service
@@ -9016,7 +9077,14 @@ pub async fn runs_the_quote_lifecycle<Q, R, E, S>(
         .unwrap();
     assert_eq!(declined.status(), QuoteStatus::Declined);
     let late = service
-        .send(company, &ana, next.id(), "cliente@exemplo.com", "Padaria")
+        .send(
+            company,
+            &ana,
+            next.id(),
+            "cliente@exemplo.com",
+            "Padaria",
+            day("2026-11-10"),
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -9037,5 +9105,104 @@ pub async fn runs_the_quote_lifecycle<Q, R, E, S>(
             .unwrap()
             .status(),
         QuoteStatus::Approved
+    );
+
+    // Declining is allowed after the validity; sending is not.
+    let stale = service
+        .register(company, &ana, quote_draft(seed, "2026-11-20"))
+        .await
+        .unwrap();
+    let sent = service
+        .send(
+            company,
+            &ana,
+            stale.id(),
+            "cliente@exemplo.com",
+            "Padaria",
+            day("2026-11-10"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .send(
+                company,
+                &ana,
+                stale.id(),
+                "cliente@exemplo.com",
+                "Padaria",
+                day("2026-11-21")
+            )
+            .await
+            .unwrap_err(),
+        ApplicationError::QuoteExpired
+    );
+    assert_eq!(
+        service
+            .answer(token_of(&sent.link), false, day("2026-12-01"))
+            .await
+            .unwrap()
+            .status(),
+        QuoteStatus::Declined
+    );
+
+    // An answer made to what the customer saw before is refused when the quote was changed and sent
+    // again meanwhile: the store checks the link the answer came through, and writes only the status.
+    let racing = service
+        .register(company, &ana, quote_draft(seed, "2026-11-20"))
+        .await
+        .unwrap();
+    let old_link = service
+        .send(
+            company,
+            &ana,
+            racing.id(),
+            "cliente@exemplo.com",
+            "Padaria",
+            day("2026-11-10"),
+        )
+        .await
+        .unwrap();
+    let old_token = token_of(&old_link.link).to_owned();
+    let seen = service.by_link(&old_token).await.unwrap();
+    let mut changed = quote_draft(seed, "2026-11-25");
+    changed.lines[0].quantity = "9".into();
+    service
+        .update(company, &ana, racing.id(), changed)
+        .await
+        .unwrap();
+    service
+        .send(
+            company,
+            &ana,
+            racing.id(),
+            "cliente@exemplo.com",
+            "Padaria",
+            day("2026-11-10"),
+        )
+        .await
+        .unwrap();
+    let digest = crate::Argon2SecretService::new()
+        .unwrap()
+        .digest_token(&old_token);
+    let approval = seen.answered(true).unwrap();
+    let audit = AuditEntry {
+        company_id: company,
+        actor: ana.clone(),
+        entity: AuditEntity::Quote,
+        entity_id: racing.id().as_uuid(),
+        action: AuditAction::Updated,
+        changes: Vec::new(),
+    };
+    assert_eq!(
+        store.answer(&approval, &digest, &audit).await.unwrap_err(),
+        RepositoryError::QuoteChanged
+    );
+    let after = service.get(company, racing.id()).await.unwrap();
+    assert_eq!(after.status(), QuoteStatus::Sent);
+    assert_eq!(after.lines()[0].quantity().to_string(), "9");
+    assert_eq!(
+        service.history(company, racing.id()).await.unwrap().len(),
+        4
     );
 }

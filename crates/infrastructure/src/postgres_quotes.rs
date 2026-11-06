@@ -137,7 +137,6 @@ impl QuoteRepository for PostgresQuoteRepository {
         let mut tx = self.pool.begin().await.map_err(storage_error)?;
         let (user_id, user_name) = sent_by(quote);
         let (mode, digest) = match &link {
-            LinkChange::Keep => ("keep", None),
             LinkChange::Revoke => ("revoke", None),
             LinkChange::Set(digest) => ("set", Some(digest.as_str())),
         };
@@ -145,7 +144,7 @@ impl QuoteRepository for PostgresQuoteRepository {
             "UPDATE quotes SET customer_id = $3, issued_on = CAST($4 AS DATE), \
              valid_until = CAST($5 AS DATE), payment_term_id = $6, notes = $7, status = $8, \
              sent_by_user_id = $9, sent_by_name = $10, \
-             link_digest = CASE $11 WHEN 'keep' THEN link_digest WHEN 'revoke' THEN NULL ELSE $12 END \
+             link_digest = CASE $11 WHEN 'revoke' THEN NULL ELSE $12 END \
              WHERE id = $1 AND company_id = $2 AND status = $13",
         )
         .bind(quote.id().as_uuid())
@@ -186,6 +185,32 @@ impl QuoteRepository for PostgresQuoteRepository {
             .await
             .map_err(storage_error)?;
         insert_lines(&mut tx, quote).await?;
+        postgres_audit::insert(&mut tx, audit).await?;
+        tx.commit().await.map_err(storage_error)
+    }
+
+    async fn answer(
+        &self,
+        quote: &Quote,
+        link_digest: &str,
+        audit: &AuditEntry,
+    ) -> Result<(), RepositoryError> {
+        ensure_audit_describes(audit, quote)?;
+        let mut tx = self.pool.begin().await.map_err(storage_error)?;
+        let result = sqlx::query(
+            "UPDATE quotes SET status = $3 \
+             WHERE id = $1 AND company_id = $2 AND status = 'sent' AND link_digest = $4",
+        )
+        .bind(quote.id().as_uuid())
+        .bind(quote.company_id().as_uuid())
+        .bind(quote.status().as_str())
+        .bind(link_digest)
+        .execute(&mut *tx)
+        .await
+        .map_err(storage_error)?;
+        if result.rows_affected() == 0 {
+            return Err(RepositoryError::QuoteChanged);
+        }
         postgres_audit::insert(&mut tx, audit).await?;
         tx.commit().await.map_err(storage_error)
     }
@@ -369,6 +394,7 @@ mod tests {
         )
         .await;
         let emails = InMemoryEmailSender::default();
+        let store = PostgresQuoteRepository::new(pool.clone());
         let service = QuoteService::new(
             PostgresQuoteRepository::new(pool.clone()),
             references(&pool),
@@ -376,7 +402,15 @@ mod tests {
             Argon2SecretService::new().unwrap(),
             "https://erp.example",
         );
-        contract::runs_the_quote_lifecycle(&service, &emails, company, other_company, &seed).await;
+        contract::runs_the_quote_lifecycle(
+            &service,
+            &store,
+            &emails,
+            company,
+            other_company,
+            &seed,
+        )
+        .await;
     }
 
     #[tokio::test]
