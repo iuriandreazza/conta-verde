@@ -38,6 +38,7 @@ mod sale;
 mod sales_report;
 mod settlement;
 mod statement_line;
+mod stock;
 mod tag;
 mod transfer;
 
@@ -61,7 +62,7 @@ pub use audit::{
     quote_creation_changes, recurrence_changes, recurrence_creation_changes, sale_changes,
     sale_creation_changes, sale_return_creation_changes, settlement_changes,
     settlement_creation_changes, statement_line_changes, statement_line_creation_changes,
-    transfer_changes, transfer_creation_changes,
+    stock_movement_creation_changes, transfer_changes, transfer_creation_changes,
 };
 pub use bank_account::{BankAccount, BankAccountDraft, BankAccountKind};
 pub use calendar_date::CalendarDate;
@@ -90,7 +91,8 @@ pub use ids::{
     AttachmentId, BankAccountId, CategoryId, ChargeId, CommissionRuleId, CompanyId, ContractId,
     CostCenterId, EntryId, InvitationId, NotificationId, PartyId, PaymentEventId, PaymentMethodId,
     PaymentTermId, PriceListId, ProductId, PurchaseOrderId, PurchaseReceiptId, QuoteId,
-    RecurrenceId, SaleId, SaleReturnId, SettlementId, StatementLineId, TransferId, UserId,
+    RecurrenceId, SaleId, SaleReturnId, SettlementId, StatementLineId, StockMovementId, TransferId,
+    UserId,
 };
 pub use invitation::Invitation;
 pub use line::{Line, LineDraft, MAX_LINES, lines_total};
@@ -121,5 +123,9 @@ pub use sale::{ReturnItemDraft, Sale, SaleDraft, SaleReturn, SaleReturnDraft, Sa
 pub use sales_report::{AbcClass, SalesGroup, SalesReportRow, net_of_lines, sales_report};
 pub use settlement::{Settlement, SettlementDraft, settled_of};
 pub use statement_line::{LineMatch, LineStatus, StatementLine, StatementLineDraft};
+pub use stock::{
+    StockBalance, StockMovement, StockMovementDraft, StockMovementKind, StockOrigin,
+    StockOriginKind,
+};
 pub use tag::{MAX_TAGS, Tag};
 pub use transfer::{AccountOpening, Transfer, TransferDraft};

@@ -64,6 +64,8 @@ mod sale_service;
 mod sales_report_service;
 mod secret_service;
 mod statement_line_repository;
+mod stock_repository;
+mod stock_service;
 mod transfer_repository;
 mod transfer_service;
 
@@ -148,6 +150,10 @@ pub use sale_service::{Conversion, Refund, ReturnRecord, SalePage, SaleService};
 pub use sales_report_service::{SalesReport, SalesReportService};
 pub use secret_service::{SecretError, SecretService};
 pub use statement_line_repository::{MatchedTargets, StatementLineQuery, StatementLineRepository};
+pub use stock_repository::{StockFloor, StockMovementQuery, StockMovementRepository};
+pub use stock_service::{
+    DocumentStock, StockMovementPage, StockPosition, StockPositionPage, StockService,
+};
 pub use transfer_repository::{
     AccountMovement, DayMovement, OpeningRepository, TransferQuery, TransferRepository,
 };

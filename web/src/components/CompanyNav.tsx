@@ -111,7 +111,10 @@ const SECTIONS: NavSection[] = [
   {
     key: "purchases",
     label: "Suprimentos",
-    items: [{ path: "/purchases", label: "Compras", icon: BriefcaseBusinessIcon }],
+    items: [
+      { path: "/purchases", label: "Compras", icon: BriefcaseBusinessIcon },
+      { path: "/stock", label: "Estoque", icon: BoxIcon },
+    ],
   },
   {
     key: "finance",

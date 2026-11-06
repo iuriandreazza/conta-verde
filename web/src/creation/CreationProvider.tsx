@@ -7,6 +7,7 @@ import { Sheet } from "../components/Sheet";
 import { EntryCreator } from "./EntryCreator";
 import { SaleCreator } from "./SaleCreator";
 import { PurchaseCreator } from "./PurchaseCreator";
+import { StockMovementCreator } from "./StockMovementCreator";
 import { QuoteCreator } from "./QuoteCreator";
 import { ContractCreator } from "./ContractCreator";
 import { CategoryCreator } from "./CategoryCreator";
@@ -17,7 +18,7 @@ import { PartyCreator } from "./PartyCreator";
 import { ProductCreator } from "./ProductCreator";
 import { TransferCreator } from "./TransferCreator";
 
-export type CreateKind = "entry" | "party" | "product" | "transfer" | "costCenter" | "paymentMethod" | "paymentTerm" | "bankAccount" | "invite" | "recurrence" | "category" | "priceList" | "commissionRule" | "contract" | "quote" | "sale" | "purchase";
+export type CreateKind = "entry" | "party" | "product" | "transfer" | "costCenter" | "paymentMethod" | "paymentTerm" | "bankAccount" | "invite" | "recurrence" | "category" | "priceList" | "commissionRule" | "contract" | "quote" | "sale" | "purchase" | "stockMovement";
 
 /** What a creator tells the host when the record exists: the words for the confirmation, and the new id. */
 export interface Created {
@@ -54,6 +55,7 @@ const CREATORS: Record<
   entry: { title: (options) => (options.kind ? ENTRY_TITLES[options.kind] : "Novo lançamento"), Creator: EntryCreator },
   sale: { title: "Novo pedido", Creator: SaleCreator },
   purchase: { title: "Nova compra", Creator: PurchaseCreator },
+  stockMovement: { title: "Novo movimento de estoque", Creator: StockMovementCreator },
   quote: { title: "Novo orçamento", Creator: QuoteCreator },
   contract: { title: "Novo contrato", Creator: ContractCreator },
   commissionRule: { title: "Nova regra de comissão", Creator: CommissionRuleCreator },

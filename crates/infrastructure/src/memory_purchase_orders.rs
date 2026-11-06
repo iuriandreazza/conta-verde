@@ -250,7 +250,10 @@ impl PurchaseOrderRepository for InMemoryPurchaseOrderRepository {
 mod tests {
     use conta_verde_application::{FinancialEntryService, PurchaseService};
 
+    use conta_verde_application::StockService;
+
     use super::*;
+    use crate::InMemoryStockMovementRepository;
     use crate::memory_entries::tests::Registers;
     use crate::{
         InMemoryFinancialEntryRepository, InMemoryPaymentTermRepository, InMemoryProductRepository,
@@ -279,6 +282,7 @@ mod tests {
                 products.clone(),
                 terms.clone(),
             ),
+            StockService::new(InMemoryStockMovementRepository::default(), products.clone()),
         );
         let entries = FinancialEntryService::new(entry_store, registers.references());
         contract::runs_the_purchase_lifecycle(

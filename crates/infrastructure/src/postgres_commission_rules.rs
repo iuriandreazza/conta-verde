@@ -167,7 +167,10 @@ fn rule_from_row(row: &PgRow) -> Result<CommissionRule, RepositoryError> {
 mod tests {
     use conta_verde_application::{CommissionService, FinancialEntryService, SaleService};
 
+    use conta_verde_application::StockService;
+
     use super::*;
+    use crate::PostgresStockMovementRepository;
     use crate::{
         PostgresBankAccountRepository, PostgresCategoryRepository, PostgresCostCenterRepository,
         PostgresFinancialEntryRepository, PostgresPartyRepository, PostgresPaymentMethodRepository,
@@ -238,6 +241,10 @@ mod tests {
             ),
             references(&pool),
             document_references(&pool),
+            StockService::new(
+                PostgresStockMovementRepository::new(pool.clone()),
+                PostgresProductRepository::new(pool.clone()),
+            ),
         );
         let commissions = CommissionService::new(
             PostgresCommissionRuleRepository::new(pool.clone()),

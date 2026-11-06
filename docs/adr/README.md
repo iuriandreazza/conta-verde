@@ -69,6 +69,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0051](0051-delinquency-report.md) | The delinquency report | accepted | 4 |
 | [0052](0052-purchases-and-inventory-plan.md) | Purchases and inventory: plan, shared rules and what it changes underneath | accepted | 5 |
 | [0053](0053-purchase-orders.md) | Purchase orders, their receipts and the payables they make | accepted | 5 |
+| [0054](0054-stock-movements.md) | Stock movements, balances and the average cost | accepted | 5 |
 
 ## Template
 

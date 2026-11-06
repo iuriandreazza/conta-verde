@@ -25,6 +25,23 @@ pub(crate) fn required_text(
     Ok(text.to_owned())
 }
 
+/// Like [`optional_text`], for a note that is one line: a control character, which a line break is, is refused
+/// too, because the database refuses it.
+pub(crate) fn optional_line(
+    raw: Option<&str>,
+    max: usize,
+    error: DomainError,
+) -> Result<Option<String>, DomainError> {
+    let text = optional_text(raw, max, error.clone())?;
+    if text
+        .as_deref()
+        .is_some_and(|text| text.chars().any(char::is_control))
+    {
+        return Err(error);
+    }
+    Ok(text)
+}
+
 /// Like [`required_text`], but a missing or blank text is not set instead of refused.
 pub(crate) fn optional_text(
     raw: Option<&str>,

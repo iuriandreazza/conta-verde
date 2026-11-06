@@ -63,6 +63,7 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
             | DomainError::SaleIsLocked
             | DomainError::SaleIsNotCompleted
             | DomainError::PurchaseIsLocked
+            | DomainError::StockMovementIsAReversal
             | DomainError::PurchaseIsNotReceivable
             | DomainError::ReceiptExceedsOrdered
             | DomainError::EntryIsVoided
@@ -91,6 +92,9 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
             | RepositoryError::EntryVoided
             | RepositoryError::SaleChanged
             | RepositoryError::PurchaseChanged
+            | RepositoryError::StockChanged
+            | RepositoryError::StockInsufficient
+            | RepositoryError::DuplicateReversal
             | RepositoryError::ReceiptTooMuch
             | RepositoryError::DuplicateQuoteSale
             | RepositoryError::DuplicateCycle
@@ -137,6 +141,9 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
         | ApplicationError::ContractChanged
         | ApplicationError::SaleChanged
         | ApplicationError::PurchaseChanged
+        | ApplicationError::StockChanged
+        | ApplicationError::StockMovementFollowsADocument
+        | ApplicationError::StockInsufficient { .. }
         | ApplicationError::EntryIsVoided
         | ApplicationError::SaleHasSettlements
         | ApplicationError::SaleHasReturns
@@ -147,6 +154,7 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
         ApplicationError::QuoteNotFound
         | ApplicationError::SaleNotFound
         | ApplicationError::PurchaseNotFound
+        | ApplicationError::StockMovementNotFound
         | ApplicationError::PurchaseReceiptNotFound
         | ApplicationError::ContractNotFound
         | ApplicationError::CommissionRuleNotFound

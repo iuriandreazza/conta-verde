@@ -40,6 +40,12 @@ pub enum RepositoryError {
     PurchaseChanged,
     /// A receipt would take in more of a line than was ordered.
     ReceiptTooMuch,
+    /// A product has another balance than the one the movements were valued against.
+    StockChanged,
+    /// A write would take a product's stock below zero.
+    StockInsufficient,
+    /// The movement was already undone.
+    DuplicateReversal,
     /// The quote already became a sale.
     DuplicateQuoteSale,
     /// The contract already has the sale of that cycle.
@@ -143,6 +149,17 @@ pub enum ApplicationError {
     ContractChanged,
     /// The sale was changed while this was being done.
     SaleChanged,
+    /// No stock movement with this id in the company (another company's looks the same).
+    StockMovementNotFound,
+    /// The stock changed under the write and could not be valued again in a few tries.
+    StockChanged,
+    /// A product would be left with less than nothing: the name and what is on hand.
+    StockInsufficient {
+        product: String,
+        available: String,
+    },
+    /// A movement a document made is undone through the document.
+    StockMovementFollowsADocument,
     /// No purchase order with this id in the company (another company's looks the same).
     PurchaseNotFound,
     /// No receipt with this id in the purchase order.
@@ -270,6 +287,9 @@ impl fmt::Display for RepositoryError {
             Self::SaleChanged => f.write_str("the sale was changed meanwhile"),
             Self::PurchaseChanged => f.write_str("the purchase order was changed meanwhile"),
             Self::ReceiptTooMuch => f.write_str("a receipt cannot be of more than was ordered"),
+            Self::StockChanged => f.write_str("the stock changed meanwhile"),
+            Self::StockInsufficient => f.write_str("not enough stock"),
+            Self::DuplicateReversal => f.write_str("the movement was already undone"),
             Self::DuplicateQuoteSale => f.write_str("the quote already became a sale"),
             Self::DuplicateCycle => f.write_str("the contract already has the sale of this cycle"),
             Self::ContractChanged => f.write_str("the contract was changed meanwhile"),
@@ -338,6 +358,14 @@ impl fmt::Display for ApplicationError {
             Self::ContractChanged => f.write_str("the contract was changed meanwhile: read it again"),
             Self::SaleChanged => f.write_str("the sale was changed meanwhile: read it again"),
             Self::PurchaseNotFound => f.write_str("purchase order not found"),
+            Self::StockMovementNotFound => f.write_str("stock movement not found"),
+            Self::StockChanged => f.write_str("the stock changed meanwhile: try again"),
+            Self::StockInsufficient { product, available } => {
+                write!(f, "not enough stock of {product}: {available} on hand")
+            }
+            Self::StockMovementFollowsADocument => f.write_str(
+                "a movement made by a sale, a receipt or a count is undone through that document",
+            ),
             Self::PurchaseReceiptNotFound => f.write_str("receipt not found"),
             Self::PurchaseChanged => {
                 f.write_str("the purchase order was changed meanwhile: read it again")

@@ -270,7 +270,10 @@ impl SaleRepository for InMemorySaleRepository {
 mod tests {
     use conta_verde_application::{FinancialEntryService, QuoteService, SaleService};
 
+    use conta_verde_application::StockService;
+
     use super::*;
+    use crate::InMemoryStockMovementRepository;
     use crate::memory_entries::tests::Registers;
     use crate::{
         Argon2SecretService, InMemoryEmailSender, InMemoryFinancialEntryRepository,
@@ -317,6 +320,7 @@ mod tests {
             FinancialEntryService::new(entry_store.clone(), registers.references()),
             registers.references(),
             document_references(),
+            StockService::new(InMemoryStockMovementRepository::default(), products.clone()),
         );
         let quotes = QuoteService::new(
             quote_store,

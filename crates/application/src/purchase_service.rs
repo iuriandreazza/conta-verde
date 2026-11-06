@@ -8,7 +8,7 @@ use conta_verde_domain::{
 use crate::audit::audit_entry;
 use crate::list_query::{clamp_limit, split_page};
 use crate::{
-    ApplicationError, DocumentReferences, EntryReferences, FinancialEntryRepository,
+    ApplicationError, DocumentReferences, DocumentStock, EntryReferences, FinancialEntryRepository,
     FinancialEntryService, NumberCursor, PurchaseOrderQuery, PurchaseOrderRepository,
     RepositoryError,
 };
@@ -30,19 +30,21 @@ pub struct ReceiptRecord {
 }
 
 /// Purchase orders of a company ([ADR 0053]): their life, and the payable each receipt makes.
-pub struct PurchaseService<P, E, F, R> {
+pub struct PurchaseService<P, E, F, R, T> {
     purchases: P,
     entries: FinancialEntryService<E, F>,
     entry_references: F,
     references: R,
+    stock: T,
 }
 
-impl<P, E, F, R> PurchaseService<P, E, F, R>
+impl<P, E, F, R, T> PurchaseService<P, E, F, R, T>
 where
     P: PurchaseOrderRepository,
     E: FinancialEntryRepository,
     F: EntryReferences,
     R: DocumentReferences,
+    T: DocumentStock,
 {
     /// The payables are made through `entries`; `entry_references` is asked about the category and the cost
     /// center when the order is written, so a mistake is refused when it is made and not when goods arrive.
@@ -51,12 +53,14 @@ where
         entries: FinancialEntryService<E, F>,
         entry_references: F,
         references: R,
+        stock: T,
     ) -> Self {
         Self {
             purchases,
             entries,
             entry_references,
             references,
+            stock,
         }
     }
 
@@ -221,8 +225,8 @@ where
         Ok(ReceiptRecord { receipt, payable })
     }
 
-    /// Makes what a receipt still lacks, which is safe to ask again: its payable is made once, and nothing
-    /// changes when it is all there.
+    /// Makes what a receipt still lacks, which is safe to ask again: its payable and its stock entries are made
+    /// once, and nothing changes when it is all there.
     pub async fn finish_receipt(
         &self,
         company_id: CompanyId,
@@ -241,6 +245,22 @@ where
     }
 
     async fn finish(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        order: &PurchaseOrder,
+        receipt: &PurchaseReceipt,
+    ) -> Result<Option<FinancialEntry>, ApplicationError> {
+        let payable = self.pay_for(company_id, actor, order, receipt).await?;
+        // The goods enter stock once, however often this is asked.
+        self.stock
+            .receive_purchase(company_id, actor, order, receipt)
+            .await?;
+        Ok(payable)
+    }
+
+    /// The payable of the receipt, made if it was not yet.
+    async fn pay_for(
         &self,
         company_id: CompanyId,
         actor: &Actor,

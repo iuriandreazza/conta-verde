@@ -2,7 +2,7 @@ use rust_decimal::Decimal;
 
 use crate::financial_entry::clean_description;
 use crate::line::{lines_total, validated_lines};
-use crate::name::optional_text;
+use crate::name::{optional_line, optional_text};
 use crate::{
     Amount, CalendarDate, CategoryId, CompanyId, CostCenterId, DomainError, EntryInstallmentDraft,
     EntryKind, FinancialEntryDraft, Line, LineDraft, PartyId, PaymentTerm, PaymentTermId,
@@ -344,14 +344,7 @@ impl PurchaseReceipt {
         }
         let received_on = CalendarDate::parse(&draft.received_on)
             .ok_or(DomainError::InvalidDate("received_on"))?;
-        let notes = optional_text(draft.notes.as_deref(), 200, DomainError::InvalidNote)?;
-        // One line: the database refuses a control character, so the domain must too.
-        if notes
-            .as_deref()
-            .is_some_and(|text| text.chars().any(char::is_control))
-        {
-            return Err(DomainError::InvalidNote);
-        }
+        let notes = optional_line(draft.notes.as_deref(), 200, DomainError::InvalidNote)?;
         if draft.items.is_empty() {
             return Err(DomainError::NoReceiptItems);
         }

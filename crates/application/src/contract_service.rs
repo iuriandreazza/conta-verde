@@ -7,9 +7,9 @@ use conta_verde_domain::{
 use crate::audit::audit_entry;
 use crate::list_query::{clamp_limit, split_page};
 use crate::{
-    ApplicationError, ContractQuery, ContractRepository, DocumentReferences, EntryReferences,
-    FinancialEntryRepository, NameCursor, QuoteRepository, RepositoryError, SaleRepository,
-    SaleService,
+    ApplicationError, ContractQuery, ContractRepository, DocumentReferences, DocumentStock,
+    EntryReferences, FinancialEntryRepository, NameCursor, QuoteRepository, RepositoryError,
+    SaleRepository, SaleService,
 };
 
 /// The most cycles one pass bills for one contract: a contract that starts years back catches up over a few.
@@ -35,12 +35,12 @@ pub struct ContractPage {
 
 /// Contracts that bill themselves every cycle ([ADR 0040]): each cycle is a completed sale and its receivable,
 /// made by [`SaleService`].
-pub struct ContractService<C, S, Q, E, F, R> {
+pub struct ContractService<C, S, Q, E, F, R, T> {
     repository: C,
-    sales: SaleService<S, Q, E, F, R>,
+    sales: SaleService<S, Q, E, F, R, T>,
 }
 
-impl<C, S, Q, E, F, R> ContractService<C, S, Q, E, F, R>
+impl<C, S, Q, E, F, R, T> ContractService<C, S, Q, E, F, R, T>
 where
     C: ContractRepository,
     S: SaleRepository,
@@ -48,8 +48,9 @@ where
     E: FinancialEntryRepository,
     F: EntryReferences,
     R: DocumentReferences,
+    T: DocumentStock,
 {
-    pub fn new(repository: C, sales: SaleService<S, Q, E, F, R>) -> Self {
+    pub fn new(repository: C, sales: SaleService<S, Q, E, F, R, T>) -> Self {
         Self { repository, sales }
     }
 

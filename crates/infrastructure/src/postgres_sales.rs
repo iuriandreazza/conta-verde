@@ -594,7 +594,10 @@ fn sale_from_row(
 mod tests {
     use conta_verde_application::{FinancialEntryService, QuoteService, SaleService};
 
+    use conta_verde_application::StockService;
+
     use super::*;
+    use crate::PostgresStockMovementRepository;
     use crate::{
         Argon2SecretService, InMemoryEmailSender, PostgresBankAccountRepository,
         PostgresCategoryRepository, PostgresCostCenterRepository, PostgresFinancialEntryRepository,
@@ -689,6 +692,10 @@ mod tests {
             ),
             references(&pool),
             document_references(&pool),
+            StockService::new(
+                PostgresStockMovementRepository::new(pool.clone()),
+                PostgresProductRepository::new(pool.clone()),
+            ),
         );
         let quotes = QuoteService::new(
             PostgresQuoteRepository::new(pool.clone()),

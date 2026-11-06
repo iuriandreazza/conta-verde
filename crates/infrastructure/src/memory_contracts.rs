@@ -151,7 +151,10 @@ impl ContractRepository for InMemoryContractRepository {
 mod tests {
     use conta_verde_application::{ContractService, FinancialEntryService, SaleService};
 
+    use conta_verde_application::StockService;
+
     use super::*;
+    use crate::InMemoryStockMovementRepository;
     use crate::memory_entries::tests::Registers;
     use crate::{
         InMemoryFinancialEntryRepository, InMemoryPaymentTermRepository, InMemoryProductRepository,
@@ -185,6 +188,7 @@ mod tests {
                     products.clone(),
                     terms.clone(),
                 ),
+                StockService::new(InMemoryStockMovementRepository::default(), products.clone()),
             )
         };
         let service = ContractService::new(InMemoryContractRepository::default(), sales());

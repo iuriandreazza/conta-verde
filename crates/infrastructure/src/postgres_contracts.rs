@@ -346,7 +346,10 @@ fn contract_from_row(
 mod tests {
     use conta_verde_application::{ContractService, FinancialEntryService, SaleService};
 
+    use conta_verde_application::StockService;
+
     use super::*;
+    use crate::PostgresStockMovementRepository;
     use crate::{
         PostgresBankAccountRepository, PostgresCategoryRepository, PostgresCostCenterRepository,
         PostgresFinancialEntryRepository, PostgresPartyRepository, PostgresPaymentMethodRepository,
@@ -380,6 +383,7 @@ mod tests {
         PostgresFinancialEntryRepository,
         impl conta_verde_application::EntryReferences,
         impl conta_verde_application::DocumentReferences,
+        impl conta_verde_application::DocumentStock,
     > {
         SaleService::new(
             PostgresSaleRepository::new(pool.clone()),
@@ -393,6 +397,10 @@ mod tests {
                 PostgresPartyRepository::new(pool.clone()),
                 PostgresProductRepository::new(pool.clone()),
                 PostgresPaymentTermRepository::new(pool.clone()),
+            ),
+            StockService::new(
+                PostgresStockMovementRepository::new(pool.clone()),
+                PostgresProductRepository::new(pool.clone()),
             ),
         )
     }
