@@ -1,4 +1,5 @@
-import { screen, within } from "@testing-library/react";
+import { fireEvent, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Entry } from "./api";
 import { mockApi, profile, renderAt } from "./testSupport";
@@ -82,24 +83,81 @@ describe("how the bank accounts list presents itself", () => {
   });
 });
 
-describe("asking for a new entry from the top bar", () => {
-  it("opens the sheet for a role that can write and clears the address", async () => {
-    serve([], null);
-    renderAt("/companies/c1/entries?novo=1");
-
-    expect(await screen.findByRole("heading", { name: "Novo lançamento" })).toBeInTheDocument();
-  });
-
-  it("only clears the address for a role that cannot write", async () => {
-    const reader = { ...profile, companies: [{ ...profile.companies[0], permissions: { finance: "read" as const } }] };
+describe("creating from the top bar", () => {
+  it("raises the sheet over the page that is open, without leaving it", async () => {
     mockApi((url) => {
-      if (url === "/api/auth/me") return { status: 200, body: reader };
+      if (url === "/api/auth/me") return { status: 200, body: profile };
       return { status: 200, body: { items: [], next_cursor: null } };
     });
-    renderAt("/companies/c1/entries?novo=1");
+    renderAt("/companies/c1/parties");
+    await screen.findByRole("heading", { name: "Clientes e fornecedores" });
 
-    await screen.findByRole("heading", { name: "Lançamentos" });
+    await userEvent.click(await screen.findByRole("button", { name: "Novo registro" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Novo lançamento" }));
+
+    expect(await screen.findByRole("dialog", { name: "Novo lançamento" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Clientes e fornecedores" })).toBeInTheDocument();
+  });
+
+  it("says the entry was added and the list on the page reads again", async () => {
+    const category = { id: "k1", company_id: "c1", parent_id: null, name: "Aluguel", dre_group: "operating_expenses", cash_flow_group: "operating", level: 1, active: true };
+    const created = entry("e9", "Aluguel de novembro", "2999-01-10", "0");
+    let lists = 0;
+    mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (url.endsWith("/categories")) return { status: 200, body: { items: [category] } };
+      if (init?.method === "POST" && url.endsWith("/entries")) return { status: 201, body: created };
+      if (url.startsWith("/api/companies/c1/entries")) {
+        lists += 1;
+        return { status: 200, body: { items: lists > 1 ? [created] : [], next_cursor: null } };
+      }
+      return { status: 200, body: { items: [], next_cursor: null } };
+    });
+    renderAt("/companies/c1/entries");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Novo registro" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Novo lançamento" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Novo lançamento" }));
+    await userEvent.type(await dialog.findByLabelText("Descrição"), "Aluguel de novembro");
+    await userEvent.selectOptions(dialog.getByLabelText("Categoria"), "k1");
+    fireEvent.change(dialog.getByLabelText("Competência"), { target: { value: "2999-01-01" } });
+    await userEvent.type(dialog.getByLabelText("Valor total"), "100");
+    fireEvent.change(dialog.getByLabelText("Primeiro vencimento"), { target: { value: "2999-01-10" } });
+    await userEvent.click(dialog.getByRole("button", { name: "Gerar parcelas" }));
+    await userEvent.click(dialog.getByRole("button", { name: /^Adicionar$/ }));
+
+    expect(await screen.findByText("Aluguel de novembro adicionado.")).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Novo lançamento" })).not.toBeInTheDocument();
+    expect(await screen.findByText("Aluguel de novembro", { selector: ".cell-title" })).toBeInTheDocument();
+  });
+
+  it("does not close the sheet under a save that is still on its way", async () => {
+    const category = { id: "k1", company_id: "c1", parent_id: null, name: "Aluguel", dre_group: "operating_expenses", cash_flow_group: "operating", level: 1, active: true };
+    const fetchMock = mockApi((url) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (url.endsWith("/categories")) return { status: 200, body: { items: [category] } };
+      return { status: 200, body: { items: [], next_cursor: null } };
+    });
+    const answer = fetchMock.getMockImplementation()!;
+    // The save never answers: it stays in flight.
+    fetchMock.mockImplementation((input, init) =>
+      String(input).endsWith("/entries") && init?.method === "POST" ? new Promise<Response>(() => undefined) : answer(input, init),
+    );
+    renderAt("/companies/c1/entries");
+    await userEvent.click(await screen.findByRole("button", { name: "Novo registro" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Novo lançamento" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Novo lançamento" }));
+    await userEvent.type(await dialog.findByLabelText("Descrição"), "Aluguel");
+    await userEvent.selectOptions(dialog.getByLabelText("Categoria"), "k1");
+    fireEvent.change(dialog.getByLabelText("Competência"), { target: { value: "2999-01-01" } });
+    await userEvent.type(dialog.getByLabelText("Valor total"), "100");
+    fireEvent.change(dialog.getByLabelText("Primeiro vencimento"), { target: { value: "2999-01-10" } });
+    await userEvent.click(dialog.getByRole("button", { name: "Gerar parcelas" }));
+    await userEvent.click(dialog.getByRole("button", { name: /^Adicionar$/ }));
+
+    await userEvent.keyboard("{Escape}");
+    await userEvent.click(dialog.getByRole("button", { name: "Fechar" }));
+
+    expect(screen.getByRole("dialog", { name: "Novo lançamento" })).toBeInTheDocument();
   });
 });

@@ -53,8 +53,10 @@ From top to bottom, in this order:
 A record is created or changed in a **bottom sheet** (`Sheet`) that rises over the page that is open, as in the
 products people come from: the list is full width and has **no add-record panel beside it**. The action row's primary
 button ("Novo lançamento") and a row's edit button open it; a save or "Fechar" closes it and the list shows what
-changed (the new row flashes, a "… adicionado." notice sits above the list). The global "Novo registro" menu goes to
-the page of that register with `?novo=1`, which opens the sheet. `Sheet` is a dialog: the focus goes in and stays in,
+changed (the new row flashes, a "… adicionado." notice sits above the list). The global "Novo registro" menu (`CreationProvider`) raises the sheet of the register chosen **over the page that is
+open, without leaving it**: a creator component holds that register's form and saves it, the host closes the sheet, says
+so in a confirmation, and the page's list reads again (`useOnCreated`). Registers that have no creator yet still go to
+their own page. `Sheet` is a dialog: the focus goes in and stays in,
 Escape and the shade close it, and the focus returns to what opened it.
 
 ## 3. A report or overview page
@@ -72,6 +74,7 @@ that matter: **overdue** and **due today**. Charts follow the dataviz rules in t
 | `RowActions` | deferred | The row's "Ações" menu over `MenuButton`. Rows keep their one-click icon buttons (each toggles a panel under the row, with `aria-expanded`); a menu would make those two clicks and rewrite most page tests, so it comes with a page that has more than four actions per row |
 | `PeriodFilter` | built (Fluxo de caixa, Relatórios) | Previous, usual periods (month, three months, quarter, year), next, and the two dates; the 3/6/12 months control of the dashboard is the Phase 3 dashboard slice's to replace |
 | `FilterBar`, `SummaryStrip` | to build | Layout of the filter row; the state tiles as a radio group |
+| `CreationProvider` | built (Lançamentos; the other registers follow) | The host of "Novo registro": `openCreate(kind)`, one creator per kind in `web/src/creation/`, `useOnCreated(kind, reload)` for the page |
 | `Sheet` | built (Lançamentos; the other registers follow) | The bottom sheet for a form; its panel is an `<aside role="dialog">` named by its title |
 | `PageHeader` | exists | Moves its title into the top bar; keeps the description and, for now, the page-level actions |
 | `Layout`, `AppTopbar`, `CompanyNav` | built | The top bar (menu on a phone, "Novo registro", user, sign out) and the grouped sidebar. A new section is one entry in `SECTIONS` of `CompanyNav` |

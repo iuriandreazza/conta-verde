@@ -1,22 +1,20 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
-import { useParams, useSearchParams } from "react-router-dom";
+import { Fragment, useState } from "react";
+import { useParams } from "react-router-dom";
 import {
   NO_ENTRY_FILTERS,
   api,
   errorMessage,
-  type BankAccount,
-  type Category,
-  type CostCenter,
   type Entry,
   type EntryFilters,
   type EntryInput,
-  type PaymentMethod,
 } from "../api";
 import { PlusIcon } from "../components/icons/plus";
 import { Sheet } from "../components/Sheet";
+import { useCreation, useOnCreated } from "../creation/CreationProvider";
+import { useEntryTargets } from "../lib/useEntryTargets";
 import { ListFooter } from "../components/ListFooter";
 import { Button } from "../components/Button";
-import { EntryForm, type EntryTargets } from "../components/EntryForm";
+import { EntryForm } from "../components/EntryForm";
 import { EntryHistory } from "../components/EntryHistory";
 import { ListRow } from "../components/ListRow";
 import { AttachmentsPanel } from "../components/AttachmentsPanel";
@@ -33,7 +31,6 @@ import { treeRows } from "../lib/categoryTree";
 import { formatMoney } from "../lib/decimal";
 import { STATUS_LABELS, entryStatus, todayIso, type InstallmentStatus } from "../lib/settlement";
 import { formatDate } from "../lib/entryInstallments";
-import { readUpTo } from "../lib/readUpTo";
 import { usePagedList } from "../lib/usePagedList";
 import { useCanWrite } from "../lib/useCanWrite";
 
@@ -65,54 +62,11 @@ export function EntriesPage() {
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
-  const [sheetOpen, setSheetOpen] = useState(false);
-  const [params, setParams] = useSearchParams();
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const [historyOpenFor, setHistoryOpenFor] = useState<string | null>(null);
   const [settlementsOpenFor, setSettlementsOpenFor] = useState<string | null>(null);
   const [attachmentsOpenFor, setAttachmentsOpenFor] = useState<string | null>(null);
-  const [banks, setBanks] = useState<BankAccount[]>([]);
-  const [methods, setMethods] = useState<PaymentMethod[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [costCenters, setCostCenters] = useState<CostCenter[]>([]);
-  const [parties, setParties] = useState<{ id: string; name: string }[]>([]);
-  const [targetsError, setTargetsError] = useState<string | null>(null);
-  const [targetsLoaded, setTargetsLoaded] = useState(false);
-
-  // What an entry points at is read once: the filter by category and the form both need it.
-  useEffect(() => {
-    let current = true;
-    Promise.all([
-      api.listCategories(companyId),
-      readUpTo((after) => api.listCostCenters(companyId, { q: "", active: "", sort: "name" }, after)),
-      readUpTo((after) => api.listParties(companyId, undefined, after)),
-      readUpTo((after) => api.listBankAccounts(companyId, undefined, after)),
-      readUpTo((after) => api.listPaymentMethods(companyId, undefined, after)),
-    ])
-      .then(([categoryList, costCenterList, partyList, bankList, methodList]) => {
-        if (current) {
-          setCategories(categoryList.items);
-          setBanks(bankList);
-          setMethods(methodList);
-          setCostCenters(costCenterList);
-          setParties(partyList.map(({ id, name }) => ({ id, name })));
-          setTargetsLoaded(true);
-        }
-      })
-      .catch((failure: unknown) => current && setTargetsError(errorMessage(failure)));
-    return () => {
-      current = false;
-    };
-  }, [companyId]);
-
-  const targets: EntryTargets = { categories, costCenters, parties };
-  const names = useMemo(() => {
-    const byId = new Map<string, string>();
-    for (const category of categories) byId.set(category.id, category.name);
-    for (const center of costCenters) byId.set(center.id, center.name);
-    for (const party of parties) byId.set(party.id, party.name);
-    return byId;
-  }, [categories, costCenters, parties]);
+  const { banks, methods, categories, costCenters, parties, names, error: targetsError, loaded: targetsLoaded } = useEntryTargets(companyId);
 
   const {
     items: entries,
@@ -145,50 +99,31 @@ export function EntriesPage() {
     }
   }
 
-  function openNew() {
-    setEditing(null);
-    setFormError(null);
-    setSaved(null);
-    setSheetOpen(true);
-  }
+  const { openCreate } = useCreation();
+  // An entry created from the top bar or from here: read the list again and flash the new row.
+  useOnCreated("entry", (created) => {
+    setHighlightedId(created.id);
+    void reload();
+  });
 
   function closeSheet() {
-    setSheetOpen(false);
     setEditing(null);
     setFormError(null);
   }
 
-  // "Novo registro" in the top bar comes here asking for the sheet.
-  useEffect(() => {
-    if (params.get("novo") !== null) {
-      if (canWrite) openNew();
-      // Also for a role that cannot write: the address must not keep asking.
-      setParams({}, { replace: true });
-    }
-  }, [params, canWrite]);
-
   async function handleSubmit(input: EntryInput) {
+    if (editing === null) return;
     setSaving(true);
     setFormError(null);
     setSaved(null);
     try {
-      if (editing === null) {
-        const created = await api.createEntry(companyId, input);
-        setHighlightedId(created.id);
-        setSaved(`${created.description} adicionado.`);
-        setFormVersion((version) => version + 1);
-        setSheetOpen(false);
-        await reload();
-      } else {
-        const updated = await api.updateEntry(companyId, editing.id, input);
-        setEditing(null);
-        setSaved(`${updated.description} atualizado.`);
-        setFormVersion((version) => version + 1);
-        setSheetOpen(false);
-        // Read again, not changed in place: a new date, kind or category can move the entry to
-        // another place in the list, or out of the filter the list is showing.
-        await reload();
-      }
+      const updated = await api.updateEntry(companyId, editing.id, input);
+      setEditing(null);
+      setSaved(`${updated.description} atualizado.`);
+      setFormVersion((version) => version + 1);
+      // Read again, not changed in place: a new date, kind or category can move the entry to
+      // another place in the list, or out of the filter the list is showing.
+      await reload();
     } catch (failure) {
       setFormError(errorMessage(failure));
     } finally {
@@ -204,7 +139,7 @@ export function EntriesPage() {
       />
       {canWrite && (
         <div className="list-actions">
-          <Button type="button" icon={PlusIcon} onClick={openNew}>
+          <Button type="button" icon={PlusIcon} onClick={() => openCreate("entry")}>
             Novo lançamento
           </Button>
         </div>
@@ -347,7 +282,6 @@ export function EntriesPage() {
                                 setEditing(entry);
                                 setFormError(null);
                                 setSaved(null);
-                                setSheetOpen(true);
                               }}
                             >
                               Alterar
@@ -452,29 +386,24 @@ export function EntriesPage() {
           )}
         </section>
         {canWrite && (
-          <Sheet
-            open={sheetOpen}
-            title={editing === null ? "Novo lançamento" : `Alterar ${editing.description}`}
-            onClose={closeSheet}
-          >
-            {targetsLoaded ? (
-              <EntryForm
-                // A new key starts the form over for another entry, or an empty one after a save.
-                key={`${editing?.id ?? "new"}-${formVersion}`}
-                entry={editing}
-                targets={targets}
-                focusDescription={false}
-                pending={saving}
-                error={formError}
-                onSubmit={(input) => void handleSubmit(input)}
-                onCancel={closeSheet}
-              />
-            ) : targetsError === null ? (
-              // The choices are read before the form shows, so nothing typed is lost when they arrive.
-              <p role="status" className="status">
-                <Spinner /> Carregando…
-              </p>
-            ) : null}
+          <Sheet open={editing !== null} title={`Alterar ${editing?.description ?? ""}`} onClose={closeSheet}>
+            {editing !== null &&
+              (targetsLoaded ? (
+                <EntryForm
+                  key={`${editing.id}-${formVersion}`}
+                  entry={editing}
+                  targets={{ categories, costCenters, parties }}
+                  focusDescription={false}
+                  pending={saving}
+                  error={formError}
+                  onSubmit={(input) => void handleSubmit(input)}
+                  onCancel={closeSheet}
+                />
+              ) : targetsError === null ? (
+                <p role="status" className="status">
+                  <Spinner /> Carregando…
+                </p>
+              ) : null)}
           </Sheet>
         )}
       </div>

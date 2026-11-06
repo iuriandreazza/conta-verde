@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { Link, Outlet, useLocation, useMatch } from "react-router-dom";
 import { useAuth } from "../auth";
 import { AppTopbar } from "./AppTopbar";
+import { CreationProvider } from "../creation/CreationProvider";
 import { CompanyNav } from "./CompanyNav";
 import { Footer } from "./Footer";
 import { Logo } from "./Logo";
@@ -72,6 +73,7 @@ export function Layout() {
 
   if (!authenticated) {
     return (
+      <CreationProvider companyId={undefined}>
       <div className="auth-shell">
         <aside className="auth-aside">
           <Link to="/" className="brand" aria-label="conta-verde, início">
@@ -91,6 +93,7 @@ export function Layout() {
           <Footer />
         </div>
       </div>
+      </CreationProvider>
     );
   }
 
@@ -103,6 +106,8 @@ export function Layout() {
 
   const userName = session.profile.user.name;
   return (
+    // The provider is in both shells, at the same place: the page keeps its state when the session arrives.
+    <CreationProvider companyId={companyId}>
     <div className="app">
       {/* Inside the sidebar, not before it: the sign-in layout and this one put <main> at the same position,
           which keeps the sign-up page mounted (and its outcome) when the session arrives. */}
@@ -145,5 +150,6 @@ export function Layout() {
       </div>
       {navOpen && <button type="button" className="drawer-scrim" aria-label="Fechar o menu" onClick={closeNav} />}
     </div>
+    </CreationProvider>
   );
 }

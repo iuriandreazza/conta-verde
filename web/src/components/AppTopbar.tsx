@@ -9,6 +9,7 @@ import { SendIcon } from "./icons/send";
 import { UsersIcon } from "./icons/users";
 import { MenuButton, type MenuItem } from "./MenuButton";
 import type { Area, Company } from "../api";
+import { useCreation, type CreateKind } from "../creation/CreationProvider";
 
 interface AppTopbarProps {
   userName: string;
@@ -22,17 +23,24 @@ interface AppTopbarProps {
 }
 
 /** What a person can start from anywhere: only the registers their role may write. */
-function creationItems(companyId: string, permissions: AppTopbarProps["permissions"]): MenuItem[] {
+function creationItems(
+  companyId: string,
+  permissions: AppTopbarProps["permissions"],
+  openCreate: (kind: CreateKind) => void,
+): MenuItem[] {
   const base = `/companies/${companyId}`;
-  const items: (MenuItem & { area: Area })[] = [
-    { key: "entry", label: "Novo lançamento", icon: CircleDollarSignIcon, to: `${base}/entries?novo=1`, area: "finance" },
+  const items: (MenuItem & { area: Area; creates?: CreateKind })[] = [
+    { key: "entry", label: "Novo lançamento", icon: CircleDollarSignIcon, creates: "entry", area: "finance" },
     { key: "transfer", label: "Nova transferência", icon: SendIcon, to: `${base}/transfers`, area: "finance" },
     { key: "quote", label: "Novo orçamento", icon: FileTextIcon, to: `${base}/quotes`, area: "sales" },
     { key: "sale", label: "Nova venda", icon: HandCoinsIcon, to: `${base}/sales`, area: "sales" },
     { key: "party", label: "Novo cliente ou fornecedor", icon: UsersIcon, to: `${base}/parties`, area: "parties" },
     { key: "product", label: "Novo produto ou serviço", icon: BoxIcon, to: `${base}/products`, area: "products" },
   ];
-  return items.filter((item) => permissions?.[item.area] === "write");
+  return items
+    .filter((item) => permissions?.[item.area] === "write")
+    // A register with a sheet opens it over the page that is showing; the others still go to their page.
+    .map(({ creates, area: _area, ...item }) => (creates ? { ...item, onSelect: () => openCreate(creates) } : item));
 }
 
 /** The bar over every signed-in page: the menu on a phone, "new" from anywhere, who is signed in and how to leave. */
@@ -46,7 +54,8 @@ export function AppTopbar({
   onToggleNav,
   onSignOut,
 }: AppTopbarProps) {
-  const creating = companyId ? creationItems(companyId, permissions) : [];
+  const { openCreate } = useCreation();
+  const creating = companyId ? creationItems(companyId, permissions, openCreate) : [];
   return (
     <div className="topbar">
       {companyId && (
