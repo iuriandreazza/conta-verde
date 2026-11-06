@@ -1109,6 +1109,85 @@ export interface ReceiptInput {
   items: { line: number; quantity: string }[];
 }
 
+export type StockMovementKind = "in" | "out" | "adjustment";
+export type StockOriginKind = "purchase_receipt" | "sale" | "sale_return" | "inventory_count";
+
+/** What a product has on hand, on a day or now (ADR 0054). */
+export interface StockPosition {
+  product_id: string;
+  name: string;
+  sku: string | null;
+  unit: string;
+  active: boolean;
+  minimum_stock: string | null;
+  /** Decimal strings: the quantity with up to 3 decimals, the value in reais. */
+  quantity: string;
+  value: string;
+  /** The value over the quantity with six decimals; `null` without something on hand. */
+  average_cost: string | null;
+}
+
+export interface StockPositionPage {
+  items: StockPosition[];
+  next_cursor: string | null;
+}
+
+export interface StockPositionFilters {
+  q: string;
+  /** `YYYY-MM-DD`: the movements through this day; empty is now. */
+  on: string;
+  sort: "name" | "-name";
+}
+
+export const NO_POSITION_FILTERS: StockPositionFilters = { q: "", on: "", sort: "name" };
+
+export interface StockMovement {
+  id: string;
+  product_id: string;
+  kind: StockMovementKind;
+  /** Signed: what comes in is above 0, what goes out below. */
+  quantity: string;
+  /** Signed like the quantity. */
+  value: string;
+  occurred_on: string;
+  /** The document that made it; `null` for one written by hand. */
+  origin: { kind: StockOriginKind; id: string; line: number } | null;
+  /** The movement this one undoes. */
+  reverses: string | null;
+  note: string | null;
+}
+
+export interface StockMovementPage {
+  items: StockMovement[];
+  next_cursor: string | null;
+}
+
+export interface StockMovementFilters {
+  product: string;
+  kind: "" | StockMovementKind;
+  from: string;
+  to: string;
+}
+
+export const NO_MOVEMENT_FILTERS: StockMovementFilters = { product: "", kind: "", from: "", to: "" };
+
+/** A movement written by hand; an `in` takes its cost as `value` (the total) or `unit_cost`, not both. */
+export interface StockMovementInput {
+  product_id: string;
+  kind: StockMovementKind;
+  /** Above 0 for an `in` and an `out`; signed for an `adjustment`. */
+  quantity: string;
+  value?: string;
+  unit_cost?: string;
+  occurred_on: string;
+  note?: string;
+}
+
+export interface StockReverseInput {
+  occurred_on: string;
+  note?: string;
+}
+
 export type BillingCycle = "monthly" | "bimonthly" | "quarterly" | "semiannual" | "yearly";
 export type ContractStatus = "active" | "paused" | "terminated";
 
@@ -1791,6 +1870,29 @@ export const api = {
     post<PurchaseReceipt>(`/companies/${companyId}/purchase-orders/${id}/receipts`, input),
   finishReceipt: (companyId: string, id: string, receiptId: string) =>
     post<PurchaseReceipt>(`/companies/${companyId}/purchase-orders/${id}/receipts/${receiptId}/finish`),
+  listStockPositions: (companyId: string, filters: StockPositionFilters = NO_POSITION_FILTERS, after?: string) => {
+    const params = new URLSearchParams();
+    if (filters.q) params.set("q", filters.q);
+    if (filters.on) params.set("on", filters.on);
+    if (filters.sort !== NO_POSITION_FILTERS.sort) params.set("sort", filters.sort);
+    if (after) params.set("after", after);
+    const query = params.size > 0 ? `?${params}` : "";
+    return request<StockPositionPage>(`/companies/${companyId}/stock/positions${query}`);
+  },
+  listStockMovements: (companyId: string, filters: StockMovementFilters = NO_MOVEMENT_FILTERS, after?: string) => {
+    const params = new URLSearchParams();
+    if (filters.product) params.set("product", filters.product);
+    if (filters.kind) params.set("kind", filters.kind);
+    if (filters.from) params.set("from", filters.from);
+    if (filters.to) params.set("to", filters.to);
+    if (after) params.set("after", after);
+    const query = params.size > 0 ? `?${params}` : "";
+    return request<StockMovementPage>(`/companies/${companyId}/stock/movements${query}`);
+  },
+  recordStockMovement: (companyId: string, input: StockMovementInput) =>
+    post<StockMovement>(`/companies/${companyId}/stock/movements`, input),
+  reverseStockMovement: (companyId: string, id: string, input: StockReverseInput) =>
+    post<StockMovement>(`/companies/${companyId}/stock/movements/${id}/reverse`, input),
   /** The OFX file goes as it is, bytes and all: the API reads the charset. */
   importStatement: (companyId: string, accountId: string, file: File, dryRun: boolean) =>
     request<ImportResult>(
