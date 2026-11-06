@@ -75,6 +75,12 @@ All of it is in the `finance` area ([ADR 0026](0026-membership-roles-and-permiss
 member, writing for the owner, admin and financial. The routes are `transfers`, `balances` and the opening
 balance under `bank-accounts`.
 
+A read is not one snapshot: each account costs two separate queries, so a transfer committed while the
+balances are being read can be counted on one side and not yet on the other, and the total is then off by
+that amount until the next read. Setting an opening balance reads the stored one and then writes, so two
+first writes at once both record a creation. Both are accepted for now (nothing stored is wrong, and the
+next read is right); a `REPEATABLE READ` read like the one parties use is the fix if it ever matters.
+
 ## Consequences
 
 - A person sets the opening balance of each account once, as of the day they start; before it was set the

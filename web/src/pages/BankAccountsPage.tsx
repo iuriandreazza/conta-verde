@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useParams } from "react-router-dom";
 import {
   NO_BANK_ACCOUNT_FILTERS,
@@ -92,19 +92,26 @@ export function BankAccountsPage() {
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const [historyOpenFor, setHistoryOpenFor] = useState<string | null>(null);
   const [openingOpenFor, setOpeningOpenFor] = useState<string | null>(null);
-  // Today where the person is: the server does not know their zone (ADR 0031).
-  const [today] = useState(() => todayIso());
   const [balances, setBalances] = useState<Balances | null>(null);
   const [balancesError, setBalancesError] = useState<string | null>(null);
+  // Counts the reads: only the latest reply is used, so a slow earlier one cannot overwrite a newer.
+  const latestBalances = useRef(0);
 
   const loadBalances = useCallback(async () => {
+    const read = ++latestBalances.current;
     try {
-      setBalances(await api.getBalances(companyId, today));
-      setBalancesError(null);
+      // Today where the person is, asked each time: the server does not know their zone (ADR 0031).
+      const fresh = await api.getBalances(companyId, todayIso());
+      if (read === latestBalances.current) {
+        setBalances(fresh);
+        setBalancesError(null);
+      }
     } catch (failure) {
-      setBalancesError(errorMessage(failure));
+      if (read === latestBalances.current) {
+        setBalancesError(errorMessage(failure));
+      }
     }
-  }, [companyId, today]);
+  }, [companyId]);
 
   useEffect(() => {
     void loadBalances();
