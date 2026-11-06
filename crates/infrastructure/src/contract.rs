@@ -9776,10 +9776,18 @@ pub async fn runs_the_sale_lifecycle<S, Q, E, F, R, Q2, R2, Em, Se>(
     };
     assert_eq!(
         store
-            .save_return(&too_big, &refused_audit)
+            .save_return(&too_big, 2, &refused_audit)
             .await
             .unwrap_err(),
         RepositoryError::ReturnTooMuch
+    );
+    // A return worked out from fewer returns than the store has is refused: its refund would be wrong.
+    assert_eq!(
+        store
+            .save_return(&too_big, 1, &refused_audit)
+            .await
+            .unwrap_err(),
+        RepositoryError::SaleChanged
     );
     let stored = store.returns_of(company, first.id()).await.unwrap();
     assert_eq!(stored.len(), 2);

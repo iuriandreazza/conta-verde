@@ -131,6 +131,17 @@ pub trait SaleRepository: Send + Sync {
         audit: &AuditEntry,
     ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
 
+    /// Changes only the status of a stored sale (completing, cancelling), only if it still has the status
+    /// `expected`: `NotFound` when the company has no such sale, `SaleChanged` when it is in another status.
+    /// The content is not written, so an edit that landed meanwhile is never overwritten with an older copy.
+    /// Cancelling is refused with `SaleHasReturns` if the sale has returns, checked with the sale locked.
+    fn set_status(
+        &self,
+        sale: &Sale,
+        expected: SaleStatus,
+        audit: &AuditEntry,
+    ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
+
     /// What was recorded about the sale, oldest first. Empty for another company's.
     fn history(
         &self,
@@ -147,12 +158,14 @@ pub trait SaleRepository: Send + Sync {
         limit: usize,
     ) -> impl Future<Output = Result<Vec<Sale>, RepositoryError>> + Send;
 
-    /// Stores a return with its audit entry, atomically, after checking, with the sale locked, that it takes
-    /// back no more of a line than was sold and not returned yet: `ReturnTooMuch` otherwise, so two returns
-    /// at the same moment cannot both pass.
+    /// Stores a return with its audit entry, atomically, after checking, with the sale locked, that the sale is
+    /// still completed (`SaleChanged`), that it has the `known_returns` the use case worked its refund out
+    /// from (`SaleChanged`: a return landed meanwhile, and the cumulative refund would be wrong), and that it
+    /// takes back no more of a line than was sold and not returned yet (`ReturnTooMuch`).
     fn save_return(
         &self,
         sale_return: &SaleReturn,
+        known_returns: usize,
         audit: &AuditEntry,
     ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
 

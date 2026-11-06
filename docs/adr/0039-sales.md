@@ -75,9 +75,19 @@ term) makes an `open` sale from a quote that is not declined or converted: the c
 copied, and the quote becomes `converted` (it keeps its link, which then shows it approved). A quote makes **one** sale (a unique
 index): asking again gives that sale, and finishes marking the quote if a failure left it unmarked.
 
+### Concurrency
+
+A transition (completing, cancelling) writes **only the status** (`set_status`), under the sale's row lock, so an edit that landed
+meanwhile is never overwritten with an older copy, and a completed sale's receivable is worked out from the sale **as stored**
+once it is completed. Cancelling is refused at the store, atomically, if the sale has returns; a return is refused at the store
+unless the sale is still completed and has exactly the returns the use case worked its refund out from (`SaleChanged`, `409`: ask
+again), so the cumulative refund never rests on a stale read. If a sale is cancelled between its completion and the write of its
+receivable, the receivable is cancelled at once. Concurrent edits of an open order are last write wins, like every register.
+What a sale or a return made is **not edited as an entry of its own** (`409`): it changes through the sale.
+
 ### Roles
 
-The `sales` and `quotes` segments are in the `sales` area; a completed sale's receivable is an entry, which the `finance` area
+The `sales` and `quotes` segments are in the `sales` area, so a user with sales write may cancel a sale and record a return, which write finance entries as their consequence (cancelling a receivable, making a refund payable): the areas are coarse ([ADR 0026](0026-membership-roles-and-permissions.md)) and the person who sells is the one who takes it back; a completed sale's receivable is an entry, which the `finance` area
 reads and settles like any other.
 
 ## Consequences

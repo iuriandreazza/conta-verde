@@ -298,7 +298,7 @@ export function EntriesPage() {
                         <td className="tabular">{describeDue(entry)}</td>
                         <td className="num">{formatMoney(entry.total)}</td>
                         <td className="row-actions">
-                          {canWrite && !entry.voided && (
+                          {canWrite && !entry.voided && entry.sale_id === null && entry.sale_return_id === null && (
                             <Button
                               iconOnly
                               icon={SquarePenIcon}

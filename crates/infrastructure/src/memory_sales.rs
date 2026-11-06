@@ -98,6 +98,35 @@ impl SaleRepository for InMemorySaleRepository {
         Ok(())
     }
 
+    async fn set_status(
+        &self,
+        sale: &Sale,
+        expected: SaleStatus,
+        audit: &AuditEntry,
+    ) -> Result<(), RepositoryError> {
+        ensure_audit_describes(audit, sale)?;
+        let mut state = self.state.lock().expect("repository lock poisoned");
+        let returned = state
+            .returns
+            .iter()
+            .any(|made| made.company_id() == sale.company_id() && made.sale_id() == sale.id());
+        let stored = state
+            .sales
+            .iter_mut()
+            .find(|stored| stored.company_id() == sale.company_id() && stored.id() == sale.id())
+            .ok_or(RepositoryError::NotFound)?;
+        if stored.status() != expected {
+            return Err(RepositoryError::SaleChanged);
+        }
+        if sale.status() == SaleStatus::Cancelled && returned {
+            return Err(RepositoryError::SaleHasReturns);
+        }
+        // Only the status moves: what an edit wrote meanwhile stays.
+        *stored = stored.with_status(sale.status());
+        state.audit.record(audit);
+        Ok(())
+    }
+
     async fn history(
         &self,
         company_id: CompanyId,
@@ -146,6 +175,7 @@ impl SaleRepository for InMemorySaleRepository {
     async fn save_return(
         &self,
         sale_return: &SaleReturn,
+        known_returns: usize,
         audit: &AuditEntry,
     ) -> Result<(), RepositoryError> {
         ensure_audit_describes(audit, sale_return)?;
@@ -158,6 +188,17 @@ impl SaleRepository for InMemorySaleRepository {
                     && stored.id() == sale_return.sale_id()
             })
             .ok_or(RepositoryError::NotFound)?;
+        if sale.status() != SaleStatus::Completed {
+            return Err(RepositoryError::SaleChanged);
+        }
+        let stored_returns = state
+            .returns
+            .iter()
+            .filter(|made| made.sale_id() == sale_return.sale_id())
+            .count();
+        if stored_returns != known_returns {
+            return Err(RepositoryError::SaleChanged);
+        }
         for (line, quantity) in sale_return.items() {
             let sold = usize::from(*line)
                 .checked_sub(1)

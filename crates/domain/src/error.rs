@@ -91,6 +91,7 @@ pub enum DomainError {
     ReturnRefundIsNothing,
     InstallmentTooSmall,
     ReturnExceedsSold,
+    EntryFollowsASale,
 }
 
 impl fmt::Display for DomainError {
@@ -275,6 +276,9 @@ impl fmt::Display for DomainError {
                 "the amount is too small to be split by this payment term: an installment would be less than one cent",
             ),
             Self::ReturnExceedsSold => f.write_str("a return cannot be of more than was sold and not returned yet"),
+            Self::EntryFollowsASale => f.write_str(
+                "an entry made by a sale or by a return changes through the sale, not on its own",
+            ),
             Self::KindCannotChange => f.write_str("the kind cannot change once registered"),
         }
     }

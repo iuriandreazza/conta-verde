@@ -137,6 +137,14 @@ impl Sale {
         Ok(replaced)
     }
 
+    /// The sale with only its status changed: what a store does when it records a transition.
+    pub fn with_status(&self, status: SaleStatus) -> Self {
+        Self {
+            status,
+            ..self.clone()
+        }
+    }
+
     /// The sale billed: it must be open and worth something, since a receivable has installments above 0.
     pub fn completed(&self) -> Result<Self, DomainError> {
         if self.status != SaleStatus::Open {

@@ -153,10 +153,17 @@ impl FinancialEntry {
     }
 
     /// The same entry with every editable field replaced by the draft's. Where it came from is not
-    /// editable, and a voided entry is not edited at all.
+    /// editable, a voided entry is not edited at all, and what a sale or a return made changes through them
+    /// (a receivable that drifted from its sale would be two records of one fact).
     pub fn replaced_with(&self, draft: FinancialEntryDraft) -> Result<Self, DomainError> {
         if self.voided {
             return Err(DomainError::EntryIsVoided);
+        }
+        if matches!(
+            self.origin,
+            Some(EntryOrigin::Sale(_) | EntryOrigin::SaleReturn(_))
+        ) {
+            return Err(DomainError::EntryFollowsASale);
         }
         let mut replaced = Self::new(self.id, self.company_id, draft)?;
         replaced.origin = self.origin;

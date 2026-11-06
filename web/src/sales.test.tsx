@@ -189,8 +189,12 @@ describe("sales", () => {
     );
     renderAt("/companies/c1/sales");
     await userEvent.click(await screen.findByRole("button", { name: "Cancelar a venda 4" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("reverse them before cancelling it");
-    await userEvent.click(screen.getByRole("button", { name: "Cancelar a venda 4" }));
+    // Nothing happens until it is confirmed, and the confirmation says what it costs.
+    const region = within(screen.getByRole("region", { name: "Cancelamento da venda 4" }));
+    expect(region.getByText(/cancela também a conta a receber que ela gerou/)).toBeInTheDocument();
+    await userEvent.click(region.getByRole("button", { name: "Cancelar a venda" }));
+    expect(await region.findByRole("alert")).toHaveTextContent("reverse them before cancelling it");
+    await userEvent.click(region.getByRole("button", { name: "Cancelar a venda" }));
     expect(await screen.findByText("Venda nº 4 cancelada e a conta a receber também.")).toBeInTheDocument();
     expect(await screen.findByRole("row", { name: /Mercado Boa Compra.*Cancelada/ })).toBeInTheDocument();
   });
@@ -297,7 +301,9 @@ describe("entries made by sales", () => {
 
     const live = await screen.findByRole("row", { name: /Venda nº 4/ });
     expect(live).toHaveTextContent("De uma venda");
-    expect(within(live).getByRole("button", { name: "Alterar Venda nº 4" })).toBeInTheDocument();
+    // What a sale made follows the sale: it is not edited as an entry of its own.
+    expect(within(live).queryByRole("button", { name: "Alterar Venda nº 4" })).not.toBeInTheDocument();
+    expect(within(live).getByRole("button", { name: "Baixas de Venda nº 4" })).toBeInTheDocument();
     const gone = screen.getByRole("row", { name: /Venda nº 5/ });
     expect(gone).toHaveTextContent("Cancelado");
     expect(within(gone).queryByRole("button", { name: /Alterar/ })).not.toBeInTheDocument();

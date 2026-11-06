@@ -55,7 +55,7 @@ const FIELD_LABELS: Record<string, string> = {
   quote_id: "Orçamento",
 };
 
-type Panel = { kind: "complete" | "returns" | "history"; id: string };
+type Panel = { kind: "complete" | "returns" | "history" | "cancel"; id: string };
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one instance.
 export function SalesPage() {
@@ -352,8 +352,8 @@ export function SalesPage() {
                               variant="ghost"
                               className="btn-small"
                               aria-label={`Cancelar a venda ${sale.number}`}
-                              disabled={acting}
-                              onClick={() => void act(sale, "cancel")}
+                              aria-expanded={panel?.kind === "cancel" && panel.id === sale.id}
+                              onClick={() => toggle("cancel", sale.id)}
                             >
                               Cancelar
                             </Button>
@@ -381,6 +381,28 @@ export function SalesPage() {
                               error={actionError}
                               onConfirm={() => void act(sale, "complete")}
                             />
+                          </td>
+                        </tr>
+                      )}
+                      {panel?.id === sale.id && panel.kind === "cancel" && (
+                        <tr>
+                          <td colSpan={6} role="region" aria-label={`Cancelamento da venda ${sale.number}`}>
+                            <div className="settlements">
+                              <p>
+                                {sale.status === "completed"
+                                  ? "Cancelar a venda cancela também a conta a receber que ela gerou, e isso não se desfaz: para vender de novo, faça outra venda. Se a conta já recebeu baixas, desfaça as baixas antes."
+                                  : "Cancelar o pedido o encerra: ele não é reaberto."}
+                              </p>
+                              <Notice message={actionError} />
+                              <div className="form-actions">
+                                <Button type="button" pending={acting} onClick={() => void act(sale, "cancel")}>
+                                  Cancelar a venda
+                                </Button>
+                                <Button type="button" variant="ghost" disabled={acting} onClick={() => setPanel(null)}>
+                                  Manter
+                                </Button>
+                              </div>
+                            </div>
                           </td>
                         </tr>
                       )}
@@ -542,8 +564,10 @@ function CompletePanel({
   onConfirm: () => void;
 }) {
   const total = toCents(sale.total);
+  // A term the page has not read is not "no term": the preview waits instead of showing what the server will not make.
+  const waiting = sale.payment_term_id !== null && term === null;
   const parts =
-    total === null
+    total === null || waiting
       ? null
       : term === null
         ? [{ due: sale.sold_on, cents: total }]
@@ -554,7 +578,11 @@ function CompletePanel({
         Concluir gera uma conta a receber de <strong>{formatMoney(sale.total)}</strong>
         {term === null ? ", para o dia da venda" : ` pelo prazo ${term.name}`}. Depois disso os itens não mudam.
       </p>
-      {parts === null ? (
+      {waiting ? (
+        <p role="status" className="status">
+          <Spinner /> Carregando o prazo…
+        </p>
+      ) : parts === null ? (
         <Notice message="O valor é pequeno demais para este prazo: uma parcela ficaria com menos de um centavo." />
       ) : (
         <ul className="history">
@@ -724,7 +752,7 @@ function displayValue(field: string, value: string | null, names: Map<string, st
   if (field === "sold_on") return formatDate(value);
   if (field === "lines") {
     return value
-      .split(",")
+      .split("\n")
       .map((line) => {
         // The description comes last and may hold colons of its own.
         const [product, quantity, price, discount, ...description] = line.split(":");

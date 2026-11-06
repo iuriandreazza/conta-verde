@@ -167,6 +167,54 @@ impl SaleRepository for PostgresSaleRepository {
         tx.commit().await.map_err(storage_error)
     }
 
+    async fn set_status(
+        &self,
+        sale: &Sale,
+        expected: SaleStatus,
+        audit: &AuditEntry,
+    ) -> Result<(), RepositoryError> {
+        ensure_audit_describes(audit, sale)?;
+        let mut tx = self.pool.begin().await.map_err(storage_error)?;
+        // The sale is locked: a return that is being stored takes the same lock before it looks at the status.
+        let stored: Option<String> = sqlx::query_scalar(
+            "SELECT status FROM sales WHERE id = $1 AND company_id = $2 FOR UPDATE",
+        )
+        .bind(sale.id().as_uuid())
+        .bind(sale.company_id().as_uuid())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(storage_error)?;
+        match stored {
+            None => return Err(RepositoryError::NotFound),
+            Some(status) if status != expected.as_str() => {
+                return Err(RepositoryError::SaleChanged);
+            }
+            Some(_) => {}
+        }
+        if sale.status() == SaleStatus::Cancelled {
+            let returned: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM sale_returns WHERE company_id = $1 AND sale_id = $2)",
+            )
+            .bind(sale.company_id().as_uuid())
+            .bind(sale.id().as_uuid())
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(storage_error)?;
+            if returned {
+                return Err(RepositoryError::SaleHasReturns);
+            }
+        }
+        sqlx::query("UPDATE sales SET status = $3 WHERE id = $1 AND company_id = $2")
+            .bind(sale.id().as_uuid())
+            .bind(sale.company_id().as_uuid())
+            .bind(sale.status().as_str())
+            .execute(&mut *tx)
+            .await
+            .map_err(storage_error)?;
+        postgres_audit::insert(&mut tx, audit).await?;
+        tx.commit().await.map_err(storage_error)
+    }
+
     async fn history(
         &self,
         company_id: CompanyId,
@@ -238,21 +286,36 @@ impl SaleRepository for PostgresSaleRepository {
     async fn save_return(
         &self,
         sale_return: &SaleReturn,
+        known_returns: usize,
         audit: &AuditEntry,
     ) -> Result<(), RepositoryError> {
         ensure_audit_describes(audit, sale_return)?;
         let mut tx = self.pool.begin().await.map_err(storage_error)?;
         // The sale is locked first: two returns of the same sale take turns, and what was returned before is
         // read after the one before has committed.
-        let locked: Option<Uuid> =
-            sqlx::query_scalar("SELECT id FROM sales WHERE id = $1 AND company_id = $2 FOR UPDATE")
-                .bind(sale_return.sale_id().as_uuid())
-                .bind(sale_return.company_id().as_uuid())
-                .fetch_optional(&mut *tx)
-                .await
-                .map_err(storage_error)?;
-        if locked.is_none() {
-            return Err(RepositoryError::NotFound);
+        let status: Option<String> = sqlx::query_scalar(
+            "SELECT status FROM sales WHERE id = $1 AND company_id = $2 FOR UPDATE",
+        )
+        .bind(sale_return.sale_id().as_uuid())
+        .bind(sale_return.company_id().as_uuid())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(storage_error)?;
+        match status.as_deref() {
+            None => return Err(RepositoryError::NotFound),
+            Some("completed") => {}
+            Some(_) => return Err(RepositoryError::SaleChanged),
+        }
+        let stored: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sale_returns WHERE company_id = $1 AND sale_id = $2",
+        )
+        .bind(sale_return.company_id().as_uuid())
+        .bind(sale_return.sale_id().as_uuid())
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(storage_error)?;
+        if usize::try_from(stored).ok() != Some(known_returns) {
+            return Err(RepositoryError::SaleChanged);
         }
         for (line, quantity) in sale_return.items() {
             let fits: Option<bool> = sqlx::query_scalar(

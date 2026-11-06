@@ -293,7 +293,7 @@ describe("quotes", () => {
                   changes: [
                     { field: "customer_id", from: null, to: "p1" },
                     { field: "status", from: null, to: "draft" },
-                    { field: "lines", from: null, to: "pr1:3:10.1:0.3:Café: o torrado" },
+                    { field: "lines", from: null, to: "pr1:3:10.1:0.3:Café: o torrado\npr2:1:5:0:Cabo, 2 m" },
                   ],
                 },
               ],
@@ -306,7 +306,7 @@ describe("quotes", () => {
     const history = within(await screen.findByRole("region", { name: "Histórico do orçamento 7" }));
     expect(await history.findByText("Mercado Boa Compra")).toBeInTheDocument();
     expect(history.getByText("Rascunho")).toBeInTheDocument();
-    expect(history.getByText("Café: o torrado × 3 a R$ 10,10 (− R$ 0,30)")).toBeInTheDocument();
+    expect(history.getByText(/Café: o torrado × 3 a R\$ 10,10 \(− R\$ 0,30\); Cabo, 2 m × 1 a R\$ 5,00/)).toBeInTheDocument();
   });
 });
 

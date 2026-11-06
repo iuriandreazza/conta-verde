@@ -40,6 +40,8 @@ pub enum RepositoryError {
     DuplicateQuoteSale,
     /// A return would take back more of a line than was sold.
     ReturnTooMuch,
+    /// The sale has returns, which stand.
+    SaleHasReturns,
     /// The quote is no longer in the status the write was made from.
     QuoteChanged,
     Storage(String),
@@ -216,6 +218,7 @@ impl fmt::Display for RepositoryError {
             Self::SaleChanged => f.write_str("the sale was changed meanwhile"),
             Self::DuplicateQuoteSale => f.write_str("the quote already became a sale"),
             Self::ReturnTooMuch => f.write_str("a return cannot be of more than was sold"),
+            Self::SaleHasReturns => f.write_str("the sale has returns"),
             Self::QuoteChanged => f.write_str("the quote was changed meanwhile"),
             Self::Storage(message) => write!(f, "storage failure: {message}"),
         }

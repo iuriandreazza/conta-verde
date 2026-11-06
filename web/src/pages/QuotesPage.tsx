@@ -642,7 +642,7 @@ function displayValue(field: string, value: string | null, names: Map<string, st
   if (field === "issued_on" || field === "valid_until") return formatDate(value);
   if (field === "lines") {
     return value
-      .split(",")
+      .split("\n")
       .map((line) => {
         // The description comes last and may hold colons of its own.
         const [product, quantity, price, discount, ...description] = line.split(":");

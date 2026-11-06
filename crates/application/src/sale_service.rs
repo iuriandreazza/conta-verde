@@ -199,8 +199,10 @@ where
     }
 
     /// Bills an open order: its receivable is made from its payment term, and its items are fixed from then
-    /// on. The receivable is checked **before** the order changes, and asking again for a sale that was
-    /// completed finishes a receivable a failure left unmade, so the two are never apart for good.
+    /// on. The receivable is checked **before** the order changes; only the status is written, and the
+    /// receivable is worked out from the sale **as it was stored** once it is completed, so an edit that
+    /// landed meanwhile is never billed from an older copy. Asking again for a completed sale finishes a
+    /// receivable a failure left unmade, and changes nothing when it exists.
     pub async fn complete(
         &self,
         company_id: CompanyId,
@@ -208,13 +210,11 @@ where
         id: SaleId,
     ) -> Result<Sale, ApplicationError> {
         let sale = self.find(company_id, id).await?;
-        let (sale, receivable) = match sale.status() {
+        match sale.status() {
             SaleStatus::Open => {
                 let completed = sale.completed()?;
                 let receivable = self.receivable_of(&completed).await?;
-                self.entries
-                    .validate(company_id, receivable.clone())
-                    .await?;
+                self.entries.validate(company_id, receivable).await?;
                 let audit = audit_entry(
                     &completed,
                     actor,
@@ -223,35 +223,45 @@ where
                 );
                 match self
                     .sales
-                    .update(&completed, SaleStatus::Open, &audit)
+                    .set_status(&completed, SaleStatus::Open, &audit)
                     .await
                 {
-                    Ok(()) => (completed, receivable),
+                    Ok(()) => {}
                     // Someone completed it a moment ago: what is left is the receivable, which is made once.
-                    Err(RepositoryError::SaleChanged) => {
-                        let now = self.find(company_id, id).await?;
-                        if now.status() != SaleStatus::Completed {
-                            return Err(ApplicationError::SaleChanged);
-                        }
-                        (now, receivable)
-                    }
+                    Err(RepositoryError::SaleChanged) => {}
                     Err(error) => return Err(changed_or_missing(error)),
                 }
             }
-            SaleStatus::Completed => {
-                let receivable = self.receivable_of(&sale).await?;
-                (sale, receivable)
-            }
-            SaleStatus::Cancelled => {
-                return Err(DomainError::SaleIsLocked.into());
-            }
-        };
+            SaleStatus::Completed => {}
+            SaleStatus::Cancelled => return Err(DomainError::SaleIsLocked.into()),
+        }
+        let stored = self.find(company_id, id).await?;
+        if stored.status() == SaleStatus::Cancelled {
+            return Err(DomainError::SaleIsLocked.into());
+        }
+        if self
+            .entries
+            .made_by(company_id, EntryOrigin::Sale(id))
+            .await?
+            .is_some()
+        {
+            return Ok(stored);
+        }
+        let receivable = self.receivable_of(&stored).await?;
         match self
             .entries
             .register_with_origin(company_id, actor, receivable, EntryOrigin::Sale(id))
             .await
         {
-            Ok(_) | Err(ApplicationError::Repository(RepositoryError::DuplicateOrigin)) => Ok(sale),
+            Ok(entry) => {
+                // Cancelled between the status and the entry: the receivable is not left alive.
+                if self.find(company_id, id).await?.status() == SaleStatus::Cancelled {
+                    self.entries.void(company_id, actor, entry.id()).await?;
+                    return Err(DomainError::SaleIsLocked.into());
+                }
+                Ok(stored)
+            }
+            Err(ApplicationError::Repository(RepositoryError::DuplicateOrigin)) => Ok(stored),
             Err(error) => Err(error),
         }
     }
@@ -307,9 +317,12 @@ where
             sale_changes(&before, &after),
         );
         self.sales
-            .update(&after, before.status(), &audit)
+            .set_status(&after, before.status(), &audit)
             .await
-            .map_err(changed_or_missing)?;
+            .map_err(|error| match error {
+                RepositoryError::SaleHasReturns => ApplicationError::SaleHasReturns,
+                other => changed_or_missing(other),
+            })?;
         Ok(after)
     }
 
@@ -325,10 +338,8 @@ where
         refund: Refund,
     ) -> Result<ReturnRecord, ApplicationError> {
         let sale = self.find(company_id, sale_id).await?;
-        let before: Vec<(u16, Decimal)> = self
-            .sales
-            .returns_of(company_id, sale_id)
-            .await?
+        let made_before = self.sales.returns_of(company_id, sale_id).await?;
+        let before: Vec<(u16, Decimal)> = made_before
             .iter()
             .flat_map(|made| made.items().iter().map(|(line, q)| (*line, q.as_decimal())))
             .collect();
@@ -342,12 +353,12 @@ where
             sale_return_creation_changes(&sale_return),
         );
         self.sales
-            .save_return(&sale_return, &audit)
+            .save_return(&sale_return, made_before.len(), &audit)
             .await
             .map_err(|error| match error {
                 RepositoryError::ReturnTooMuch => DomainError::ReturnExceedsSold.into(),
                 RepositoryError::NotFound => ApplicationError::SaleNotFound,
-                other => other.into(),
+                other => changed_or_missing(other),
             })?;
         let entry = self
             .entries

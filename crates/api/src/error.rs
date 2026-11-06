@@ -61,7 +61,8 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
             | DomainError::SaleIsLocked
             | DomainError::SaleIsNotCompleted
             | DomainError::EntryIsVoided
-            | DomainError::ReturnExceedsSold),
+            | DomainError::ReturnExceedsSold
+            | DomainError::EntryFollowsASale),
         ) => (StatusCode::CONFLICT, error.to_string()),
         ApplicationError::Domain(error) => (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()),
         ApplicationError::Repository(
@@ -83,7 +84,8 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
             | RepositoryError::EntryVoided
             | RepositoryError::SaleChanged
             | RepositoryError::DuplicateQuoteSale
-            | RepositoryError::ReturnTooMuch),
+            | RepositoryError::ReturnTooMuch
+            | RepositoryError::SaleHasReturns),
         ) => (StatusCode::CONFLICT, error.to_string()),
         ApplicationError::Auth(error) => {
             let status = match error {
