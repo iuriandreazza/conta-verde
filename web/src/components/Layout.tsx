@@ -149,17 +149,19 @@ export function Layout() {
           <Link to="/" className="brand" aria-label="conta-verde, início">
             <Logo size={30} />
           </Link>
-          <button
-            type="button"
-            className="sidebar-toggle"
-            aria-expanded={!collapsed}
-            aria-controls="company-nav"
-            aria-label={collapsed ? "Expandir o menu" : "Recolher o menu"}
-            title={collapsed ? "Expandir o menu" : "Recolher o menu"}
-            onClick={toggleCollapsed}
-          >
-            {collapsed ? <ChevronRightIcon size={18} aria-hidden /> : <ChevronLeftIcon size={18} aria-hidden />}
-          </button>
+          {companyId && (
+            <button
+              type="button"
+              className="sidebar-toggle"
+              aria-expanded={!collapsed}
+              aria-controls="company-nav"
+              aria-label={collapsed ? "Expandir o menu" : "Recolher o menu"}
+              title={collapsed ? "Expandir o menu" : "Recolher o menu"}
+              onClick={toggleCollapsed}
+            >
+              {collapsed ? <ChevronRightIcon size={18} aria-hidden /> : <ChevronLeftIcon size={18} aria-hidden />}
+            </button>
+          )}
         </div>
         {company && (
           <div className="company-switch">
