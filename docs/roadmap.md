@@ -67,7 +67,7 @@ rounding rule). No proposed ADR belongs to this phase. One slice per pull reques
 - [x] Recurring contracts: billing cycle, automatic sale and receivable per period, adjustment and termination ([ADR 0040](adr/0040-contracts.md)) — a contract (monthly to yearly) bills each cycle on its day as a completed sale and its receivable, by an hourly job and when it is written, once per cycle day (a unique index), with a percentage adjustment and a termination; the tests move the clock through three cycles
 - [x] Sellers and commissions: rules per seller or product, commission statement
 - [x] Price lists
-- [ ] Dashboard: balances, receivables and payables due, sales of the month, top products and customers (real figures replace the sample data)
+- [x] Dashboard: balances, receivables and payables due, sales of the month, top products and customers (real figures replace the sample data) ([ADR 0043](adr/0043-sales-reports-and-dashboard.md)) — the home page reads the balance of each account and the statement lines waiting to be reconciled, mirrored receivable and payable blocks (overdue, due today, next days) and the due ranges, the cash flow of a chosen period and the top products and customers, each card on its own request, with an "atualizado em" stamp
 - [x] Reports: sales by customer, product, seller and period; ABC curve ([ADR 0043](adr/0043-sales-reports-and-dashboard.md)) — `GET /sales-reports` ranks the completed sales of a span net of returns by customer, product or seller with each row's share and its ABC class, and the Relatórios page has a Vendas view
 
 Exit criteria: a quote becomes a sale and its receivables appear in cash flow; a recurring
