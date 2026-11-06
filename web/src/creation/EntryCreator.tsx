@@ -7,7 +7,7 @@ import type { CreatorProps } from "./CreationProvider";
 
 /** The form of a new entry, with what it points at read for the company, and the call that saves it. */
 export function EntryCreator({ companyId, onBusyChange, onCreated, onCancel }: CreatorProps) {
-  const targets = useEntryTargets(companyId);
+  const targets = useEntryTargets(companyId, { payments: false });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

@@ -2374,6 +2374,7 @@ describe("members and invitations", () => {
     });
     renderAt("/companies/c1/members");
 
+    await userEvent.click(await screen.findByRole("button", { name: "Convidar alguém" }));
     await userEvent.type(await screen.findByLabelText("E-mail"), "bia@example.com");
     await userEvent.selectOptions(screen.getByLabelText("Papel"), "sales");
     expect(screen.getByText(/Cadastra clientes e fornecedores; só consulta o resto/)).toBeInTheDocument();
@@ -2385,9 +2386,10 @@ describe("members and invitations", () => {
       email: "bia@example.com",
       role: "sales",
     });
-    // The list shows it now, and the e-mail field is empty again.
+    // The list behind the sheet shows it already; the link stays until the person is done with it.
     expect(await screen.findByRole("button", { name: "Retirar o convite de bia@example.com" })).toBeInTheDocument();
-    expect(screen.getByLabelText("E-mail")).toHaveValue("");
+    await userEvent.click(screen.getByRole("button", { name: "Concluir" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   describe("changing and removing members", () => {
@@ -2494,6 +2496,7 @@ describe("members and invitations", () => {
     });
     renderAt("/companies/c1/members");
 
+    await userEvent.click(await screen.findByRole("button", { name: "Convidar alguém" }));
     await userEvent.type(await screen.findByLabelText("E-mail"), "bia@example.com");
     await userEvent.click(screen.getByRole("button", { name: "Convidar" }));
 
@@ -4110,6 +4113,10 @@ describe("recurrences", () => {
     };
 
   const formPanel = async (heading: string) => {
+    // A new recurrence is asked for with the button; a change opens the sheet by itself.
+    if (heading === "Nova recorrência") {
+      await userEvent.click(await screen.findByRole("button", { name: heading }));
+    }
     const panel = within((await screen.findByRole("heading", { name: heading })).closest("aside")!);
     await panel.findByLabelText("Descrição");
     return panel;

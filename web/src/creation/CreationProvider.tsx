@@ -1,15 +1,18 @@
 import { AnimatePresence, motion } from "motion/react";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { BadgeAlertIcon } from "../components/icons/badge-alert";
+import { Button } from "../components/Button";
 import { CheckIcon } from "../components/icons/check";
 import { Sheet } from "../components/Sheet";
 import { EntryCreator } from "./EntryCreator";
+import { RecurrenceCreator } from "./RecurrenceCreator";
+import { InviteCreator } from "./InviteCreator";
 import { BankAccountCreator, CostCenterCreator, PaymentMethodCreator, PaymentTermCreator } from "./registers";
 import { PartyCreator } from "./PartyCreator";
 import { ProductCreator } from "./ProductCreator";
 import { TransferCreator } from "./TransferCreator";
 
-export type CreateKind = "entry" | "party" | "product" | "transfer" | "costCenter" | "paymentMethod" | "paymentTerm" | "bankAccount";
+export type CreateKind = "entry" | "party" | "product" | "transfer" | "costCenter" | "paymentMethod" | "paymentTerm" | "bankAccount" | "invite" | "recurrence";
 
 /** What a creator tells the host when the record exists: the words for the confirmation, and the new id. */
 export interface Created {
@@ -17,6 +20,8 @@ export interface Created {
   id: string;
   /** A warning from what was saved (the registry could not confirm a CNPJ) is not a plain success. */
   tone?: "success" | "warning";
+  /** Something the person must read before leaving (a link that is shown once): the sheet stays open on it. */
+  result?: ReactNode;
 }
 
 export interface CreatorProps {
@@ -29,6 +34,8 @@ export interface CreatorProps {
 
 const CREATORS: Record<CreateKind, { title: string; Creator: (props: CreatorProps) => ReactNode }> = {
   entry: { title: "Novo lançamento", Creator: EntryCreator },
+  recurrence: { title: "Nova recorrência", Creator: RecurrenceCreator },
+  invite: { title: "Convidar alguém", Creator: InviteCreator },
   bankAccount: { title: "Nova conta bancária", Creator: BankAccountCreator },
   costCenter: { title: "Novo centro de custo", Creator: CostCenterCreator },
   paymentMethod: { title: "Nova forma de pagamento", Creator: PaymentMethodCreator },
@@ -57,19 +64,24 @@ export function CreationProvider({ companyId, children }: { companyId: string | 
   const [kind, setKind] = useState<CreateKind | null>(null);
   // An object, so the same words twice in a row are a new confirmation with a new timer.
   const [confirmation, setConfirmation] = useState<{ text: string; id: number; tone: "success" | "warning" } | null>(null);
+  // What a creator asks the person to read before the sheet goes away.
+  const [result, setResult] = useState<ReactNode>(null);
   const busy = useRef(false);
   const confirmations = useRef(0);
   const listeners = useRef(new Map<CreateKind, Set<(created: Created) => void>>());
 
   const openCreate = useCallback((wanted: CreateKind) => setKind(wanted), []);
   const closeUnlessSaving = useCallback(() => {
-    if (!busy.current) setKind(null);
+    if (busy.current) return;
+    setKind(null);
+    setResult(null);
   }, []);
 
   // Another company, or a path outside any: what was open belongs to the one that was left.
   useEffect(() => {
     busy.current = false;
     setKind(null);
+    setResult(null);
   }, [companyId]);
 
   const subscribe = useCallback((wanted: CreateKind, listener: (created: Created) => void) => {
@@ -94,7 +106,18 @@ export function CreationProvider({ companyId, children }: { companyId: string | 
       {children}
       {companyId !== undefined && (
         <Sheet open={kind !== null} title={current?.title ?? ""} onClose={closeUnlessSaving}>
-          {kind !== null && current !== null && (
+          {kind !== null && current !== null && result !== null && (
+            <div className="creation-result">
+              {result}
+              <div className="form-footer">
+                <span />
+                <Button type="button" icon={CheckIcon} onClick={closeUnlessSaving}>
+                  Concluir
+                </Button>
+              </div>
+            </div>
+          )}
+          {kind !== null && current !== null && result === null && (
             <current.Creator
               key={companyId}
               companyId={companyId}
@@ -104,9 +127,14 @@ export function CreationProvider({ companyId, children }: { companyId: string | 
               onCancel={closeUnlessSaving}
               onCreated={(created) => {
                 busy.current = false;
+                listeners.current.get(kind)?.forEach((listener) => listener(created));
+                if (created.result !== undefined) {
+                  // The sheet stays, now showing what must be read; the page behind already has the news.
+                  setResult(created.result);
+                  return;
+                }
                 setKind(null);
                 setConfirmation({ text: created.message, id: ++confirmations.current, tone: created.tone ?? "success" });
-                listeners.current.get(kind)?.forEach((listener) => listener(created));
               }}
             />
           )}
