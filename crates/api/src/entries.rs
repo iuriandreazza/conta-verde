@@ -3,8 +3,9 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use conta_verde_application::{ApplicationError, EntryCursor, EntrySort, FinancialEntryQuery};
 use conta_verde_domain::{
-    CalendarDate, CategoryId, CostCenterId, EntryId, EntryInstallmentDraft, EntryKind,
-    FinancialEntry, FinancialEntryDraft, PartyId,
+    BankAccountId, CalendarDate, CategoryId, CostCenterId, EntryId, EntryInstallmentDraft,
+    EntryKind, FinancialEntry, FinancialEntryDraft, PartyId, PaymentMethodId, Settlement,
+    SettlementDraft, SettlementId, settled_of,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -113,6 +114,9 @@ pub(crate) struct InstallmentResponse {
     due_date: String,
     /// A decimal string without trailing zeros, like `"150.5"` or `"2500"`.
     amount: String,
+    /// How much of it the settlements that are not reversed have settled, a decimal string. What is
+    /// left is `amount` less this; whether it is overdue is for the reader, who knows today's date.
+    settled: String,
 }
 
 #[derive(Serialize)]
@@ -130,8 +134,8 @@ pub(crate) struct EntryResponse {
     total: String,
 }
 
-impl From<&FinancialEntry> for EntryResponse {
-    fn from(entry: &FinancialEntry) -> Self {
+impl EntryResponse {
+    fn new(entry: &FinancialEntry, settlements: &[Settlement]) -> Self {
         Self {
             id: entry.id().as_uuid(),
             company_id: entry.company_id().as_uuid(),
@@ -148,6 +152,7 @@ impl From<&FinancialEntry> for EntryResponse {
                     number: installment.number(),
                     due_date: installment.due_date().to_string(),
                     amount: installment.amount().to_string(),
+                    settled: settled_of(settlements, installment.number()).to_string(),
                 })
                 .collect(),
             total: entry.total().to_string(),
@@ -193,8 +198,14 @@ pub(crate) async fn list_entries<X: Ports>(
         .entries
         .list(company_id, &filter, after.as_ref(), query.limit)
         .await?;
+    let ids: Vec<EntryId> = page.items.iter().map(FinancialEntry::id).collect();
+    let settlements = state.entries.settlements_of(company_id, &ids).await?;
     Ok(Json(EntryPageResponse {
-        items: page.items.iter().map(EntryResponse::from).collect(),
+        items: page
+            .items
+            .iter()
+            .map(|entry| EntryResponse::new(entry, &of_entry(&settlements, entry.id())))
+            .collect(),
         next_cursor: page.next.as_ref().map(encode_cursor),
     }))
 }
@@ -208,7 +219,8 @@ pub(crate) async fn register_entry<X: Ports>(
         .entries
         .register(company_id, &actor, request.into_draft()?)
         .await?;
-    Ok((StatusCode::CREATED, Json(EntryResponse::from(&entry))))
+    // Nothing is settled in a new entry.
+    Ok((StatusCode::CREATED, Json(EntryResponse::new(&entry, &[]))))
 }
 
 pub(crate) async fn get_entry<X: Ports>(
@@ -217,7 +229,8 @@ pub(crate) async fn get_entry<X: Ports>(
     Path((_, id)): Path<(Uuid, String)>,
 ) -> Result<Json<EntryResponse>, ApiError> {
     let entry = state.entries.get(company_id, parse_id(&id)?).await?;
-    Ok(Json(EntryResponse::from(&entry)))
+    let settlements = state.entries.settlements(company_id, entry.id()).await?;
+    Ok(Json(EntryResponse::new(&entry, &settlements)))
 }
 
 /// Replaces every field and every installment. Nothing is written, and nothing is recorded, when
@@ -232,7 +245,8 @@ pub(crate) async fn update_entry<X: Ports>(
         .entries
         .update(company_id, &actor, parse_id(&id)?, request.into_draft()?)
         .await?;
-    Ok(Json(EntryResponse::from(&entry)))
+    let settlements = state.entries.settlements(company_id, entry.id()).await?;
+    Ok(Json(EntryResponse::new(&entry, &settlements)))
 }
 
 /// What was recorded about an entry, oldest first.
@@ -245,4 +259,131 @@ pub(crate) async fn entry_history<X: Ports>(
     Ok(Json(
         history.iter().map(HistoryEntryResponse::from).collect(),
     ))
+}
+
+/// The settlements of one entry out of those of a page.
+fn of_entry(settlements: &[Settlement], entry_id: EntryId) -> Vec<Settlement> {
+    settlements
+        .iter()
+        .filter(|settlement| settlement.entry_id() == entry_id)
+        .cloned()
+        .collect()
+}
+
+/// Pays an installment: what is applied, and the interest, fine and discount of the day, from a bank
+/// account. Amounts are decimal strings in cents.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SettlementRequest {
+    /// The number of the installment, from 1.
+    installment: u16,
+    /// `YYYY-MM-DD`: the day the money moved.
+    settled_on: String,
+    applied: String,
+    interest: Option<String>,
+    fine: Option<String>,
+    discount: Option<String>,
+    bank_account_id: Uuid,
+    payment_method_id: Option<Uuid>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct SettlementResponse {
+    id: Uuid,
+    entry_id: Uuid,
+    installment: u16,
+    settled_on: String,
+    applied: String,
+    interest: String,
+    fine: String,
+    discount: String,
+    /// What moved in the account: what is applied, with interest and fine, less the discount.
+    cash: String,
+    bank_account_id: Uuid,
+    payment_method_id: Option<Uuid>,
+    reversed: bool,
+}
+
+impl From<&Settlement> for SettlementResponse {
+    fn from(settlement: &Settlement) -> Self {
+        Self {
+            id: settlement.id().as_uuid(),
+            entry_id: settlement.entry_id().as_uuid(),
+            installment: settlement.installment(),
+            settled_on: settlement.settled_on().to_string(),
+            applied: settlement.applied().to_string(),
+            interest: settlement.interest().to_string(),
+            fine: settlement.fine().to_string(),
+            discount: settlement.discount().to_string(),
+            cash: settlement.cash().to_string(),
+            bank_account_id: settlement.bank_account_id().as_uuid(),
+            payment_method_id: settlement.payment_method_id().map(|id| id.as_uuid()),
+            reversed: settlement.is_reversed(),
+        }
+    }
+}
+
+fn parse_settlement_id(raw: &str) -> Result<SettlementId, ApiError> {
+    Uuid::parse_str(raw)
+        .map(SettlementId::from_uuid)
+        .map_err(|_| ApplicationError::SettlementNotFound.into())
+}
+
+pub(crate) async fn settle_installment<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, actor): CompanyAccess,
+    Path((_, id)): Path<(Uuid, String)>,
+    ApiJson(request): ApiJson<SettlementRequest>,
+) -> Result<(StatusCode, Json<SettlementResponse>), ApiError> {
+    let draft = SettlementDraft {
+        installment: request.installment,
+        settled_on: request.settled_on,
+        applied: request.applied,
+        interest: request.interest,
+        fine: request.fine,
+        discount: request.discount,
+        bank_account_id: BankAccountId::from_uuid(request.bank_account_id),
+        payment_method_id: request.payment_method_id.map(PaymentMethodId::from_uuid),
+    };
+    let settlement = state
+        .entries
+        .settle(company_id, &actor, parse_id(&id)?, draft)
+        .await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(SettlementResponse::from(&settlement)),
+    ))
+}
+
+/// The settlements of an entry, reversed ones included, by day settled.
+pub(crate) async fn list_settlements<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, _): CompanyAccess,
+    Path((_, id)): Path<(Uuid, String)>,
+) -> Result<Json<Vec<SettlementResponse>>, ApiError> {
+    let settlements = state
+        .entries
+        .settlements(company_id, parse_id(&id)?)
+        .await?;
+    Ok(Json(
+        settlements.iter().map(SettlementResponse::from).collect(),
+    ))
+}
+
+/// Undoes a settlement: it stops counting and stays in the trail.
+pub(crate) async fn reverse_settlement<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, actor): CompanyAccess,
+    Path((_, entry_id, settlement_id)): Path<(Uuid, String, String)>,
+) -> Result<StatusCode, ApiError> {
+    state
+        .entries
+        .reverse(
+            company_id,
+            &actor,
+            parse_id(&entry_id)?,
+            parse_settlement_id(&settlement_id)?,
+        )
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
 }

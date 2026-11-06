@@ -230,6 +230,14 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
             get(entries::entry_history::<X>),
         )
         .route(
+            "/companies/{company_id}/entries/{entry_id}/settlements",
+            get(entries::list_settlements::<X>).post(entries::settle_installment::<X>),
+        )
+        .route(
+            "/companies/{company_id}/entries/{entry_id}/settlements/{settlement_id}",
+            delete(entries::reverse_settlement::<X>),
+        )
+        .route(
             "/companies/{company_id}/members",
             get(members::list_members::<X>),
         )
@@ -377,6 +385,8 @@ mod tests {
         InMemoryCategoryRepository,
         InMemoryCostCenterRepository,
         InMemoryPartyRepository,
+        InMemoryBankAccountRepository,
+        InMemoryPaymentMethodRepository,
     >;
 
     type TestEntries = FinancialEntryService<InMemoryFinancialEntryRepository, TestReferences>;
@@ -388,6 +398,8 @@ mod tests {
             &InMemoryCategoryRepository::default(),
             &InMemoryCostCenterRepository::default(),
             &InMemoryPartyRepository::default(),
+            &InMemoryBankAccountRepository::default(),
+            &InMemoryPaymentMethodRepository::default(),
         )
     }
 
@@ -397,10 +409,18 @@ mod tests {
         categories: &InMemoryCategoryRepository,
         cost_centers: &InMemoryCostCenterRepository,
         parties: &InMemoryPartyRepository,
+        bank_accounts: &InMemoryBankAccountRepository,
+        payment_methods: &InMemoryPaymentMethodRepository,
     ) -> TestEntries {
         FinancialEntryService::new(
             InMemoryFinancialEntryRepository::default(),
-            RegisterReferences::new(categories.clone(), cost_centers.clone(), parties.clone()),
+            RegisterReferences::new(
+                categories.clone(),
+                cost_centers.clone(),
+                parties.clone(),
+                bank_accounts.clone(),
+                payment_methods.clone(),
+            ),
         )
     }
 
@@ -4064,6 +4084,8 @@ mod tests {
         let categories = InMemoryCategoryRepository::default();
         let cost_centers = InMemoryCostCenterRepository::default();
         let parties = InMemoryPartyRepository::default();
+        let bank_accounts = InMemoryBankAccountRepository::default();
+        let payment_methods = InMemoryPaymentMethodRepository::default();
         router::<MemoryPorts>(
             Services {
                 parties: PartyService::new(parties.clone(), known_companies())
@@ -4071,12 +4093,16 @@ mod tests {
                 products: ProductService::new(InMemoryProductRepository::default()),
                 cost_centers: CostCenterService::new(cost_centers.clone()),
                 categories: CategoryService::new(categories.clone()),
-                bank_accounts: BankAccountService::new(InMemoryBankAccountRepository::default()),
-                payment_methods: PaymentMethodService::new(
-                    InMemoryPaymentMethodRepository::default(),
-                ),
+                bank_accounts: BankAccountService::new(bank_accounts.clone()),
+                payment_methods: PaymentMethodService::new(payment_methods.clone()),
                 payment_terms: PaymentTermService::new(InMemoryPaymentTermRepository::default()),
-                entries: entries_over(&categories, &cost_centers, &parties),
+                entries: entries_over(
+                    &categories,
+                    &cost_centers,
+                    &parties,
+                    &bank_accounts,
+                    &payment_methods,
+                ),
                 postal_codes: PostalCodeService::new(known_postal_codes()),
                 members: standalone_members(),
                 auth: auth_service(),
@@ -4167,7 +4193,7 @@ mod tests {
         assert_eq!(created.body["kind"], "receivable");
         assert_eq!(
             created.body["installments"][0],
-            json!({ "number": 1, "due_date": "2026-12-10", "amount": "100.5" })
+            json!({ "number": 1, "due_date": "2026-12-10", "amount": "100.5", "settled": "0" })
         );
         assert_eq!(created.body["installments"][1]["number"], 2);
         assert_eq!(created.body["party_id"], targets.party);
@@ -4483,6 +4509,315 @@ mod tests {
             };
             assert_eq!(write.status, expected, "{role:?} writes");
         }
+    }
+
+    async fn registered_account(
+        app: &Router,
+        cookie: &str,
+        company_id: Uuid,
+        name: &str,
+    ) -> String {
+        let reply = send(
+            app,
+            json_request(
+                "POST",
+                &format!("/companies/{company_id}/bank-accounts"),
+                Some(cookie),
+                json!({ "kind": "cash", "name": name }),
+            ),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.body);
+        reply.body["id"].as_str().unwrap().to_owned()
+    }
+
+    #[tokio::test]
+    async fn settles_an_installment_in_part_and_in_full_and_reverses_it_through_the_api() {
+        let app = entry_app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let targets = entry_targets(&app, &cookie, company_id).await;
+        let account = registered_account(&app, &cookie, company_id, "Caixa").await;
+        let uri = entries_uri(company_id);
+        let created = send(
+            &app,
+            json_request(
+                "POST",
+                &uri,
+                Some(&cookie),
+                entry_body(
+                    &targets,
+                    "Venda",
+                    &[("2026-12-10", "100"), ("2027-01-10", "50.5")],
+                ),
+            ),
+        )
+        .await;
+        let entry = format!("{uri}/{}", created.body["id"].as_str().unwrap());
+        let settlements = format!("{entry}/settlements");
+        let settle = |body: Value| {
+            send(
+                &app,
+                json_request("POST", &settlements, Some(&cookie), body),
+            )
+        };
+        let body = |installment: u32, applied: &str| json!({ "installment": installment, "settled_on": "2026-12-10", "applied": applied, "bank_account_id": account });
+
+        // Nothing is settled yet, and what has been settled is said per installment.
+        assert_eq!(created.body["installments"][0]["settled"], "0");
+
+        let part = settle(json!({
+            "installment": 1, "settled_on": "2026-12-09", "applied": "40",
+            "interest": "1.5", "fine": "0.5", "discount": "2", "bank_account_id": account,
+        }))
+        .await;
+        assert_eq!(part.status, StatusCode::CREATED, "{}", part.body);
+        assert_eq!(part.body["cash"], "40");
+        assert_eq!(part.body["applied"], "40");
+        assert_eq!(part.body["reversed"], false);
+        assert_eq!(part.body["bank_account_id"], account);
+        let rest = settle(body(1, "60")).await;
+        assert_eq!(rest.status, StatusCode::CREATED);
+
+        let fetched = send(&app, get_request(&entry, Some(&cookie))).await;
+        assert_eq!(fetched.body["installments"][0]["settled"], "100");
+        assert_eq!(fetched.body["installments"][1]["settled"], "0");
+        let listed = send(&app, get_request(&uri, Some(&cookie))).await;
+        assert_eq!(listed.body["items"][0]["installments"][0]["settled"], "100");
+
+        // Not for more than is left; a refusal is a 409 that says why, and nothing is stored.
+        let over = settle(body(1, "0.01")).await;
+        assert_eq!(over.status, StatusCode::CONFLICT);
+        assert!(
+            over.body["error"]
+                .as_str()
+                .unwrap()
+                .contains("more of the installment")
+        );
+        let all = send(&app, get_request(&settlements, Some(&cookie))).await;
+        assert_eq!(all.body.as_array().unwrap().len(), 2);
+
+        // While it has settlements, its installments are fixed (409), but a description is not.
+        let put = |body: Value| send(&app, json_request("PUT", &entry, Some(&cookie), body));
+        let mut changed = entry_body(
+            &targets,
+            "Venda de bolos",
+            &[("2026-12-10", "100"), ("2027-01-10", "50.5")],
+        );
+        assert_eq!(put(changed.clone()).await.status, StatusCode::OK);
+        changed["installments"] = json!([{ "due_date": "2026-12-10", "amount": "150.5" }]);
+        let fixed = put(changed).await;
+        assert_eq!(fixed.status, StatusCode::CONFLICT);
+        assert!(
+            fixed.body["error"]
+                .as_str()
+                .unwrap()
+                .contains("reverse them first")
+        );
+
+        // Reversing: 204, it stops counting and stays listed; once more is a 404.
+        let id = rest.body["id"].as_str().unwrap().to_owned();
+        let one = format!("{settlements}/{id}");
+        let reversed = send(
+            &app,
+            json_request("DELETE", &one, Some(&cookie), Value::Null),
+        )
+        .await;
+        assert_eq!(reversed.status, StatusCode::NO_CONTENT);
+        assert_eq!(
+            send(
+                &app,
+                json_request("DELETE", &one, Some(&cookie), Value::Null)
+            )
+            .await
+            .status,
+            StatusCode::NOT_FOUND
+        );
+        let after = send(&app, get_request(&entry, Some(&cookie))).await;
+        assert_eq!(after.body["installments"][0]["settled"], "40");
+        let all = send(&app, get_request(&settlements, Some(&cookie))).await;
+        let flags: Vec<bool> = all
+            .body
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["reversed"].as_bool().unwrap())
+            .collect();
+        assert_eq!(flags.iter().filter(|reversed| **reversed).count(), 1);
+        assert_eq!(settle(body(1, "60")).await.status, StatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn a_settlement_that_points_at_what_cannot_be_used_or_is_not_money_is_refused_in_json() {
+        let app = entry_app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let targets = entry_targets(&app, &cookie, company_id).await;
+        let account = registered_account(&app, &cookie, company_id, "Caixa").await;
+        let created = send(
+            &app,
+            json_request(
+                "POST",
+                &entries_uri(company_id),
+                Some(&cookie),
+                entry_body(&targets, "Venda", &[("2026-12-10", "100")]),
+            ),
+        )
+        .await;
+        let settlements = format!(
+            "{}/{}/settlements",
+            entries_uri(company_id),
+            created.body["id"].as_str().unwrap()
+        );
+        let ok = json!({ "installment": 1, "settled_on": "2026-12-10", "applied": "10", "bank_account_id": account });
+        let post = |body: Value| {
+            send(
+                &app,
+                json_request("POST", &settlements, Some(&cookie), body),
+            )
+        };
+        let with = |field: &str, value: Value| {
+            let mut body = ok.clone();
+            body[field] = value;
+            body
+        };
+
+        for (body, status, what) in [
+            (
+                with("installment", json!(2)),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "installment",
+            ),
+            (
+                with("bank_account_id", json!(Uuid::new_v4())),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "bank account",
+            ),
+            (
+                with("payment_method_id", json!(Uuid::new_v4())),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "payment method",
+            ),
+            (
+                with("applied", json!("0")),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "applied",
+            ),
+            (
+                with("applied", json!("1.005")),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "applied",
+            ),
+            (
+                with("interest", json!("-1")),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "interest",
+            ),
+            (
+                with("discount", json!("10")),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "must move some money",
+            ),
+            (
+                with("settled_on", json!("10/12/2026")),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "settled_on",
+            ),
+            (
+                with("installment", json!(0)),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "installment",
+            ),
+            (
+                with("applied", json!(10)),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "",
+            ),
+            (
+                with("cash", json!("10")),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "",
+            ),
+        ] {
+            let reply = post(body.clone()).await;
+            assert_eq!(reply.status, status, "{body}");
+            assert!(
+                reply.body["error"].as_str().unwrap().contains(what),
+                "{}",
+                reply.body
+            );
+        }
+        let none = send(&app, get_request(&settlements, Some(&cookie))).await;
+        assert_eq!(
+            none.body.as_array().unwrap().len(),
+            0,
+            "a refused settlement is not stored"
+        );
+
+        // An id that is not one is a JSON 404, and so is an entry that is not there.
+        let bad = send(
+            &app,
+            json_request(
+                "DELETE",
+                &format!("{settlements}/not-an-id"),
+                Some(&cookie),
+                Value::Null,
+            ),
+        )
+        .await;
+        assert_eq!(bad.status, StatusCode::NOT_FOUND);
+        let missing = send(
+            &app,
+            get_request(
+                &format!("{}/{}/settlements", entries_uri(company_id), Uuid::new_v4()),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(missing.status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn settlements_stay_private_to_the_company() {
+        let app = entry_app();
+        let (owner, company_id) = sign_up(&app, "dona@example.com").await;
+        let targets = entry_targets(&app, &owner, company_id).await;
+        let account = registered_account(&app, &owner, company_id, "Caixa").await;
+        let created = send(
+            &app,
+            json_request(
+                "POST",
+                &entries_uri(company_id),
+                Some(&owner),
+                entry_body(&targets, "Venda", &[("2026-12-10", "100")]),
+            ),
+        )
+        .await;
+        let settlements = format!(
+            "{}/{}/settlements",
+            entries_uri(company_id),
+            created.body["id"].as_str().unwrap()
+        );
+        let body = json!({ "installment": 1, "settled_on": "2026-12-10", "applied": "10", "bank_account_id": account });
+        let settled = send(
+            &app,
+            json_request("POST", &settlements, Some(&owner), body.clone()),
+        )
+        .await;
+        assert_eq!(settled.status, StatusCode::CREATED);
+        let one = format!("{settlements}/{}", settled.body["id"].as_str().unwrap());
+
+        // Another company's member does not learn it exists.
+        let (stranger, _) = sign_up(&app, "bia@example.com").await;
+        for request in [
+            get_request(&settlements, Some(&stranger)),
+            json_request("POST", &settlements, Some(&stranger), body.clone()),
+            json_request("DELETE", &one, Some(&stranger), Value::Null),
+        ] {
+            assert_eq!(send(&app, request).await.status, StatusCode::NOT_FOUND);
+        }
+        assert_eq!(
+            send(&app, get_request(&settlements, None)).await.status,
+            StatusCode::UNAUTHORIZED
+        );
     }
 
     fn payment_terms_uri(company_id: Uuid) -> String {

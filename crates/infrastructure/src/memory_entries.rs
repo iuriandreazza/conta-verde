@@ -5,7 +5,8 @@ use conta_verde_application::{
     ensure_audit_describes,
 };
 use conta_verde_domain::{
-    AuditEntity, AuditEntry, AuditRecord, CompanyId, EntryId, FinancialEntry,
+    AuditEntity, AuditEntry, AuditRecord, CompanyId, EntryId, FinancialEntry, Settlement,
+    SettlementId, settled_of,
 };
 
 use crate::memory_audit::AuditLog;
@@ -22,6 +23,7 @@ pub struct InMemoryFinancialEntryRepository {
 #[derive(Default)]
 struct EntryState {
     entries: Vec<FinancialEntry>,
+    settlements: Vec<Settlement>,
     audit: AuditLog,
 }
 
@@ -65,9 +67,111 @@ impl FinancialEntryRepository for InMemoryFinancialEntryRepository {
                 stored.company_id() == entry.company_id() && stored.id() == entry.id()
             })
             .ok_or(RepositoryError::NotFound)?;
+        let stored = &state.entries[position];
+        let settled = state
+            .settlements
+            .iter()
+            .any(|settlement| settlement.entry_id() == entry.id() && !settlement.is_reversed());
+        if settled
+            && (stored.kind() != entry.kind()
+                || stored.installments_text() != entry.installments_text())
+        {
+            return Err(RepositoryError::EntrySettled);
+        }
         state.entries[position] = entry.clone();
         state.audit.record(audit);
         Ok(())
+    }
+
+    async fn settle(
+        &self,
+        settlement: &Settlement,
+        audit: &AuditEntry,
+    ) -> Result<(), RepositoryError> {
+        ensure_audit_describes(audit, settlement)?;
+        let mut state = self.state.lock().expect("repository lock poisoned");
+        let installment = state
+            .entries
+            .iter()
+            .find(|stored| {
+                stored.company_id() == settlement.company_id()
+                    && stored.id() == settlement.entry_id()
+            })
+            .and_then(|stored| stored.installment(settlement.installment()))
+            .ok_or(RepositoryError::NotFound)?;
+        let settled = settled_of(
+            &state
+                .settlements
+                .iter()
+                .filter(|other| other.entry_id() == settlement.entry_id())
+                .cloned()
+                .collect::<Vec<_>>(),
+            settlement.installment(),
+        );
+        if settled + settlement.applied().as_decimal() > installment.amount().as_decimal() {
+            return Err(RepositoryError::Overpaid);
+        }
+        state.settlements.push(settlement.clone());
+        state.audit.record(audit);
+        Ok(())
+    }
+
+    async fn reverse(
+        &self,
+        reversed: &Settlement,
+        audit: &AuditEntry,
+    ) -> Result<(), RepositoryError> {
+        ensure_audit_describes(audit, reversed)?;
+        let mut state = self.state.lock().expect("repository lock poisoned");
+        let stored = state
+            .settlements
+            .iter_mut()
+            .find(|stored| {
+                stored.company_id() == reversed.company_id()
+                    && stored.entry_id() == reversed.entry_id()
+                    && stored.id() == reversed.id()
+                    && !stored.is_reversed()
+            })
+            .ok_or(RepositoryError::NotFound)?;
+        *stored = stored.clone().with_reversed(true);
+        state.audit.record(audit);
+        Ok(())
+    }
+
+    async fn settlement(
+        &self,
+        company_id: CompanyId,
+        entry_id: EntryId,
+        id: SettlementId,
+    ) -> Result<Option<Settlement>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        Ok(state
+            .settlements
+            .iter()
+            .find(|stored| {
+                stored.company_id() == company_id
+                    && stored.entry_id() == entry_id
+                    && stored.id() == id
+            })
+            .cloned())
+    }
+
+    async fn settlements_of(
+        &self,
+        company_id: CompanyId,
+        entry_ids: &[EntryId],
+    ) -> Result<Vec<Settlement>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        let mut found: Vec<Settlement> = state
+            .settlements
+            .iter()
+            .filter(|stored| {
+                stored.company_id() == company_id && entry_ids.contains(&stored.entry_id())
+            })
+            .cloned()
+            .collect();
+        found.sort_by_key(|stored| (stored.settled_on(), stored.id().as_uuid()));
+        Ok(found)
     }
 
     async fn history(
@@ -124,8 +228,8 @@ mod tests {
     use super::*;
     use crate::contract::{self, EntrySeed};
     use crate::{
-        InMemoryCategoryRepository, InMemoryCostCenterRepository, InMemoryPartyRepository,
-        RegisterReferences,
+        InMemoryBankAccountRepository, InMemoryCategoryRepository, InMemoryCostCenterRepository,
+        InMemoryPartyRepository, InMemoryPaymentMethodRepository, RegisterReferences,
     };
 
     /// The registers an entry points at, shared by handle with the references that read them.
@@ -133,6 +237,8 @@ mod tests {
         categories: InMemoryCategoryRepository,
         cost_centers: InMemoryCostCenterRepository,
         parties: InMemoryPartyRepository,
+        bank_accounts: InMemoryBankAccountRepository,
+        payment_methods: InMemoryPaymentMethodRepository,
     }
 
     impl Registers {
@@ -141,6 +247,8 @@ mod tests {
                 categories: InMemoryCategoryRepository::default(),
                 cost_centers: InMemoryCostCenterRepository::default(),
                 parties: InMemoryPartyRepository::default(),
+                bank_accounts: InMemoryBankAccountRepository::default(),
+                payment_methods: InMemoryPaymentMethodRepository::default(),
             }
         }
 
@@ -149,6 +257,8 @@ mod tests {
                 &self.categories,
                 &self.cost_centers,
                 &self.parties,
+                &self.bank_accounts,
+                &self.payment_methods,
                 company,
             )
             .await
@@ -160,11 +270,15 @@ mod tests {
             InMemoryCategoryRepository,
             InMemoryCostCenterRepository,
             InMemoryPartyRepository,
+            InMemoryBankAccountRepository,
+            InMemoryPaymentMethodRepository,
         > {
             RegisterReferences::new(
                 self.categories.clone(),
                 self.cost_centers.clone(),
                 self.parties.clone(),
+                self.bank_accounts.clone(),
+                self.payment_methods.clone(),
             )
         }
     }
@@ -226,6 +340,19 @@ mod tests {
             &seed,
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn settles_installments_and_reverses_them() {
+        let registers = Registers::new();
+        let (company, other_company) = (CompanyId::generate(), CompanyId::generate());
+        let seed = registers.seed(company).await;
+        let service = FinancialEntryService::new(
+            InMemoryFinancialEntryRepository::default(),
+            registers.references(),
+        );
+        contract::settles_installments_and_reverses_them(&service, company, other_company, &seed)
+            .await;
     }
 
     #[tokio::test]

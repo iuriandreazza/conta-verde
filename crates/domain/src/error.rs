@@ -38,6 +38,10 @@ pub enum DomainError {
     InvalidInstallmentAmount,
     InstallmentDatesDecrease,
     NoEntryInstallments,
+    InvalidInstallmentNumber,
+    /// Names the amount: what is applied, or the interest, fine or discount.
+    InvalidSettlementAmount(&'static str),
+    SettlementMovesNothing,
     TooManyEntryInstallments,
     InvalidInstallmentDays,
     InstallmentDaysNotIncreasing,
@@ -125,6 +129,18 @@ impl fmt::Display for DomainError {
                 f.write_str("the due dates must not decrease from one installment to the next")
             }
             Self::NoEntryInstallments => f.write_str("an entry needs at least one installment"),
+            Self::InvalidInstallmentNumber => {
+                f.write_str("installment must be a number from 1 to 120")
+            }
+            Self::InvalidSettlementAmount("applied") => {
+                f.write_str("applied must be more than 0, in cents (at most two decimals)")
+            }
+            Self::InvalidSettlementAmount(field) => {
+                write!(f, "{field} must be 0 or more, in cents (at most two decimals)")
+            }
+            Self::SettlementMovesNothing => f.write_str(
+                "a settlement must move some money: what is applied, with interest and fine, less the discount, must be more than 0",
+            ),
             Self::TooManyEntryInstallments => f.write_str("an entry has at most 120 installments"),
             Self::NoInstallments => f.write_str("a payment term needs at least one installment"),
             Self::TooManyInstallments => f.write_str("a payment term has at most 24 installments"),

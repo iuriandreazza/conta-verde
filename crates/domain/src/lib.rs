@@ -20,6 +20,7 @@ mod payment_method;
 mod payment_term;
 mod product;
 mod role;
+mod settlement;
 mod tag;
 
 pub use account::{Account, AccountDraft, Company, User, validate_password};
@@ -31,7 +32,8 @@ pub use audit::{
     category_creation_changes, cost_center_changes, cost_center_creation_changes, creation_changes,
     document_check_changes, entry_changes, entry_creation_changes, party_changes,
     payment_method_changes, payment_method_creation_changes, payment_term_changes,
-    payment_term_creation_changes, product_changes, product_creation_changes,
+    payment_term_creation_changes, product_changes, product_creation_changes, settlement_changes,
+    settlement_creation_changes,
 };
 pub use bank_account::{BankAccount, BankAccountDraft, BankAccountKind};
 pub use calendar_date::CalendarDate;
@@ -48,7 +50,7 @@ pub use financial_entry::{
 };
 pub use ids::{
     BankAccountId, CategoryId, CompanyId, CostCenterId, EntryId, InvitationId, PartyId,
-    PaymentMethodId, PaymentTermId, ProductId, UserId,
+    PaymentMethodId, PaymentTermId, ProductId, SettlementId, UserId,
 };
 pub use invitation::Invitation;
 pub use party::{Party, PartyDraft};
@@ -59,4 +61,5 @@ pub use payment_term::{
 };
 pub use product::{Product, ProductDraft, ProductKind};
 pub use role::{Access, Area, Role};
+pub use settlement::{Settlement, SettlementDraft, settled_of};
 pub use tag::{MAX_TAGS, Tag};

@@ -31,4 +31,5 @@ uuid_id!(PartyId);
 uuid_id!(PaymentMethodId);
 uuid_id!(PaymentTermId);
 uuid_id!(ProductId);
+uuid_id!(SettlementId);
 uuid_id!(UserId);

@@ -2,7 +2,7 @@ use uuid::Uuid;
 
 use crate::{
     BankAccount, Category, CompanyId, CostCenter, DocumentCheck, FinancialEntry, Party,
-    PaymentMethod, PaymentTerm, Product, Tag, UserId,
+    PaymentMethod, PaymentTerm, Product, Settlement, Tag, UserId,
 };
 
 /// Who made a change. The name is a snapshot: history must keep reading the same after the user is
@@ -23,6 +23,7 @@ pub enum AuditEntity {
     PaymentMethod,
     PaymentTerm,
     FinancialEntry,
+    Settlement,
 }
 
 impl AuditEntity {
@@ -36,6 +37,7 @@ impl AuditEntity {
             Self::PaymentMethod => "payment_method",
             Self::PaymentTerm => "payment_term",
             Self::FinancialEntry => "financial_entry",
+            Self::Settlement => "settlement",
         }
     }
 }
@@ -177,6 +179,20 @@ impl Audited for PaymentTerm {
 impl Audited for FinancialEntry {
     fn audit_entity(&self) -> AuditEntity {
         AuditEntity::FinancialEntry
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.id().as_uuid()
+    }
+}
+
+impl Audited for Settlement {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::Settlement
     }
 
     fn audit_company(&self) -> CompanyId {
@@ -452,6 +468,42 @@ pub fn entry_creation_changes(entry: &FinancialEntry) -> Vec<FieldChange> {
 
 pub fn entry_changes(before: &FinancialEntry, after: &FinancialEntry) -> Vec<FieldChange> {
     changes_between(entry_fields(before), entry_fields(after))
+}
+
+fn settlement_fields(settlement: &Settlement) -> Fields {
+    vec![
+        (
+            "entry_id",
+            Some(settlement.entry_id().as_uuid().to_string()),
+        ),
+        ("installment", Some(settlement.installment().to_string())),
+        ("settled_on", Some(settlement.settled_on().to_string())),
+        ("applied", Some(settlement.applied().to_string())),
+        ("interest", Some(settlement.interest().to_string())),
+        ("fine", Some(settlement.fine().to_string())),
+        ("discount", Some(settlement.discount().to_string())),
+        (
+            "bank_account_id",
+            Some(settlement.bank_account_id().as_uuid().to_string()),
+        ),
+        (
+            "payment_method_id",
+            settlement
+                .payment_method_id()
+                .map(|id| id.as_uuid().to_string()),
+        ),
+        ("reversed", Some(settlement.is_reversed().to_string())),
+    ]
+}
+
+/// Every field a new settlement has set.
+pub fn settlement_creation_changes(settlement: &Settlement) -> Vec<FieldChange> {
+    creation_from(settlement_fields(settlement))
+}
+
+/// What a reversal changes: only the `reversed` flag.
+pub fn settlement_changes(before: &Settlement, after: &Settlement) -> Vec<FieldChange> {
+    changes_between(settlement_fields(before), settlement_fields(after))
 }
 
 fn payment_term_fields(term: &PaymentTerm) -> Fields {

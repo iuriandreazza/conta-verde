@@ -1,4 +1,4 @@
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use conta_verde_application::{
     NameCursor, PaymentMethodQuery, PaymentMethodRepository, RepositoryError,
@@ -14,9 +14,9 @@ use crate::memory_list::{keyset_page, name_key};
 /// Keeps payment methods and their audit trail in process memory. Used by tests and for running
 /// the API without a database. Like the Postgres adapter, it records an audit entry only for a
 /// write that happened: a refused or missed write leaves nothing in the trail.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct InMemoryPaymentMethodRepository {
-    state: Mutex<PaymentMethodState>,
+    state: Arc<Mutex<PaymentMethodState>>,
 }
 
 #[derive(Default)]

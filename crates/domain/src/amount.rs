@@ -17,6 +17,14 @@ const MAX_FRACTION_DIGITS: usize = 6;
 pub struct Amount(Decimal);
 
 impl Amount {
+    pub const ZERO: Self = Self(Decimal::ZERO);
+
+    /// An amount in cents, which is what money in Brazil is paid in: at most two decimals, never
+    /// rounded. `10` and `10.50` are, `10.505` is not.
+    pub fn in_cents(raw: &str) -> Option<Self> {
+        Self::parse(raw).filter(|amount| amount.0.scale() <= 2)
+    }
+
     pub fn parse(raw: &str) -> Option<Self> {
         let (integer, fraction) = match raw.split_once('.') {
             Some((integer, fraction)) => (integer, Some(fraction)),

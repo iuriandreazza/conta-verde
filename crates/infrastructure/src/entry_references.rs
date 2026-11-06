@@ -1,32 +1,47 @@
 use conta_verde_application::{
-    CategoryRepository, CostCenterRepository, EntryReferences, PartyRepository, RepositoryError,
+    BankAccountRepository, CategoryRepository, CostCenterRepository, EntryReferences,
+    PartyRepository, PaymentMethodRepository, RepositoryError,
 };
-use conta_verde_domain::{CategoryId, CompanyId, CostCenterId, DreGroup, PartyId};
+use conta_verde_domain::{
+    BankAccountId, CategoryId, CompanyId, CostCenterId, DreGroup, PartyId, PaymentMethodId,
+};
 
-/// Answers what an entry may point at by asking the registers themselves, so one implementation
-/// serves every adapter: Postgres, and the in-memory ones that tests share between the services.
-/// A record of another company is not found, so it answers like one that does not exist.
-pub struct RegisterReferences<C, K, P> {
+/// Answers what an entry and its settlements may point at by asking the registers themselves, so one
+/// implementation serves every adapter: Postgres, and the in-memory ones that tests share between the
+/// services. A record of another company is not found, so it answers like one that does not exist.
+pub struct RegisterReferences<C, K, P, B, M> {
     categories: C,
     cost_centers: K,
     parties: P,
+    bank_accounts: B,
+    payment_methods: M,
 }
 
-impl<C, K, P> RegisterReferences<C, K, P> {
-    pub fn new(categories: C, cost_centers: K, parties: P) -> Self {
+impl<C, K, P, B, M> RegisterReferences<C, K, P, B, M> {
+    pub fn new(
+        categories: C,
+        cost_centers: K,
+        parties: P,
+        bank_accounts: B,
+        payment_methods: M,
+    ) -> Self {
         Self {
             categories,
             cost_centers,
             parties,
+            bank_accounts,
+            payment_methods,
         }
     }
 }
 
-impl<C, K, P> EntryReferences for RegisterReferences<C, K, P>
+impl<C, K, P, B, M> EntryReferences for RegisterReferences<C, K, P, B, M>
 where
     C: CategoryRepository,
     K: CostCenterRepository,
     P: PartyRepository,
+    B: BankAccountRepository,
+    M: PaymentMethodRepository,
 {
     async fn category_is_usable(
         &self,
@@ -60,5 +75,29 @@ where
         id: PartyId,
     ) -> Result<bool, RepositoryError> {
         Ok(self.parties.find(company_id, id).await?.is_some())
+    }
+
+    async fn bank_account_is_usable(
+        &self,
+        company_id: CompanyId,
+        id: BankAccountId,
+    ) -> Result<bool, RepositoryError> {
+        Ok(self
+            .bank_accounts
+            .find(company_id, id)
+            .await?
+            .is_some_and(|account| account.is_active()))
+    }
+
+    async fn payment_method_is_usable(
+        &self,
+        company_id: CompanyId,
+        id: PaymentMethodId,
+    ) -> Result<bool, RepositoryError> {
+        Ok(self
+            .payment_methods
+            .find(company_id, id)
+            .await?
+            .is_some_and(|method| method.is_active()))
     }
 }

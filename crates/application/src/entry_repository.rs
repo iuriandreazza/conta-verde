@@ -1,8 +1,8 @@
 use std::future::Future;
 
 use conta_verde_domain::{
-    AuditEntry, AuditRecord, CalendarDate, CategoryId, CompanyId, CostCenterId, EntryId, EntryKind,
-    FinancialEntry, PartyId,
+    AuditEntry, AuditRecord, BankAccountId, CalendarDate, CategoryId, CompanyId, CostCenterId,
+    EntryId, EntryKind, FinancialEntry, PartyId, PaymentMethodId, Settlement, SettlementId,
 };
 use uuid::Uuid;
 
@@ -117,12 +117,49 @@ pub trait FinancialEntryRepository: Send + Sync {
     ) -> impl Future<Output = Result<Option<FinancialEntry>, RepositoryError>> + Send;
 
     /// Replaces the editable fields and the installments of a stored entry. `NotFound` when the
-    /// company has no such one.
+    /// company has no such one, and `EntrySettled` when it has settlements that are not reversed
+    /// and the installments or the kind would change: nothing is written then. The rule is the
+    /// adapter's, inside the write, so a settlement that races the edit cannot slip past it.
     fn update(
         &self,
         entry: &FinancialEntry,
         audit: &AuditEntry,
     ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
+
+    /// Stores a settlement of one installment with its audit entry, atomically, after checking that
+    /// the entry has the installment and what is left of it: `NotFound` for an entry the company
+    /// does not have or an installment it does not have, and `Overpaid` when what is applied, with
+    /// what its non-reversed settlements already settled, is more than the installment is worth.
+    /// Two settlements of the same installment at the same moment cannot both pass.
+    fn settle(
+        &self,
+        settlement: &Settlement,
+        audit: &AuditEntry,
+    ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
+
+    /// Marks a stored settlement reversed, with its audit entry, atomically. `NotFound` when the
+    /// company's entry has no such settlement or it is reversed already.
+    fn reverse(
+        &self,
+        reversed: &Settlement,
+        audit: &AuditEntry,
+    ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
+
+    /// The settlement, reversed or not, only if it belongs to the company's entry.
+    fn settlement(
+        &self,
+        company_id: CompanyId,
+        entry_id: EntryId,
+        id: SettlementId,
+    ) -> impl Future<Output = Result<Option<Settlement>, RepositoryError>> + Send;
+
+    /// Every settlement of these entries of the company, reversed ones included, by day settled
+    /// and then by id.
+    fn settlements_of(
+        &self,
+        company_id: CompanyId,
+        entry_ids: &[EntryId],
+    ) -> impl Future<Output = Result<Vec<Settlement>, RepositoryError>> + Send;
 
     /// What was recorded about the entry, oldest first. Empty for another company's.
     fn history(
@@ -164,5 +201,19 @@ pub trait EntryReferences: Send + Sync {
         &self,
         company_id: CompanyId,
         id: PartyId,
+    ) -> impl Future<Output = Result<bool, RepositoryError>> + Send;
+
+    /// The bank account exists in the company and is active.
+    fn bank_account_is_usable(
+        &self,
+        company_id: CompanyId,
+        id: BankAccountId,
+    ) -> impl Future<Output = Result<bool, RepositoryError>> + Send;
+
+    /// The payment method exists in the company and is active.
+    fn payment_method_is_usable(
+        &self,
+        company_id: CompanyId,
+        id: PaymentMethodId,
     ) -> impl Future<Output = Result<bool, RepositoryError>> + Send;
 }

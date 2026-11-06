@@ -158,6 +158,11 @@ impl FinancialEntry {
         &self.installments
     }
 
+    /// The installment with this number, if the entry has it.
+    pub fn installment(&self, number: u16) -> Option<&EntryInstallment> {
+        self.installments.iter().find(|item| item.number == number)
+    }
+
     /// The sum of the installments, exact. Written without trailing zeros, like every amount.
     pub fn total(&self) -> Decimal {
         let sum: Decimal = self
@@ -209,10 +214,8 @@ fn validated_installments(
     for (index, draft) in drafts.iter().enumerate() {
         let due_date = CalendarDate::parse(&draft.due_date)
             .ok_or(DomainError::InvalidDate("installment due_date"))?;
-        let amount = Amount::parse(draft.amount.trim())
-            .filter(|amount| {
-                amount.as_decimal() > Decimal::ZERO && amount.as_decimal().scale() <= 2
-            })
+        let amount = Amount::in_cents(draft.amount.trim())
+            .filter(|amount| amount.as_decimal() > Decimal::ZERO)
             .ok_or(DomainError::InvalidInstallmentAmount)?;
         installments.push(EntryInstallment {
             number: u16::try_from(index + 1).expect("at most 120 installments"),
