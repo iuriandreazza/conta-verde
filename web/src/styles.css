@@ -1055,6 +1055,15 @@ main:focus {
   color: var(--green);
 }
 
+.empty h3 {
+  margin: 0.25rem 0 0;
+  font-size: 1.05rem;
+}
+
+.empty .btn {
+  margin-top: 0.75rem;
+}
+
 .empty p {
   margin: 0;
   color: var(--ink);
@@ -1875,4 +1884,33 @@ tbody tr:last-child td {
   padding: 0.75rem 1rem;
   border: 1px solid var(--border, #e2e8e4);
   border-radius: 0.5rem;
+}
+
+/* Where a file can be dropped: the native input stays inside, so the keyboard keeps working. */
+.dropzone {
+  display: grid;
+  justify-items: center;
+  gap: 0.5rem;
+  padding: 1.5rem 1rem;
+  border: 2px dashed var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  text-align: center;
+  transition:
+    border-color 0.15s ease,
+    background-color 0.15s ease;
+}
+
+.dropzone p {
+  margin: 0;
+}
+
+.dropzone-active {
+  border-color: var(--green);
+  background: var(--green-soft);
+}
+
+.dropzone-file {
+  font-weight: 600;
+  color: var(--ink);
 }
