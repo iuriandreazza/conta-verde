@@ -12,6 +12,7 @@ mod commission;
 mod contact;
 mod contract;
 mod cost_center;
+mod delinquency;
 mod document;
 mod document_check;
 mod dunning;
@@ -71,6 +72,7 @@ pub use commission::{
 pub use contact::{Contact, ContactDraft, MAX_CONTACTS};
 pub use contract::{BillingCycle, Contract, ContractCycle, ContractDraft, ContractStatus};
 pub use cost_center::{CostCenter, CostCenterDraft};
+pub use delinquency::{BUCKET_STARTS, DelinquencyReport, DelinquentCustomer, LateInstallment};
 pub use document::{Cnpj, Document};
 pub use document_check::DocumentCheck;
 pub use dunning::{

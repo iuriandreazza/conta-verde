@@ -1863,3 +1863,19 @@ tbody tr:last-child td {
 .charge-details code {
   overflow-wrap: anywhere;
 }
+
+/* The delinquency report's ranges: a tile each, wrapping on a narrow screen. */
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 0.75rem;
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border, #e2e8e4);
+  border-radius: 0.5rem;
+}

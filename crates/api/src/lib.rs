@@ -11,6 +11,7 @@ mod contracts;
 mod cost_centers;
 mod csv_import;
 mod cursor;
+mod delinquency;
 mod dunning;
 mod entries;
 mod error;
@@ -495,6 +496,10 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
             "/companies/{company_id}/collection/settings",
             get(charges::get_collection_settings::<X>)
                 .put(charges::replace_collection_settings::<X>),
+        )
+        .route(
+            "/companies/{company_id}/delinquency",
+            get(delinquency::delinquency::<X>),
         )
         .route(
             "/companies/{company_id}/collection/dunning",
@@ -6497,6 +6502,74 @@ mod tests {
         .await;
         assert_eq!(reminders.status, StatusCode::OK);
         assert_eq!(reminders.body["items"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn the_delinquency_report_adds_up_what_is_late_by_customer_and_range() {
+        let app = entry_app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let targets = entry_targets(&app, &cookie, company_id).await;
+        let uri = format!("/companies/{company_id}/delinquency?on=2027-01-31");
+        let empty = send(&app, get_request(&uri, Some(&cookie))).await;
+        assert_eq!(empty.status, StatusCode::OK);
+        assert_eq!(empty.body["owed"], "0");
+        assert_eq!(empty.body["customers"], json!([]));
+        assert_eq!(empty.body["buckets"].as_array().unwrap().len(), 4);
+        assert_eq!(empty.body["buckets"][0]["from_days"], 1);
+        assert_eq!(empty.body["buckets"][0]["to_days"], 30);
+        assert!(empty.body["buckets"][3]["to_days"].is_null());
+
+        for (due, amount) in [
+            ("2027-01-20", "100"),
+            ("2026-10-01", "10"),
+            ("2027-02-10", "99"),
+        ] {
+            let made = send(
+                &app,
+                json_request(
+                    "POST",
+                    &entries_uri(company_id),
+                    Some(&cookie),
+                    entry_body(&targets, "Venda", &[(due, amount)]),
+                ),
+            )
+            .await;
+            assert_eq!(made.status, StatusCode::CREATED, "{}", made.body);
+        }
+        let report = send(&app, get_request(&uri, Some(&cookie))).await;
+        assert_eq!(report.body["on"], "2027-01-31");
+        assert_eq!(report.body["owed"], "110");
+        assert_eq!(report.body["installments"], 2);
+        assert_eq!(report.body["buckets"][0]["owed"], "100");
+        assert_eq!(report.body["buckets"][0]["installments"], 1);
+        assert_eq!(report.body["buckets"][3]["owed"], "10");
+        let customer = &report.body["customers"][0];
+        assert_eq!(customer["party_id"], targets.party);
+        assert_eq!(customer["owed"], "110");
+        assert_eq!(customer["oldest_due"], "2026-10-01");
+        assert_eq!(customer["by_bucket"], json!(["100", "0", "0", "10"]));
+
+        // The day is required and must be one; another company sees nothing of it, and a session is needed.
+        for bad in [
+            format!("/companies/{company_id}/delinquency"),
+            format!("/companies/{company_id}/delinquency?on=tomorrow"),
+            format!("/companies/{company_id}/delinquency?on=2027-01-31&x=1"),
+        ] {
+            assert_eq!(
+                send(&app, get_request(&bad, Some(&cookie))).await.status,
+                StatusCode::BAD_REQUEST,
+                "{bad}"
+            );
+        }
+        let (stranger, _) = sign_up(&app, "bia@example.com").await;
+        assert_eq!(
+            send(&app, get_request(&uri, Some(&stranger))).await.status,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            send(&app, get_request(&uri, None)).await.status,
+            StatusCode::UNAUTHORIZED
+        );
     }
 
     fn attachments_uri(company_id: Uuid, entry_id: &str) -> String {

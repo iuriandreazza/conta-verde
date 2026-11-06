@@ -1,8 +1,8 @@
 use conta_verde_domain::{
     Actor, AuditAction, AuditRecord, BankAccountId, CalendarDate, ChargeId, CompanyId, Decimal,
-    EntryId, EntryKind, EntryOrigin, FinancialEntry, FinancialEntryDraft, Settlement,
-    SettlementDraft, SettlementId, entry_changes, entry_creation_changes, settlement_changes,
-    settlement_creation_changes,
+    DelinquencyReport, EntryId, EntryKind, EntryOrigin, FinancialEntry, FinancialEntryDraft,
+    LateInstallment, Settlement, SettlementDraft, SettlementId, entry_changes,
+    entry_creation_changes, settlement_changes, settlement_creation_changes,
 };
 
 use crate::audit::audit_entry;
@@ -143,6 +143,30 @@ impl<R: FinancialEntryRepository, F: EntryReferences> FinancialEntryService<R, F
             .repository
             .report_entries(company_id, group, basis, from, to)
             .await?)
+    }
+
+    /// Who owes what late on the day `on`, and how late ([ADR 0051]): the installments of receivables that are not
+    /// cancelled that fell due before it and still have something left, added up by customer and by range.
+    pub async fn delinquency(
+        &self,
+        company_id: CompanyId,
+        on: CalendarDate,
+    ) -> Result<DelinquencyReport, ApplicationError> {
+        let Some(until) = on.pred() else {
+            return Ok(DelinquencyReport::build(on, &[]));
+        };
+        let late: Vec<LateInstallment> = self
+            .repository
+            .receivable_installments_due(company_id, CalendarDate::EARLIEST, until)
+            .await?
+            .into_iter()
+            .map(|item| LateInstallment {
+                party_id: item.party_id,
+                due_date: item.due_date,
+                owed: item.amount - item.settled,
+            })
+            .collect();
+        Ok(DelinquencyReport::build(on, &late))
     }
 
     /// The installments that fell due before `on` and still have something left ([ADR 0035]).
