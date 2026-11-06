@@ -30,6 +30,7 @@
   --shadow: 0 1px 2px rgb(20 32 26 / 0.05), 0 1px 3px rgb(20 32 26 / 0.04);
   --shadow-lift: 0 8px 24px rgb(20 32 26 / 0.1);
   --sidebar-width: 16rem;
+  --sidebar-collapsed-width: 4.5rem;
 
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: 100%;
@@ -89,6 +90,32 @@ a {
   padding: 1.25rem 1rem;
   background: linear-gradient(180deg, var(--forest), var(--forest-2));
   color: #e6f2ea;
+}
+
+.sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.sidebar-toggle {
+  display: inline-flex;
+  padding: 0.4rem;
+  border: 1px solid #ffffff1f;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: #cfe3d6;
+  cursor: pointer;
+}
+
+.sidebar-toggle:hover {
+  background: #ffffff14;
+  color: #fff;
+}
+
+.sidebar-toggle > div {
+  display: inline-flex;
 }
 
 .brand {
@@ -1533,7 +1560,54 @@ tbody tr:last-child td {
   display: inline-flex;
 }
 
+/* The rail: only on a wide screen, where there is a sidebar to shrink. */
+@media (min-width: 52.0625rem) {
+  .app[data-collapsed] {
+    grid-template-columns: var(--sidebar-collapsed-width) minmax(0, 1fr);
+  }
+
+  .app[data-collapsed] .sidebar {
+    padding-inline: 0.6rem;
+  }
+
+  .app[data-collapsed] .sidebar-head {
+    flex-direction: column;
+  }
+
+  .app[data-collapsed] .wordmark,
+  .app[data-collapsed] .company-switch,
+  .app[data-collapsed] .nav-group-toggle {
+    display: none;
+  }
+
+  /* Out of sight, not out of the page: a link keeps its name for a screen reader. */
+  .app[data-collapsed] .nav-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  /* Without headings, a line tells where one section ends. */
+  .app[data-collapsed] .nav-group {
+    margin-top: 0.4rem;
+    padding-top: 0.4rem;
+    border-top: 1px solid #ffffff1f;
+  }
+
+  .app[data-collapsed] .side-nav a {
+    justify-content: center;
+    padding-inline: 0.5rem;
+  }
+}
+
 @media (max-width: 52rem) {
+  .sidebar-toggle {
+    display: none;
+  }
+
   .app {
     grid-template-columns: minmax(0, 1fr);
   }
