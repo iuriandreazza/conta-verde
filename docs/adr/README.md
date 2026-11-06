@@ -25,7 +25,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0007](0007-authentication-and-authorization.md) | Authentication and authorization | accepted | 1 |
 | [0008](0008-audit-trail.md) | Audit trail on every business write | accepted | 1 |
 | [0009](0009-postgres-only-background-jobs.md) | PostgreSQL is the only infrastructure; jobs run on it | accepted | 2 |
-| [0010](0010-payment-providers.md) | Payment providers behind ports | proposed | 4 |
+| [0010](0010-payment-providers.md) | Payment providers behind ports | accepted | 4 |
 | [0011](0011-bank-data-ingestion.md) | Bank data: OFX first, aggregator later | accepted | 2, 8 |
 | [0012](0012-managerial-accounting-model.md) | Managerial chart of accounts, not a general ledger | accepted | 1, 2, 6 |
 | [0013](0013-accountant-access-and-exports.md) | Accountant access and exports | proposed | 6 |
@@ -59,6 +59,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0041](0041-commissions.md) | Sellers and commissions | accepted | 3 |
 | [0042](0042-price-lists.md) | Price lists | accepted | 3 |
 | [0043](0043-sales-reports-and-dashboard.md) | Sales reports and the dashboard | accepted | 3 |
+| [0044](0044-collection-module-plan.md) | The collection module: plan, shared rules and what it changes underneath | accepted | 4 |
 
 ## Template
 

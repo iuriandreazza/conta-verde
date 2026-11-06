@@ -75,11 +75,17 @@ contract bills itself for three cycles in a test clock.
 
 ## Phase 4 — Collection and notifications (v0.5)
 
-- [ ] Payment-provider ports: registered boleto, Pix (dynamic QR), card payment link; fake adapter plus two real ones ([ADR 0010](adr/0010-payment-providers.md))
-- [ ] Charges attached to installments; webhooks settle the installment and record fees
-- [ ] Dunning rules: reminders before and after due date, cadence per company
-- [ ] Notification ports: e-mail (SMTP) first, WhatsApp through a provider ([ADR 0014](adr/0014-notifications.md))
-- [ ] Customer-facing payment page (charge details, boleto PDF, Pix copy-and-paste)
+Planned in [ADR 0044](adr/0044-collection-module-plan.md), which also accepts [ADR 0010](adr/0010-payment-providers.md)
+and settles what the phase changes underneath (installation-wide provider credentials, a charge that settles once
+through the settlement path, the provider fee as a payable, signed public webhooks, the dunning job). One slice
+per pull request, in this order:
+
+- [ ] Payment-provider port with the fake adapter; charges attached to installments: boleto, Pix (dynamic QR), card link
+- [ ] Webhooks settle the installment and record the provider fee
+- [ ] Customer-facing payment page (charge details, boleto, Pix copy-and-paste) behind a token
+- [ ] Notification ports: e-mail (SMTP) first, WhatsApp through a provider ([ADR 0014](adr/0014-notifications.md)); dunning rules with reminders before and after the due date, cadence per company, sent by the hourly job
+- [ ] First real provider adapter
+- [ ] Second real provider adapter
 - [ ] Delinquency report
 
 Exit criteria: an installment issued as boleto or Pix settles itself when the provider's
