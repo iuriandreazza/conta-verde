@@ -8138,4 +8138,28 @@ pub async fn reports_the_entries<R, F>(
         .unwrap();
     let after = service.overdue(company, on, None, None).await.unwrap();
     assert_eq!(overdue_of(&after).0[0], "2026-10-05 Aluguel 1000");
+
+    // A sum is written without trailing zeros, however the database adds it up (0.5 + 0.5 is 1.0 in SQL).
+    service
+        .register(
+            company,
+            &ana,
+            draft(
+                EntryKind::Payable,
+                "Meio e meio",
+                seed.other_category,
+                "2030-01-10",
+                &[("2030-01-10", "0.5"), ("2030-02-10", "0.5")],
+            ),
+        )
+        .await
+        .unwrap();
+    let halves = report(
+        ReportGroup::Category,
+        ReportBasis::Competence,
+        (day("2030-01-01"), day("2030-01-31")),
+    )
+    .await
+    .unwrap();
+    assert_eq!(halves[0].payable.to_string(), "1");
 }

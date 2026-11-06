@@ -688,11 +688,13 @@ fn day_of(row: &PgRow) -> Result<CalendarDate, RepositoryError> {
         .ok_or_else(|| RepositoryError::Storage(format!("stored day {text} is invalid")))
 }
 
-/// A column that is a sum, read as text, like every amount.
+/// A column that is a sum, read as text, like every amount. `SUM` keeps the widest scale of what it adds
+/// (`0.5 + 0.5` is `1.0`), so the trailing zeros go, as the in-memory adapter has it.
 fn sum_of(row: &PgRow, column: &str) -> Result<Decimal, RepositoryError> {
     row.try_get::<String, _>(column)
         .map_err(storage_error)?
         .parse::<Decimal>()
+        .map(|sum| sum.normalize())
         .map_err(|error| RepositoryError::Storage(format!("a sum that is not a number: {error}")))
 }
 

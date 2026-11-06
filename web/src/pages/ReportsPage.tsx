@@ -28,6 +28,8 @@ const SERIES: LegendItem[] = [
 ];
 /** The bars show the biggest groups; the table has all of them. */
 const MAX_BARS = 8;
+/** Names are read for every row a report can show, so the cap is well above what a select offers. */
+const MAX_NAMES = 5000;
 
 const GROUPS: { key: EntriesReportFilters["group"]; label: string; none: string }[] = [
   { key: "category", label: "Categoria", none: "Sem categoria" },
@@ -49,8 +51,8 @@ export function ReportsPage() {
     let current = true;
     Promise.all([
       api.listCategories(companyId),
-      readUpTo((after) => api.listCostCenters(companyId, { q: "", active: "", sort: "name" }, after)),
-      readUpTo((after) => api.listParties(companyId, undefined, after)),
+      readUpTo((after) => api.listCostCenters(companyId, { q: "", active: "", sort: "name" }, after), MAX_NAMES),
+      readUpTo((after) => api.listParties(companyId, undefined, after), MAX_NAMES),
     ])
       .then(([categories, costCenters, parties]) => {
         if (!current) return;
@@ -116,7 +118,12 @@ function EntriesReportView({ companyId, names }: { companyId: string; names: Map
           setError(null);
         }
       })
-      .catch((failure: unknown) => latest && setError(errorMessage(failure)))
+      .catch((failure: unknown) => {
+        if (latest) {
+          setReport(null);
+          setError(errorMessage(failure));
+        }
+      })
       .finally(() => latest && setLoading(false));
     return () => {
       latest = false;
@@ -252,6 +259,9 @@ function OverdueView({ companyId, names }: { companyId: string; names: Map<strin
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    // The totals on screen belong to the answer they came with, not to the select that changed.
+    setReport(null);
+    setError(null);
     let latest = true;
     api
       .overdueReport(companyId, today, kind)
