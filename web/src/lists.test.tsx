@@ -376,6 +376,7 @@ describe("creating from the top bar", () => {
     ["Nova regra de comissão", "Percentual (%)"],
     ["Novo contrato", "Ciclo de cobrança"],
     ["Novo orçamento", "Emitido em"],
+    ["Novo pedido", "Data da venda"],
   ])("raises the %s sheet from the top bar, with its fields once what it points at is read", async (item, field) => {
     mockApi((url) =>
       url === "/api/auth/me" ? { status: 200, body: profile } : { status: 200, body: { items: [], next_cursor: null } },
