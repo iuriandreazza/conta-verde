@@ -597,7 +597,6 @@ mod tests {
     use conta_verde_application::StockService;
 
     use super::*;
-    use crate::PostgresStockMovementRepository;
     use crate::{
         Argon2SecretService, InMemoryEmailSender, PostgresBankAccountRepository,
         PostgresCategoryRepository, PostgresCostCenterRepository, PostgresFinancialEntryRepository,

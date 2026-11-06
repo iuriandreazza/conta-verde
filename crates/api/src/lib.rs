@@ -1314,8 +1314,6 @@ mod tests {
         InMemoryStockSettingsRepository,
     >;
 
-    type TestStock = StockService<InMemoryStockMovementRepository, InMemoryProductRepository>;
-
     /// Sales over the registers, the quotes and the entries a test keeps a handle to, so that a quote can be
     /// turned into a sale and the sale's receivable shows in the entries and the cash flow.
     #[allow(clippy::too_many_arguments)]

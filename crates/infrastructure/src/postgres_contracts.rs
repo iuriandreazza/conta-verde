@@ -349,7 +349,6 @@ mod tests {
     use conta_verde_application::StockService;
 
     use super::*;
-    use crate::PostgresStockMovementRepository;
     use crate::{
         PostgresBankAccountRepository, PostgresCategoryRepository, PostgresCostCenterRepository,
         PostgresFinancialEntryRepository, PostgresPartyRepository, PostgresPaymentMethodRepository,
