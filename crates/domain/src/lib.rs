@@ -22,6 +22,7 @@ mod product;
 mod recurrence;
 mod role;
 mod settlement;
+mod statement_line;
 mod tag;
 mod transfer;
 
@@ -36,7 +37,8 @@ pub use audit::{
     opening_creation_changes, party_changes, payment_method_changes,
     payment_method_creation_changes, payment_term_changes, payment_term_creation_changes,
     product_changes, product_creation_changes, recurrence_changes, recurrence_creation_changes,
-    settlement_changes, settlement_creation_changes, transfer_changes, transfer_creation_changes,
+    settlement_changes, settlement_creation_changes, statement_line_changes,
+    statement_line_creation_changes, transfer_changes, transfer_creation_changes,
 };
 pub use bank_account::{BankAccount, BankAccountDraft, BankAccountKind};
 pub use calendar_date::CalendarDate;
@@ -53,7 +55,8 @@ pub use financial_entry::{
 };
 pub use ids::{
     BankAccountId, CategoryId, CompanyId, CostCenterId, EntryId, InvitationId, PartyId,
-    PaymentMethodId, PaymentTermId, ProductId, RecurrenceId, SettlementId, TransferId, UserId,
+    PaymentMethodId, PaymentTermId, ProductId, RecurrenceId, SettlementId, StatementLineId,
+    TransferId, UserId,
 };
 pub use invitation::Invitation;
 pub use party::{Party, PartyDraft};
@@ -68,5 +71,6 @@ pub use role::{Access, Area, Role};
 /// The exact decimal money is made of, so a layer that adds amounts need not depend on its crate.
 pub use rust_decimal::Decimal;
 pub use settlement::{Settlement, SettlementDraft, settled_of};
+pub use statement_line::{LineMatch, LineStatus, StatementLine, StatementLineDraft};
 pub use tag::{MAX_TAGS, Tag};
 pub use transfer::{AccountOpening, Transfer, TransferDraft};

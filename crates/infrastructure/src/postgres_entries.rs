@@ -362,6 +362,36 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
         })
     }
 
+    async fn settlement_candidates(
+        &self,
+        company_id: CompanyId,
+        account: BankAccountId,
+        kind: EntryKind,
+        cash: Decimal,
+        since: CalendarDate,
+        until: CalendarDate,
+    ) -> Result<Vec<Settlement>, RepositoryError> {
+        let rows = sqlx::query(&format!(
+            "{SELECT_SETTLEMENTS} WHERE company_id = $1 AND id IN ( \
+                 SELECT s.id FROM entry_settlements s \
+                 JOIN financial_entries e ON e.company_id = s.company_id AND e.id = s.entry_id \
+                 WHERE s.company_id = $1 AND s.bank_account_id = $2 AND NOT s.reversed AND e.kind = $3 \
+                   AND s.applied + s.interest + s.fine - s.discount = CAST($4 AS NUMERIC) \
+                   AND s.settled_on BETWEEN CAST($5 AS DATE) AND CAST($6 AS DATE)) \
+             ORDER BY settled_on, id"
+        ))
+        .bind(company_id.as_uuid())
+        .bind(account.as_uuid())
+        .bind(kind.as_str())
+        .bind(cash.to_string())
+        .bind(since.to_string())
+        .bind(until.to_string())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        rows.iter().map(settlement_from_row).collect()
+    }
+
     async fn cash_by_day(
         &self,
         company_id: CompanyId,

@@ -1,7 +1,8 @@
 use conta_verde_domain::{
-    Actor, AuditAction, AuditRecord, CompanyId, EntryId, EntryOrigin, FinancialEntry,
-    FinancialEntryDraft, Settlement, SettlementDraft, SettlementId, entry_changes,
-    entry_creation_changes, settlement_changes, settlement_creation_changes,
+    Actor, AuditAction, AuditRecord, BankAccountId, CalendarDate, CompanyId, Decimal, EntryId,
+    EntryKind, EntryOrigin, FinancialEntry, FinancialEntryDraft, Settlement, SettlementDraft,
+    SettlementId, entry_changes, entry_creation_changes, settlement_changes,
+    settlement_creation_changes,
 };
 
 use crate::audit::audit_entry;
@@ -73,6 +74,22 @@ impl<R: FinancialEntryRepository, F: EntryReferences> FinancialEntryService<R, F
         );
         self.repository.save(&record, &audit).await?;
         Ok(record)
+    }
+
+    /// The settlements a bank statement line may be, see `settlement_candidates` of the port.
+    pub async fn settlement_candidates(
+        &self,
+        company_id: CompanyId,
+        account: BankAccountId,
+        kind: EntryKind,
+        cash: Decimal,
+        since: CalendarDate,
+        until: CalendarDate,
+    ) -> Result<Vec<Settlement>, ApplicationError> {
+        Ok(self
+            .repository
+            .settlement_candidates(company_id, account, kind, cash, since, until)
+            .await?)
     }
 
     /// Replaces the editable fields and the installments. A draft that changes nothing writes

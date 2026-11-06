@@ -155,6 +155,37 @@ impl TransferRepository for PostgresTransferRepository {
         postgres_audit::history(&self.pool, company_id, AuditEntity::Transfer, id.as_uuid()).await
     }
 
+    async fn transfer_candidates(
+        &self,
+        company_id: CompanyId,
+        account: BankAccountId,
+        incoming: bool,
+        amount: Decimal,
+        since: CalendarDate,
+        until: CalendarDate,
+    ) -> Result<Vec<Transfer>, RepositoryError> {
+        let side = if incoming {
+            "to_account_id"
+        } else {
+            "from_account_id"
+        };
+        let rows = sqlx::query(&format!(
+            "{SELECT_TRANSFERS} WHERE company_id = $1 AND NOT reversed AND {side} = $2 \
+             AND amount = CAST($3 AS NUMERIC) \
+             AND occurred_on BETWEEN CAST($4 AS DATE) AND CAST($5 AS DATE) \
+             ORDER BY occurred_on, id"
+        ))
+        .bind(company_id.as_uuid())
+        .bind(account.as_uuid())
+        .bind(amount.to_string())
+        .bind(since.to_string())
+        .bind(until.to_string())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        rows.iter().map(transfer_from_row).collect()
+    }
+
     async fn movement_by_day(
         &self,
         company_id: CompanyId,

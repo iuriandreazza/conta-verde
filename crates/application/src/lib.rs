@@ -28,9 +28,11 @@ mod postal_code_directory;
 mod postal_code_service;
 mod product_repository;
 mod product_service;
+mod reconciliation_service;
 mod recurrence_repository;
 mod recurrence_service;
 mod secret_service;
+mod statement_line_repository;
 mod transfer_repository;
 mod transfer_service;
 
@@ -71,11 +73,15 @@ pub use postal_code_directory::{PostalCodeDirectory, PostalCodeEntry, PostalCode
 pub use postal_code_service::PostalCodeService;
 pub use product_repository::{ProductQuery, ProductRepository};
 pub use product_service::{ProductPage, ProductService};
+pub use reconciliation_service::{
+    EntryFromLine, ReconciliationService, SUGGESTION_WINDOW_DAYS, StatementLinePage, Suggestion,
+};
 pub use recurrence_repository::{RecurrenceQuery, RecurrenceRepository};
 pub use recurrence_service::{
     GENERATION_HORIZON_DAYS, GenerationReport, RecurrencePage, RecurrenceService,
 };
 pub use secret_service::{SecretError, SecretService};
+pub use statement_line_repository::{MatchedTargets, StatementLineQuery, StatementLineRepository};
 pub use transfer_repository::{
     AccountMovement, DayMovement, OpeningRepository, TransferQuery, TransferRepository,
 };

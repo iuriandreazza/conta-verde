@@ -92,6 +92,22 @@ impl<R: TransferRepository, F: EntryReferences> TransferService<R, F> {
         Ok(reversed)
     }
 
+    /// The transfers a bank statement line may be, see `transfer_candidates` of the port.
+    pub async fn candidates(
+        &self,
+        company_id: CompanyId,
+        account: BankAccountId,
+        incoming: bool,
+        amount: Decimal,
+        since: CalendarDate,
+        until: CalendarDate,
+    ) -> Result<Vec<Transfer>, ApplicationError> {
+        Ok(self
+            .repository
+            .transfer_candidates(company_id, account, incoming, amount, since, until)
+            .await?)
+    }
+
     pub async fn list(
         &self,
         company_id: CompanyId,

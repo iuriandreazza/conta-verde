@@ -26,7 +26,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0008](0008-audit-trail.md) | Audit trail on every business write | accepted | 1 |
 | [0009](0009-postgres-only-background-jobs.md) | PostgreSQL is the only infrastructure; jobs run on it | accepted | 2 |
 | [0010](0010-payment-providers.md) | Payment providers behind ports | proposed | 4 |
-| [0011](0011-bank-data-ingestion.md) | Bank data: OFX first, aggregator later | proposed | 2, 8 |
+| [0011](0011-bank-data-ingestion.md) | Bank data: OFX first, aggregator later | accepted | 2, 8 |
 | [0012](0012-managerial-accounting-model.md) | Managerial chart of accounts, not a general ledger | accepted | 1, 2, 6 |
 | [0013](0013-accountant-access-and-exports.md) | Accountant access and exports | proposed | 6 |
 | [0014](0014-notifications.md) | Notifications behind ports | accepted | 4 |
@@ -49,6 +49,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0031](0031-transfers-and-balances.md) | Transfers, opening balances and balance per account | accepted | 2 |
 | [0032](0032-cash-flow.md) | Cash flow, realized and forecast | accepted | 2 |
 | [0033](0033-recurring-entries.md) | Recurring entries generated ahead by a scheduled job | accepted | 2 |
+| [0034](0034-statement-import-and-reconciliation.md) | Statement import (OFX) and reconciliation | accepted | 2 |
 
 ## Template
 

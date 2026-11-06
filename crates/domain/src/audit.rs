@@ -2,7 +2,8 @@ use uuid::Uuid;
 
 use crate::{
     AccountOpening, BankAccount, Category, CompanyId, CostCenter, DocumentCheck, FinancialEntry,
-    Party, PaymentMethod, PaymentTerm, Product, Recurrence, Settlement, Tag, Transfer, UserId,
+    LineMatch, Party, PaymentMethod, PaymentTerm, Product, Recurrence, Settlement, StatementLine,
+    Tag, Transfer, UserId,
 };
 
 /// Who made a change. The name is a snapshot: history must keep reading the same after the user is
@@ -28,6 +29,7 @@ pub enum AuditEntity {
     /// One per bank account: the audit id is the account's.
     AccountOpening,
     Recurrence,
+    StatementLine,
 }
 
 impl AuditEntity {
@@ -42,6 +44,7 @@ impl AuditEntity {
             Self::PaymentTerm => "payment_term",
             Self::FinancialEntry => "financial_entry",
             Self::Recurrence => "recurrence",
+            Self::StatementLine => "statement_line",
             Self::Settlement => "settlement",
             Self::Transfer => "transfer",
             Self::AccountOpening => "account_opening",
@@ -200,6 +203,20 @@ impl Audited for FinancialEntry {
 impl Audited for Recurrence {
     fn audit_entity(&self) -> AuditEntity {
         AuditEntity::Recurrence
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.id().as_uuid()
+    }
+}
+
+impl Audited for StatementLine {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::StatementLine
     }
 
     fn audit_company(&self) -> CompanyId {
@@ -555,6 +572,34 @@ pub fn recurrence_creation_changes(recurrence: &Recurrence) -> Vec<FieldChange> 
 
 pub fn recurrence_changes(before: &Recurrence, after: &Recurrence) -> Vec<FieldChange> {
     changes_between(recurrence_fields(before), recurrence_fields(after))
+}
+
+fn statement_line_fields(line: &StatementLine) -> Fields {
+    let (settlement, transfer) = match line.matched() {
+        Some(LineMatch::Settlement(id)) => (Some(id.as_uuid().to_string()), None),
+        Some(LineMatch::Transfer(id)) => (None, Some(id.as_uuid().to_string())),
+        None => (None, None),
+    };
+    vec![
+        ("account_id", Some(line.account_id().as_uuid().to_string())),
+        ("posted_on", Some(line.posted_on().to_string())),
+        ("amount", Some(line.amount().to_string())),
+        ("description", Some(line.description().to_owned())),
+        ("bank_ref", line.bank_ref().map(str::to_owned)),
+        ("status", Some(line.status().as_str().to_owned())),
+        ("matched_settlement_id", settlement),
+        ("matched_transfer_id", transfer),
+    ]
+}
+
+/// Every field a new statement line has set.
+pub fn statement_line_creation_changes(line: &StatementLine) -> Vec<FieldChange> {
+    creation_from(statement_line_fields(line))
+}
+
+/// What a move of the status changes: the status and what it is matched to.
+pub fn statement_line_changes(before: &StatementLine, after: &StatementLine) -> Vec<FieldChange> {
+    changes_between(statement_line_fields(before), statement_line_fields(after))
 }
 
 fn settlement_fields(settlement: &Settlement) -> Fields {

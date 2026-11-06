@@ -536,6 +536,50 @@ export interface CashFlow {
 
 export type EntryKind = "receivable" | "payable";
 
+export type StatementLineStatus = "pending" | "matched" | "ignored";
+
+/** One line of a bank statement and where it stands in the reconciliation (ADR 0034). */
+export interface StatementLine {
+  id: string;
+  company_id: string;
+  account_id: string;
+  /** `YYYY-MM-DD`. */
+  posted_on: string;
+  /** Signed: positive came into the account, negative went out of it. */
+  amount: string;
+  description: string;
+  bank_ref: string | null;
+  status: StatementLineStatus;
+  matched_settlement_id: string | null;
+  matched_transfer_id: string | null;
+}
+
+export interface StatementLinePage {
+  items: StatementLine[];
+  next_cursor: string | null;
+}
+
+export interface StatementLineFilters {
+  /** The id of an account, or empty for all of them. */
+  account: string;
+  status: "" | StatementLineStatus;
+}
+
+export const NO_STATEMENT_LINE_FILTERS: StatementLineFilters = { account: "", status: "pending" };
+
+/** What a pending line may be matched to: a settlement of an entry, or a transfer. */
+export type LineSuggestion =
+  | { kind: "settlement"; settlement: Settlement; entry_description: string }
+  | { kind: "transfer"; transfer: Transfer };
+
+export interface EntryFromLineInput {
+  category_id: string;
+  party_id?: string;
+  cost_center_id?: string;
+  payment_method_id?: string;
+  description?: string;
+}
+
 export type RecurrenceFrequency = "weekly" | "monthly" | "yearly";
 
 /** An entry that comes back every week, month or year and is generated ahead (ADR 0033). */
@@ -917,6 +961,43 @@ export const api = {
     }),
   recurrenceHistory: (companyId: string, id: string) =>
     request<HistoryEntry[]>(`/companies/${companyId}/recurrences/${id}/history`),
+  /** The OFX file goes as it is, bytes and all: the API reads the charset. */
+  importStatement: (companyId: string, accountId: string, file: File, dryRun: boolean) =>
+    request<ImportResult>(
+      `/companies/${companyId}/bank-accounts/${accountId}/statement-import${dryRun ? "?dry_run=true" : ""}`,
+      { method: "POST", headers: { "Content-Type": "application/x-ofx" }, body: file },
+    ),
+  /** Newest day first; a cursor only continues the list of the same filters. */
+  listStatementLines: (
+    companyId: string,
+    filters: StatementLineFilters = NO_STATEMENT_LINE_FILTERS,
+    after?: string,
+  ) => {
+    const params = new URLSearchParams();
+    if (filters.account) params.set("account", filters.account);
+    if (filters.status) params.set("status", filters.status);
+    if (after) params.set("after", after);
+    const query = params.size > 0 ? `?${params}` : "";
+    return request<StatementLinePage>(`/companies/${companyId}/statement-lines${query}`);
+  },
+  statementLineSuggestions: (companyId: string, id: string) =>
+    request<LineSuggestion[]>(`/companies/${companyId}/statement-lines/${id}/suggestions`),
+  matchStatementLine: (
+    companyId: string,
+    id: string,
+    target: { settlement_id: string } | { transfer_id: string },
+  ) => post<StatementLine>(`/companies/${companyId}/statement-lines/${id}/match`, target),
+  unmatchStatementLine: (companyId: string, id: string) =>
+    post<StatementLine>(`/companies/${companyId}/statement-lines/${id}/unmatch`),
+  ignoreStatementLine: (companyId: string, id: string) =>
+    post<StatementLine>(`/companies/${companyId}/statement-lines/${id}/ignore`),
+  restoreStatementLine: (companyId: string, id: string) =>
+    post<StatementLine>(`/companies/${companyId}/statement-lines/${id}/restore`),
+  createEntryFromLine: (companyId: string, id: string, input: EntryFromLineInput) =>
+    post<{ line: StatementLine; entry_id: string; settlement_id: string }>(
+      `/companies/${companyId}/statement-lines/${id}/create-entry`,
+      input,
+    ),
   /** Newest first; a cursor only continues the list of the same filters. */
   listTransfers: (companyId: string, filters: TransferFilters = NO_TRANSFER_FILTERS, after?: string) => {
     const params = new URLSearchParams();

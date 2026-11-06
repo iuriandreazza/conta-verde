@@ -24,6 +24,10 @@ pub enum RepositoryError {
     Overpaid,
     /// The entry has settlements that are not reversed, so its installments and kind are fixed.
     EntrySettled,
+    /// The account already has this statement line.
+    DuplicateLine,
+    /// Another statement line is matched to the settlement or the transfer.
+    AlreadyMatched,
     /// The recurrence already has the entry of that occurrence day.
     DuplicateOccurrence,
     Storage(String),
@@ -69,6 +73,15 @@ pub enum ApplicationError {
     EntryNotFound,
     /// A cash flow was asked for a span that is not one or is too long to cut.
     InvalidSpan(&'static str),
+    /// No statement line with this id in the company (another company's looks the same).
+    StatementLineNotFound,
+    /// Another statement line is already matched to the settlement or the transfer.
+    AlreadyMatched,
+    /// The settlement or the transfer is not one that fits the line: another account, reversed, not the
+    /// same amount or direction, or too far from its day.
+    MatchDoesNotFit,
+    /// A file has more lines than one import takes.
+    TooManyImportRows,
     /// No recurrence with this id in the company (another company's looks the same).
     RecurrenceNotFound,
     /// No transfer with this id in the company, or it was reversed already.
@@ -158,6 +171,8 @@ impl fmt::Display for RepositoryError {
                 f.write_str("this settles more of the installment than is left of it")
             }
             Self::EntrySettled => f.write_str("the entry has settlements that are not reversed"),
+            Self::DuplicateLine => f.write_str("the account already has this statement line"),
+            Self::AlreadyMatched => f.write_str("another statement line is already matched to it"),
             Self::DuplicateOccurrence => {
                 f.write_str("the recurrence already has the entry of this occurrence")
             }
@@ -195,6 +210,12 @@ impl fmt::Display for ApplicationError {
             Self::SettlementNotFound => f.write_str("settlement not found"),
             Self::TransferNotFound => f.write_str("transfer not found"),
             Self::RecurrenceNotFound => f.write_str("recurrence not found"),
+            Self::StatementLineNotFound => f.write_str("statement line not found"),
+            Self::AlreadyMatched => f.write_str("another statement line is already matched to it"),
+            Self::MatchDoesNotFit => f.write_str(
+                "that settlement or transfer does not fit the line: it has to be in the same account, not reversed, for the same amount in the same direction, and within five days",
+            ),
+            Self::TooManyImportRows => f.write_str("the file has more lines than one import takes"),
             Self::InvalidSpan(reason) => write!(f, "invalid span: {reason}"),
             Self::SettlementExceedsBalance => {
                 f.write_str("this settles more of the installment than is left of it")

@@ -10,9 +10,17 @@ interface CsvImportProps {
   title: string;
   /** What the columns of the file are, in words. */
   children: ReactNode;
-  /** The header and one example row, which the person downloads and fills in. */
-  template: string;
-  templateName: string;
+  /** The header and one example row, which the person downloads and fills in; none for a file a bank makes. */
+  template?: string;
+  templateName?: string;
+  /** What the file is, for the field: "Arquivo CSV" unless said. */
+  fileLabel?: string;
+  /** The kinds of file the picker offers. */
+  accept?: string;
+  /** What an import makes, in words: "cadastro criado" / "cadastros criados" unless said. */
+  created?: [string, string];
+  /** Holds the buttons back, because something the import needs is not chosen yet. */
+  blocked?: boolean;
   /** Sends the file; with `dryRun` only checks it. */
   run: (file: File, dryRun: boolean) => Promise<ImportResult>;
   /** Called after rows were created, so the list shows them. */
@@ -28,6 +36,10 @@ export function CsvImport({
   children,
   template,
   templateName,
+  fileLabel = "Arquivo CSV",
+  accept = ".csv,text/csv",
+  created = ["cadastro criado", "cadastros criados"],
+  blocked = false,
   run,
   onImported,
 }: CsvImportProps) {
@@ -84,24 +96,26 @@ export function CsvImport({
   }
 
   // A BOM makes a spreadsheet open the accents right.
-  const templateHref = `data:text/csv;charset=utf-8,${encodeURIComponent(`﻿${template}`)}`;
+  const templateHref = `data:text/csv;charset=utf-8,${encodeURIComponent(`﻿${template ?? ""}`)}`;
 
   return (
     <section className="card import-card" aria-labelledby="import-title">
       <h2 id="import-title">{title}</h2>
       <div className="muted">{children}</div>
-      <p>
-        <a href={templateHref} download={templateName}>
-          Baixar modelo
-        </a>
-      </p>
+      {template !== undefined && (
+        <p>
+          <a href={templateHref} download={templateName}>
+            Baixar modelo
+          </a>
+        </p>
+      )}
       <label>
-        Arquivo CSV
+        {fileLabel}
         <input
           key={inputKey}
           ref={input}
           type="file"
-          accept=".csv,text/csv"
+          accept={accept}
           disabled={pending !== null}
           onChange={choose}
         />
@@ -111,7 +125,7 @@ export function CsvImport({
           type="button"
           variant="ghost"
           pending={pending === "check"}
-          disabled={file === null || pending === "import"}
+          disabled={blocked || file === null || pending === "import"}
           onClick={() => void send(true)}
         >
           Verificar arquivo
@@ -119,25 +133,25 @@ export function CsvImport({
         <Button
           type="button"
           pending={pending === "import"}
-          disabled={file === null || pending === "check"}
+          disabled={blocked || file === null || pending === "check"}
           onClick={() => void send(false)}
         >
           Importar
         </Button>
       </div>
       <Notice message={error} />
-      {result && <ImportOutcome result={result} />}
+      {result && <ImportOutcome result={result} created={created} />}
     </section>
   );
 }
 
-function ImportOutcome({ result }: { result: ImportResult }) {
+function ImportOutcome({ result, created }: { result: ImportResult; created: [string, string] }) {
   const bad = result.refused.length > 0;
   const message = bad
     ? `Nada foi importado: ${plural(result.refused.length, "linha tem", "linhas têm")} problema. Corrija o arquivo e envie de novo.`
     : result.dry_run
       ? `Arquivo em ordem: ${plural(result.valid, "linha válida", "linhas válidas")}. As que já estiverem cadastradas serão ignoradas.`
-      : `${plural(result.created, "cadastro criado", "cadastros criados")}${
+      : `${plural(result.created, created[0], created[1])}${
           result.skipped.length > 0
             ? `; ${plural(result.skipped.length, "linha ignorada", "linhas ignoradas")}`
             : ""

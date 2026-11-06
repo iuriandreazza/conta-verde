@@ -97,6 +97,19 @@ pub trait TransferRepository: Send + Sync {
         id: TransferId,
     ) -> impl Future<Output = Result<Vec<AuditRecord>, RepositoryError>> + Send;
 
+    /// The transfers that are not reversed into the account (`incoming`) or out of it, for exactly
+    /// `amount`, on the days from `since` through `until`: what a bank statement line of that amount
+    /// may be ([ADR 0034]). Oldest day first, then by id.
+    fn transfer_candidates(
+        &self,
+        company_id: CompanyId,
+        account: BankAccountId,
+        incoming: bool,
+        amount: Decimal,
+        since: CalendarDate,
+        until: CalendarDate,
+    ) -> impl Future<Output = Result<Vec<Transfer>, RepositoryError>> + Send;
+
     /// What the transfers that are not reversed moved in the account on each day from `since` through
     /// `until` that had any, oldest day first: `received` what came into it, `paid` what went out.
     fn movement_by_day(

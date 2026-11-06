@@ -33,5 +33,6 @@ uuid_id!(PaymentTermId);
 uuid_id!(ProductId);
 uuid_id!(RecurrenceId);
 uuid_id!(SettlementId);
+uuid_id!(StatementLineId);
 uuid_id!(TransferId);
 uuid_id!(UserId);

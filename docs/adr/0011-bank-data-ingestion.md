@@ -1,6 +1,6 @@
 ---
 title: "ADR 0011: Bank data: OFX first, aggregator later"
-status: proposed
+status: accepted
 date: 2026-11-04
 tags: [adr, finance, integrations]
 ---
