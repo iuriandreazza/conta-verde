@@ -125,5 +125,7 @@ without being taught. Described in our own words; no wording, logo or screen of 
 | Closing a half-filled form asks first | `SheetGuard`: "Descartar edições?" |
 
 Not matched because they need the API first: a period (month) filter on entries, a strip with the totals by state
-above the list, numbered pages (the API is cursor-paginated), and bulk actions on selected rows. Export, print and
-a reports menu in the action row are the next front-end slice.
+above the list, numbered pages (the API is cursor-paginated), and bulk actions on selected rows. Export and print
+are in the action row of the parties, products and entries lists: the CSV holds every row the filters give (up to 2000,
+said when it stops short), made in the browser; the printed page drops the shell and the controls. A reports menu in
+the action row and the CSV import moved into a sheet are the next front-end slice.

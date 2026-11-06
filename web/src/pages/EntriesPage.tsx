@@ -18,6 +18,7 @@ import { ListFooter } from "../components/ListFooter";
 import { Button } from "../components/Button";
 import { EntryForm } from "../components/EntryForm";
 import { EntryHistory } from "../components/EntryHistory";
+import { ListTools } from "../components/ListTools";
 import { ListRow } from "../components/ListRow";
 import { AttachmentsPanel } from "../components/AttachmentsPanel";
 import { ChargesPanel } from "../components/ChargesPanel";
@@ -32,7 +33,7 @@ import { CreditCardIcon } from "../components/icons/credit-card";
 import { FileTextIcon } from "../components/icons/file-text";
 import { SquarePenIcon } from "../components/icons/square-pen";
 import { treeRows } from "../lib/categoryTree";
-import { formatMoney } from "../lib/decimal";
+import { formatMoney, toInputDecimal } from "../lib/decimal";
 import { STATUS_LABELS, entryStatus, todayIso, type InstallmentStatus } from "../lib/settlement";
 import { formatDate } from "../lib/entryInstallments";
 import { usePagedList } from "../lib/usePagedList";
@@ -53,21 +54,40 @@ function describeDue(entry: Entry): string {
     : `${entry.installments.length} parcelas, de ${formatDate(first.due_date)} a ${formatDate(last.due_date)}`;
 }
 
+const ENTRY_COLUMNS = ["Tipo", "Descrição", "Cliente ou fornecedor", "Categoria", "Competência", "Parcelas", "Primeiro vencimento", "Total", "Situação"];
+
+function entryRow(entry: Entry, names: Map<string, string>): string[] {
+  return [
+    entry.kind === "receivable" ? "A receber" : "A pagar",
+    entry.description,
+    entry.party_id === null ? "" : (names.get(entry.party_id) ?? ""),
+    names.get(entry.category_id) ?? "",
+    formatDate(entry.competence_date),
+    String(entry.installments.length),
+    formatDate(entry.installments[0].due_date),
+    toInputDecimal(entry.total),
+    entry.voided ? "Cancelado" : "",
+  ];
+}
+
 const PAGE_TEXT = {
   "": {
     title: "Lançamentos",
     description: "O que a empresa tem a receber e a pagar, dividido em parcelas.",
     create: "Novo lançamento",
+    file: "lancamentos",
   },
   receivable: {
     title: "Contas a receber",
     description: "O que os clientes ainda vão pagar, dividido em parcelas.",
     create: "Nova receita",
+    file: "contas-a-receber",
   },
   payable: {
     title: "Contas a pagar",
     description: "O que a empresa ainda vai pagar, dividido em parcelas.",
     create: "Nova despesa",
+    file: "contas-a-pagar",
   },
 } as const;
 
@@ -175,13 +195,19 @@ export function EntriesPage() {
   return (
     <>
       <PageHeader title={PAGE_TEXT[pageKind].title} description={PAGE_TEXT[pageKind].description} />
-      {canWrite && (
-        <div className="list-actions">
+      <div className="list-actions">
+        {canWrite && (
           <Button type="button" icon={PlusIcon} onClick={() => openCreate("entry", pageKind === "" ? {} : { kind: pageKind })}>
             {PAGE_TEXT[pageKind].create}
           </Button>
-        </div>
-      )}
+        )}
+        <ListTools
+          filename={PAGE_TEXT[pageKind].file}
+          header={ENTRY_COLUMNS}
+          fetchPage={(after) => api.listEntries(companyId, applied, after)}
+          toRow={(entry) => entryRow(entry, names)}
+        />
+      </div>
       <Notice message={saved} tone="success" />
       <div>
         <section className="card list-card">

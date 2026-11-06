@@ -602,6 +602,11 @@ main {
   margin-bottom: 1rem;
 }
 
+.list-actions .notice {
+  flex-basis: 100%;
+  margin: 0;
+}
+
 .list-card {
   padding: 0;
   overflow: hidden;
@@ -1875,4 +1880,28 @@ tbody tr:last-child td {
   padding: 0.75rem 1rem;
   border: 1px solid var(--border, #e2e8e4);
   border-radius: 0.5rem;
+}
+
+/* A printed list is the page without the shell around it: no menus, buttons or filters. */
+@media print {
+  .sidebar,
+  .topbar,
+  .skip-link,
+  .drawer-scrim,
+  .list-actions,
+  .filters,
+  .list-footer,
+  .row-actions,
+  .btn {
+    display: none !important;
+  }
+
+  .app {
+    display: block;
+  }
+
+  .card {
+    box-shadow: none;
+    border: 0;
+  }
 }
