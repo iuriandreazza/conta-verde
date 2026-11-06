@@ -1,0 +1,70 @@
+import { Button } from "./Button";
+import { BoxIcon } from "./icons/box";
+import { CircleDollarSignIcon } from "./icons/circle-dollar-sign";
+import { LogoutIcon } from "./icons/logout";
+import { PlusIcon } from "./icons/plus";
+import { SendIcon } from "./icons/send";
+import { UsersIcon } from "./icons/users";
+import { MenuButton, type MenuItem } from "./MenuButton";
+import type { Area } from "../api";
+
+interface AppTopbarProps {
+  userName: string;
+  permissions: Partial<Record<Area, "read" | "write">> | undefined;
+  companyId: string | undefined;
+  signingOut: boolean;
+  signOutFailed: boolean;
+  navOpen: boolean;
+  onToggleNav: () => void;
+  onSignOut: () => void;
+}
+
+/** What a person can start from anywhere: only the registers their role may write. */
+function creationItems(companyId: string, permissions: AppTopbarProps["permissions"]): MenuItem[] {
+  const base = `/companies/${companyId}`;
+  const items: (MenuItem & { area: Area })[] = [
+    { key: "entry", label: "Novo lançamento", icon: CircleDollarSignIcon, to: `${base}/entries`, area: "finance" },
+    { key: "transfer", label: "Nova transferência", icon: SendIcon, to: `${base}/transfers`, area: "finance" },
+    { key: "party", label: "Novo cliente ou fornecedor", icon: UsersIcon, to: `${base}/parties`, area: "parties" },
+    { key: "product", label: "Novo produto ou serviço", icon: BoxIcon, to: `${base}/products`, area: "products" },
+  ];
+  return items.filter((item) => permissions?.[item.area] === "write");
+}
+
+/** The bar over every signed-in page: the menu on a phone, "new" from anywhere, who is signed in and how to leave. */
+export function AppTopbar({
+  userName,
+  permissions,
+  companyId,
+  signingOut,
+  signOutFailed,
+  navOpen,
+  onToggleNav,
+  onSignOut,
+}: AppTopbarProps) {
+  const creating = companyId ? creationItems(companyId, permissions) : [];
+  return (
+    <div className="topbar">
+      <button
+        type="button"
+        className="topbar-menu"
+        aria-expanded={navOpen}
+        aria-controls="app-sidebar"
+        onClick={onToggleNav}
+      >
+        Menu
+      </button>
+      <div className="topbar-actions">
+        {creating.length > 0 && <MenuButton variant="primary" icon={PlusIcon} label="Novo registro" items={creating} align="end" />}
+        <span className="avatar" aria-hidden>
+          {userName.trim().charAt(0).toUpperCase()}
+        </span>
+        <span className="user-name">{userName}</span>
+        <Button variant="ghost" icon={LogoutIcon} pending={signingOut} onClick={onSignOut}>
+          Sair
+        </Button>
+        {signOutFailed && <span role="alert">Não foi possível sair, tente novamente.</span>}
+      </div>
+    </div>
+  );
+}

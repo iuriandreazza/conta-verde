@@ -5,6 +5,7 @@ import {
   type ForwardRefExoticComponent,
   type HTMLAttributes,
   type ReactNode,
+  type Ref,
   type RefAttributes,
 } from "react";
 import { cn } from "../lib/utils";
@@ -26,6 +27,8 @@ interface ButtonProps
     "onAnimationStart" | "onDrag" | "onDragStart" | "onDragEnd"
   > {
   icon?: AnimatedIcon;
+  /** A menu button hands the focus back to its trigger. */
+  ref?: Ref<HTMLButtonElement>;
   pending?: boolean;
   variant?: "primary" | "ghost";
   /**
