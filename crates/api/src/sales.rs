@@ -3,8 +3,8 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use conta_verde_application::{ApplicationError, Conversion, Refund, ReturnRecord, SaleQuery};
 use conta_verde_domain::{
-    CategoryId, CostCenterId, LineDraft, PartyId, PaymentTermId, QuoteId, ReturnItemDraft, Sale,
-    SaleDraft, SaleId, SaleReturnDraft, SaleStatus,
+    CategoryId, ContractId, CostCenterId, LineDraft, PartyId, PaymentTermId, QuoteId,
+    ReturnItemDraft, Sale, SaleDraft, SaleId, SaleReturnDraft, SaleStatus,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -91,6 +91,8 @@ pub(crate) struct ListQuery {
     status: Option<String>,
     customer: Option<Uuid>,
     seller: Option<Uuid>,
+    /// The contract whose cycles they bill.
+    contract: Option<Uuid>,
     /// `-number` (default) or `number`.
     sort: Option<String>,
 }
@@ -112,6 +114,9 @@ impl ListQuery {
         if let Some(seller) = self.seller {
             query = query.with_seller(PartyId::from_uuid(seller));
         }
+        if let Some(contract) = self.contract {
+            query = query.of_contract(ContractId::from_uuid(contract));
+        }
         Ok(query.sorted(list_params::number_sort(self.sort.as_deref())?))
     }
 }
@@ -131,6 +136,9 @@ pub(crate) struct SaleResponse {
     status: &'static str,
     /// The quote it was made from.
     quote_id: Option<Uuid>,
+    /// The contract it bills a cycle of, and the day of the cycle.
+    contract_id: Option<Uuid>,
+    cycle_on: Option<String>,
     lines: Vec<LineResponse>,
     /// The sum of the lines.
     total: String,
@@ -153,6 +161,8 @@ impl SaleResponse {
             notes: sale.notes().map(str::to_owned),
             status: sale.status().as_str(),
             quote_id: sale.quote_id().map(|id| id.as_uuid()),
+            contract_id: sale.cycle().map(|cycle| cycle.contract_id.as_uuid()),
+            cycle_on: sale.cycle().map(|cycle| cycle.cycle_on.to_string()),
             lines: sale.lines().iter().map(LineResponse::from).collect(),
             total: sale.total().to_string(),
             receivable_id,

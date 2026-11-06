@@ -4,8 +4,8 @@ use conta_verde_application::{
     NumberCursor, NumberSort, RepositoryError, SaleQuery, SaleRepository, ensure_audit_describes,
 };
 use conta_verde_domain::{
-    AuditEntity, AuditEntry, AuditRecord, CompanyId, Decimal, QuoteId, Sale, SaleId, SaleReturn,
-    SaleStatus,
+    AuditEntity, AuditEntry, AuditRecord, CompanyId, ContractCycle, Decimal, QuoteId, Sale, SaleId,
+    SaleReturn, SaleStatus,
 };
 
 use crate::memory_audit::AuditLog;
@@ -37,6 +37,14 @@ impl SaleRepository for InMemorySaleRepository {
         }) {
             return Err(RepositoryError::DuplicateQuoteSale);
         }
+        if sale.cycle().is_some_and(|cycle| {
+            state
+                .sales
+                .iter()
+                .any(|stored| stored.cycle() == Some(cycle))
+        }) {
+            return Err(RepositoryError::DuplicateCycle);
+        }
         let number = state
             .sales
             .iter()
@@ -60,6 +68,19 @@ impl SaleRepository for InMemorySaleRepository {
             .sales
             .iter()
             .find(|stored| stored.company_id() == company_id && stored.id() == id)
+            .cloned())
+    }
+
+    async fn find_by_cycle(
+        &self,
+        company_id: CompanyId,
+        cycle: ContractCycle,
+    ) -> Result<Option<Sale>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        Ok(state
+            .sales
+            .iter()
+            .find(|stored| stored.company_id() == company_id && stored.cycle() == Some(cycle))
             .cloned())
     }
 

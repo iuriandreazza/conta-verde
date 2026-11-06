@@ -8,9 +8,12 @@ use conta_verde_application::{
     PaymentMethodService, ProductQuery, ProductRepository, ProductService, RepositoryError,
     SecretService,
 };
-use conta_verde_application::{Conversion, Refund, SaleQuery, SaleRepository, SaleService};
 use conta_verde_application::{
-    EmailSender, NumberSort, QuotePage, QuoteQuery, QuoteRepository, QuoteService, SalesReferences,
+    ContractQuery, EmailSender, NumberSort, QuotePage, QuoteQuery, QuoteRepository, QuoteService,
+    SalesReferences,
+};
+use conta_verde_application::{
+    ContractRepository, ContractService, Conversion, Refund, SaleQuery, SaleRepository, SaleService,
 };
 use conta_verde_application::{
     ImportRow, InvitationRepository, InvitationState, Invited, MemberService, NewAccount,
@@ -28,6 +31,7 @@ use conta_verde_domain::{
     document_check_changes, payment_method_changes, payment_method_creation_changes,
     product_changes, product_creation_changes,
 };
+use conta_verde_domain::{BillingCycle, ContractDraft, ContractStatus};
 use conta_verde_domain::{
     EntryOrigin, ReturnItemDraft, SaleDraft, SaleReturn, SaleReturnDraft, SaleReturnId, SaleStatus,
     sale_return_creation_changes,
@@ -10003,5 +10007,455 @@ pub async fn runs_the_sale_lifecycle<S, Q, E, F, R, Q2, R2, Em, Se>(
             .await
             .unwrap_err(),
         ApplicationError::Domain(DomainError::QuoteIsLocked)
+    );
+}
+
+fn contract_draft(
+    entry_seed: &EntrySeed,
+    seed: &SalesSeed,
+    starts_on: &str,
+    ends_on: Option<&str>,
+) -> ContractDraft {
+    ContractDraft {
+        name: "Manutenção mensal".into(),
+        customer_id: seed.customer,
+        seller_id: Some(seed.seller),
+        payment_term_id: Some(seed.term),
+        category_id: entry_seed.category,
+        cost_center_id: Some(entry_seed.cost_center),
+        notes: None,
+        lines: vec![sale_line(seed.product, "Suporte", "2", "100.10", "0.20")],
+        cycle: BillingCycle::Monthly,
+        starts_on: starts_on.into(),
+        ends_on: ends_on.map(Into::into),
+        active: true,
+    }
+}
+
+/// What the sales of a contract are, by cycle day: `(day, total, completed)`.
+async fn billed_by<S, Q, E, F, R>(
+    sales: &SaleService<S, Q, E, F, R>,
+    company: CompanyId,
+    contract: conta_verde_domain::ContractId,
+) -> Vec<(String, String, bool)>
+where
+    S: SaleRepository,
+    Q: QuoteRepository,
+    E: FinancialEntryRepository,
+    F: EntryReferences,
+    R: SalesReferences,
+{
+    let mut found: Vec<(String, String, bool)> = sales
+        .list(
+            company,
+            &SaleQuery::default().of_contract(contract),
+            None,
+            Some(200),
+        )
+        .await
+        .unwrap()
+        .items
+        .iter()
+        .map(|sale| {
+            let cycle = sale.cycle().unwrap();
+            assert_eq!(cycle.contract_id, contract);
+            // A cycle is sold on its own day.
+            assert_eq!(sale.sold_on(), cycle.cycle_on);
+            (
+                cycle.cycle_on.to_string(),
+                sale.total().to_string(),
+                sale.status() == SaleStatus::Completed,
+            )
+        })
+        .collect();
+    found.sort();
+    found
+}
+
+fn cycles(items: &[(&str, &str)]) -> Vec<(String, String, bool)> {
+    items
+        .iter()
+        .map(|(day, total)| ((*day).to_owned(), (*total).to_owned(), true))
+        .collect()
+}
+
+/// A contract bills itself: every cycle that has fallen due becomes a completed sale and its receivable, once
+/// however often the job runs, from where it starts to where it ends, never while paused, and in the name of
+/// whoever saved it. An adjustment changes the cycles that come after it, a termination ends it for good, and
+/// what it points at has to be usable. Nothing of another company's shows.
+#[allow(clippy::too_many_arguments)]
+pub async fn bills_contracts_every_cycle<C, S, Q, E, F, R>(
+    contracts: &ContractService<C, S, Q, E, F, R>,
+    sales: &SaleService<S, Q, E, F, R>,
+    company: CompanyId,
+    other_company: CompanyId,
+    entry_seed: &EntrySeed,
+    seed: &SalesSeed,
+) where
+    C: ContractRepository,
+    S: SaleRepository,
+    Q: QuoteRepository,
+    E: FinancialEntryRepository,
+    F: EntryReferences,
+    R: SalesReferences,
+{
+    let ana = actor();
+    let day = |text: &str| CalendarDate::parse(text).unwrap();
+
+    // Written before its first cycle: nothing is due. The trail has its creation.
+    let rent = contracts
+        .register(
+            company,
+            &ana,
+            contract_draft(entry_seed, seed, "2026-11-05", None),
+            day("2026-11-04"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rent.status(), ContractStatus::Active);
+    assert_eq!(rent.total().to_string(), "200");
+    assert!(billed_by(sales, company, rent.id()).await.is_empty());
+    assert_eq!(
+        contracts.history(company, rent.id()).await.unwrap().len(),
+        1
+    );
+
+    // Cycle one, on its day: a completed sale and its receivable (the term 30/60 splits the 200).
+    // The job reads the contracts of every company, so what it reports is not this test's alone: what it made
+    // for this company is read from its sales.
+    contracts.bill_all_due(day("2026-11-05")).await.unwrap();
+    assert_eq!(
+        billed_by(sales, company, rent.id()).await,
+        cycles(&[("2026-11-05", "200")])
+    );
+    let first = sales
+        .list(
+            company,
+            &SaleQuery::default().of_contract(rent.id()),
+            None,
+            None,
+        )
+        .await
+        .unwrap()
+        .items
+        .remove(0);
+    assert_eq!(first.seller_id(), Some(seed.seller));
+    let receivable = sales
+        .receivable(company, first.id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(receivable.total().to_string(), "200");
+    assert_eq!(
+        receivable.installments_text(),
+        "1:2026-12-05:100,2:2027-01-04:100"
+    );
+    assert_eq!(
+        sales.history(company, first.id()).await.unwrap()[0]
+            .entry
+            .actor,
+        ana
+    );
+    // The same day again, and the job running twice at once, add nothing.
+    contracts.bill_all_due(day("2026-11-05")).await.unwrap();
+    assert_eq!(
+        billed_by(sales, company, rent.id()).await,
+        cycles(&[("2026-11-05", "200")])
+    );
+    let (a, b) = tokio::join!(
+        contracts.bill_all_due(day("2026-12-05")),
+        contracts.bill_all_due(day("2026-12-05"))
+    );
+    let _ = (a.unwrap(), b.unwrap());
+    assert_eq!(
+        billed_by(sales, company, rent.id()).await,
+        cycles(&[("2026-11-05", "200"), ("2026-12-05", "200")])
+    );
+
+    // An adjustment changes the cycles that come after it, not those already billed.
+    let raised = contracts
+        .adjust(company, &ana, rent.id(), "10")
+        .await
+        .unwrap();
+    // 100.10 x 1.10 = 110.11 and 2 x 110.11 less 0.20.
+    assert_eq!(raised.total().to_string(), "220.02");
+    assert_eq!(
+        contracts
+            .adjust(company, &ana, rent.id(), "-100")
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::InvalidAdjustment)
+    );
+    contracts.bill_all_due(day("2027-01-05")).await.unwrap();
+    assert_eq!(
+        billed_by(sales, company, rent.id()).await,
+        cycles(&[
+            ("2026-11-05", "200"),
+            ("2026-12-05", "200"),
+            ("2027-01-05", "220.02")
+        ])
+    );
+    contracts.bill_all_due(day("2027-01-05")).await.unwrap();
+    let trail = contracts.history(company, rent.id()).await.unwrap();
+    assert_eq!(trail.len(), 2);
+    assert!(
+        trail[1]
+            .entry
+            .changes
+            .iter()
+            .any(|change| change.field == "lines")
+    );
+
+    // Paused, it bills nothing; brought back, it goes on from today and what fell due meanwhile is skipped.
+    let mut paused_draft = contract_draft(entry_seed, seed, "2026-11-05", None);
+    paused_draft.lines = raised.lines().iter().map(|line| line.to_draft()).collect();
+    paused_draft.active = false;
+    let paused = contracts
+        .update(
+            company,
+            &ana,
+            rent.id(),
+            paused_draft.clone(),
+            day("2027-01-06"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(paused.status(), ContractStatus::Paused);
+    contracts.bill_all_due(day("2027-03-10")).await.unwrap();
+    assert_eq!(billed_by(sales, company, rent.id()).await.len(), 3);
+    paused_draft.active = true;
+    contracts
+        .update(company, &ana, rent.id(), paused_draft, day("2027-03-10"))
+        .await
+        .unwrap();
+    // 5 February and 5 March fell due while it was paused; the next is 5 April.
+    assert_eq!(billed_by(sales, company, rent.id()).await.len(), 3);
+    contracts.bill_all_due(day("2027-04-05")).await.unwrap();
+    assert_eq!(
+        billed_by(sales, company, rent.id())
+            .await
+            .last()
+            .map(|(day, _, _)| day.clone()),
+        Some("2027-04-05".to_owned())
+    );
+    assert_eq!(billed_by(sales, company, rent.id()).await.len(), 4);
+
+    // Terminated: nothing more is billed and nothing changes.
+    let ended = contracts
+        .terminate(company, &ana, rent.id(), "2027-04-20", day("2027-04-10"))
+        .await
+        .unwrap();
+    assert_eq!(ended.status(), ContractStatus::Terminated);
+    contracts.bill_all_due(day("2028-01-01")).await.unwrap();
+    assert_eq!(billed_by(sales, company, rent.id()).await.len(), 4);
+    for attempt in [
+        contracts
+            .terminate(company, &ana, rent.id(), "2027-04-21", day("2027-04-10"))
+            .await
+            .map(|_| ()),
+        contracts
+            .adjust(company, &ana, rent.id(), "5")
+            .await
+            .map(|_| ()),
+        contracts
+            .update(
+                company,
+                &ana,
+                rent.id(),
+                contract_draft(entry_seed, seed, "2026-11-05", None),
+                day("2027-05-01"),
+            )
+            .await
+            .map(|_| ()),
+    ] {
+        assert_eq!(
+            attempt.unwrap_err(),
+            ApplicationError::Domain(DomainError::ContractIsTerminated)
+        );
+    }
+
+    // Terminated ahead of its last day, it is fixed but still bills the cycles that fall due up to that day,
+    // each on its own, and none after it.
+    let ahead = contracts
+        .register(
+            company,
+            &ana,
+            contract_draft(entry_seed, seed, "2027-05-05", None),
+            day("2027-05-10"),
+        )
+        .await
+        .unwrap();
+    contracts
+        .terminate(company, &ana, ahead.id(), "2027-07-31", day("2027-05-10"))
+        .await
+        .unwrap();
+    assert_eq!(
+        billed_by(sales, company, ahead.id()).await,
+        cycles(&[("2027-05-05", "200")])
+    );
+    contracts.bill_all_due(day("2027-12-01")).await.unwrap();
+    assert_eq!(
+        billed_by(sales, company, ahead.id()).await,
+        cycles(&[
+            ("2027-05-05", "200"),
+            ("2027-06-05", "200"),
+            ("2027-07-05", "200")
+        ])
+    );
+
+    // A sale of a cycle that a person cancelled is consumed: the cycles after it are still billed.
+    let hole = contracts
+        .register(
+            company,
+            &ana,
+            contract_draft(entry_seed, seed, "2027-08-05", None),
+            day("2027-08-05"),
+        )
+        .await
+        .unwrap();
+    let only = sales
+        .list(
+            company,
+            &SaleQuery::default().of_contract(hole.id()),
+            None,
+            None,
+        )
+        .await
+        .unwrap()
+        .items
+        .remove(0);
+    sales.cancel(company, &ana, only.id()).await.unwrap();
+    contracts.bill_all_due(day("2027-10-05")).await.unwrap();
+    let after_hole: Vec<String> = sales
+        .list(
+            company,
+            &SaleQuery::default().of_contract(hole.id()),
+            None,
+            None,
+        )
+        .await
+        .unwrap()
+        .items
+        .iter()
+        .map(|sale| sale.cycle().unwrap().cycle_on.to_string())
+        .collect();
+    assert_eq!(after_hole.len(), 3);
+    assert!(after_hole.contains(&"2027-10-05".to_owned()));
+
+    // One that starts in the past catches up when it is written, clipping the day of a short month, and
+    // never past its last day.
+    let late = contracts
+        .register(
+            company,
+            &ana,
+            contract_draft(entry_seed, seed, "2026-01-31", Some("2026-04-15")),
+            day("2026-06-01"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        billed_by(sales, company, late.id()).await,
+        cycles(&[
+            ("2026-01-31", "200"),
+            ("2026-02-28", "200"),
+            ("2026-03-31", "200")
+        ])
+    );
+    assert_eq!(
+        late.billed_through().map(|d| d.to_string()),
+        Some("2026-04-15".to_owned())
+    );
+
+    // What it points at has to be usable, and what is refused makes nothing.
+    let refused = |what| ApplicationError::UnusableReference(what);
+    for (what, change) in [
+        (
+            "customer",
+            Box::new(|d: &mut ContractDraft| d.customer_id = PartyId::generate())
+                as Box<dyn Fn(&mut ContractDraft)>,
+        ),
+        (
+            "seller",
+            Box::new(|d: &mut ContractDraft| d.seller_id = Some(d.customer_id)),
+        ),
+        (
+            "payment term",
+            Box::new(|d: &mut ContractDraft| d.payment_term_id = Some(seed.inactive_term)),
+        ),
+        (
+            "product",
+            Box::new(|d: &mut ContractDraft| d.lines[0].product_id = seed.inactive_product),
+        ),
+    ] {
+        let mut bad = contract_draft(entry_seed, seed, "2026-11-05", None);
+        change(&mut bad);
+        assert_eq!(
+            contracts
+                .register(company, &ana, bad, day("2026-11-05"))
+                .await
+                .unwrap_err(),
+            refused(what),
+            "{what}"
+        );
+    }
+    let mut bad = contract_draft(entry_seed, seed, "2026-11-05", None);
+    bad.category_id = entry_seed.transfer_category;
+    assert_eq!(
+        contracts
+            .register(company, &ana, bad, day("2026-11-05"))
+            .await
+            .unwrap_err(),
+        refused("category")
+    );
+    let mut bad = contract_draft(entry_seed, seed, "2026-11-05", Some("2026-11-04"));
+    bad.name = "  ".into();
+    assert!(
+        contracts
+            .register(company, &ana, bad, day("2026-11-05"))
+            .await
+            .is_err()
+    );
+
+    // Nothing of another company's shows; listed by name, status and text.
+    assert_eq!(
+        contracts.get(other_company, rent.id()).await.unwrap_err(),
+        ApplicationError::ContractNotFound
+    );
+    assert!(
+        contracts
+            .list(other_company, &ContractQuery::default(), None, None)
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
+    let all = contracts
+        .list(company, &ContractQuery::default(), None, None)
+        .await
+        .unwrap();
+    assert_eq!(all.items.len(), 4);
+    let live = contracts
+        .list(
+            company,
+            &ContractQuery::default().with_status(ContractStatus::Terminated),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(live.items.len(), 2);
+    assert_eq!(
+        contracts
+            .list(
+                company,
+                &ContractQuery::default().searching("MENSAL"),
+                None,
+                None
+            )
+            .await
+            .unwrap()
+            .items
+            .len(),
+        4
     );
 }

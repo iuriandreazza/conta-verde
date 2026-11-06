@@ -5,6 +5,7 @@ mod bank_accounts;
 mod cash_flow;
 mod categories;
 mod clock;
+mod contracts;
 mod cost_centers;
 mod csv_import;
 mod cursor;
@@ -37,13 +38,14 @@ use axum::{Json, Router};
 use conta_verde_application::{
     AttachmentRepository, AttachmentService, AuthService, BalanceService, BankAccountRepository,
     BankAccountService, BlobStore, CategoryRepository, CategoryService, CnpjRegistry,
-    CostCenterRepository, CostCenterService, EmailSender, EntryReferences,
-    FinancialEntryRepository, FinancialEntryService, IdentityRepository, InvitationRepository,
-    MemberService, OpeningRepository, PartyRepository, PartyService, PaymentMethodRepository,
-    PaymentMethodService, PaymentTermRepository, PaymentTermService, PostalCodeDirectory,
-    PostalCodeService, ProductRepository, ProductService, QuoteRepository, QuoteService,
-    ReconciliationService, RecurrenceRepository, RecurrenceService, SaleRepository, SaleService,
-    SalesReferences, SecretService, StatementLineRepository, TransferRepository, TransferService,
+    ContractRepository, ContractService, CostCenterRepository, CostCenterService, EmailSender,
+    EntryReferences, FinancialEntryRepository, FinancialEntryService, IdentityRepository,
+    InvitationRepository, MemberService, OpeningRepository, PartyRepository, PartyService,
+    PaymentMethodRepository, PaymentMethodService, PaymentTermRepository, PaymentTermService,
+    PostalCodeDirectory, PostalCodeService, ProductRepository, ProductService, QuoteRepository,
+    QuoteService, ReconciliationService, RecurrenceRepository, RecurrenceService, SaleRepository,
+    SaleService, SalesReferences, SecretService, StatementLineRepository, TransferRepository,
+    TransferService,
 };
 use serde::Serialize;
 
@@ -55,7 +57,7 @@ pub struct ApiConfig {
 
 /// The adapters the use cases run on, named once so that a handler has one type parameter however
 /// many registers there are. Generic rather than `dyn`, like the use cases themselves.
-pub use clock::today;
+pub use clock::{customer_today, today};
 
 pub trait Ports: 'static {
     type Parties: PartyRepository + 'static;
@@ -78,6 +80,7 @@ pub trait Ports: 'static {
     type SalesReferences: SalesReferences + 'static;
     type Quotes: QuoteRepository + 'static;
     type Sales: SaleRepository + 'static;
+    type Contracts: ContractRepository + 'static;
     type Statements: StatementLineRepository + 'static;
     type PostalCodes: PostalCodeDirectory + 'static;
     type Invitations: InvitationRepository + 'static;
@@ -86,6 +89,16 @@ pub trait Ports: 'static {
 
 /// The sales use case over the adapters of `X`.
 type SalesOf<X> = SaleService<
+    <X as Ports>::Sales,
+    <X as Ports>::Quotes,
+    <X as Ports>::Entries,
+    <X as Ports>::EntryReferences,
+    <X as Ports>::SalesReferences,
+>;
+
+/// The contracts use case over the adapters of `X`.
+type ContractsOf<X> = ContractService<
+    <X as Ports>::Contracts,
     <X as Ports>::Sales,
     <X as Ports>::Quotes,
     <X as Ports>::Entries,
@@ -108,6 +121,7 @@ pub struct Services<X: Ports> {
     pub recurrences: RecurrenceService<X::Recurrences, X::Entries, X::EntryReferences>,
     pub quotes: QuoteService<X::Quotes, X::SalesReferences, X::Emails, X::Secrets>,
     pub sales: SalesOf<X>,
+    pub contracts: ContractsOf<X>,
     pub reconciliation:
         ReconciliationService<X::Statements, X::Entries, X::Transfers, X::EntryReferences>,
     pub balances: BalanceService<X::BankAccounts, X::Entries, X::Transfers, X::Openings>,
@@ -130,6 +144,7 @@ pub(crate) struct AppState<X: Ports> {
     recurrences: RecurrenceService<X::Recurrences, X::Entries, X::EntryReferences>,
     quotes: QuoteService<X::Quotes, X::SalesReferences, X::Emails, X::Secrets>,
     sales: SalesOf<X>,
+    contracts: ContractsOf<X>,
     reconciliation:
         ReconciliationService<X::Statements, X::Entries, X::Transfers, X::EntryReferences>,
     balances: BalanceService<X::BankAccounts, X::Entries, X::Transfers, X::Openings>,
@@ -157,6 +172,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         recurrences: services.recurrences,
         quotes: services.quotes,
         sales: services.sales,
+        contracts: services.contracts,
         reconciliation: services.reconciliation,
         balances: services.balances,
         postal_codes: services.postal_codes,
@@ -418,6 +434,26 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
             post(sales::convert_quote::<X>),
         )
         .route(
+            "/companies/{company_id}/contracts",
+            get(contracts::list_contracts::<X>).post(contracts::register_contract::<X>),
+        )
+        .route(
+            "/companies/{company_id}/contracts/{contract_id}",
+            get(contracts::get_contract::<X>).put(contracts::update_contract::<X>),
+        )
+        .route(
+            "/companies/{company_id}/contracts/{contract_id}/history",
+            get(contracts::contract_history::<X>),
+        )
+        .route(
+            "/companies/{company_id}/contracts/{contract_id}/adjust",
+            post(contracts::adjust_contract::<X>),
+        )
+        .route(
+            "/companies/{company_id}/contracts/{contract_id}/terminate",
+            post(contracts::terminate_contract::<X>),
+        )
+        .route(
             "/companies/{company_id}/sales",
             get(sales::list_sales::<X>).post(sales::register_sale::<X>),
         )
@@ -492,12 +528,13 @@ mod tests {
     use conta_verde_infrastructure::{
         Argon2SecretService, InMemoryAttachmentRepository, InMemoryBankAccountRepository,
         InMemoryBlobStore, InMemoryCategoryRepository, InMemoryCnpjRegistry,
-        InMemoryCostCenterRepository, InMemoryEmailSender, InMemoryFinancialEntryRepository,
-        InMemoryIdentityRepository, InMemoryInvitationRepository, InMemoryOpeningRepository,
-        InMemoryPartyRepository, InMemoryPaymentMethodRepository, InMemoryPaymentTermRepository,
-        InMemoryPostalCodeDirectory, InMemoryProductRepository, InMemoryQuoteRepository,
-        InMemoryRecurrenceRepository, InMemorySaleRepository, InMemoryStatementLineRepository,
-        InMemoryTransferRepository, RegisterReferences, RegisterSalesReferences,
+        InMemoryContractRepository, InMemoryCostCenterRepository, InMemoryEmailSender,
+        InMemoryFinancialEntryRepository, InMemoryIdentityRepository, InMemoryInvitationRepository,
+        InMemoryOpeningRepository, InMemoryPartyRepository, InMemoryPaymentMethodRepository,
+        InMemoryPaymentTermRepository, InMemoryPostalCodeDirectory, InMemoryProductRepository,
+        InMemoryQuoteRepository, InMemoryRecurrenceRepository, InMemorySaleRepository,
+        InMemoryStatementLineRepository, InMemoryTransferRepository, RegisterReferences,
+        RegisterSalesReferences,
     };
     use http_body_util::BodyExt;
     use serde_json::{Value, json};
@@ -571,6 +608,7 @@ mod tests {
         type SalesReferences = TestSalesReferences;
         type Quotes = InMemoryQuoteRepository;
         type Sales = InMemorySaleRepository;
+        type Contracts = InMemoryContractRepository;
         type Statements = InMemoryStatementLineRepository;
         type PostalCodes = InMemoryPostalCodeDirectory;
         type Invitations = InMemoryInvitationRepository;
@@ -601,6 +639,7 @@ mod tests {
         type SalesReferences = TestSalesReferences;
         type Quotes = InMemoryQuoteRepository;
         type Sales = InMemorySaleRepository;
+        type Contracts = InMemoryContractRepository;
         type Statements = InMemoryStatementLineRepository;
         type PostalCodes = Option<InMemoryPostalCodeDirectory>;
         type Invitations = InMemoryInvitationRepository;
@@ -870,6 +909,7 @@ mod tests {
     /// turned into a sale and the sale's receivable shows in the entries and the cash flow.
     #[allow(clippy::too_many_arguments)]
     fn sales_over(
+        store: InMemorySaleRepository,
         quotes: InMemoryQuoteRepository,
         entries: InMemoryFinancialEntryRepository,
         categories: &InMemoryCategoryRepository,
@@ -890,7 +930,7 @@ mod tests {
             )
         };
         SaleService::new(
-            InMemorySaleRepository::default(),
+            store,
             quotes,
             FinancialEntryService::new(entries, references()),
             references(),
@@ -901,6 +941,7 @@ mod tests {
     /// Sales over registers that the app's own services do not share.
     fn standalone_sales() -> TestSales {
         sales_over(
+            InMemorySaleRepository::default(),
             InMemoryQuoteRepository::default(),
             InMemoryFinancialEntryRepository::default(),
             &InMemoryCategoryRepository::default(),
@@ -988,6 +1029,10 @@ mod tests {
                 recurrences: standalone_recurrences(),
                 quotes: standalone_quotes(),
                 sales: standalone_sales(),
+                contracts: ContractService::new(
+                    InMemoryContractRepository::default(),
+                    standalone_sales(),
+                ),
                 reconciliation: standalone_reconciliation(),
                 balances: standalone_balances(),
                 postal_codes: PostalCodeService::new(postal_codes),
@@ -1627,6 +1672,10 @@ mod tests {
                 recurrences: standalone_recurrences(),
                 quotes: standalone_quotes(),
                 sales: standalone_sales(),
+                contracts: ContractService::new(
+                    InMemoryContractRepository::default(),
+                    standalone_sales(),
+                ),
                 reconciliation: standalone_reconciliation(),
                 balances: standalone_balances(),
                 postal_codes: PostalCodeService::new(None),
@@ -3108,6 +3157,10 @@ mod tests {
                 recurrences: standalone_recurrences(),
                 quotes: standalone_quotes(),
                 sales: standalone_sales(),
+                contracts: ContractService::new(
+                    InMemoryContractRepository::default(),
+                    standalone_sales(),
+                ),
                 reconciliation: standalone_reconciliation(),
                 balances: standalone_balances(),
                 postal_codes: PostalCodeService::new(None),
@@ -4601,6 +4654,21 @@ mod tests {
         let entry_store = InMemoryFinancialEntryRepository::default();
         let transfer_store = InMemoryTransferRepository::default();
         let quote_store = InMemoryQuoteRepository::default();
+        let sale_store = InMemorySaleRepository::default();
+        let sales = || {
+            sales_over(
+                sale_store.clone(),
+                quote_store.clone(),
+                entry_store.clone(),
+                &categories,
+                &cost_centers,
+                &parties,
+                &bank_accounts,
+                &payment_methods,
+                &products,
+                &payment_terms,
+            )
+        };
         router::<MemoryPorts>(
             Services {
                 parties: PartyService::new(parties.clone(), known_companies())
@@ -4652,17 +4720,8 @@ mod tests {
                     &payment_methods,
                 ),
                 quotes: quotes_over(quote_store.clone(), &parties, &products, &payment_terms),
-                sales: sales_over(
-                    quote_store,
-                    entry_store.clone(),
-                    &categories,
-                    &cost_centers,
-                    &parties,
-                    &bank_accounts,
-                    &payment_methods,
-                    &products,
-                    &payment_terms,
-                ),
+                sales: sales(),
+                contracts: ContractService::new(InMemoryContractRepository::default(), sales()),
                 balances: BalanceService::new(
                     bank_accounts.clone(),
                     entry_store,
@@ -7494,6 +7553,214 @@ mod tests {
             send(&app, get_request(&uri, None)).await.status,
             StatusCode::UNAUTHORIZED
         );
+    }
+
+    fn contracts_uri(company_id: Uuid) -> String {
+        format!("/companies/{company_id}/contracts")
+    }
+
+    fn contract_body(targets: &SalesTargets, category: &str) -> Value {
+        json!({
+            "name": "Manutenção mensal",
+            "customer_id": targets.customer,
+            "payment_term_id": targets.term,
+            "category_id": category,
+            "lines": [
+                { "product_id": targets.product, "description": "Suporte", "quantity": "2",
+                  "unit_price": "100.10", "discount": "0.20" }
+            ],
+            "cycle": "monthly",
+            "starts_on": "2026-09-05",
+            "ends_on": "2026-11-30",
+        })
+    }
+
+    #[tokio::test]
+    async fn a_contract_bills_itself_every_cycle_into_sales_and_receivables() {
+        let app = entry_app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let targets = sales_targets(&app, &cookie, company_id).await;
+        let category = revenue_category(&app, &cookie, company_id).await;
+        let uri = contracts_uri(company_id);
+
+        // Written with its first cycles already past: three fall on 5 September, 5 October and 5 November.
+        let created = send(
+            &app,
+            json_request(
+                "POST",
+                &uri,
+                Some(&cookie),
+                contract_body(&targets, &category),
+            ),
+        )
+        .await;
+        assert_eq!(created.status, StatusCode::CREATED, "{}", created.body);
+        assert_eq!(created.body["status"], "active");
+        assert_eq!(created.body["total"], "200");
+        // The server billed through the day it was written (or the last day of the contract, once past).
+        assert!(created.body["billed_through"].is_string());
+        let id = created.body["id"].as_str().unwrap().to_owned();
+        let one = format!("{uri}/{id}");
+        assert_eq!(
+            send(&app, get_request(&one, Some(&cookie))).await.body,
+            created.body
+        );
+        let billed = send(
+            &app,
+            get_request(
+                &format!("{}?contract={id}", sales_uri(company_id)),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        let items = billed.body["items"].as_array().unwrap();
+        assert_eq!(items.len(), 3);
+        assert!(items.iter().all(|sale| sale["status"] == "completed"
+            && sale["contract_id"] == id
+            && sale["total"] == "200"));
+        let mut days: Vec<&str> = items
+            .iter()
+            .map(|sale| sale["cycle_on"].as_str().unwrap())
+            .collect();
+        days.sort_unstable();
+        assert_eq!(days, ["2026-09-05", "2026-10-05", "2026-11-05"]);
+        // Each cycle's receivable is in the entries, split by the term, and in the cash flow forecast.
+        let entries = send(&app, get_request(&entries_uri(company_id), Some(&cookie))).await;
+        assert_eq!(entries.body["items"].as_array().unwrap().len(), 3);
+        let flow = send(
+            &app,
+            get_request(
+                &cash_flow_uri(company_id, "from=2026-10-01&to=2027-01-31"),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        let receivable: Vec<&str> = flow.body["periods"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|period| period["to_receive"].as_str().unwrap())
+            .collect();
+        // 30 and 60 days after each cycle, 100 each: October gets 5 September's first (5 October), November
+        // its second (4 November) and 5 October's first, December 5 October's second and 5 November's first.
+        assert_eq!(receivable, ["100", "200", "200", "100"]);
+
+        // An adjustment is audited and changes what the next cycles bill; a replacement says whether it is active.
+        let raised = send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{one}/adjust"),
+                Some(&cookie),
+                json!({ "percent": "10" }),
+            ),
+        )
+        .await;
+        assert_eq!(raised.status, StatusCode::OK, "{}", raised.body);
+        assert_eq!(raised.body["total"], "220.02");
+        let bad = send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{one}/adjust"),
+                Some(&cookie),
+                json!({ "percent": "-100" }),
+            ),
+        )
+        .await;
+        assert_eq!(bad.status, StatusCode::UNPROCESSABLE_ENTITY);
+        let mut replaced = contract_body(&targets, &category);
+        let missing = send(
+            &app,
+            json_request("PUT", &one, Some(&cookie), replaced.clone()),
+        )
+        .await;
+        assert_eq!(missing.status, StatusCode::UNPROCESSABLE_ENTITY);
+        replaced["active"] = json!(false);
+        let paused = send(&app, json_request("PUT", &one, Some(&cookie), replaced)).await;
+        assert_eq!(paused.status, StatusCode::OK, "{}", paused.body);
+        assert_eq!(paused.body["status"], "paused");
+        let history = send(&app, get_request(&format!("{one}/history"), Some(&cookie))).await;
+        assert!(history.body.as_array().unwrap().len() >= 3);
+
+        // Terminated for good.
+        let ended = send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{one}/terminate"),
+                Some(&cookie),
+                json!({ "on": "2026-10-20" }),
+            ),
+        )
+        .await;
+        assert_eq!(ended.status, StatusCode::OK, "{}", ended.body);
+        assert_eq!(ended.body["status"], "terminated");
+        assert_eq!(ended.body["ends_on"], "2026-10-20");
+        let again = send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{one}/terminate"),
+                Some(&cookie),
+                json!({ "on": "2026-10-21" }),
+            ),
+        )
+        .await;
+        assert_eq!(again.status, StatusCode::CONFLICT);
+        let listed = send(
+            &app,
+            get_request(&format!("{uri}?status=terminated&q=MENSAL"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(listed.body["items"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            send(
+                &app,
+                get_request(&format!("{uri}?status=gone"), Some(&cookie))
+            )
+            .await
+            .status,
+            StatusCode::BAD_REQUEST
+        );
+        let (other, other_company) = sign_up(&app, "bia@example.com").await;
+        let theirs = send(
+            &app,
+            get_request(
+                &format!("{}/{id}", contracts_uri(other_company)),
+                Some(&other),
+            ),
+        )
+        .await;
+        assert_eq!(theirs.status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn contracts_follow_the_sales_role() {
+        use conta_verde_domain::Role;
+
+        let (app, identities, _) = app_with_mailbox();
+        let (_, company_id) = sign_up(&app, "dona@example.com").await;
+        let uri = contracts_uri(company_id);
+        for (role, may_write) in [
+            (Role::Sales, true),
+            (Role::Financial, false),
+            (Role::Viewer, false),
+        ] {
+            let cookie = member_with_role(&app, &identities, company_id, role).await;
+            assert_eq!(
+                send(&app, get_request(&uri, Some(&cookie))).await.status,
+                StatusCode::OK,
+                "{role:?} reads"
+            );
+            let write = send(&app, json_request("POST", &uri, Some(&cookie), json!({}))).await;
+            let expected = if may_write {
+                StatusCode::UNPROCESSABLE_ENTITY
+            } else {
+                StatusCode::FORBIDDEN
+            };
+            assert_eq!(write.status, expected, "{role:?} writes");
+        }
     }
 
     const STATEMENT: &str = "OFXHEADER:100\nDATA:OFXSGML\nVERSION:102\nCHARSET:1252\n\n<OFX><BANKMSGSRSV1><STMTTRNRS><STMTRS><BANKTRANLIST>\n\

@@ -75,6 +75,7 @@ const SECTIONS: NavSection[] = [
     items: [
       { path: "/quotes", label: "Orçamentos", icon: FileTextIcon },
       { path: "/sales", label: "Vendas", icon: HandCoinsIcon },
+      { path: "/contracts", label: "Contratos", icon: RotateCCWIcon },
     ],
   },
   {
