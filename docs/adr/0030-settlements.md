@@ -40,7 +40,8 @@ bank account:
 
 An installment's **balance** is its amount minus the `applied` of its settlements that are not
 reversed. It is never stored. A settlement that would take the sum of `applied` over the installment's
-amount is refused (`409`), and so is one for an installment the entry does not have. Two requests
+amount is refused (`409`), and one for an installment the entry does not have is a `422`, like any other
+reference that is not there. Two requests
 that settle the same installment at the same moment cannot both pass: the installment's row is
 locked for the check and the write, in one transaction.
 

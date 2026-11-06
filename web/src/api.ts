@@ -729,6 +729,8 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(input),
     }),
+  getEntry: (companyId: string, id: string) =>
+    request<Entry>(`/companies/${companyId}/entries/${id}`),
   entryHistory: (companyId: string, id: string) =>
     request<HistoryEntry[]>(`/companies/${companyId}/entries/${id}/history`),
   settleInstallment: (companyId: string, entryId: string, input: SettlementInput) =>

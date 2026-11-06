@@ -141,6 +141,8 @@ export function SettlementPanel({
       onChanged();
     } catch (failure) {
       setFormError(errorMessage(failure));
+      // A refusal often means the balances shown are out of date (another tab settled): read them.
+      onChanged();
     } finally {
       setSaving(false);
     }
@@ -162,6 +164,7 @@ export function SettlementPanel({
       // (the read clears the message).
       await load();
       setError(errorMessage(failure));
+      onChanged();
     } finally {
       setReversingId(null);
     }
@@ -244,7 +247,7 @@ export function SettlementPanel({
         (open.length === 0 ? (
           <p className="muted">Todas as parcelas estão pagas.</p>
         ) : (
-          <form onSubmit={handleSubmit} key={`${installment}-${formVersion}`} className="settle-form">
+          <form onSubmit={handleSubmit} key={formVersion} className="settle-form">
             <h3>Baixar uma parcela</h3>
             <label>
               Parcela
@@ -267,6 +270,9 @@ export function SettlementPanel({
             <label>
               Valor baixado
               <input
+                // Only this field starts over when the balance it proposes changes: the rest of what
+                // was typed, and the focus on the select, stay.
+                key={`${installment}-${chosen ? balance(chosen) : ""}`}
                 name="applied"
                 inputMode="decimal"
                 autoComplete="off"

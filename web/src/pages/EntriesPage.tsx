@@ -127,6 +127,7 @@ export function EntriesPage() {
 
   const {
     items: entries,
+    setItems,
     nextCursor,
     loading,
     loadingMore,
@@ -140,6 +141,19 @@ export function EntriesPage() {
   );
   const today = todayIso();
   const isFiltered = applied.q !== "" || applied.kind !== "" || applied.category !== "";
+
+  /**
+   * Reads one entry again and puts it where it is in the list, so a settlement does not send the
+   * list back to its first page and lose the "load more" pages.
+   */
+  async function refresh(id: string) {
+    try {
+      const fresh = await api.getEntry(companyId, id);
+      setItems((current) => current.map((item) => (item.id === fresh.id ? fresh : item)));
+    } catch {
+      await reload();
+    }
+  }
 
   async function handleSubmit(input: EntryInput) {
     setSaving(true);
@@ -348,7 +362,7 @@ export function EntriesPage() {
                               banks={banks}
                               methods={methods}
                               canWrite={canWrite}
-                              onChanged={() => void reload()}
+                              onChanged={() => void refresh(entry.id)}
                             />
                           </td>
                         </tr>

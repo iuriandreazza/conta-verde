@@ -3282,6 +3282,7 @@ describe("financial entries", () => {
               return { status: 201, body: { ...settlement, installment: 2, applied: "100", cash: "100" } };
             }
             if (url.endsWith("/settlements")) return { status: 200, body: [] };
+            if (url.endsWith("/entries/e1")) return { status: 200, body: made ? afterwards : twoOpen };
             if (url.includes("/entries")) return { status: 200, body: { items: [made ? afterwards : twoOpen], next_cursor: null } };
             return undefined;
           },
