@@ -8,10 +8,13 @@ import {
   type PartyFilters,
   type PartyInput,
 } from "../api";
+import { PlusIcon } from "../components/icons/plus";
+import { Sheet } from "../components/Sheet";
+import { useCreation, useOnCreated } from "../creation/CreationProvider";
 import { PageHeader } from "../components/PageHeader";
 import { DocumentBadge } from "../components/DocumentBadge";
 import { ListRow } from "../components/ListRow";
-import { Notice, type NoticeTone } from "../components/Notice";
+import { Notice } from "../components/Notice";
 import { PartyForm } from "../components/PartyForm";
 import { Button } from "../components/Button";
 import { CsvImport } from "../components/CsvImport";
@@ -21,6 +24,8 @@ import { RefreshCWIcon } from "../components/icons/refresh-cw";
 import { UsersIcon } from "../components/icons/users";
 import { PartyHistory } from "../components/PartyHistory";
 import { Spinner } from "../components/Spinner";
+import { registryNoticeFor, type RegistryNotice } from "../lib/registryNotice";
+import { useLastValue } from "../lib/useLastValue";
 import { usePagedList } from "../lib/usePagedList";
 import { useCanWrite } from "../lib/useCanWrite";
 import { SquarePenIcon } from "../components/icons/square-pen";
@@ -32,8 +37,6 @@ export function PartiesPage() {
   const { companyId = "" } = useParams();
   const canWrite = useCanWrite("parties");
   const [editing, setEditing] = useState<Party | null>(null);
-  // Bumped after a save so the form starts over, empty or for another party.
-  const [formVersion, setFormVersion] = useState(0);
   const [saving, setSaving] = useState(false);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
@@ -79,38 +82,46 @@ export function PartiesPage() {
     }
   }
 
+  const { openCreate } = useCreation();
+  const shown = useLastValue(editing);
+  // A party registered from the top bar or from here: read the list again and flash the new row.
+  useOnCreated("party", (created) => {
+    // What an earlier change or re-check said is not about this one.
+    setRegistryNotice(null);
+    setVerifyNotice(null);
+    setHighlightedId(created.id);
+    void loadFirstPage();
+  });
+
+  function closeSheet() {
+    // A change on its way finishes first: closing now would hide what a failure has to say.
+    if (saving) return;
+    setEditing(null);
+    setFormError(null);
+  }
+
   async function handleSubmit(input: PartyInput) {
+    if (editing === null) return;
     setSaving(true);
     setFormError(null);
     setRegistryNotice(null);
     // A message about an earlier re-check would read like a statement about the new state.
     setVerifyNotice(null);
     try {
-      if (editing === null) {
-        const created = await api.createParty(companyId, input);
-        setHighlightedId(created.id);
-        setRegistryNotice(registryNoticeFor(created, "registering"));
-        setFormVersion((version) => version + 1);
-        await loadFirstPage();
-      } else {
-        const updated = await api.updateParty(companyId, editing.id, input);
-        // In place: the list keeps its page and its filters, but a party that stopped being of the
-        // kind shown, or lost the tag shown, no longer belongs in it.
-        const tag = applied.tag.trim().toLowerCase();
-        const stillShown = (item: Party) =>
-          (applied.kind === "" || item[`is_${applied.kind}` as const]) &&
-          (tag === "" || item.tags.includes(tag));
-        setParties((current) =>
-          current.flatMap((item) => (item.id !== updated.id ? [item] : stillShown(updated) ? [updated] : [])),
-        );
-        setHighlightedId(updated.id);
-        // The registry is only asked about a document that changed: otherwise there is nothing new.
-        setRegistryNotice(
-          updated.document !== editing.document ? registryNoticeFor(updated, "updating") : null,
-        );
-        setEditing(null);
-        setFormVersion((version) => version + 1);
-      }
+      const updated = await api.updateParty(companyId, editing.id, input);
+      // In place: the list keeps its page and its filters, but a party that stopped being of the
+      // kind shown, or lost the tag shown, no longer belongs in it.
+      const tag = applied.tag.trim().toLowerCase();
+      const stillShown = (item: Party) =>
+        (applied.kind === "" || item[`is_${applied.kind}` as const]) &&
+        (tag === "" || item.tags.includes(tag));
+      setParties((current) =>
+        current.flatMap((item) => (item.id !== updated.id ? [item] : stillShown(updated) ? [updated] : [])),
+      );
+      setHighlightedId(updated.id);
+      // The registry is only asked about a document that changed: otherwise there is nothing new.
+      setRegistryNotice(updated.document !== editing.document ? registryNoticeFor(updated, "updating") : null);
+      setEditing(null);
     } catch (failure) {
       setFormError(errorMessage(failure));
     } finally {
@@ -121,7 +132,15 @@ export function PartiesPage() {
   return (
     <>
       <PageHeader title="Clientes e fornecedores" description="Quem compra de você e de quem você compra." />
-      <div className={canWrite ? "split" : "split split-single"}>
+      {canWrite && (
+        <div className="list-actions">
+          <Button type="button" icon={PlusIcon} onClick={() => openCreate("party")}>
+            Novo cliente ou fornecedor
+          </Button>
+        </div>
+      )}
+      <Notice message={registryNotice?.message ?? null} tone={registryNotice?.tone} />
+      <div>
         <section className="card list-card">
         <h2>Cadastrados</h2>
         <div className="filters" role="search">
@@ -340,26 +359,20 @@ export function PartiesPage() {
         )}
       </section>
         {canWrite && (
-          <aside className="card form-card">
-          <h2>{editing === null ? "Novo cliente ou fornecedor" : `Alterar ${editing.name}`}</h2>
-          <PartyForm
-            // A new key starts the form over for another party, or an empty one after a save.
-            key={`${editing?.id ?? "new"}-${formVersion}`}
-            party={editing}
-            // After a save or when editing, the person is in the form: put the cursor back in it.
-            focusName={editing !== null || formVersion > 0}
-            pending={saving}
-            blocked={verifyingId !== null}
-            error={formError}
-            notice={registryNotice}
-            lookupAddress={(postalCode) => api.lookupPostalCode(companyId, postalCode)}
-            onSubmit={(input) => void handleSubmit(input)}
-            onCancel={() => {
-              setEditing(null);
-              setFormError(null);
-            }}
-          />
-        </aside>
+          <Sheet open={editing !== null} title={`Alterar ${shown?.name ?? ""}`} onClose={closeSheet}>
+            {shown !== null && (
+              <PartyForm
+                key={shown.id}
+                party={shown}
+                pending={saving}
+                blocked={verifyingId !== null}
+                error={formError}
+                lookupAddress={(postalCode) => api.lookupPostalCode(companyId, postalCode)}
+                onSubmit={(input) => void handleSubmit(input)}
+                onCancel={closeSheet}
+              />
+            )}
+          </Sheet>
         )}
       </div>
       {canWrite && (
@@ -396,46 +409,3 @@ const PARTIES_TEMPLATE = [
   "",
 ].join("\n");
 
-interface RegistryNotice {
-  message: string;
-  tone: NoticeTone;
-}
-
-// The party is already saved when this runs: the notice only reports what the registry said,
-// so a warning never asks the user to redo anything. `after` says which action produced the
-// answer, since "Cadastrado" would be wrong for a re-check of an old row.
-function registryNoticeFor(
-  party: Party,
-  after: "registering" | "updating" | "rechecking",
-): RegistryNotice | null {
-  const check = party.document_check;
-  const rechecking = after === "rechecking";
-  const done = after === "updating" ? "Atualizado" : "Cadastrado";
-  const lead = rechecking ? `${party.name}:` : `${done}, mas`;
-  if (check.status === "not_found") {
-    return {
-      tone: "warning",
-      message: `${lead} a Receita não encontrou este CNPJ. Confira o número: ela pode demorar a incluir empresas recém-abertas.`,
-    };
-  }
-  if (check.status === "unverified") {
-    return {
-      tone: "warning",
-      message: rechecking
-        ? `${party.name}: a Receita continua indisponível. Tente de novo mais tarde.`
-        : `${done}, mas não foi possível consultar o CNPJ na Receita agora. Só os dígitos foram conferidos.`,
-    };
-  }
-  if (check.status === "verified") {
-    return check.needs_attention
-      ? {
-          tone: "warning",
-          message: `${rechecking ? `${party.name}:` : `${done}. Atenção:`} ${check.legal_name} está com situação ${check.situation} na Receita.`,
-        }
-      : {
-          tone: "success",
-          message: `${rechecking ? `${party.name}: ` : ""}CNPJ verificado: ${check.legal_name}.`,
-        };
-  }
-  return null;
-}

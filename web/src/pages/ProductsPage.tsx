@@ -23,6 +23,7 @@ import { BriefcaseBusinessIcon } from "../components/icons/briefcase-business";
 import { ChevronDownIcon } from "../components/icons/chevron-down";
 import { HistoryIcon } from "../components/icons/history";
 import { formatDecimal, formatMoney } from "../lib/decimal";
+import { useLastValue } from "../lib/useLastValue";
 import { usePagedList } from "../lib/usePagedList";
 import { useCanWrite } from "../lib/useCanWrite";
 import { SquarePenIcon } from "../components/icons/square-pen";
@@ -36,8 +37,6 @@ export function ProductsPage() {
   const canWrite = useCanWrite("products");
   const [filters, setFilters] = useState<ProductFilters>(NO_PRODUCT_FILTERS);
   const [editing, setEditing] = useState<Product | null>(null);
-  // Bumped after a registration so the form starts empty again.
-  const [formVersion, setFormVersion] = useState(0);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
@@ -61,6 +60,7 @@ export function ProductsPage() {
   const isFiltered = applied.q !== "" || applied.kind !== "" || applied.active !== "";
 
   const { openCreate } = useCreation();
+  const shown = useLastValue(editing);
   // A product created from the top bar or from here: read the list again and flash the new row.
   useOnCreated("product", (created) => {
     setHighlightedId(created.id);
@@ -79,7 +79,6 @@ export function ProductsPage() {
       setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)));
       setEditing(null);
       setSaved(`${updated.name} atualizado.`);
-      setFormVersion((version) => version + 1);
     } catch (failure) {
       setFormError(errorMessage(failure));
     } finally {
@@ -88,6 +87,8 @@ export function ProductsPage() {
   }
 
   function closeSheet() {
+    // A change on its way finishes first: closing now would hide what a failure has to say.
+    if (saving) return;
     setEditing(null);
     setFormError(null);
   }
@@ -287,12 +288,11 @@ export function ProductsPage() {
         )}
       </section>
         {canWrite && (
-          <Sheet open={editing !== null} title={`Alterar ${editing?.name ?? ""}`} onClose={closeSheet}>
-            {editing !== null && (
+          <Sheet open={editing !== null} title={`Alterar ${shown?.name ?? ""}`} onClose={closeSheet}>
+            {shown !== null && (
               <ProductForm
-                key={`${editing.id}-${formVersion}`}
-                product={editing}
-                focusName={false}
+                key={shown.id}
+                product={shown}
                 pending={saving}
                 error={formError}
                 onSubmit={(input) => void handleSubmit(input)}

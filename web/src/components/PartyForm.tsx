@@ -43,12 +43,10 @@ const rowOf = (key: number, contact?: Contact): ContactRow => ({
 interface PartyFormProps {
   /** The party being changed, or `null` to register one. */
   party: Party | null;
-  focusName: boolean;
   pending: boolean;
   /** Something else on the page is writing: wait for it. */
   blocked: boolean;
   error: string | null;
-  notice: { message: string; tone: NoticeTone } | null;
   onSubmit: (input: PartyInput) => void;
   onCancel: () => void;
   /** Finds the address of a postal code; it asks a third party, so it may fail. */
@@ -61,11 +59,9 @@ interface PartyFormProps {
  */
 export function PartyForm({
   party,
-  focusName,
   pending,
   blocked,
   error,
-  notice,
   onSubmit,
   onCancel,
   lookupAddress,
@@ -200,7 +196,6 @@ export function PartyForm({
           name="name"
           required
           maxLength={200}
-          autoFocus={focusName}
           defaultValue={party?.name}
         />
       </label>
@@ -390,7 +385,6 @@ export function PartyForm({
         </div>
       </fieldset>
       <Notice message={error} />
-      <Notice message={notice?.message ?? null} tone={notice?.tone} />
       <div className="form-actions">
         <Button
           type="submit"

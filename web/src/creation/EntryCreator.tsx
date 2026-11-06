@@ -41,7 +41,6 @@ export function EntryCreator({ companyId, onBusyChange, onCreated, onCancel }: C
     <EntryForm
       entry={null}
       targets={targets}
-      focusDescription={false}
       pending={saving}
       error={error}
       onSubmit={(input) => void save(input)}

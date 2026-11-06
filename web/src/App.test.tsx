@@ -345,6 +345,7 @@ describe("App", () => {
     });
     renderAt("/companies/c1/parties");
 
+    await userEvent.click(await screen.findByRole("button", { name: "Novo cliente ou fornecedor" }));
     await userEvent.type(await screen.findByLabelText("Nome"), "Zeca");
     await userEvent.click(screen.getByRole("button", { name: "Adicionar" }));
     expect(await screen.findByRole("heading", { name: "Entrar" })).toBeInTheDocument();
@@ -391,6 +392,7 @@ describe("App", () => {
       });
       renderAt("/companies/c1/parties");
 
+      await userEvent.click(await screen.findByRole("button", { name: "Novo cliente ou fornecedor" }));
       await userEvent.type(await screen.findByLabelText("Nome"), "Padaria Central");
       // Letters must be accepted: the CNPJ is alphanumeric since July 2026.
       await userEvent.type(screen.getByLabelText("CPF ou CNPJ"), "12.ABC.345/01DE-35");
@@ -398,6 +400,14 @@ describe("App", () => {
 
       const post = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
       return JSON.parse(String(post?.[1]?.body));
+    }
+
+    // The registry's warning rises in the confirmation as a warning, and stays until it is dismissed.
+    async function expectWarning(text: RegExp) {
+      const toast = within(document.querySelector<HTMLElement>(".toast")!);
+      expect(await toast.findByText(text)).toBeInTheDocument();
+      expect(document.querySelector(".toast .notice-warning")).not.toBeNull();
+      expect(toast.getByRole("button", { name: "Dispensar" })).toBeInTheDocument();
     }
 
     it("sends the letters of an alphanumeric CNPJ and confirms an active company", async () => {
@@ -421,9 +431,7 @@ describe("App", () => {
         situation: "BAIXADA",
         needs_attention: true,
       });
-      expect(await screen.findByRole("status")).toHaveTextContent(
-        "Atenção: PADARIA CENTRAL LTDA está com situação BAIXADA na Receita.",
-      );
+      await expectWarning(/Atenção: PADARIA CENTRAL LTDA está com situação BAIXADA na Receita\./);
       // The party was saved and is listed, with its situation as the badge.
       expect(await screen.findByText("BAIXADA")).toBeInTheDocument();
     });
@@ -435,9 +443,7 @@ describe("App", () => {
         situation: null,
         needs_attention: true,
       });
-      expect(await screen.findByRole("status")).toHaveTextContent(
-        "a Receita não encontrou este CNPJ",
-      );
+      await expectWarning(/a Receita não encontrou este CNPJ/);
       // Saved and listed, not refused.
       expect(await screen.findByText("Não encontrado")).toBeInTheDocument();
     });
@@ -449,9 +455,7 @@ describe("App", () => {
         situation: null,
         needs_attention: true,
       });
-      expect(await screen.findByRole("status")).toHaveTextContent(
-        "não foi possível consultar o CNPJ na Receita",
-      );
+      await expectWarning(/não foi possível consultar o CNPJ na Receita/);
       expect(await screen.findByText("Não verificado")).toBeInTheDocument();
     });
   });
@@ -681,6 +685,7 @@ describe("App", () => {
     });
     renderAt("/companies/c1/parties");
 
+    await userEvent.click(await screen.findByRole("button", { name: "Novo cliente ou fornecedor" }));
     await userEvent.type(await screen.findByLabelText("Nome"), "Padaria Central");
     await userEvent.type(screen.getByLabelText("CPF ou CNPJ"), "123");
     await userEvent.click(screen.getByRole("button", { name: "Adicionar" }));
@@ -1685,8 +1690,8 @@ describe("changing a party, its roles and its address", () => {
       contacts: [],
       tags: [],
     });
-    // The form is back to registering.
-    expect(screen.getByRole("heading", { name: "Novo cliente ou fornecedor" })).toBeInTheDocument();
+    // The sheet closes once the change is saved.
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("fills the form with the address and leaves it out when every part is cleared", async () => {
@@ -1749,7 +1754,7 @@ describe("changing a party, its roles and its address", () => {
     // Same document: nothing was asked, so nothing is said.
     await userEvent.click(screen.getByRole("button", { name: "Alterar Padaria Central" }));
     await userEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
-    await screen.findByRole("heading", { name: "Novo cliente ou fornecedor" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(screen.queryByText(/CNPJ verificado/)).not.toBeInTheDocument();
 
     // Another document: the answer for the new one is reported, like at registration.
@@ -1908,8 +1913,7 @@ describe("changing a party, its roles and its address", () => {
     await userEvent.click(screen.getByRole("button", { name: "Alterar Padaria" }));
     expect(screen.getByRole("heading", { name: "Alterar Padaria" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Cancelar" }));
-    expect(screen.getByRole("heading", { name: "Novo cliente ou fornecedor" })).toBeInTheDocument();
-    expect(screen.getByLabelText("Nome")).toHaveValue("");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("filters by carrier and seller, and names the new fields in the history", async () => {
@@ -2758,7 +2762,7 @@ describe("what a role that cannot write is offered", () => {
     );
     renderAt("/companies/c1/parties");
 
-    expect(await screen.findByRole("heading", { name: "Novo cliente ou fornecedor" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Novo cliente ou fornecedor" })).toBeInTheDocument();
     expect(await screen.findByRole("button", { name: "Alterar Maria" })).toBeInTheDocument();
   });
 

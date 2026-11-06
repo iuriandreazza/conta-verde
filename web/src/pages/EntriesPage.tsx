@@ -11,6 +11,7 @@ import {
 import { PlusIcon } from "../components/icons/plus";
 import { Sheet } from "../components/Sheet";
 import { useCreation, useOnCreated } from "../creation/CreationProvider";
+import { useLastValue } from "../lib/useLastValue";
 import { useEntryTargets } from "../lib/useEntryTargets";
 import { ListFooter } from "../components/ListFooter";
 import { Button } from "../components/Button";
@@ -57,8 +58,6 @@ export function EntriesPage() {
   const canWrite = useCanWrite("finance");
   const [filters, setFilters] = useState<EntryFilters>(NO_ENTRY_FILTERS);
   const [editing, setEditing] = useState<Entry | null>(null);
-  // Bumped after a save so the form starts over, empty or for another entry.
-  const [formVersion, setFormVersion] = useState(0);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
@@ -100,6 +99,7 @@ export function EntriesPage() {
   }
 
   const { openCreate } = useCreation();
+  const shown = useLastValue(editing);
   // An entry created from the top bar or from here: read the list again and flash the new row.
   useOnCreated("entry", (created) => {
     setHighlightedId(created.id);
@@ -107,6 +107,8 @@ export function EntriesPage() {
   });
 
   function closeSheet() {
+    // A change on its way finishes first: closing now would hide what a failure has to say.
+    if (saving) return;
     setEditing(null);
     setFormError(null);
   }
@@ -120,7 +122,6 @@ export function EntriesPage() {
       const updated = await api.updateEntry(companyId, editing.id, input);
       setEditing(null);
       setSaved(`${updated.description} atualizado.`);
-      setFormVersion((version) => version + 1);
       // Read again, not changed in place: a new date, kind or category can move the entry to
       // another place in the list, or out of the filter the list is showing.
       await reload();
@@ -386,14 +387,13 @@ export function EntriesPage() {
           )}
         </section>
         {canWrite && (
-          <Sheet open={editing !== null} title={`Alterar ${editing?.description ?? ""}`} onClose={closeSheet}>
-            {editing !== null &&
+          <Sheet open={editing !== null} title={`Alterar ${shown?.description ?? ""}`} onClose={closeSheet}>
+            {shown !== null &&
               (targetsLoaded ? (
                 <EntryForm
-                  key={`${editing.id}-${formVersion}`}
-                  entry={editing}
+                  key={shown.id}
+                  entry={shown}
                   targets={{ categories, costCenters, parties }}
-                  focusDescription={false}
                   pending={saving}
                   error={formError}
                   onSubmit={(input) => void handleSubmit(input)}
