@@ -245,7 +245,7 @@ export function ContractsPage() {
                                 type="button"
                                 variant="ghost"
                                 aria-label={`Alterar ${contract.name}`}
-                                disabled={saving}
+                                disabled={saving || acting}
                                 onClick={() => {
                                   setEditing(contract);
                                   setFormError(null);
