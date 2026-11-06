@@ -207,6 +207,7 @@ mod tests {
             &entries,
             &settings,
             &provider,
+            &registers.parties,
             company,
             other_company,
             &seed,

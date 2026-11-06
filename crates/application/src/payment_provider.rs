@@ -66,6 +66,20 @@ pub struct Payer {
     /// The CPF or CNPJ, stored without punctuation.
     pub document: Option<String>,
     pub email: Option<String>,
+    /// Where they live, for the providers whose boleto needs it.
+    pub address: Option<PayerAddress>,
+}
+
+/// A payer's address as a boleto prints it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PayerAddress {
+    /// The street and the number.
+    pub street: String,
+    pub city: String,
+    /// The two-letter state.
+    pub state: String,
+    /// The CEP, as eight digits.
+    pub postal_code: String,
 }
 
 /// What a provider is asked to make ([ADR 0045]).

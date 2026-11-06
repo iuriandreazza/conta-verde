@@ -522,6 +522,7 @@ mod tests {
                 name: "Mercado Boa Compra".into(),
                 document: document.map(str::to_owned),
                 email: Some("compras@example.com".into()),
+                address: None,
             },
             description: "Venda 12 (1/2)".into(),
         }

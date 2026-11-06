@@ -60,6 +60,7 @@ mod postgres_transfers;
 mod sales_references;
 mod secrets;
 mod smtp_email_sender;
+mod stripe;
 mod webhook_signature;
 
 pub use asaas::AsaasProvider;
@@ -127,4 +128,5 @@ pub use postgres_transfers::{PostgresOpeningRepository, PostgresTransferReposito
 pub use sales_references::RegisterSalesReferences;
 pub use secrets::Argon2SecretService;
 pub use smtp_email_sender::SmtpEmailSender;
+pub use stripe::StripeProvider;
 pub use webhook_signature::{hmac_sha256_hex, is_valid_signature};

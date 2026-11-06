@@ -367,6 +367,7 @@ mod tests {
             &entry_service(&pool),
             &settings_service(&pool),
             &provider,
+            &PostgresPartyRepository::new(pool.clone()),
             company,
             other_company,
             &seed,
