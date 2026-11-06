@@ -402,6 +402,14 @@ describe("App", () => {
       return JSON.parse(String(post?.[1]?.body));
     }
 
+    // The registry's warning rises in the confirmation as a warning, and stays until it is dismissed.
+    async function expectWarning(text: RegExp) {
+      const toast = within(document.querySelector<HTMLElement>(".toast")!);
+      expect(await toast.findByText(text)).toBeInTheDocument();
+      expect(document.querySelector(".toast .notice-warning")).not.toBeNull();
+      expect(toast.getByRole("button", { name: "Dispensar" })).toBeInTheDocument();
+    }
+
     it("sends the letters of an alphanumeric CNPJ and confirms an active company", async () => {
       const sent = await registerWith({
         status: "verified",
@@ -423,7 +431,7 @@ describe("App", () => {
         situation: "BAIXADA",
         needs_attention: true,
       });
-      expect(await screen.findByText(/Atenção: PADARIA CENTRAL LTDA está com situação BAIXADA na Receita\./)).toBeInTheDocument();
+      await expectWarning(/Atenção: PADARIA CENTRAL LTDA está com situação BAIXADA na Receita\./);
       // The party was saved and is listed, with its situation as the badge.
       expect(await screen.findByText("BAIXADA")).toBeInTheDocument();
     });
@@ -435,7 +443,7 @@ describe("App", () => {
         situation: null,
         needs_attention: true,
       });
-      expect(await screen.findByText(/a Receita não encontrou este CNPJ/)).toBeInTheDocument();
+      await expectWarning(/a Receita não encontrou este CNPJ/);
       // Saved and listed, not refused.
       expect(await screen.findByText("Não encontrado")).toBeInTheDocument();
     });
@@ -447,7 +455,7 @@ describe("App", () => {
         situation: null,
         needs_attention: true,
       });
-      expect(await screen.findByText(/não foi possível consultar o CNPJ na Receita/)).toBeInTheDocument();
+      await expectWarning(/não foi possível consultar o CNPJ na Receita/);
       expect(await screen.findByText("Não verificado")).toBeInTheDocument();
     });
   });

@@ -27,7 +27,6 @@ export function ProductCreator({ companyId, onBusyChange, onCreated, onCancel }:
   return (
     <ProductForm
       product={null}
-      focusName={false}
       pending={saving}
       error={error}
       onSubmit={(input) => void save(input)}

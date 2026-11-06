@@ -33,11 +33,9 @@ export function PartyCreator({ companyId, onBusyChange, onCreated, onCancel }: C
   return (
     <PartyForm
       party={null}
-      focusName={false}
       pending={saving}
       blocked={false}
       error={error}
-      notice={null}
       lookupAddress={(postalCode) => api.lookupPostalCode(companyId, postalCode)}
       onSubmit={(input) => void save(input)}
       onCancel={onCancel}

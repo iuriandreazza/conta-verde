@@ -25,6 +25,7 @@ import { UsersIcon } from "../components/icons/users";
 import { PartyHistory } from "../components/PartyHistory";
 import { Spinner } from "../components/Spinner";
 import { registryNoticeFor, type RegistryNotice } from "../lib/registryNotice";
+import { useLastValue } from "../lib/useLastValue";
 import { usePagedList } from "../lib/usePagedList";
 import { useCanWrite } from "../lib/useCanWrite";
 import { SquarePenIcon } from "../components/icons/square-pen";
@@ -36,8 +37,6 @@ export function PartiesPage() {
   const { companyId = "" } = useParams();
   const canWrite = useCanWrite("parties");
   const [editing, setEditing] = useState<Party | null>(null);
-  // Bumped after a save so the form starts over, empty or for another party.
-  const [formVersion, setFormVersion] = useState(0);
   const [saving, setSaving] = useState(false);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
@@ -84,13 +83,19 @@ export function PartiesPage() {
   }
 
   const { openCreate } = useCreation();
+  const shown = useLastValue(editing);
   // A party registered from the top bar or from here: read the list again and flash the new row.
   useOnCreated("party", (created) => {
+    // What an earlier change or re-check said is not about this one.
+    setRegistryNotice(null);
+    setVerifyNotice(null);
     setHighlightedId(created.id);
     void loadFirstPage();
   });
 
   function closeSheet() {
+    // A change on its way finishes first: closing now would hide what a failure has to say.
+    if (saving) return;
     setEditing(null);
     setFormError(null);
   }
@@ -117,7 +122,6 @@ export function PartiesPage() {
       // The registry is only asked about a document that changed: otherwise there is nothing new.
       setRegistryNotice(updated.document !== editing.document ? registryNoticeFor(updated, "updating") : null);
       setEditing(null);
-      setFormVersion((version) => version + 1);
     } catch (failure) {
       setFormError(errorMessage(failure));
     } finally {
@@ -355,16 +359,14 @@ export function PartiesPage() {
         )}
       </section>
         {canWrite && (
-          <Sheet open={editing !== null} title={`Alterar ${editing?.name ?? ""}`} onClose={closeSheet}>
-            {editing !== null && (
+          <Sheet open={editing !== null} title={`Alterar ${shown?.name ?? ""}`} onClose={closeSheet}>
+            {shown !== null && (
               <PartyForm
-                key={`${editing.id}-${formVersion}`}
-                party={editing}
-                focusName={false}
+                key={shown.id}
+                party={shown}
                 pending={saving}
                 blocked={verifyingId !== null}
                 error={formError}
-                notice={null}
                 lookupAddress={(postalCode) => api.lookupPostalCode(companyId, postalCode)}
                 onSubmit={(input) => void handleSubmit(input)}
                 onCancel={closeSheet}

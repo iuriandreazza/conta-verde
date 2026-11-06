@@ -35,7 +35,6 @@ interface EntryFormProps {
   /** The entry being changed, or `null` to register one. */
   entry: Entry | null;
   targets: EntryTargets;
-  focusDescription: boolean;
   pending: boolean;
   error: string | null;
   onSubmit: (input: EntryInput) => void;
@@ -51,7 +50,6 @@ interface EntryFormProps {
 export function EntryForm({
   entry,
   targets,
-  focusDescription,
   pending,
   error,
   onSubmit,
@@ -175,7 +173,6 @@ export function EntryForm({
           required
           maxLength={200}
           autoComplete="off"
-          autoFocus={focusDescription}
           defaultValue={entry?.description}
         />
       </label>

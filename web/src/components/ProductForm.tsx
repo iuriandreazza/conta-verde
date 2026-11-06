@@ -15,8 +15,6 @@ const AMOUNT_FIELDS = [
 interface ProductFormProps {
   /** The product being changed, or `null` to register a new one. */
   product: Product | null;
-  /** Starts with the cursor in the name, which also brings the form into view. */
-  focusName: boolean;
   pending: boolean;
   error: string | null;
   onSubmit: (input: ProductInput) => void;
@@ -29,7 +27,6 @@ interface ProductFormProps {
  */
 export function ProductForm({
   product,
-  focusName,
   pending,
   error,
   onSubmit,
@@ -91,7 +88,6 @@ export function ProductForm({
           name="name"
           required
           maxLength={200}
-          autoFocus={focusName}
           defaultValue={product?.name}
         />
       </label>

@@ -479,6 +479,21 @@ main {
   max-width: min(26rem, calc(100vw - 2.5rem));
 }
 
+.toast .notice {
+  box-shadow: var(--shadow-lift);
+}
+
+.toast-dismiss {
+  margin-left: auto;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid currentColor;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
 .sheet-root {
   position: fixed;
   inset: 0;

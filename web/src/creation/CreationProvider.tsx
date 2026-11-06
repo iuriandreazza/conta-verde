@@ -75,7 +75,8 @@ export function CreationProvider({ companyId, children }: { companyId: string | 
   }, []);
 
   useEffect(() => {
-    if (confirmation === null) return;
+    // A warning asks the person to look at something: it stays until it is dismissed.
+    if (confirmation === null || confirmation.tone === "warning") return;
     const timer = setTimeout(() => setConfirmation(null), CONFIRMATION_MS);
     return () => clearTimeout(timer);
   }, [confirmation]);
@@ -119,6 +120,11 @@ export function CreationProvider({ companyId, children }: { companyId: string | 
             >
               {confirmation.tone === "warning" ? <BadgeAlertIcon size={18} aria-hidden /> : <CheckIcon size={18} aria-hidden />}
               <span>{confirmation.text}</span>
+              {confirmation.tone === "warning" && (
+                <button type="button" className="toast-dismiss" onClick={() => setConfirmation(null)}>
+                  Dispensar
+                </button>
+              )}
             </motion.div>
           )}
         </AnimatePresence>
