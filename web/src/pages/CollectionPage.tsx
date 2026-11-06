@@ -18,25 +18,26 @@ export function CollectionPage() {
   const [settings, setSettings] = useState<CollectionSettings | null>(null);
   const [provider, setProvider] = useState<string | null | undefined>(undefined);
   const [plan, setPlan] = useState<DunningPlan | null>(null);
+  const [planError, setPlanError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     let current = true;
-    Promise.all([
-      api.getCollectionSettings(companyId),
-      api.getCollection(companyId),
-      api.getDunningPlan(companyId),
-    ])
-      .then(([stored, collection, dunning]) => {
+    Promise.all([api.getCollectionSettings(companyId), api.getCollection(companyId)])
+      .then(([stored, collection]) => {
         if (current) {
           setSettings(stored);
           setProvider(collection.provider);
-          setPlan(dunning);
         }
       })
       .catch((failure: unknown) => current && setError(errorMessage(failure)));
+    // The reminders are a section of their own: if they cannot be read, the settings above still can.
+    api
+      .getDunningPlan(companyId)
+      .then((dunning) => current && setPlan(dunning))
+      .catch((failure: unknown) => current && setPlanError(errorMessage(failure)));
     return () => {
       current = false;
     };
@@ -72,7 +73,7 @@ export function CollectionPage() {
     }
   }
 
-  const ready = settings !== null && targets.loaded && provider !== undefined && plan !== null;
+  const ready = settings !== null && targets.loaded && provider !== undefined;
   const banks = targets.banks.filter((bank) => bank.active || bank.id === settings?.bank_account_id);
   const categories = targets.categories.filter(
     (category) =>
@@ -158,7 +159,8 @@ export function CollectionPage() {
           </section>
         )
       )}
-      {ready && (
+      <Notice message={planError} />
+      {ready && plan !== null && (
         <section className="card">
           <DunningPlanForm companyId={companyId} plan={plan} canWrite={canWrite} onSaved={setPlan} />
         </section>
