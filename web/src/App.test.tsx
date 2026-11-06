@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, vi } from "vitest";
 import { App } from "./App";
-import type { AccountBalance, CashFlow, CashFlowPeriod, Entry, Transfer, PaymentTerm, BankAccount, Category, CostCenter, PaymentMethod, DocumentCheck, HistoryEntry, Party, Product, Profile } from "./api";
+import type { AccountBalance, CashFlow, CashFlowPeriod, Recurrence, Entry, Transfer, PaymentTerm, BankAccount, Category, CostCenter, PaymentMethod, DocumentCheck, HistoryEntry, Party, Product, Profile } from "./api";
 import { AuthProvider } from "./auth";
 import { SOURCE_URL } from "./components/Footer";
 import { defaultSpan } from "./lib/cashFlow";
@@ -2924,6 +2924,7 @@ describe("financial entries", () => {
       { number: 2, due_date: "2027-01-10", amount: "100.5", settled: "0" },
     ],
     total: "201",
+    recurrence_id: null,
   };
   const rent: Entry = {
     ...entry,
@@ -2933,6 +2934,7 @@ describe("financial entries", () => {
     competence_date: "2026-11-01",
     installments: [{ number: 1, due_date: "2026-11-10", amount: "2500", settled: "0" }],
     total: "2500",
+    recurrence_id: null,
   };
 
   const sent = (fetchMock: ReturnType<typeof mockApi>, method: string) =>
@@ -3939,4 +3941,235 @@ describe("cash flow", () => {
     // Still labelled as the months they are, not as days.
     expect(screen.getByRole("row", { name: /dez\/2026/ })).toBeInTheDocument();
   });
+});
+
+describe("recurrences", () => {
+  const vendas = { id: "cat1", company_id: "c1", parent_id: null, name: "Vendas", dre_group: "gross_revenue", cash_flow_group: "operating", level: 1, active: true };
+  const despesas = { ...vendas, id: "cat2", name: "Despesas", dre_group: "operating_expenses" };
+  const transfers = { ...vendas, id: "cat3", name: "Transferências", dre_group: "transfers", cash_flow_group: "transfer" };
+  const closed = { ...vendas, id: "cat4", name: "Antiga", active: false };
+  const matriz = { id: "cc1", company_id: "c1", name: "Matriz", active: true };
+  const rent: Recurrence = {
+    id: "r1",
+    company_id: "c1",
+    kind: "payable",
+    description: "Aluguel",
+    party_id: null,
+    category_id: "cat2",
+    cost_center_id: null,
+    amount: "2500",
+    frequency: "monthly",
+    starts_on: "2026-11-05",
+    ends_on: null,
+    active: true,
+    generated_through: "2027-01-05",
+  };
+  const paused: Recurrence = { ...rent, id: "r2", description: "Seguro", frequency: "yearly", amount: "1200.5", ends_on: "2030-11-20", active: false };
+
+  const sent = (fetchMock: ReturnType<typeof mockApi>, method: string) =>
+    fetchMock.mock.calls.filter(([, init]) => init?.method === method);
+
+  const answer =
+    (items: Recurrence[], extra: (url: string, init?: RequestInit) => Reply | undefined = () => undefined) =>
+    (url: string, init?: RequestInit): Reply => {
+      const special = extra(url, init);
+      if (special) return special;
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (url.endsWith("/categories")) return { status: 200, body: { items: [vendas, despesas, transfers, closed] } };
+      if (url.includes("/cost-centers")) return { status: 200, body: { items: [matriz], next_cursor: null } };
+      if (url.includes("/parties")) return { status: 200, body: { items: [], next_cursor: null } };
+      if (url.includes("/recurrences")) return { status: 200, body: { items, next_cursor: null } };
+      return { status: 404, body: { error: "not found" } };
+    };
+
+  const formPanel = async (heading: string) => {
+    const panel = within((await screen.findByRole("heading", { name: heading })).closest("aside")!);
+    await panel.findByLabelText("Descrição");
+    return panel;
+  };
+
+  it("lists the recurrences with what they are, how often, since when and whether they are paused", async () => {
+    mockApi(answer([rent, paused]));
+    renderAt("/companies/c1/recurrences");
+
+    const row = await screen.findByRole("row", { name: /Aluguel/ });
+    expect(row).toHaveTextContent("A pagar");
+    expect(row).toHaveTextContent("Despesas");
+    expect(row).toHaveTextContent("Todo mês");
+    expect(row).toHaveTextContent("desde 05/11/2026");
+    expect(row).toHaveTextContent("R$ 2.500,00");
+    expect(row).toHaveTextContent("Ativa");
+    const other = screen.getByRole("row", { name: /Seguro/ });
+    expect(other).toHaveTextContent("Todo ano");
+    expect(other).toHaveTextContent("até 20/11/2030");
+    expect(other).toHaveTextContent("Pausada");
+  });
+
+  it("registers a recurrence, offers only the categories that can be used, and says that the entries were generated", async () => {
+    const fetchMock = mockApi(
+      answer([], (url, init) =>
+        url.endsWith("/recurrences") && init?.method === "POST" ? { status: 201, body: { ...rent, id: "r9" } } : undefined,
+      ),
+    );
+    renderAt("/companies/c1/recurrences");
+    const form = await formPanel("Nova recorrência");
+
+    expect(within(form.getByLabelText("Categoria")).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Escolha uma categoria",
+      "Vendas",
+      "Despesas",
+    ]);
+    await userEvent.type(form.getByLabelText("Descrição"), "Aluguel");
+    await userEvent.selectOptions(form.getByLabelText("Categoria"), "cat2");
+    await userEvent.type(form.getByLabelText("Valor de cada vez"), "2.500,00");
+    fireEvent.change(form.getByLabelText("Primeiro vencimento"), { target: { value: "2026-11-05" } });
+    await userEvent.click(form.getByRole("button", { name: "Adicionar" }));
+
+    expect(await screen.findByText(/Aluguel cadastrada: os lançamentos que vencem nos próximos dois meses já foram gerados/)).toBeInTheDocument();
+    expect(JSON.parse(String(sent(fetchMock, "POST")[0][1]?.body))).toEqual({
+      kind: "payable",
+      description: "Aluguel",
+      category_id: "cat2",
+      amount: "2500",
+      frequency: "monthly",
+      starts_on: "2026-11-05",
+      active: true,
+    });
+  });
+
+  it("refuses an amount that is not clear and an end before the start, without asking the API", async () => {
+    const fetchMock = mockApi(answer([]));
+    renderAt("/companies/c1/recurrences");
+    const form = await formPanel("Nova recorrência");
+    await userEvent.type(form.getByLabelText("Descrição"), "Aluguel");
+    await userEvent.selectOptions(form.getByLabelText("Categoria"), "cat2");
+    fireEvent.change(form.getByLabelText("Primeiro vencimento"), { target: { value: "2026-11-05" } });
+
+    // `1.000` could be a thousand or one: the person has to say which.
+    await userEvent.type(form.getByLabelText("Valor de cada vez"), "1.000");
+    await userEvent.click(form.getByRole("button", { name: "Adicionar" }));
+    expect(await form.findByRole("alert")).toHaveTextContent("reais e centavos");
+
+    await userEvent.clear(form.getByLabelText("Valor de cada vez"));
+    await userEvent.type(form.getByLabelText("Valor de cada vez"), "10");
+    fireEvent.change(form.getByLabelText("Último dia (opcional)"), { target: { value: "2026-11-04" } });
+    await userEvent.click(form.getByRole("button", { name: "Adicionar" }));
+    expect(await form.findByRole("alert")).toHaveTextContent("antes do primeiro vencimento");
+    expect(sent(fetchMock, "POST")).toHaveLength(0);
+  });
+
+  it("changes a recurrence with its fields filled in, pauses it, and says that what was generated stays", async () => {
+    const fetchMock = mockApi(
+      answer([rent], (url, init) =>
+        url.endsWith("/recurrences/r1") && init?.method === "PUT" ? { status: 200, body: { ...rent, active: false } } : undefined,
+      ),
+    );
+    renderAt("/companies/c1/recurrences");
+    await userEvent.click(await screen.findByRole("button", { name: "Alterar Aluguel" }));
+    const form = await formPanel("Alterar Aluguel");
+    expect(form.getByLabelText("Valor de cada vez")).toHaveValue("2500");
+    expect(form.getByLabelText("Frequência")).toHaveValue("monthly");
+    expect(form.getByLabelText("Primeiro vencimento")).toHaveValue("2026-11-05");
+    expect(form.getByLabelText("Ativa")).toBeChecked();
+
+    await userEvent.click(form.getByLabelText("Ativa"));
+    await userEvent.click(form.getByRole("button", { name: "Salvar alterações" }));
+
+    expect(await screen.findByText(/Aluguel atualizada. O que já foi gerado não muda./)).toBeInTheDocument();
+    expect(JSON.parse(String(sent(fetchMock, "PUT")[0][1]?.body))).toMatchObject({ active: false, amount: "2500", frequency: "monthly" });
+    expect(await screen.findByText("Pausada")).toBeInTheDocument();
+  });
+
+  it("shows what the API refused", async () => {
+    mockApi(
+      answer([], (_url, init) =>
+        init?.method === "POST" ? { status: 422, body: { error: "category cannot be used" } } : undefined,
+      ),
+    );
+    renderAt("/companies/c1/recurrences");
+    const form = await formPanel("Nova recorrência");
+    await userEvent.type(form.getByLabelText("Descrição"), "Aluguel");
+    await userEvent.selectOptions(form.getByLabelText("Categoria"), "cat2");
+    await userEvent.type(form.getByLabelText("Valor de cada vez"), "10");
+    fireEvent.change(form.getByLabelText("Primeiro vencimento"), { target: { value: "2026-11-05" } });
+    await userEvent.click(form.getByRole("button", { name: "Adicionar" }));
+    expect(await form.findByRole("alert")).toHaveTextContent("category cannot be used");
+  });
+
+  it("shows the history with the values as a person reads them", async () => {
+    const entry: HistoryEntry = {
+      at: Date.UTC(2026, 10, 5, 12, 0),
+      actor: { kind: "user", id: "u1", name: "Ana" },
+      action: "created",
+      changes: [
+        { field: "frequency", from: null, to: "monthly" },
+        { field: "amount", from: null, to: "2500" },
+        { field: "category_id", from: null, to: "cat2" },
+      ],
+    };
+    mockApi(answer([rent], (url) => (url.endsWith("/recurrences/r1/history") ? { status: 200, body: [entry] } : undefined)));
+    renderAt("/companies/c1/recurrences");
+    await userEvent.click(await screen.findByRole("button", { name: "Histórico de Aluguel" }));
+    const region = within(await screen.findByRole("region", { name: "Histórico de Aluguel" }));
+    expect(await region.findByText(/Todo mês/)).toBeInTheDocument();
+    expect(region.getByText(/R\$ 2\.500,00/)).toBeInTheDocument();
+    expect(region.getByText(/Despesas/)).toBeInTheDocument();
+  });
+
+  it("filters by kind, state and text", async () => {
+    const fetchMock = mockApi(answer([rent]));
+    renderAt("/companies/c1/recurrences");
+    await screen.findByRole("table");
+
+    await userEvent.selectOptions(screen.getByLabelText("Mostrar"), "payable");
+    await userEvent.selectOptions(screen.getByLabelText("Situação"), "true");
+    await userEvent.type(screen.getByRole("searchbox", { name: "Buscar" }), "alu");
+    await waitFor(
+      () => {
+        const urls = fetchMock.mock.calls.map(([url]) => String(url));
+        expect(urls).toContain("/api/companies/c1/recurrences?q=alu&kind=payable&active=true");
+      },
+      { timeout: 3000 },
+    );
+  });
+
+  it("marks an entry that a recurrence generated", async () => {
+    const generated: Entry = { ...rentEntry(), recurrence_id: "r1" };
+    mockApi((url) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (url.endsWith("/categories")) return { status: 200, body: { items: [despesas] } };
+      if (url.includes("/entries")) return { status: 200, body: { items: [generated], next_cursor: null } };
+      return { status: 200, body: { items: [], next_cursor: null } };
+    });
+    renderAt("/companies/c1/entries");
+    expect(await screen.findByRole("row", { name: /Aluguel/ })).toHaveTextContent("Recorrente");
+  });
+
+  it("offers no form to a role that only reads finance", async () => {
+    const reader: Profile = {
+      ...profile,
+      companies: [{ id: "c1", name: "Padaria", role: "viewer", permissions: { ...OWNER_PERMISSIONS, finance: "read" } }],
+    };
+    mockApi((url, init) => (url === "/api/auth/me" ? { status: 200, body: reader } : answer([rent])(url, init)));
+    renderAt("/companies/c1/recurrences");
+    await screen.findByRole("row", { name: /Aluguel/ });
+    expect(screen.queryByRole("heading", { name: "Nova recorrência" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Alterar Aluguel/ })).not.toBeInTheDocument();
+  });
+
+  function rentEntry(): Entry {
+    return {
+      id: "e1",
+      company_id: "c1",
+      kind: "payable",
+      description: "Aluguel",
+      party_id: null,
+      category_id: "cat2",
+      cost_center_id: null,
+      competence_date: "2026-11-05",
+      installments: [{ number: 1, due_date: "2026-11-05", amount: "2500", settled: "0" }],
+      total: "2500",
+      recurrence_id: null,
+    };
+  }
 });

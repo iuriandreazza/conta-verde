@@ -15,6 +15,7 @@ import { PartiesPage } from "./pages/PartiesPage";
 import { PaymentMethodsPage } from "./pages/PaymentMethodsPage";
 import { PaymentTermsPage } from "./pages/PaymentTermsPage";
 import { ProductsPage } from "./pages/ProductsPage";
+import { RecurrencesPage } from "./pages/RecurrencesPage";
 import { TransfersPage } from "./pages/TransfersPage";
 
 export function App() {
@@ -30,6 +31,7 @@ export function App() {
           <Route path="/companies/:companyId/parties" element={<PartiesPage />} />
           <Route path="/companies/:companyId/products" element={<ProductsPage />} />
           <Route path="/companies/:companyId/entries" element={<EntriesPage />} />
+          <Route path="/companies/:companyId/recurrences" element={<RecurrencesPage />} />
           <Route path="/companies/:companyId/cash-flow" element={<CashFlowPage />} />
           <Route path="/companies/:companyId/transfers" element={<TransfersPage />} />
           <Route path="/companies/:companyId/categories" element={<CategoriesPage />} />

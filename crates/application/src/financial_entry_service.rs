@@ -1,7 +1,7 @@
 use conta_verde_domain::{
-    Actor, AuditAction, AuditRecord, CompanyId, EntryId, FinancialEntry, FinancialEntryDraft,
-    Settlement, SettlementDraft, SettlementId, entry_changes, entry_creation_changes,
-    settlement_changes, settlement_creation_changes,
+    Actor, AuditAction, AuditRecord, CompanyId, EntryId, EntryOrigin, FinancialEntry,
+    FinancialEntryDraft, Settlement, SettlementDraft, SettlementId, entry_changes,
+    entry_creation_changes, settlement_changes, settlement_creation_changes,
 };
 
 use crate::audit::audit_entry;
@@ -41,6 +41,29 @@ impl<R: FinancialEntryRepository, F: EntryReferences> FinancialEntryService<R, F
         draft: FinancialEntryDraft,
     ) -> Result<FinancialEntry, ApplicationError> {
         let record = FinancialEntry::new(EntryId::generate(), company_id, draft)?;
+        self.check_references(&record, None).await?;
+        let audit = audit_entry(
+            &record,
+            actor,
+            AuditAction::Created,
+            entry_creation_changes(&record),
+        );
+        self.repository.save(&record, &audit).await?;
+        Ok(record)
+    }
+
+    /// Like `register`, for an entry a recurrence generated ([ADR 0033]): it remembers where it came
+    /// from, and the store refuses, with `DuplicateOccurrence`, a second one for the same
+    /// occurrence day.
+    pub async fn register_generated(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        draft: FinancialEntryDraft,
+        origin: EntryOrigin,
+    ) -> Result<FinancialEntry, ApplicationError> {
+        let record =
+            FinancialEntry::new(EntryId::generate(), company_id, draft)?.with_origin(origin);
         self.check_references(&record, None).await?;
         let audit = audit_entry(
             &record,

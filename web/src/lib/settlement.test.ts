@@ -20,6 +20,7 @@ const entryOf = (installments: EntryInstallment[]): Entry => ({
   competence_date: "2026-11-01",
   installments,
   total: "0",
+  recurrence_id: null,
 });
 
 describe("what is left of an installment", () => {

@@ -67,6 +67,7 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
             | RepositoryError::DuplicateMembership
             | RepositoryError::Overpaid
             | RepositoryError::EntrySettled
+            | RepositoryError::DuplicateOccurrence
             | RepositoryError::DuplicateInvitation),
         ) => (StatusCode::CONFLICT, error.to_string()),
         ApplicationError::Auth(error) => {
@@ -102,6 +103,7 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
             (StatusCode::CONFLICT, error.to_string())
         }
         ApplicationError::EntryNotFound
+        | ApplicationError::RecurrenceNotFound
         | ApplicationError::SettlementNotFound
         | ApplicationError::TransferNotFound => (StatusCode::NOT_FOUND, error.to_string()),
         ApplicationError::SettlementExceedsBalance | ApplicationError::EntryIsSettled => {

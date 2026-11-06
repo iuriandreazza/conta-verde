@@ -6,8 +6,9 @@ use conta_verde_application::{
 };
 use conta_verde_domain::{
     Amount, AuditEntity, AuditEntry, AuditRecord, BankAccountId, CalendarDate, CategoryId,
-    CompanyId, CostCenterId, Decimal, EntryId, EntryInstallmentDraft, EntryKind, FinancialEntry,
-    FinancialEntryDraft, PartyId, PaymentMethodId, Settlement, SettlementDraft, SettlementId,
+    CompanyId, CostCenterId, Decimal, EntryId, EntryInstallmentDraft, EntryKind, EntryOrigin,
+    FinancialEntry, FinancialEntryDraft, PartyId, PaymentMethodId, RecurrenceId, Settlement,
+    SettlementDraft, SettlementId,
 };
 use sqlx::postgres::PgRow;
 use sqlx::{PgConnection, PgPool, Postgres, QueryBuilder, Row};
@@ -16,9 +17,11 @@ use uuid::Uuid;
 use crate::postgres::{snapshot, storage_error};
 use crate::postgres_audit;
 
+const OCCURRENCE_UNIQUE_INDEX: &str = "financial_entries_occurrence_key";
+
 const SELECT_ENTRIES: &str = "SELECT id, company_id, kind, description, party_id, category_id, \
-     cost_center_id, to_char(competence_date, 'YYYY-MM-DD') AS competence_date \
-     FROM financial_entries";
+     cost_center_id, to_char(competence_date, 'YYYY-MM-DD') AS competence_date, recurrence_id, \
+     to_char(occurrence_on, 'YYYY-MM-DD') AS occurrence_on FROM financial_entries";
 
 pub struct PostgresFinancialEntryRepository {
     pool: PgPool,
@@ -67,8 +70,9 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
         let mut tx = self.pool.begin().await.map_err(storage_error)?;
         sqlx::query(
             "INSERT INTO financial_entries \
-             (id, company_id, kind, description, party_id, category_id, cost_center_id, competence_date) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, CAST($8 AS DATE))",
+             (id, company_id, kind, description, party_id, category_id, cost_center_id, competence_date, \
+              recurrence_id, occurrence_on) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, CAST($8 AS DATE), $9, CAST($10 AS DATE))",
         )
         .bind(entry.id().as_uuid())
         .bind(entry.company_id().as_uuid())
@@ -78,9 +82,16 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
         .bind(entry.category_id().as_uuid())
         .bind(entry.cost_center_id().map(|id| id.as_uuid()))
         .bind(entry.competence_date().to_string())
+        .bind(entry.origin().map(|origin| origin.recurrence_id.as_uuid()))
+        .bind(entry.origin().map(|origin| origin.occurrence_on.to_string()))
         .execute(&mut *tx)
         .await
-        .map_err(storage_error)?;
+        .map_err(|error| match &error {
+            sqlx::Error::Database(db) if db.constraint() == Some(OCCURRENCE_UNIQUE_INDEX) => {
+                RepositoryError::DuplicateOccurrence
+            }
+            _ => storage_error(error),
+        })?;
         insert_installments(&mut tx, entry).await?;
         postgres_audit::insert(&mut tx, audit).await?;
         tx.commit().await.map_err(storage_error)
@@ -650,9 +661,21 @@ fn entry_from_row(
         competence_date: row.try_get("competence_date").map_err(storage_error)?,
         installments: installments.remove(&raw_id).unwrap_or_default(),
     };
-    FinancialEntry::new(id, company_id, draft).map_err(|error| {
+    let entry = FinancialEntry::new(id, company_id, draft).map_err(|error| {
         RepositoryError::Storage(format!("stored entry {id:?} is invalid: {error}"))
-    })
+    })?;
+    let recurrence: Option<Uuid> = row.try_get("recurrence_id").map_err(storage_error)?;
+    let occurrence: Option<String> = row.try_get("occurrence_on").map_err(storage_error)?;
+    match (
+        recurrence,
+        occurrence.as_deref().and_then(CalendarDate::parse),
+    ) {
+        (Some(recurrence_id), Some(occurrence_on)) => Ok(entry.with_origin(EntryOrigin {
+            recurrence_id: RecurrenceId::from_uuid(recurrence_id),
+            occurrence_on,
+        })),
+        _ => Ok(entry),
+    }
 }
 
 #[cfg(test)]

@@ -282,6 +282,7 @@ export function EntriesPage() {
                             <span className={STATUS_BADGES[status]}>{STATUS_LABELS[status]}</span>{" "}
                             {entry.kind === "receivable" ? "A receber" : "A pagar"} ·{" "}
                             {names.get(entry.category_id) ?? ""}
+                            {entry.recurrence_id !== null && " · Recorrente"}
                           </div>
                         </td>
                         <td className="tabular">{formatDate(entry.competence_date)}</td>

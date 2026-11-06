@@ -19,6 +19,7 @@ mod party;
 mod payment_method;
 mod payment_term;
 mod product;
+mod recurrence;
 mod role;
 mod settlement;
 mod tag;
@@ -34,8 +35,8 @@ pub use audit::{
     document_check_changes, entry_changes, entry_creation_changes, opening_changes,
     opening_creation_changes, party_changes, payment_method_changes,
     payment_method_creation_changes, payment_term_changes, payment_term_creation_changes,
-    product_changes, product_creation_changes, settlement_changes, settlement_creation_changes,
-    transfer_changes, transfer_creation_changes,
+    product_changes, product_creation_changes, recurrence_changes, recurrence_creation_changes,
+    settlement_changes, settlement_creation_changes, transfer_changes, transfer_creation_changes,
 };
 pub use bank_account::{BankAccount, BankAccountDraft, BankAccountKind};
 pub use calendar_date::CalendarDate;
@@ -47,12 +48,12 @@ pub use document_check::DocumentCheck;
 pub use email::Email;
 pub use error::DomainError;
 pub use financial_entry::{
-    EntryInstallment, EntryInstallmentDraft, EntryKind, FinancialEntry, FinancialEntryDraft,
-    MAX_ENTRY_INSTALLMENTS,
+    EntryInstallment, EntryInstallmentDraft, EntryKind, EntryOrigin, FinancialEntry,
+    FinancialEntryDraft, MAX_ENTRY_INSTALLMENTS,
 };
 pub use ids::{
     BankAccountId, CategoryId, CompanyId, CostCenterId, EntryId, InvitationId, PartyId,
-    PaymentMethodId, PaymentTermId, ProductId, SettlementId, TransferId, UserId,
+    PaymentMethodId, PaymentTermId, ProductId, RecurrenceId, SettlementId, TransferId, UserId,
 };
 pub use invitation::Invitation;
 pub use party::{Party, PartyDraft};
@@ -62,6 +63,7 @@ pub use payment_term::{
     PaymentTermDraft, Percent,
 };
 pub use product::{Product, ProductDraft, ProductKind};
+pub use recurrence::{Frequency, Recurrence, RecurrenceDraft};
 pub use role::{Access, Area, Role};
 /// The exact decimal money is made of, so a layer that adds amounts need not depend on its crate.
 pub use rust_decimal::Decimal;

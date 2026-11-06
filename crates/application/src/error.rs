@@ -24,6 +24,8 @@ pub enum RepositoryError {
     Overpaid,
     /// The entry has settlements that are not reversed, so its installments and kind are fixed.
     EntrySettled,
+    /// The recurrence already has the entry of that occurrence day.
+    DuplicateOccurrence,
     Storage(String),
 }
 
@@ -67,6 +69,8 @@ pub enum ApplicationError {
     EntryNotFound,
     /// A cash flow was asked for a span that is not one or is too long to cut.
     InvalidSpan(&'static str),
+    /// No recurrence with this id in the company (another company's looks the same).
+    RecurrenceNotFound,
     /// No transfer with this id in the company, or it was reversed already.
     TransferNotFound,
     /// No settlement with this id in the entry (another company's looks the same), or it was
@@ -154,6 +158,9 @@ impl fmt::Display for RepositoryError {
                 f.write_str("this settles more of the installment than is left of it")
             }
             Self::EntrySettled => f.write_str("the entry has settlements that are not reversed"),
+            Self::DuplicateOccurrence => {
+                f.write_str("the recurrence already has the entry of this occurrence")
+            }
             Self::Storage(message) => write!(f, "storage failure: {message}"),
         }
     }
@@ -187,6 +194,7 @@ impl fmt::Display for ApplicationError {
             Self::EntryNotFound => f.write_str("entry not found"),
             Self::SettlementNotFound => f.write_str("settlement not found"),
             Self::TransferNotFound => f.write_str("transfer not found"),
+            Self::RecurrenceNotFound => f.write_str("recurrence not found"),
             Self::InvalidSpan(reason) => write!(f, "invalid span: {reason}"),
             Self::SettlementExceedsBalance => {
                 f.write_str("this settles more of the installment than is left of it")
