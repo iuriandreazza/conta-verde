@@ -54,7 +54,8 @@ use conta_verde_application::{
     TransferService,
 };
 use conta_verde_application::{
-    CollectionService, CollectionSettingsRepository, PaymentEventRepository, PaymentWebhookService,
+    CollectionService, CollectionSettingsRepository, PaymentEventRepository, PaymentLinkRepository,
+    PaymentPageService, PaymentWebhookService,
 };
 use serde::Serialize;
 
@@ -87,6 +88,7 @@ pub trait Ports: 'static {
     type Charges: ChargeRepository + 'static;
     type CollectionSettings: CollectionSettingsRepository + 'static;
     type PaymentEvents: PaymentEventRepository + 'static;
+    type PaymentLinks: PaymentLinkRepository + 'static;
     type Provider: PaymentProvider + 'static;
     type Transfers: TransferRepository + 'static;
     type Openings: OpeningRepository + 'static;
@@ -109,6 +111,14 @@ type ChargesOf<X> = ChargeService<
     <X as Ports>::Parties,
     <X as Ports>::Provider,
     <X as Ports>::CollectionSettings,
+>;
+
+/// The payment pages use case over the adapters of `X`.
+type PaymentPagesOf<X> = PaymentPageService<
+    <X as Ports>::PaymentLinks,
+    <X as Ports>::Charges,
+    <X as Ports>::Entries,
+    <X as Ports>::Secrets,
 >;
 
 /// The webhooks use case over the adapters of `X`.
@@ -168,6 +178,7 @@ pub struct Services<X: Ports> {
     pub attachments: AttachmentService<X::Attachments, X::Blobs, X::Entries>,
     pub charges: ChargesOf<X>,
     pub webhooks: WebhooksOf<X>,
+    pub payment_pages: PaymentPagesOf<X>,
     pub collection: CollectionService<X::CollectionSettings, X::EntryReferences>,
     pub transfers: TransferService<X::Transfers, X::EntryReferences>,
     pub recurrences: RecurrenceService<X::Recurrences, X::Entries, X::EntryReferences>,
@@ -197,6 +208,7 @@ pub(crate) struct AppState<X: Ports> {
     attachments: AttachmentService<X::Attachments, X::Blobs, X::Entries>,
     charges: ChargesOf<X>,
     webhooks: WebhooksOf<X>,
+    payment_pages: PaymentPagesOf<X>,
     collection: CollectionService<X::CollectionSettings, X::EntryReferences>,
     transfers: TransferService<X::Transfers, X::EntryReferences>,
     recurrences: RecurrenceService<X::Recurrences, X::Entries, X::EntryReferences>,
@@ -231,6 +243,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         attachments: services.attachments,
         charges: services.charges,
         webhooks: services.webhooks,
+        payment_pages: services.payment_pages,
         collection: services.collection,
         transfers: services.transfers,
         recurrences: services.recurrences,
@@ -447,6 +460,10 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
             post(charges::cancel_charge::<X>),
         )
         .route(
+            "/companies/{company_id}/entries/{entry_id}/charges/{charge_id}/link",
+            post(charges::new_payment_link::<X>),
+        )
+        .route(
             "/companies/{company_id}/entries/{entry_id}/charges/{charge_id}/history",
             get(charges::charge_history::<X>),
         )
@@ -618,6 +635,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         .merge(
             Router::new()
                 .route("/public/quotes/{token}", get(quotes::public_quote::<X>))
+                .route("/public/charges/{token}", get(charges::public_charge::<X>))
                 .route(
                     "/public/quotes/{token}/pdf",
                     get(quotes::public_quote_pdf::<X>),
@@ -658,11 +676,12 @@ mod tests {
         InMemoryCommissionRuleRepository, InMemoryContractRepository, InMemoryCostCenterRepository,
         InMemoryEmailSender, InMemoryFinancialEntryRepository, InMemoryIdentityRepository,
         InMemoryInvitationRepository, InMemoryOpeningRepository, InMemoryPartyRepository,
-        InMemoryPaymentEventRepository, InMemoryPaymentMethodRepository,
-        InMemoryPaymentTermRepository, InMemoryPostalCodeDirectory, InMemoryPriceListRepository,
-        InMemoryProductRepository, InMemoryQuoteRepository, InMemoryRecurrenceRepository,
-        InMemorySaleRepository, InMemoryStatementLineRepository, InMemoryTransferRepository,
-        RegisterReferences, RegisterSalesReferences,
+        InMemoryPaymentEventRepository, InMemoryPaymentLinkRepository,
+        InMemoryPaymentMethodRepository, InMemoryPaymentTermRepository,
+        InMemoryPostalCodeDirectory, InMemoryPriceListRepository, InMemoryProductRepository,
+        InMemoryQuoteRepository, InMemoryRecurrenceRepository, InMemorySaleRepository,
+        InMemoryStatementLineRepository, InMemoryTransferRepository, RegisterReferences,
+        RegisterSalesReferences,
     };
     use http_body_util::BodyExt;
     use serde_json::{Value, json};
@@ -735,6 +754,7 @@ mod tests {
         type Provider = FakePaymentProvider;
         type CollectionSettings = InMemoryCollectionSettingsRepository;
         type PaymentEvents = InMemoryPaymentEventRepository;
+        type PaymentLinks = InMemoryPaymentLinkRepository;
         type Transfers = InMemoryTransferRepository;
         type Openings = InMemoryOpeningRepository;
         type Recurrences = InMemoryRecurrenceRepository;
@@ -772,6 +792,7 @@ mod tests {
         type Provider = FakePaymentProvider;
         type CollectionSettings = InMemoryCollectionSettingsRepository;
         type PaymentEvents = InMemoryPaymentEventRepository;
+        type PaymentLinks = InMemoryPaymentLinkRepository;
         type Transfers = InMemoryTransferRepository;
         type Openings = InMemoryOpeningRepository;
         type Recurrences = InMemoryRecurrenceRepository;
@@ -897,6 +918,26 @@ mod tests {
             events,
             settings,
             entries,
+        )
+    }
+
+    fn payment_pages_over(
+        charges: InMemoryChargeRepository,
+        entries: InMemoryFinancialEntryRepository,
+    ) -> PaymentPagesOf<MemoryPorts> {
+        PaymentPageService::new(
+            InMemoryPaymentLinkRepository::default(),
+            charges,
+            entries,
+            Argon2SecretService::new().unwrap(),
+            "https://app.example",
+        )
+    }
+
+    fn standalone_payment_pages() -> PaymentPagesOf<MemoryPorts> {
+        payment_pages_over(
+            InMemoryChargeRepository::default(),
+            InMemoryFinancialEntryRepository::default(),
         )
     }
 
@@ -1272,6 +1313,7 @@ mod tests {
                 attachments: standalone_attachments(),
                 charges: standalone_charges(),
                 webhooks: standalone_webhooks(),
+                payment_pages: standalone_payment_pages(),
                 collection: standalone_collection(),
                 transfers: standalone_transfers(),
                 recurrences: standalone_recurrences(),
@@ -1921,6 +1963,7 @@ mod tests {
                 attachments: standalone_attachments(),
                 charges: standalone_charges(),
                 webhooks: standalone_webhooks(),
+                payment_pages: standalone_payment_pages(),
                 collection: standalone_collection(),
                 transfers: standalone_transfers(),
                 recurrences: standalone_recurrences(),
@@ -3412,6 +3455,7 @@ mod tests {
                 attachments: standalone_attachments(),
                 charges: standalone_charges(),
                 webhooks: standalone_webhooks(),
+                payment_pages: standalone_payment_pages(),
                 collection: standalone_collection(),
                 transfers: standalone_transfers(),
                 recurrences: standalone_recurrences(),
@@ -4977,6 +5021,7 @@ mod tests {
                         &payment_methods,
                     ),
                 ),
+                payment_pages: payment_pages_over(charge_store.clone(), entry_store.clone()),
                 collection: CollectionService::new(
                     settings_store.clone(),
                     references_over(
@@ -6130,6 +6175,134 @@ mod tests {
         .await;
         assert_eq!(settings.body["bank_account_id"], account);
         assert_eq!(settings.body["fee_category_id"], targets.other_category);
+    }
+
+    #[tokio::test]
+    async fn a_customer_opens_the_payment_page_from_a_link_with_no_session() {
+        let app = entry_app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let targets = entry_targets(&app, &cookie, company_id).await;
+        configure_collection(&app, &cookie, company_id, None).await;
+        let created = send(
+            &app,
+            json_request(
+                "POST",
+                &entries_uri(company_id),
+                Some(&cookie),
+                entry_body(&targets, "Venda 12", &[("2026-12-10", "100")]),
+            ),
+        )
+        .await;
+        let entry_id = created.body["id"].as_str().unwrap().to_owned();
+        let charges = format!("/companies/{company_id}/entries/{entry_id}/charges");
+        let issued = send(
+            &app,
+            json_request(
+                "POST",
+                &charges,
+                Some(&cookie),
+                json!({ "installment": 1, "method": "pix" }),
+            ),
+        )
+        .await;
+        let charge_uri = format!("{charges}/{}", issued.body["id"].as_str().unwrap());
+
+        // The person makes a link; the address holds the token, which is not kept.
+        let made = send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{charge_uri}/link"),
+                Some(&cookie),
+                Value::Null,
+            ),
+        )
+        .await;
+        assert_eq!(made.status, StatusCode::CREATED, "{}", made.body);
+        let url = made.body["url"].as_str().unwrap();
+        let token = url.strip_prefix("https://app.example/pay/").expect(url);
+        let public = format!("/public/charges/{token}");
+
+        // The customer needs no session, and sees what to pay with, and nothing of the books.
+        let page = send(&app, get_request(&public, None)).await;
+        assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+        assert_eq!(page.body["state"], "payable");
+        assert_eq!(page.body["description"], "Venda 12");
+        assert_eq!(page.body["amount"], "100");
+        assert_eq!(page.body["method"], "pix");
+        assert_eq!(page.body["installments"], 1);
+        assert_eq!(page.body["pix_payload"], issued.body["pix_payload"]);
+        for secret in [
+            "id",
+            "company_id",
+            "entry_id",
+            "external_id",
+            "provider",
+            "issued_by",
+        ] {
+            assert!(page.body.get(secret).is_none(), "{secret}");
+        }
+        assert_eq!(
+            send(&app, get_request("/public/charges/not-a-token", None))
+                .await
+                .status,
+            StatusCode::NOT_FOUND
+        );
+
+        // Nobody else's session makes a link for it.
+        let (stranger, _) = sign_up(&app, "bia@example.com").await;
+        assert_eq!(
+            send(
+                &app,
+                json_request(
+                    "POST",
+                    &format!("{charge_uri}/link"),
+                    Some(&stranger),
+                    Value::Null
+                )
+            )
+            .await
+            .status,
+            StatusCode::NOT_FOUND
+        );
+
+        // Once it is paid the page says so and offers nothing to pay with.
+        let external = format!(
+            "fake_{}",
+            issued.body["id"].as_str().unwrap().replace('-', "")
+        );
+        let (signature, body) = signed_notice(
+            "evt_page",
+            &external,
+            "paid",
+            Some(("100", "2026-12-09", "0")),
+        );
+        let hook = format!("/public/payments/{company_id}/webhooks/fake");
+        assert_eq!(
+            send(&app, webhook_request(&hook, Some(&signature), body))
+                .await
+                .status,
+            StatusCode::OK
+        );
+        let paid = send(&app, get_request(&public, None)).await;
+        assert_eq!(paid.body["state"], "paid");
+        assert_eq!(paid.body["paid_on"], "2026-12-09");
+        assert!(paid.body["pix_payload"].is_null());
+        // A paid charge gets no new link.
+        assert_eq!(
+            send(
+                &app,
+                json_request(
+                    "POST",
+                    &format!("{charge_uri}/link"),
+                    Some(&cookie),
+                    Value::Null
+                )
+            )
+            .await
+            .status,
+            StatusCode::CONFLICT
+        );
     }
 
     fn attachments_uri(company_id: Uuid, entry_id: &str) -> String {

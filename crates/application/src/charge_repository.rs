@@ -42,6 +42,13 @@ pub trait ChargeRepository: Send + Sync {
         entry_id: EntryId,
     ) -> impl Future<Output = Result<Vec<Charge>, RepositoryError>> + Send;
 
+    /// The charge, in any status, only if it belongs to the company: what a link leads to.
+    fn find_by_id(
+        &self,
+        company_id: CompanyId,
+        id: ChargeId,
+    ) -> impl Future<Output = Result<Option<Charge>, RepositoryError>> + Send;
+
     /// The charge the provider knows as `external_id`, only if it is the company's.
     fn find_by_external(
         &self,

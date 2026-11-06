@@ -189,6 +189,22 @@ impl ChargeRepository for PostgresChargeRepository {
         tx.commit().await.map_err(storage_error)
     }
 
+    async fn find_by_id(
+        &self,
+        company_id: CompanyId,
+        id: ChargeId,
+    ) -> Result<Option<Charge>, RepositoryError> {
+        let row = sqlx::query(&format!(
+            "{SELECT_CHARGES} WHERE company_id = $1 AND id = $2"
+        ))
+        .bind(company_id.as_uuid())
+        .bind(id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        row.as_ref().map(charge_from_row).transpose()
+    }
+
     async fn find_by_external(
         &self,
         company_id: CompanyId,
@@ -253,11 +269,15 @@ impl ChargeRepository for PostgresChargeRepository {
 #[cfg(test)]
 mod tests {
     use conta_verde_application::{
-        ChargeService, CollectionService, FinancialEntryService, PaymentWebhookService,
+        ChargeService, CollectionService, FinancialEntryService, PaymentLinkRepository,
+        PaymentPageService, PaymentWebhookService,
     };
 
     use super::*;
-    use crate::{PostgresCollectionSettingsRepository, PostgresPaymentEventRepository};
+    use crate::{
+        PostgresCollectionSettingsRepository, PostgresPaymentEventRepository,
+        PostgresPaymentLinkRepository,
+    };
 
     type PgReferences = RegisterReferences<
         PostgresCategoryRepository,
@@ -361,6 +381,33 @@ mod tests {
         let (company, other_company, seed) = seeded(&pool).await;
         contract::configures_collection(&settings_service(&pool), company, other_company, &seed)
             .await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn serves_payment_pages() {
+        let pool = contract::test_pool().await;
+        let (company, other_company, seed) = seeded(&pool).await;
+        let provider = FakePaymentProvider::default();
+        let links = PostgresPaymentLinkRepository::new(pool.clone());
+        let pages = PaymentPageService::new(
+            PostgresPaymentLinkRepository::new(pool.clone()),
+            PostgresChargeRepository::new(pool.clone()),
+            PostgresFinancialEntryRepository::new(pool.clone()),
+            crate::Argon2SecretService::new().unwrap(),
+            "https://app.example/",
+        );
+        contract::serves_payment_pages(
+            &pages,
+            &links,
+            &charge_service(&pool, &provider),
+            &entry_service(&pool),
+            &settings_service(&pool),
+            company,
+            other_company,
+            &seed,
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -620,6 +667,22 @@ mod tests {
                 "{statement}"
             );
         }
+
+        // A link is to the company's own charge and holds a digest, never a short text.
+        let links = PostgresPaymentLinkRepository::new(pool.clone());
+        let digest = "d".repeat(40);
+        assert!(
+            links
+                .save(other_company, charge.id(), &digest)
+                .await
+                .is_err()
+        );
+        assert!(links.save(company, charge.id(), "short").await.is_err());
+        links.save(company, charge.id(), &digest).await.unwrap();
+        assert!(
+            links.save(company, charge.id(), &digest).await.is_err(),
+            "a digest is one link's"
+        );
 
         // Settings point at the company's own account and category.
         assert!(

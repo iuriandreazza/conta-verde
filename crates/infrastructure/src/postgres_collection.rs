@@ -1,6 +1,6 @@
 use conta_verde_application::{
-    CollectionSettingsRepository, PaymentEventRepository, Recorded, RepositoryError,
-    ensure_audit_describes,
+    CollectionSettingsRepository, LinkTarget, PaymentEventRepository, PaymentLinkRepository,
+    Recorded, RepositoryError, ensure_audit_describes,
 };
 use conta_verde_domain::{
     AuditEntity, AuditEntry, AuditRecord, BankAccountId, CategoryId, ChargeId, CollectionSettings,
@@ -171,5 +171,50 @@ impl PaymentEventRepository for PostgresPaymentEventRepository {
             return Err(RepositoryError::NotFound);
         }
         Ok(())
+    }
+}
+
+pub struct PostgresPaymentLinkRepository {
+    pool: PgPool,
+}
+
+impl PostgresPaymentLinkRepository {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+impl PaymentLinkRepository for PostgresPaymentLinkRepository {
+    async fn save(
+        &self,
+        company_id: CompanyId,
+        charge_id: ChargeId,
+        digest: &str,
+    ) -> Result<(), RepositoryError> {
+        sqlx::query(
+            "INSERT INTO payment_links (digest, company_id, charge_id) VALUES ($1, $2, $3)",
+        )
+        .bind(digest)
+        .bind(company_id.as_uuid())
+        .bind(charge_id.as_uuid())
+        .execute(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        Ok(())
+    }
+
+    async fn find(&self, digest: &str) -> Result<Option<LinkTarget>, RepositoryError> {
+        let row = sqlx::query("SELECT company_id, charge_id FROM payment_links WHERE digest = $1")
+            .bind(digest)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(storage_error)?;
+        row.map(|row| {
+            Ok(LinkTarget {
+                company_id: CompanyId::from_uuid(row.try_get("company_id").map_err(storage_error)?),
+                charge_id: ChargeId::from_uuid(row.try_get("charge_id").map_err(storage_error)?),
+            })
+        })
+        .transpose()
     }
 }

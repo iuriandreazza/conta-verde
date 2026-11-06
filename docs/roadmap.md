@@ -82,7 +82,7 @@ per pull request, in this order:
 
 - [x] Payment-provider port with the fake adapter; charges attached to installments: boleto, Pix (dynamic QR), card link ([ADR 0045](adr/0045-charges.md)) — a `PaymentProvider` port with a fake and an off adapter (`PAYMENT_PROVIDER`), and charges for what is left of an installment: issue a boleto, Pix or card link, see what the customer pays with, cancel, with a history; one open charge per installment
 - [x] Webhooks settle the installment and record the provider fee ([ADR 0046](adr/0046-webhooks-and-automatic-settlement.md)) — a public, signed route per company and provider; a payment settles the installment through the settlement path (once per charge, cash exactly what was paid) and enters the provider's fee as a settled payable; the same notice twice, or interrupted, settles once; what cannot be applied is kept with a note on the charge; a Cobrança page chooses the account the money lands in
-- [ ] Customer-facing payment page (charge details, boleto, Pix copy-and-paste) behind a token
+- [x] Customer-facing payment page (charge details, boleto, Pix copy-and-paste) behind a token ([ADR 0047](adr/0047-payment-page.md)) — a link per charge (many allowed, only the digest kept, shown once) leads, with no session, to a page that shows the amount and what to pay with while there is something to pay, and says so when it was paid or can no longer be
 - [ ] Notification ports: e-mail (SMTP) first, WhatsApp through a provider ([ADR 0014](adr/0014-notifications.md)); dunning rules with reminders before and after the due date, cadence per company, sent by the hourly job
 - [ ] First real provider adapter
 - [ ] Second real provider adapter

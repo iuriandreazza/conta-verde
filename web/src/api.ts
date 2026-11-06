@@ -535,6 +535,23 @@ export interface Charge {
   note: string | null;
 }
 
+/** What the customer sees at the link of a charge (ADR 0047): nothing of the company's books. */
+export interface PublicCharge {
+  company_name: string;
+  description: string;
+  installment: number;
+  installments: number;
+  method: ChargeMethod;
+  /** What the page may offer: pay, say it was paid, or say there is nothing to pay. */
+  state: "payable" | "paid" | "unavailable";
+  amount: string;
+  due_on: string;
+  digitable_line: string | null;
+  pix_payload: string | null;
+  payment_url: string | null;
+  paid_on: string | null;
+}
+
 /** Where the money of a paid charge lands, and what the provider's fee is entered under (ADR 0046). */
 export interface CollectionSettings {
   bank_account_id: string | null;
@@ -1461,6 +1478,13 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(settings),
     }),
+  /** Makes a link to the charge's payment page; the address is shown once, only its digest is kept. */
+  newPaymentLink: (companyId: string, entryId: string, chargeId: string) =>
+    request<{ url: string }>(
+      `/companies/${companyId}/entries/${entryId}/charges/${chargeId}/link`,
+      { method: "POST" },
+    ),
+  publicCharge: (token: string) => request<PublicCharge>(`/public/charges/${token}`),
   listCharges: (companyId: string, entryId: string) =>
     request<{ items: Charge[] }>(`/companies/${companyId}/entries/${entryId}/charges`),
   issueCharge: (companyId: string, entryId: string, input: ChargeInput) =>

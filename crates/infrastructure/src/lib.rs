@@ -72,7 +72,10 @@ pub use memory_attachments::{InMemoryAttachmentRepository, InMemoryBlobStore};
 pub use memory_bank_accounts::InMemoryBankAccountRepository;
 pub use memory_categories::InMemoryCategoryRepository;
 pub use memory_charges::InMemoryChargeRepository;
-pub use memory_collection::{InMemoryCollectionSettingsRepository, InMemoryPaymentEventRepository};
+pub use memory_collection::{
+    InMemoryCollectionSettingsRepository, InMemoryPaymentEventRepository,
+    InMemoryPaymentLinkRepository,
+};
 pub use memory_commission_rules::InMemoryCommissionRuleRepository;
 pub use memory_contracts::InMemoryContractRepository;
 pub use memory_cost_centers::InMemoryCostCenterRepository;
@@ -96,6 +99,7 @@ pub use postgres_categories::PostgresCategoryRepository;
 pub use postgres_charges::PostgresChargeRepository;
 pub use postgres_collection::{
     PostgresCollectionSettingsRepository, PostgresPaymentEventRepository,
+    PostgresPaymentLinkRepository,
 };
 pub use postgres_commission_rules::PostgresCommissionRuleRepository;
 pub use postgres_contracts::PostgresContractRepository;
