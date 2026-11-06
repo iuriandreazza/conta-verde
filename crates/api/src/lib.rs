@@ -36,6 +36,7 @@ mod sales;
 mod sales_reports;
 mod session;
 mod statements;
+mod stock;
 mod transfers;
 
 use std::sync::Arc;
@@ -54,7 +55,7 @@ use conta_verde_application::{
     PriceListService, ProductRepository, ProductService, PurchaseOrderRepository, PurchaseService,
     QuoteRepository, QuoteService, ReconciliationService, RecurrenceRepository, RecurrenceService,
     SaleRepository, SaleService, SalesReportService, SecretService, StatementLineRepository,
-    TransferRepository, TransferService,
+    StockMovementRepository, StockService, TransferRepository, TransferService,
 };
 use conta_verde_application::{
     CollectionService, CollectionSettingsRepository, DunningPlanRepository, DunningService,
@@ -104,6 +105,7 @@ pub trait Ports: 'static {
     type Quotes: QuoteRepository + 'static;
     type Sales: SaleRepository + 'static;
     type Purchases: PurchaseOrderRepository + 'static;
+    type StockMovements: StockMovementRepository + 'static;
     type Contracts: ContractRepository + 'static;
     type CommissionRules: CommissionRuleRepository + 'static;
     type Statements: StatementLineRepository + 'static;
@@ -151,6 +153,9 @@ type WebhooksOf<X> = PaymentWebhookService<
     <X as Ports>::EntryReferences,
 >;
 
+/// The stock use case over the adapters of `X`.
+type StockOf<X> = StockService<<X as Ports>::StockMovements, <X as Ports>::Products>;
+
 /// The sales use case over the adapters of `X`.
 type SalesOf<X> = SaleService<
     <X as Ports>::Sales,
@@ -158,6 +163,7 @@ type SalesOf<X> = SaleService<
     <X as Ports>::Entries,
     <X as Ports>::EntryReferences,
     <X as Ports>::DocumentReferences,
+    StockOf<X>,
 >;
 
 /// The purchase orders use case over the adapters of `X`.
@@ -166,6 +172,7 @@ type PurchasesOf<X> = PurchaseService<
     <X as Ports>::Entries,
     <X as Ports>::EntryReferences,
     <X as Ports>::DocumentReferences,
+    StockOf<X>,
 >;
 
 /// The contracts use case over the adapters of `X`.
@@ -176,6 +183,7 @@ type ContractsOf<X> = ContractService<
     <X as Ports>::Entries,
     <X as Ports>::EntryReferences,
     <X as Ports>::DocumentReferences,
+    StockOf<X>,
 >;
 
 /// The commissions use case over the adapters of `X`.
@@ -214,6 +222,7 @@ pub struct Services<X: Ports> {
     pub quotes: QuoteService<X::Quotes, X::DocumentReferences, X::Emails, X::Secrets>,
     pub sales: SalesOf<X>,
     pub purchases: PurchasesOf<X>,
+    pub stock: StockOf<X>,
     pub contracts: ContractsOf<X>,
     pub commissions: CommissionsOf<X>,
     pub reconciliation:
@@ -246,6 +255,7 @@ pub(crate) struct AppState<X: Ports> {
     quotes: QuoteService<X::Quotes, X::DocumentReferences, X::Emails, X::Secrets>,
     sales: SalesOf<X>,
     purchases: PurchasesOf<X>,
+    stock: StockOf<X>,
     contracts: ContractsOf<X>,
     commissions: CommissionsOf<X>,
     reconciliation:
@@ -283,6 +293,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         quotes: services.quotes,
         sales: services.sales,
         purchases: services.purchases,
+        stock: services.stock,
         contracts: services.contracts,
         commissions: services.commissions,
         reconciliation: services.reconciliation,
@@ -671,6 +682,22 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
             get(sales::list_returns::<X>).post(sales::register_return::<X>),
         )
         .route(
+            "/companies/{company_id}/stock/movements",
+            get(stock::list_movements::<X>).post(stock::record_movement::<X>),
+        )
+        .route(
+            "/companies/{company_id}/stock/movements/{movement_id}",
+            get(stock::get_movement::<X>),
+        )
+        .route(
+            "/companies/{company_id}/stock/movements/{movement_id}/reverse",
+            post(stock::reverse_movement::<X>),
+        )
+        .route(
+            "/companies/{company_id}/stock/positions",
+            get(stock::list_positions::<X>),
+        )
+        .route(
             "/companies/{company_id}/purchase-orders",
             get(purchase_orders::list_purchase_orders::<X>)
                 .post(purchase_orders::register_purchase_order::<X>),
@@ -765,8 +792,8 @@ mod tests {
         InMemoryPaymentMethodRepository, InMemoryPaymentTermRepository,
         InMemoryPostalCodeDirectory, InMemoryPriceListRepository, InMemoryProductRepository,
         InMemoryPurchaseOrderRepository, InMemoryQuoteRepository, InMemoryRecurrenceRepository,
-        InMemorySaleRepository, InMemoryStatementLineRepository, InMemoryTransferRepository,
-        RegisterDocumentReferences, RegisterReferences,
+        InMemorySaleRepository, InMemoryStatementLineRepository, InMemoryStockMovementRepository,
+        InMemoryTransferRepository, RegisterDocumentReferences, RegisterReferences,
     };
     use http_body_util::BodyExt;
     use serde_json::{Value, json};
@@ -850,6 +877,7 @@ mod tests {
         type Quotes = InMemoryQuoteRepository;
         type Sales = InMemorySaleRepository;
         type Purchases = InMemoryPurchaseOrderRepository;
+        type StockMovements = InMemoryStockMovementRepository;
         type Contracts = InMemoryContractRepository;
         type CommissionRules = InMemoryCommissionRuleRepository;
         type Statements = InMemoryStatementLineRepository;
@@ -892,6 +920,7 @@ mod tests {
         type Quotes = InMemoryQuoteRepository;
         type Sales = InMemorySaleRepository;
         type Purchases = InMemoryPurchaseOrderRepository;
+        type StockMovements = InMemoryStockMovementRepository;
         type Contracts = InMemoryContractRepository;
         type CommissionRules = InMemoryCommissionRuleRepository;
         type Statements = InMemoryStatementLineRepository;
@@ -1258,7 +1287,10 @@ mod tests {
         InMemoryFinancialEntryRepository,
         TestReferences,
         TestDocumentReferences,
+        TestStock,
     >;
+
+    type TestStock = StockService<InMemoryStockMovementRepository, InMemoryProductRepository>;
 
     /// Sales over the registers, the quotes and the entries a test keeps a handle to, so that a quote can be
     /// turned into a sale and the sale's receivable shows in the entries and the cash flow.
@@ -1274,6 +1306,7 @@ mod tests {
         payment_methods: &InMemoryPaymentMethodRepository,
         products: &InMemoryProductRepository,
         payment_terms: &InMemoryPaymentTermRepository,
+        ledger: InMemoryStockMovementRepository,
     ) -> TestSales {
         let references = || {
             references_over(
@@ -1294,6 +1327,7 @@ mod tests {
                 products.clone(),
                 payment_terms.clone(),
             ),
+            StockService::new(ledger, products.clone()),
         )
     }
 
@@ -1310,6 +1344,7 @@ mod tests {
             &InMemoryPaymentMethodRepository::default(),
             &InMemoryProductRepository::default(),
             &InMemoryPaymentTermRepository::default(),
+            InMemoryStockMovementRepository::default(),
         )
     }
 
@@ -1318,6 +1353,7 @@ mod tests {
         InMemoryFinancialEntryRepository,
         TestReferences,
         TestDocumentReferences,
+        TestStock,
     >;
 
     /// Purchase orders over the registers and the entries a test keeps a handle to, so that what a receipt
@@ -1333,6 +1369,7 @@ mod tests {
         payment_methods: &InMemoryPaymentMethodRepository,
         products: &InMemoryProductRepository,
         payment_terms: &InMemoryPaymentTermRepository,
+        ledger: InMemoryStockMovementRepository,
     ) -> TestPurchases {
         let references = || {
             references_over(
@@ -1352,6 +1389,7 @@ mod tests {
                 products.clone(),
                 payment_terms.clone(),
             ),
+            StockService::new(ledger, products.clone()),
         )
     }
 
@@ -1367,6 +1405,15 @@ mod tests {
             &InMemoryPaymentMethodRepository::default(),
             &InMemoryProductRepository::default(),
             &InMemoryPaymentTermRepository::default(),
+            InMemoryStockMovementRepository::default(),
+        )
+    }
+
+    /// The stock over registers that the app's own services do not share.
+    fn standalone_stock() -> TestStock {
+        StockService::new(
+            InMemoryStockMovementRepository::default(),
+            InMemoryProductRepository::default(),
         )
     }
 
@@ -1512,6 +1559,7 @@ mod tests {
                 quotes: standalone_quotes(),
                 sales: standalone_sales(),
                 purchases: standalone_purchases(),
+                stock: standalone_stock(),
                 contracts: ContractService::new(
                     InMemoryContractRepository::default(),
                     standalone_sales(),
@@ -2164,6 +2212,7 @@ mod tests {
                 quotes: standalone_quotes(),
                 sales: standalone_sales(),
                 purchases: standalone_purchases(),
+                stock: standalone_stock(),
                 contracts: ContractService::new(
                     InMemoryContractRepository::default(),
                     standalone_sales(),
@@ -3658,6 +3707,7 @@ mod tests {
                 quotes: standalone_quotes(),
                 sales: standalone_sales(),
                 purchases: standalone_purchases(),
+                stock: standalone_stock(),
                 contracts: ContractService::new(
                     InMemoryContractRepository::default(),
                     standalone_sales(),
@@ -5161,6 +5211,7 @@ mod tests {
         let transfer_store = InMemoryTransferRepository::default();
         let quote_store = InMemoryQuoteRepository::default();
         let sale_store = InMemorySaleRepository::default();
+        let ledger = InMemoryStockMovementRepository::default();
         let sales = || {
             sales_over(
                 sale_store.clone(),
@@ -5173,6 +5224,7 @@ mod tests {
                 &payment_methods,
                 &products,
                 &payment_terms,
+                ledger.clone(),
             )
         };
         router::<MemoryPorts>(
@@ -5269,7 +5321,9 @@ mod tests {
                     &payment_methods,
                     &products,
                     &payment_terms,
+                    ledger.clone(),
                 ),
+                stock: StockService::new(ledger.clone(), products.clone()),
                 contracts: ContractService::new(InMemoryContractRepository::default(), sales()),
                 commissions: commissions_over(
                     sale_store.clone(),
@@ -9100,6 +9154,327 @@ mod tests {
         );
         assert_eq!(
             send(&app, get_request(&uri, None)).await.status,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    fn stock_uri(company_id: Uuid) -> String {
+        format!("/companies/{company_id}/stock")
+    }
+
+    #[tokio::test]
+    async fn goods_received_enter_stock_and_a_sale_takes_them_at_the_average_cost() {
+        let app = entry_app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let targets = sales_targets(&app, &cookie, company_id).await;
+        let category = revenue_category(&app, &cookie, company_id).await;
+        let supplier = send(
+            &app,
+            json_request(
+                "POST",
+                &parties_uri(company_id),
+                Some(&cookie),
+                json!({ "name": "Torrefação Boa", "is_customer": false, "is_supplier": true }),
+            ),
+        )
+        .await
+        .body["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let positions_uri = format!("{}/positions", stock_uri(company_id));
+        let position_of = |positions: &Value, product: &str| -> Value {
+            positions["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["product_id"] == product)
+                .unwrap()
+                .clone()
+        };
+
+        // Nothing is on hand before anything arrives.
+        let none = send(&app, get_request(&positions_uri, Some(&cookie))).await;
+        assert_eq!(position_of(&none.body, &targets.product)["quantity"], "0");
+
+        // A purchase of 12 coffees (96.70 after the discount) and 3 breads (9.99) is received whole.
+        let order = send(
+            &app,
+            json_request(
+                "POST",
+                &purchases_uri(company_id),
+                Some(&cookie),
+                purchase_body(&targets, &supplier, &category),
+            ),
+        )
+        .await;
+        let order_uri = format!(
+            "{}/{}",
+            purchases_uri(company_id),
+            order.body["id"].as_str().unwrap()
+        );
+        send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{order_uri}/approve"),
+                Some(&cookie),
+                Value::Null,
+            ),
+        )
+        .await;
+        let received = send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{order_uri}/receipts"),
+                Some(&cookie),
+                json!({
+                    "received_on": "2026-11-10",
+                    "items": [{ "line": 1, "quantity": "12" }, { "line": 2, "quantity": "3" }],
+                }),
+            ),
+        )
+        .await;
+        assert_eq!(received.status, StatusCode::CREATED, "{}", received.body);
+        let positions = send(&app, get_request(&positions_uri, Some(&cookie))).await;
+        let coffee = position_of(&positions.body, &targets.product);
+        assert_eq!(
+            (
+                &coffee["quantity"],
+                &coffee["value"],
+                &coffee["average_cost"]
+            ),
+            (&json!("12"), &json!("96.7"), &json!("8.058333"))
+        );
+
+        // A sale of 3 coffees and 1.5 breads, completed: the coffees leave at the average (96.70 x 3/12 = 24.175,
+        // which rounds up to 24.18) and the breads at theirs (4.995 -> 5).
+        let sale = send(
+            &app,
+            json_request(
+                "POST",
+                &sales_uri(company_id),
+                Some(&cookie),
+                sale_body(&targets, &category),
+            ),
+        )
+        .await;
+        let sale_uri = format!(
+            "{}/{}",
+            sales_uri(company_id),
+            sale.body["id"].as_str().unwrap()
+        );
+        let completed = send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{sale_uri}/complete"),
+                Some(&cookie),
+                Value::Null,
+            ),
+        )
+        .await;
+        assert_eq!(completed.status, StatusCode::OK, "{}", completed.body);
+        let positions = send(&app, get_request(&positions_uri, Some(&cookie))).await;
+        let coffee = position_of(&positions.body, &targets.product);
+        assert_eq!(
+            (&coffee["quantity"], &coffee["value"]),
+            (&json!("9"), &json!("72.52"))
+        );
+        let bread = position_of(&positions.body, &targets.other_product);
+        assert_eq!(
+            (&bread["quantity"], &bread["value"]),
+            (&json!("1.5"), &json!("4.99"))
+        );
+        // The ledger says what moved and why; what was before a day is what the position of that day says.
+        let ledger = send(
+            &app,
+            get_request(
+                &format!(
+                    "{}/movements?kind=out&product={}",
+                    stock_uri(company_id),
+                    targets.product
+                ),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(ledger.body["items"][0]["quantity"], "-3");
+        assert_eq!(ledger.body["items"][0]["value"], "-24.18");
+        assert_eq!(ledger.body["items"][0]["origin"]["kind"], "sale");
+        let before = send(
+            &app,
+            get_request(&format!("{positions_uri}?on=2026-11-09"), Some(&cookie)),
+        )
+        .await;
+        // The sale is dated the 6th and the goods came on the 10th: on the 9th the shelf was short by what it sold.
+        assert_eq!(
+            position_of(&before.body, &targets.product)["quantity"],
+            "-3"
+        );
+
+        // By hand: an exit beyond what there is is refused with a clear 409, an adjustment is valued at the
+        // average, and a movement is undone once.
+        let movements = format!("{}/movements", stock_uri(company_id));
+        let too_much = send(
+            &app,
+            json_request(
+                "POST",
+                &movements,
+                Some(&cookie),
+                json!({ "product_id": targets.product, "kind": "out", "quantity": "10",
+                        "occurred_on": "2026-11-11" }),
+            ),
+        )
+        .await;
+        assert_eq!(too_much.status, StatusCode::CONFLICT);
+        assert_eq!(
+            too_much.body["error"],
+            "not enough stock of Café: 9 on hand"
+        );
+        let found = send(
+            &app,
+            json_request(
+                "POST",
+                &movements,
+                Some(&cookie),
+                json!({ "product_id": targets.product, "kind": "adjustment", "quantity": "-1",
+                        "occurred_on": "2026-11-11", "note": "Quebrou" }),
+            ),
+        )
+        .await;
+        assert_eq!(found.status, StatusCode::CREATED, "{}", found.body);
+        let undo = format!("{movements}/{}/reverse", found.body["id"].as_str().unwrap());
+        let body = json!({ "occurred_on": "2026-11-12" });
+        let undone = send(
+            &app,
+            json_request("POST", &undo, Some(&cookie), body.clone()),
+        )
+        .await;
+        assert_eq!(undone.status, StatusCode::CREATED, "{}", undone.body);
+        assert_eq!(
+            send(
+                &app,
+                json_request("POST", &undo, Some(&cookie), body.clone())
+            )
+            .await
+            .status,
+            StatusCode::CONFLICT
+        );
+        // What a sale made is undone through the sale, a service has no stock, and bad input is a 422.
+        let sale_exit = ledger.body["items"][0]["id"].as_str().unwrap();
+        assert_eq!(
+            send(
+                &app,
+                json_request(
+                    "POST",
+                    &format!("{movements}/{sale_exit}/reverse"),
+                    Some(&cookie),
+                    body
+                )
+            )
+            .await
+            .status,
+            StatusCode::CONFLICT
+        );
+        for bad in [
+            json!({ "product_id": targets.product, "kind": "sideways", "quantity": "1", "occurred_on": "2026-11-11" }),
+            json!({ "product_id": targets.product, "kind": "in", "quantity": "1", "occurred_on": "2026-11-11" }),
+            json!({ "product_id": targets.product, "kind": "out", "quantity": "-1", "occurred_on": "2026-11-11" }),
+        ] {
+            assert_eq!(
+                send(&app, json_request("POST", &movements, Some(&cookie), bad))
+                    .await
+                    .status,
+                StatusCode::UNPROCESSABLE_ENTITY
+            );
+        }
+
+        // A cancelled sale gives its exits back.
+        send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{sale_uri}/cancel"),
+                Some(&cookie),
+                Value::Null,
+            ),
+        )
+        .await;
+        let positions = send(&app, get_request(&positions_uri, Some(&cookie))).await;
+        let coffee = position_of(&positions.body, &targets.product);
+        assert_eq!(
+            (&coffee["quantity"], &coffee["value"]),
+            (&json!("12"), &json!("96.7"))
+        );
+        assert_eq!(
+            send(
+                &app,
+                get_request(&format!("{movements}?kind=sideways"), Some(&cookie))
+            )
+            .await
+            .status,
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn stock_follows_the_purchases_role_and_stays_private_to_the_company() {
+        use conta_verde_domain::Role;
+
+        let (app, identities, _) = app_with_mailbox();
+        let (_, company_id) = sign_up(&app, "dona@example.com").await;
+        let movements = format!("{}/movements", stock_uri(company_id));
+        for (role, may_write) in [
+            (Role::Admin, true),
+            (Role::Stock, true),
+            (Role::Financial, false),
+            (Role::Sales, false),
+            (Role::Accountant, false),
+            (Role::Viewer, false),
+        ] {
+            let cookie = member_with_role(&app, &identities, company_id, role).await;
+            for uri in [&movements, &format!("{}/positions", stock_uri(company_id))] {
+                assert_eq!(
+                    send(&app, get_request(uri, Some(&cookie))).await.status,
+                    StatusCode::OK,
+                    "{role:?} reads"
+                );
+            }
+            let write = send(
+                &app,
+                json_request("POST", &movements, Some(&cookie), json!({})),
+            )
+            .await;
+            let expected = if may_write {
+                StatusCode::UNPROCESSABLE_ENTITY
+            } else {
+                StatusCode::FORBIDDEN
+            };
+            assert_eq!(write.status, expected, "{role:?} writes");
+        }
+        let (other, other_company) = sign_up(&app, "outra@example.com").await;
+        assert_eq!(
+            send(
+                &app,
+                get_request(
+                    &format!("{}/movements/{}", stock_uri(other_company), Uuid::new_v4()),
+                    Some(&other)
+                )
+            )
+            .await
+            .status,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            send(&app, get_request(&movements, Some(&other)))
+                .await
+                .status,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            send(&app, get_request(&movements, None)).await.status,
             StatusCode::UNAUTHORIZED
         );
     }

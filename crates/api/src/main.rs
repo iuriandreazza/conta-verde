@@ -6,7 +6,7 @@ use conta_verde_application::{
     CommissionService, ContractService, CostCenterService, FinancialEntryService, MemberService,
     PartyService, PaymentMethodService, PaymentTermService, PostalCodeService, PriceListService,
     ProductService, PurchaseService, QuoteService, ReconciliationService, RecurrenceService,
-    SaleService, SalesReportService, TransferService,
+    SaleService, SalesReportService, StockService, TransferService,
 };
 use conta_verde_application::{
     ChargeService, CollectionService, DunningService, EmailError, EmailMessage, EmailSender,
@@ -23,8 +23,8 @@ use conta_verde_infrastructure::{
     PostgresPaymentMethodRepository, PostgresPaymentTermRepository, PostgresPriceListRepository,
     PostgresProductRepository, PostgresPurchaseOrderRepository, PostgresQuoteRepository,
     PostgresRecurrenceRepository, PostgresSaleRepository, PostgresStatementLineRepository,
-    PostgresTransferRepository, RegisterDocumentReferences, RegisterReferences, SmtpEmailSender,
-    connect_and_migrate,
+    PostgresStockMovementRepository, PostgresTransferRepository, RegisterDocumentReferences,
+    RegisterReferences, SmtpEmailSender, connect_and_migrate,
 };
 use conta_verde_infrastructure::{
     AsaasProvider, NoMessageSender, PostgresDunningPlanRepository, PostgresNotificationRepository,
@@ -81,6 +81,7 @@ impl Ports for PostgresPorts {
     type Quotes = PostgresQuoteRepository;
     type Sales = PostgresSaleRepository;
     type Purchases = PostgresPurchaseOrderRepository;
+    type StockMovements = PostgresStockMovementRepository;
     type Contracts = PostgresContractRepository;
     type CommissionRules = PostgresCommissionRuleRepository;
     type Statements = PostgresStatementLineRepository;
@@ -241,6 +242,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         ),
     );
     let sales_reports = SalesReportService::new(PostgresSaleRepository::new(pool.clone()));
+    let stock_service = || {
+        StockService::new(
+            PostgresStockMovementRepository::new(pool.clone()),
+            PostgresProductRepository::new(pool.clone()),
+        )
+    };
     let sale_service = || {
         SaleService::new(
             PostgresSaleRepository::new(pool.clone()),
@@ -255,6 +262,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 PostgresProductRepository::new(pool.clone()),
                 PostgresPaymentTermRepository::new(pool.clone()),
             ),
+            stock_service(),
         )
     };
     let contract_service = || {
@@ -284,7 +292,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             PostgresProductRepository::new(pool.clone()),
             PostgresPaymentTermRepository::new(pool.clone()),
         ),
+        stock_service(),
     );
+    let stock = stock_service();
     let sales = sale_service();
     let contracts = contract_service();
     tokio::spawn(bill_contracts(contract_service()));
@@ -328,6 +338,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 quotes,
                 sales,
                 purchases,
+                stock,
                 contracts,
                 commissions,
                 reconciliation,
@@ -408,7 +419,7 @@ where
 
 /// The scheduled job of ADR 0040: once an hour, bills the cycles of the contracts that have fallen due. It is
 /// safe to repeat and to run in several instances, so a failed pass only waits for the next one.
-async fn bill_contracts<C, S, Q, E, F, R>(service: ContractService<C, S, Q, E, F, R>)
+async fn bill_contracts<C, S, Q, E, F, R, T>(service: ContractService<C, S, Q, E, F, R, T>)
 where
     C: conta_verde_application::ContractRepository,
     S: conta_verde_application::SaleRepository,
@@ -416,6 +427,7 @@ where
     E: conta_verde_application::FinancialEntryRepository,
     F: conta_verde_application::EntryReferences,
     R: conta_verde_application::DocumentReferences,
+    T: conta_verde_application::DocumentStock,
 {
     let mut tick = tokio::time::interval(JOB_INTERVAL);
     loop {

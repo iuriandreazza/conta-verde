@@ -18,8 +18,8 @@ use conta_verde_application::{
     ContractService, Conversion, Refund, SaleQuery, SaleRepository, SaleService,
 };
 use conta_verde_application::{
-    ContractQuery, DocumentReferences, EmailSender, NumberSort, QuotePage, QuoteQuery,
-    QuoteRepository, QuoteService,
+    ContractQuery, DocumentReferences, DocumentStock, EmailSender, NumberSort, QuotePage,
+    QuoteQuery, QuoteRepository, QuoteService,
 };
 use conta_verde_application::{
     DunningPlanRepository, DunningService, EmailMessage, InstallmentLinks, MessageSender,
@@ -33,6 +33,7 @@ use conta_verde_application::{PriceListQuery, PriceListRepository, PriceListServ
 use conta_verde_application::{
     PurchaseOrderPage, PurchaseOrderQuery, PurchaseOrderRepository, PurchaseService,
 };
+use conta_verde_application::{StockMovementQuery, StockMovementRepository, StockService};
 use conta_verde_domain::{
     Account, AccountDraft, Actor, AddressDraft, AuditAction, AuditEntity, AuditEntry, BankAccount,
     BankAccountDraft, BankAccountId, BankAccountKind, CashFlowGroup, Category, CategoryId,
@@ -8530,6 +8531,8 @@ pub struct SalesSeed {
     pub product: ProductId,
     pub other_product: ProductId,
     pub inactive_product: ProductId,
+    /// A service, which has no stock.
+    pub service: ProductId,
     pub term: PaymentTermId,
     pub inactive_term: PaymentTermId,
 }
@@ -8584,11 +8587,16 @@ where
         .await
         .unwrap();
     let mut saved = Vec::new();
-    for (name, active) in [("Café", true), ("Pão", true), ("Descontinuado", false)] {
+    for (name, active, kind) in [
+        ("Café", true, ProductKind::Product),
+        ("Pão", true, ProductKind::Product),
+        ("Descontinuado", false, ProductKind::Product),
+        ("Consultoria", true, ProductKind::Service),
+    ] {
         let product = Product::new(
             ProductId::generate(),
             company,
-            product_draft(name, ProductKind::Product, None, active),
+            product_draft(name, kind, None, active),
         )
         .unwrap();
         let entry = product_entry(
@@ -8616,6 +8624,7 @@ where
         product: saved[0],
         other_product: saved[1],
         inactive_product: saved[2],
+        service: saved[3],
         term: term.id(),
         inactive_term: retired.id(),
     }
@@ -9511,8 +9520,8 @@ pub async fn voids_entries<R, F>(
 /// a cancelled sale cancels its receivable unless money was settled on it. Everything it points at has to be
 /// usable and nothing of another company's shows.
 #[allow(clippy::too_many_arguments)]
-pub async fn runs_the_sale_lifecycle<S, Q, E, F, R, Q2, R2, Em, Se>(
-    sales: &SaleService<S, Q, E, F, R>,
+pub async fn runs_the_sale_lifecycle<S, Q, E, F, R, T, Q2, R2, Em, Se>(
+    sales: &SaleService<S, Q, E, F, R, T>,
     store: &S,
     quotes: &QuoteService<Q2, R2, Em, Se>,
     entries: &FinancialEntryService<E, F>,
@@ -9526,6 +9535,7 @@ pub async fn runs_the_sale_lifecycle<S, Q, E, F, R, Q2, R2, Em, Se>(
     E: FinancialEntryRepository,
     F: EntryReferences,
     R: DocumentReferences,
+    T: DocumentStock,
     Q2: QuoteRepository,
     R2: DocumentReferences,
     Em: EmailSender,
@@ -10090,8 +10100,8 @@ fn contract_draft(
 }
 
 /// What the sales of a contract are, by cycle day: `(day, total, completed)`.
-async fn billed_by<S, Q, E, F, R>(
-    sales: &SaleService<S, Q, E, F, R>,
+async fn billed_by<S, Q, E, F, R, T>(
+    sales: &SaleService<S, Q, E, F, R, T>,
     company: CompanyId,
     contract: conta_verde_domain::ContractId,
 ) -> Vec<(String, String, bool)>
@@ -10101,6 +10111,7 @@ where
     E: FinancialEntryRepository,
     F: EntryReferences,
     R: DocumentReferences,
+    T: DocumentStock,
 {
     let mut found: Vec<(String, String, bool)> = sales
         .list(
@@ -10141,9 +10152,9 @@ fn cycles(items: &[(&str, &str)]) -> Vec<(String, String, bool)> {
 /// whoever saved it. An adjustment changes the cycles that come after it, a termination ends it for good, and
 /// what it points at has to be usable. Nothing of another company's shows.
 #[allow(clippy::too_many_arguments)]
-pub async fn bills_contracts_every_cycle<C, S, Q, E, F, R>(
-    contracts: &ContractService<C, S, Q, E, F, R>,
-    sales: &SaleService<S, Q, E, F, R>,
+pub async fn bills_contracts_every_cycle<C, S, Q, E, F, R, T>(
+    contracts: &ContractService<C, S, Q, E, F, R, T>,
+    sales: &SaleService<S, Q, E, F, R, T>,
     company: CompanyId,
     other_company: CompanyId,
     entry_seed: &EntrySeed,
@@ -10155,6 +10166,7 @@ pub async fn bills_contracts_every_cycle<C, S, Q, E, F, R>(
     E: FinancialEntryRepository,
     F: EntryReferences,
     R: DocumentReferences,
+    T: DocumentStock,
 {
     let ana = actor();
     let day = |text: &str| CalendarDate::parse(text).unwrap();
@@ -10539,9 +10551,9 @@ fn rule_draft(
 /// line by line, net of what came back, by the narrowest rule in force on the day of each sale; a sale
 /// without a seller, an order and a cancelled sale earn nothing, and a rule that ends does not rewrite what it
 /// earned before. Nothing of another company's shows.
-pub async fn computes_commission_statements<CR, S2, R2, S, Q, E, F, R>(
+pub async fn computes_commission_statements<CR, S2, R2, S, Q, E, F, R, T>(
     commissions: &CommissionService<CR, S2, R2>,
-    sales: &SaleService<S, Q, E, F, R>,
+    sales: &SaleService<S, Q, E, F, R, T>,
     company: CompanyId,
     other_company: CompanyId,
     entry_seed: &EntrySeed,
@@ -10555,6 +10567,7 @@ pub async fn computes_commission_statements<CR, S2, R2, S, Q, E, F, R>(
     E: FinancialEntryRepository,
     F: EntryReferences,
     R: DocumentReferences,
+    T: DocumentStock,
 {
     let ana = actor();
     let day = |text: &str| CalendarDate::parse(text).unwrap();
@@ -12506,8 +12519,8 @@ fn purchase_numbers(orders: &PurchaseOrderPage) -> Vec<i64> {
 /// A purchase order from a draft to everything received: numbering, what it points at, listing, the life of
 /// the order, and the payable each receipt makes, valued cumulatively so partial receipts add up.
 #[allow(clippy::too_many_lines)]
-pub async fn runs_the_purchase_lifecycle<P, E, F, R>(
-    purchases: &PurchaseService<P, E, F, R>,
+pub async fn runs_the_purchase_lifecycle<P, E, F, R, T>(
+    purchases: &PurchaseService<P, E, F, R, T>,
     store: &P,
     entries: &FinancialEntryService<E, F>,
     company: CompanyId,
@@ -12519,6 +12532,7 @@ pub async fn runs_the_purchase_lifecycle<P, E, F, R>(
     E: FinancialEntryRepository,
     F: EntryReferences,
     R: DocumentReferences,
+    T: DocumentStock,
 {
     let ana = actor();
 
@@ -12975,4 +12989,519 @@ pub async fn runs_the_purchase_lifecycle<P, E, F, R>(
             .number(),
         1
     );
+}
+
+fn stock_draft(
+    product: ProductId,
+    kind: conta_verde_domain::StockMovementKind,
+    quantity: &str,
+    day: &str,
+) -> conta_verde_domain::StockMovementDraft {
+    conta_verde_domain::StockMovementDraft {
+        product_id: product,
+        kind,
+        quantity: quantity.into(),
+        value: None,
+        unit_cost: None,
+        occurred_on: day.into(),
+        note: None,
+    }
+}
+
+/// What the ledger of a company holds, by hand: the worked example of the average cost, the floor of a manual
+/// exit, reversals, listing, and two writes racing for the same stock.
+#[allow(clippy::too_many_lines)]
+pub async fn runs_the_stock_ledger<M, P>(
+    stock: &StockService<M, P>,
+    company: CompanyId,
+    other_company: CompanyId,
+    seed: &SalesSeed,
+) where
+    M: StockMovementRepository,
+    P: ProductRepository,
+{
+    use conta_verde_domain::StockMovementKind::{Adjustment, In, Out};
+    let ana = actor();
+    let coffee = seed.product;
+    let state = |balance: conta_verde_domain::StockBalance| {
+        (
+            balance.quantity().to_string(),
+            balance.value().to_string(),
+            balance.average_cost().map(|cost| cost.to_string()),
+        )
+    };
+    let bought = |quantity: &str, unit_cost: &str, day: &str| {
+        let mut draft = stock_draft(coffee, In, quantity, day);
+        draft.unit_cost = Some(unit_cost.into());
+        draft
+    };
+
+    // The worked example: 10 bought at 5 and 10 at 7 are 20 worth 120, average 6.
+    let first = stock
+        .record(company, &ana, bought("10", "5", "2026-11-01"))
+        .await
+        .unwrap();
+    assert_eq!(first.value().to_string(), "50");
+    stock
+        .record(company, &ana, bought("10", "7", "2026-11-06"))
+        .await
+        .unwrap();
+    assert_eq!(
+        state(stock.balance_of(company, coffee).await.unwrap()),
+        ("20".into(), "120".into(), Some("6".into()))
+    );
+    // Selling 5 takes them at the average, 30; the average stays 6.
+    let five = stock
+        .record(company, &ana, stock_draft(coffee, Out, "5", "2026-11-06"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (five.quantity().to_string(), five.value().to_string()),
+        ("-5".into(), "-30".into())
+    );
+    assert_eq!(
+        state(stock.balance_of(company, coffee).await.unwrap()),
+        ("15".into(), "90".into(), Some("6".into()))
+    );
+
+    // A manual exit never takes more than there is, and what is refused leaves nothing.
+    let before = stock
+        .list(company, &StockMovementQuery::default(), None, None)
+        .await
+        .unwrap()
+        .items
+        .len();
+    assert_eq!(
+        stock
+            .record(
+                company,
+                &ana,
+                stock_draft(coffee, Out, "15.001", "2026-11-06")
+            )
+            .await
+            .unwrap_err(),
+        ApplicationError::StockInsufficient {
+            product: "Café".into(),
+            available: "15".into()
+        }
+    );
+    assert_eq!(
+        stock
+            .record(
+                company,
+                &ana,
+                stock_draft(coffee, Adjustment, "-16", "2026-11-06")
+            )
+            .await
+            .unwrap_err(),
+        ApplicationError::StockInsufficient {
+            product: "Café".into(),
+            available: "15".into()
+        }
+    );
+    assert_eq!(
+        stock
+            .list(company, &StockMovementQuery::default(), None, None)
+            .await
+            .unwrap()
+            .items
+            .len(),
+        before
+    );
+    // What cannot be stocked or written is refused.
+    assert_eq!(
+        stock
+            .record(
+                company,
+                &ana,
+                stock_draft(seed.service, In, "1", "2026-11-06")
+            )
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::NotStocked)
+    );
+    assert_eq!(
+        stock
+            .record(
+                company,
+                &ana,
+                stock_draft(ProductId::generate(), Out, "1", "2026-11-06")
+            )
+            .await
+            .unwrap_err(),
+        ApplicationError::ProductNotFound
+    );
+    assert_eq!(
+        stock
+            .record(
+                other_company,
+                &ana,
+                stock_draft(coffee, Out, "1", "2026-11-06")
+            )
+            .await
+            .unwrap_err(),
+        ApplicationError::ProductNotFound
+    );
+    assert_eq!(
+        stock
+            .record(company, &ana, stock_draft(coffee, In, "1", "2026-11-06"))
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::StockCostRequired)
+    );
+
+    // An adjustment up is worth the average; one down takes at the average.
+    let up = stock
+        .record(
+            company,
+            &ana,
+            stock_draft(coffee, Adjustment, "3", "2026-11-07"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(up.value().to_string(), "18");
+    let down = stock
+        .record(
+            company,
+            &ana,
+            stock_draft(coffee, Adjustment, "-3", "2026-11-07"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(down.value().to_string(), "-18");
+
+    // Undone by a movement of the opposite quantity and value, once; a reversal is not undone.
+    let undone = stock
+        .reverse(
+            company,
+            &ana,
+            five.id(),
+            "2026-11-08",
+            Some("Engano".into()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            undone.kind(),
+            undone.quantity().to_string(),
+            undone.value().to_string()
+        ),
+        (In, "5".into(), "30".into())
+    );
+    assert_eq!(undone.reverses(), Some(five.id()));
+    assert_eq!(
+        state(stock.balance_of(company, coffee).await.unwrap()),
+        ("20".into(), "120".into(), Some("6".into()))
+    );
+    assert_eq!(
+        stock
+            .reverse(company, &ana, five.id(), "2026-11-08", None)
+            .await
+            .unwrap_err(),
+        ApplicationError::Repository(RepositoryError::DuplicateReversal)
+    );
+    assert_eq!(
+        stock
+            .reverse(company, &ana, undone.id(), "2026-11-08", None)
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::StockMovementIsAReversal)
+    );
+    assert_eq!(
+        stock
+            .reverse(other_company, &ana, first.id(), "2026-11-08", None)
+            .await
+            .unwrap_err(),
+        ApplicationError::StockMovementNotFound
+    );
+    // An `in` whose goods are gone is not undone.
+    stock
+        .record(company, &ana, stock_draft(coffee, Out, "20", "2026-11-09"))
+        .await
+        .unwrap();
+    assert_eq!(
+        stock
+            .reverse(company, &ana, first.id(), "2026-11-09", None)
+            .await
+            .unwrap_err(),
+        ApplicationError::StockInsufficient {
+            product: "Café".into(),
+            available: "0".into()
+        }
+    );
+    assert_eq!(
+        state(stock.balance_of(company, coffee).await.unwrap()),
+        ("0".into(), "0".into(), None)
+    );
+
+    // The ledger is listed newest day first, narrowed and paged; nothing of another company's shows.
+    let all = stock
+        .list(company, &StockMovementQuery::default(), None, None)
+        .await
+        .unwrap();
+    let days: Vec<String> = all
+        .items
+        .iter()
+        .map(|movement| movement.occurred_on().to_string())
+        .collect();
+    let mut newest_first = days.clone();
+    newest_first.sort();
+    newest_first.reverse();
+    assert_eq!(days, newest_first);
+    let page = stock
+        .list(company, &StockMovementQuery::default(), None, Some(3))
+        .await
+        .unwrap();
+    assert_eq!(page.items.len(), 3);
+    let rest = stock
+        .list(
+            company,
+            &StockMovementQuery::default(),
+            page.next.as_ref(),
+            Some(200),
+        )
+        .await
+        .unwrap();
+    assert_eq!(page.items.len() + rest.items.len(), all.items.len());
+    assert!(rest.next.is_none());
+    let day = |text: &str| CalendarDate::parse(text).unwrap();
+    for (query, expected) in [
+        (
+            StockMovementQuery::default().of_product(coffee),
+            all.items.len(),
+        ),
+        (
+            StockMovementQuery::default().of_product(seed.other_product),
+            0,
+        ),
+        (StockMovementQuery::default().of_kind(In), 3),
+        (StockMovementQuery::default().from(day("2026-11-08")), 2),
+        (StockMovementQuery::default().to(day("2026-11-01")), 1),
+        (
+            StockMovementQuery::default()
+                .from(day("2026-11-06"))
+                .to(day("2026-11-06")),
+            2,
+        ),
+    ] {
+        let found = stock.list(company, &query, None, Some(200)).await.unwrap();
+        assert_eq!(found.items.len(), expected, "{query:?}");
+    }
+    assert!(
+        stock
+            .list(other_company, &StockMovementQuery::default(), None, None)
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
+
+    // What each product had on a day, and what has stock at all: services are left out.
+    let positions = stock
+        .positions(
+            company,
+            ProductQuery::default(),
+            None,
+            None,
+            Some(day("2026-11-03")),
+        )
+        .await
+        .unwrap();
+    let names: Vec<&str> = positions.items.iter().map(|p| p.product.name()).collect();
+    assert_eq!(names, ["Café", "Descontinuado", "Pão"]);
+    assert_eq!(
+        state(positions.items[0].balance),
+        ("10".into(), "50".into(), Some("5".into()))
+    );
+    assert_eq!(
+        state(positions.items[2].balance),
+        ("0".into(), "0".into(), None)
+    );
+
+    // Two writes for the same stock at once: one lands, the other is valued again against what is left and
+    // refused.
+    stock
+        .record(company, &ana, bought("20", "5", "2026-11-10"))
+        .await
+        .unwrap();
+    let (a, b) = tokio::join!(
+        stock.record(company, &ana, stock_draft(coffee, Out, "12", "2026-11-10")),
+        stock.record(company, &ana, stock_draft(coffee, Out, "12", "2026-11-10"))
+    );
+    assert_eq!(u8::from(a.is_ok()) + u8::from(b.is_ok()), 1, "{a:?} {b:?}");
+    assert_eq!(
+        state(stock.balance_of(company, coffee).await.unwrap()),
+        ("8".into(), "40".into(), Some("5".into()))
+    );
+}
+
+/// The exit criterion of Phase 5 for stock: goods received enter at their cost, a sale takes them at the average
+/// cost (worked out below), a return puts back what the sale took, and cancelling a sale undoes its exits; each
+/// step is written once however often it is asked for.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub async fn stock_follows_purchases_and_sales<P, E, F, R, T, S, Q, M, Pr>(
+    purchases: &PurchaseService<P, E, F, R, T>,
+    sales: &SaleService<S, Q, E, F, R, T>,
+    stock: &StockService<M, Pr>,
+    company: CompanyId,
+    entry_seed: &EntrySeed,
+    seed: &SalesSeed,
+) where
+    P: PurchaseOrderRepository,
+    E: FinancialEntryRepository,
+    F: EntryReferences,
+    R: DocumentReferences,
+    T: DocumentStock,
+    S: SaleRepository,
+    Q: QuoteRepository,
+    M: StockMovementRepository,
+    Pr: ProductRepository,
+{
+    let ana = actor();
+    let state = |balance: conta_verde_domain::StockBalance| {
+        (
+            balance.quantity().to_string(),
+            balance.value().to_string(),
+            balance.average_cost().map(|cost| cost.to_string()),
+        )
+    };
+    let coffee = || async { stock.balance_of(company, seed.product).await.unwrap() };
+    let bread = || async { stock.balance_of(company, seed.other_product).await.unwrap() };
+
+    // 10 coffees at 5 (50) and 3 breads at 3.33 (9.99) are received.
+    let mut order = purchase_draft(entry_seed, seed);
+    order.lines = vec![
+        sale_line(seed.product, "Café 500g", "10", "5", "0"),
+        sale_line(seed.other_product, "Pão francês", "3", "3.33", "0"),
+    ];
+    let order = purchases.register(company, &ana, order).await.unwrap();
+    purchases.approve(company, &ana, order.id()).await.unwrap();
+    let received = purchases
+        .receive(
+            company,
+            &ana,
+            order.id(),
+            receipt_draft("2026-11-02", &[(1, "10"), (2, "3")]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        state(coffee().await),
+        ("10".into(), "50".into(), Some("5".into()))
+    );
+    assert_eq!(
+        state(bread().await),
+        ("3".into(), "9.99".into(), Some("3.33".into()))
+    );
+    // Finishing the receipt again enters nothing twice.
+    purchases
+        .finish_receipt(company, &ana, order.id(), received.receipt.id())
+        .await
+        .unwrap();
+    assert_eq!(state(coffee().await).0, "10");
+
+    // 10 more coffees at 7 (70): 20 worth 120, average 6.
+    let mut more = purchase_draft(entry_seed, seed);
+    more.lines = vec![sale_line(seed.product, "Café 500g", "10", "7", "0")];
+    let more = purchases.register(company, &ana, more).await.unwrap();
+    purchases.approve(company, &ana, more.id()).await.unwrap();
+    purchases
+        .receive(
+            company,
+            &ana,
+            more.id(),
+            receipt_draft("2026-11-03", &[(1, "10")]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        state(coffee().await),
+        ("20".into(), "120".into(), Some("6".into()))
+    );
+
+    // A sale of 3 coffees and 1.5 breads, completed: the coffees leave at the average (120 x 3/20 = 18) and the
+    // breads at theirs (9.99 x 1.5/3 = 4.995, which rounds up to 5). Completing again takes nothing twice.
+    let sale = sales
+        .register(company, &ana, sale_draft(entry_seed, seed))
+        .await
+        .unwrap();
+    for _ in 0..2 {
+        sales.complete(company, &ana, sale.id()).await.unwrap();
+    }
+    assert_eq!(
+        state(coffee().await),
+        ("17".into(), "102".into(), Some("6".into()))
+    );
+    assert_eq!(
+        state(bread().await),
+        ("1.5".into(), "4.99".into(), Some("3.326667".into()))
+    );
+    let exits = stock
+        .list(
+            company,
+            &StockMovementQuery::default().of_kind(conta_verde_domain::StockMovementKind::Out),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(exits.items.len(), 2);
+    assert!(
+        exits
+            .items
+            .iter()
+            .all(|movement| movement.occurred_on().to_string() == "2026-11-06")
+    );
+
+    // A return of 1 coffee puts back 1/3 of what the sale took (18 / 3 = 6); the next, of 2, the rest (12).
+    let refund = Refund {
+        category_id: entry_seed.category,
+        due_on: "2026-11-20".into(),
+    };
+    sales
+        .register_return(
+            company,
+            &ana,
+            sale.id(),
+            return_draft(&[(1, "1")]),
+            refund.clone(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        state(coffee().await),
+        ("18".into(), "108".into(), Some("6".into()))
+    );
+    sales
+        .register_return(company, &ana, sale.id(), return_draft(&[(1, "2")]), refund)
+        .await
+        .unwrap();
+    assert_eq!(
+        state(coffee().await),
+        ("20".into(), "120".into(), Some("6".into()))
+    );
+
+    // Another sale, cancelled: its exits are undone and the stock is as it was; asking again changes nothing.
+    let other = sales
+        .register(company, &ana, sale_draft(entry_seed, seed))
+        .await
+        .unwrap();
+    sales.complete(company, &ana, other.id()).await.unwrap();
+    assert_eq!(state(coffee().await).0, "17");
+    sales.cancel(company, &ana, other.id()).await.unwrap();
+    assert_eq!(
+        state(coffee().await),
+        ("20".into(), "120".into(), Some("6".into()))
+    );
+    assert_eq!(state(bread().await).0, "1.5");
+    // A sale of a service moves nothing.
+    let mut consulting = sale_draft(entry_seed, seed);
+    consulting.lines = vec![sale_line(seed.service, "Consultoria", "1", "100", "0")];
+    let consulting = sales.register(company, &ana, consulting).await.unwrap();
+    sales
+        .complete(company, &ana, consulting.id())
+        .await
+        .unwrap();
+    assert_eq!(state(coffee().await).0, "20");
 }

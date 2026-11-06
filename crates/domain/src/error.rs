@@ -115,6 +115,11 @@ pub enum DomainError {
     ReceiptLineUnknown,
     InvalidReceiptQuantity,
     ReceiptExceedsOrdered,
+    InvalidStockQuantity,
+    StockCostRequired,
+    StockCostNotAllowed,
+    StockMovementIsAReversal,
+    NotStocked,
 }
 
 impl fmt::Display for DomainError {
@@ -346,6 +351,19 @@ impl fmt::Display for DomainError {
             Self::InvalidReceiptQuantity => f.write_str(
                 "a received quantity must be more than 0, with at most 3 decimals, written like 1.5",
             ),
+            Self::InvalidStockQuantity => f.write_str(
+                "a quantity of stock must be more than 0 (an adjustment may be negative), with at most 3 decimals, written like 1.5",
+            ),
+            Self::StockCostRequired => f.write_str(
+                "stock that comes in needs its cost: the total in cents, or the cost of a unit, not both",
+            ),
+            Self::StockCostNotAllowed => f.write_str(
+                "only stock that comes in is given a cost: the rest is valued at the average cost",
+            ),
+            Self::StockMovementIsAReversal => {
+                f.write_str("a movement that undoes another is not itself undone")
+            }
+            Self::NotStocked => f.write_str("a service has no stock"),
             Self::ReceiptExceedsOrdered => {
                 f.write_str("a receipt cannot be of more than was ordered and not received yet")
             }

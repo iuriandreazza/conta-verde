@@ -46,5 +46,6 @@ uuid_id!(SaleId);
 uuid_id!(SaleReturnId);
 uuid_id!(SettlementId);
 uuid_id!(StatementLineId);
+uuid_id!(StockMovementId);
 uuid_id!(TransferId);
 uuid_id!(UserId);

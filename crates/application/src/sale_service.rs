@@ -8,7 +8,7 @@ use conta_verde_domain::{
 use crate::audit::audit_entry;
 use crate::list_query::{clamp_limit, split_page};
 use crate::{
-    ApplicationError, DocumentReferences, EntryReferences, FinancialEntryRepository,
+    ApplicationError, DocumentReferences, DocumentStock, EntryReferences, FinancialEntryRepository,
     FinancialEntryService, LinkChange, NumberCursor, QuoteRepository, RepositoryError, SaleQuery,
     SaleRepository,
 };
@@ -49,21 +49,23 @@ pub struct ReturnRecord {
 
 /// Orders and sales of a company ([ADR 0039]): their life, the receivable a completed one makes, and what
 /// comes back.
-pub struct SaleService<S, Q, E, F, R> {
+pub struct SaleService<S, Q, E, F, R, T> {
     sales: S,
     quotes: Q,
     entries: FinancialEntryService<E, F>,
     entry_references: F,
     references: R,
+    stock: T,
 }
 
-impl<S, Q, E, F, R> SaleService<S, Q, E, F, R>
+impl<S, Q, E, F, R, T> SaleService<S, Q, E, F, R, T>
 where
     S: SaleRepository,
     Q: QuoteRepository,
     E: FinancialEntryRepository,
     F: EntryReferences,
     R: DocumentReferences,
+    T: DocumentStock,
 {
     /// The receivable is made through `entries`; `entry_references` is asked about the category and the cost
     /// center when the sale is written, so a mistake is refused when it is made and not when it is billed.
@@ -73,6 +75,7 @@ where
         entries: FinancialEntryService<E, F>,
         entry_references: F,
         references: R,
+        stock: T,
     ) -> Self {
         Self {
             sales,
@@ -80,6 +83,7 @@ where
             entries,
             entry_references,
             references,
+            stock,
         }
     }
 
@@ -278,27 +282,35 @@ where
             .entries
             .made_by(company_id, EntryOrigin::Sale(id))
             .await?
-            .is_some()
+            .is_none()
         {
-            return Ok(stored);
-        }
-        let receivable = self.receivable_of(&stored).await?;
-        match self
-            .entries
-            .register_with_origin(company_id, actor, receivable, EntryOrigin::Sale(id))
-            .await
-        {
-            Ok(entry) => {
-                // Cancelled between the status and the entry: the receivable is not left alive.
-                if self.find(company_id, id).await?.status() == SaleStatus::Cancelled {
-                    self.entries.void(company_id, actor, entry.id()).await?;
-                    return Err(DomainError::SaleIsLocked.into());
+            let receivable = self.receivable_of(&stored).await?;
+            match self
+                .entries
+                .register_with_origin(company_id, actor, receivable, EntryOrigin::Sale(id))
+                .await
+            {
+                Ok(entry) => {
+                    // Cancelled between the status and the entry: the receivable is not left alive.
+                    if self.find(company_id, id).await?.status() == SaleStatus::Cancelled {
+                        self.entries.void(company_id, actor, entry.id()).await?;
+                        return Err(DomainError::SaleIsLocked.into());
+                    }
                 }
-                Ok(stored)
+                Err(ApplicationError::Repository(RepositoryError::DuplicateOrigin)) => {}
+                Err(error) => return Err(error),
             }
-            Err(ApplicationError::Repository(RepositoryError::DuplicateOrigin)) => Ok(stored),
-            Err(error) => Err(error),
         }
+        // The exits are made once, however often this is asked, and last: a sale cancelled while they were
+        // being made has them undone at once.
+        self.stock.take_for_sale(company_id, actor, &stored).await?;
+        if self.find(company_id, id).await?.status() == SaleStatus::Cancelled {
+            self.stock
+                .put_back_cancelled_sale(company_id, actor, id)
+                .await?;
+            return Err(DomainError::SaleIsLocked.into());
+        }
+        Ok(stored)
     }
 
     async fn receivable_of(&self, sale: &Sale) -> Result<FinancialEntryDraft, ApplicationError> {
@@ -344,6 +356,9 @@ where
                         other => other,
                     })?;
             }
+            self.stock
+                .put_back_cancelled_sale(company_id, actor, id)
+                .await?;
         }
         let audit = audit_entry(
             &after,
@@ -403,6 +418,11 @@ where
                 payable,
                 EntryOrigin::SaleReturn(sale_return.id()),
             )
+            .await
+            .ok();
+        // Like the refund, a failure here leaves the return stored: the stock is put right by hand.
+        self.stock
+            .put_back_return(company_id, actor, &sale, &sale_return, &before)
             .await
             .ok();
         Ok(ReturnRecord {

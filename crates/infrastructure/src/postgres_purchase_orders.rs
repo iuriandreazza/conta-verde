@@ -512,7 +512,10 @@ fn order_from_row(
 mod tests {
     use conta_verde_application::{FinancialEntryService, PurchaseService};
 
+    use conta_verde_application::StockService;
+
     use super::*;
+    use crate::PostgresStockMovementRepository;
     use crate::{
         PostgresBankAccountRepository, PostgresCategoryRepository, PostgresCostCenterRepository,
         PostgresFinancialEntryRepository, PostgresPartyRepository, PostgresPaymentMethodRepository,
@@ -583,6 +586,10 @@ mod tests {
             ),
             references(&pool),
             document_references(&pool),
+            StockService::new(
+                PostgresStockMovementRepository::new(pool.clone()),
+                PostgresProductRepository::new(pool.clone()),
+            ),
         );
         let entries = FinancialEntryService::new(
             PostgresFinancialEntryRepository::new(pool.clone()),

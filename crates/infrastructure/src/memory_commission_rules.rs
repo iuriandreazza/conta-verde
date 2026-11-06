@@ -101,7 +101,10 @@ impl CommissionRuleRepository for InMemoryCommissionRuleRepository {
 mod tests {
     use conta_verde_application::{CommissionService, FinancialEntryService, SaleService};
 
+    use conta_verde_application::StockService;
+
     use super::*;
+    use crate::InMemoryStockMovementRepository;
     use crate::memory_entries::tests::Registers;
     use crate::{
         InMemoryFinancialEntryRepository, InMemoryPaymentTermRepository, InMemoryProductRepository,
@@ -136,6 +139,7 @@ mod tests {
             ),
             registers.references(),
             references(),
+            StockService::new(InMemoryStockMovementRepository::default(), products.clone()),
         );
         let commissions = CommissionService::new(
             InMemoryCommissionRuleRepository::default(),

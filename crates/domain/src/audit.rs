@@ -5,7 +5,7 @@ use crate::{
     AccountOpening, Attachment, BankAccount, Category, Charge, CollectionSettings, CommissionRule,
     CompanyId, Contract, CostCenter, DocumentCheck, DunningPlan, FinancialEntry, LineMatch, Party,
     PaymentMethod, PaymentTerm, PriceList, Product, PurchaseOrder, PurchaseReceipt, Quote,
-    Recurrence, Sale, SaleReturn, Settlement, StatementLine, Tag, Transfer, UserId,
+    Recurrence, Sale, SaleReturn, Settlement, StatementLine, StockMovement, Tag, Transfer, UserId,
 };
 
 /// Who made a change. The name is a snapshot: history must keep reading the same after the user is
@@ -46,6 +46,7 @@ pub enum AuditEntity {
     CommissionRule,
     PurchaseOrder,
     PurchaseReceipt,
+    StockMovement,
 }
 
 impl AuditEntity {
@@ -73,6 +74,7 @@ impl AuditEntity {
             Self::CommissionRule => "commission_rule",
             Self::PurchaseOrder => "purchase_order",
             Self::PurchaseReceipt => "purchase_receipt",
+            Self::StockMovement => "stock_movement",
             Self::Settlement => "settlement",
             Self::Transfer => "transfer",
             Self::AccountOpening => "account_opening",
@@ -329,6 +331,20 @@ impl Audited for PurchaseOrder {
 impl Audited for PurchaseReceipt {
     fn audit_entity(&self) -> AuditEntity {
         AuditEntity::PurchaseReceipt
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.id().as_uuid()
+    }
+}
+
+impl Audited for StockMovement {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::StockMovement
     }
 
     fn audit_company(&self) -> CompanyId {
@@ -920,6 +936,31 @@ pub fn purchase_receipt_creation_changes(receipt: &PurchaseReceipt) -> Vec<Field
                     .join(","),
             ),
         ),
+    ])
+}
+
+/// Every field a new movement has set.
+pub fn stock_movement_creation_changes(movement: &StockMovement) -> Vec<FieldChange> {
+    creation_from(vec![
+        (
+            "product_id",
+            Some(movement.product_id().as_uuid().to_string()),
+        ),
+        ("kind", Some(movement.kind().as_str().to_owned())),
+        ("quantity", Some(movement.quantity().to_string())),
+        ("value", Some(movement.value().to_string())),
+        ("occurred_on", Some(movement.occurred_on().to_string())),
+        (
+            "origin",
+            movement
+                .origin()
+                .map(|origin| format!("{}:{}:{}", origin.kind.as_str(), origin.id, origin.line)),
+        ),
+        (
+            "reverses",
+            movement.reverses().map(|id| id.as_uuid().to_string()),
+        ),
+        ("note", movement.note().map(str::to_owned)),
     ])
 }
 
