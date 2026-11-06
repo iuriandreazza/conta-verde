@@ -50,7 +50,7 @@ CREATE TABLE charges (
     ),
     CONSTRAINT charges_pix_payload_valid CHECK (
         pix_payload IS NULL
-        OR (char_length(pix_payload) <= 1000 AND pix_payload ~ '^[!-~]+$')
+        OR (char_length(pix_payload) <= 1000 AND pix_payload ~ '^[ -~]+$')
     ),
     CONSTRAINT charges_payment_url_valid CHECK (
         payment_url IS NULL

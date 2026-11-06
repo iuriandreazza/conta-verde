@@ -11045,7 +11045,7 @@ pub async fn issues_and_cancels_charges<C, E, P, F>(
     assert_eq!(trail[0].entry.action, AuditAction::Created);
     assert_eq!(trail[0].entry.entity, AuditEntity::Charge);
 
-    // One open charge per installment: the second is refused and the provider is told to drop it.
+    // One open charge per installment: the second is refused before the provider is asked.
     assert_eq!(
         service
             .issue(company, &ana, entry.id(), 1, ChargeMethod::Boleto, None)
@@ -11053,9 +11053,8 @@ pub async fn issues_and_cancels_charges<C, E, P, F>(
             .unwrap_err(),
         ApplicationError::Repository(RepositoryError::ChargeAlreadyOpen)
     );
-    assert_eq!(provider.created().len(), 2);
-    assert_eq!(provider.cancelled().len(), 1);
-    assert_ne!(provider.cancelled()[0], pix.external_id());
+    assert_eq!(provider.created().len(), 1, "the provider is not asked");
+    assert!(provider.cancelled().is_empty());
     assert_eq!(
         service.list(company, entry.id()).await.unwrap(),
         vec![pix.clone()]
@@ -11122,7 +11121,7 @@ pub async fn issues_and_cancels_charges<C, E, P, F>(
     assert!(card.payment().payment_url.is_some());
     assert_eq!(
         service.list(company, entry.id()).await.unwrap(),
-        vec![cancelled, boleto, card.clone()],
+        vec![cancelled, boleto.clone(), card.clone()],
         "in the order they were issued"
     );
     service
@@ -11175,6 +11174,10 @@ pub async fn issues_and_cancels_charges<C, E, P, F>(
     assert_eq!(provider.created().len(), asked);
 
     // A provider that fails leaves nothing behind, and says why.
+    service
+        .cancel(company, &ana, entry.id(), boleto.id())
+        .await
+        .unwrap();
     provider.failing_with(ProviderError::Unavailable("timeout".into()));
     assert_eq!(
         service

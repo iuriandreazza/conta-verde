@@ -162,5 +162,6 @@ it("copies the Pix text", async () => {
 
   await userEvent.click(await panel.findByRole("button", { name: "Copiar o código Pix" }));
   expect(writeText).toHaveBeenCalledWith("00020126580014br.gov.bcb.pix");
-  expect(await panel.findByRole("button", { name: "Copiar o código Pix" })).toHaveTextContent("Copiado");
+  expect(await panel.findByText("Copiado.")).toBeInTheDocument();
+  expect(panel.getByText(/Provedor de teste/)).toBeInTheDocument();
 });

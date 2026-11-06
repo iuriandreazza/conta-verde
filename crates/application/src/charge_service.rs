@@ -1,7 +1,7 @@
 use conta_verde_domain::{
     Actor, Amount, AuditAction, AuditRecord, CalendarDate, Charge, ChargeDraft, ChargeId,
-    ChargeMethod, CompanyId, Decimal, EntryId, EntryKind, FinancialEntry, charge_changes,
-    charge_creation_changes, settled_of,
+    ChargeMethod, ChargeStatus, CompanyId, Decimal, DomainError, EntryId, EntryKind,
+    FinancialEntry, charge_changes, charge_creation_changes, settled_of,
 };
 
 use crate::audit::audit_entry;
@@ -75,6 +75,19 @@ where
             .find(company_id, party_id)
             .await?
             .ok_or(ApplicationError::PartyNotFound)?;
+        // Asked before the provider, which a double click would otherwise make a boleto for nothing; the
+        // store's unique index is what holds when two requests are at it at the same time.
+        if self
+            .charges
+            .list_by_entry(company_id, entry_id)
+            .await?
+            .iter()
+            .any(|charge| {
+                charge.installment() == installment && charge.status() == ChargeStatus::Open
+            })
+        {
+            return Err(RepositoryError::ChargeAlreadyOpen.into());
+        }
         let due_on = due_on.unwrap_or_else(|| item.due_date());
         let charge_id = ChargeId::generate();
         let made = self
@@ -162,15 +175,27 @@ where
             AuditAction::Updated,
             charge_changes(&stored, &after),
         );
-        self.charges
+        let recorded = self
+            .charges
             .cancel(&after, &audit)
             .await
             .map_err(|error| match error {
-                // It was paid or called off between the read and the write.
                 RepositoryError::NotFound => ApplicationError::ChargeNotFound,
                 other => other.into(),
-            })?;
-        Ok(after)
+            });
+        match recorded {
+            Ok(()) => Ok(after),
+            // Another request got there first: if it called the charge off too, that is the answer.
+            Err(ApplicationError::ChargeNotFound) => {
+                let now = self.get(company_id, entry_id, id).await?;
+                if now.status() == ChargeStatus::Cancelled {
+                    Ok(now)
+                } else {
+                    Err(DomainError::ChargeIsNotOpen.into())
+                }
+            }
+            Err(other) => Err(other),
+        }
     }
 
     pub async fn get(

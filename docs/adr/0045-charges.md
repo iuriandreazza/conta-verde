@@ -49,9 +49,9 @@ due day, the provider's key and id, the payment details and **who issued it** (a
 settlement made from it later is made in their name, ADR 0044).
 
 Rules of one row, in the domain and as `CHECK`s: the amount is above 0 and in cents; the provider key is
-`[a-z][a-z0-9_]{0,31}`; the provider's id is a trimmed line without control characters; **each method has the
+`[a-z][a-z0-9_]{0,31}`; the provider's id is a trimmed line without control characters or exotic spaces; **each method has the
 details it needs and nothing of another's** (a boleto a digitable line of digits, spaces and dots; a Pix a text
-of printable characters without spaces; a card link an `https://` address without spaces). The address is
+of printable ASCII (a merchant name in a Pix code has spaces); a card link an `https://` address without spaces). The address is
 https only, so a page cannot be given a `javascript:` link by a provider.
 
 Rules that span rows: **an installment has at most one open charge** (a unique partial index, and the adapter
@@ -65,7 +65,8 @@ a receivable, has no customer, or is cancelled (`422`/`409`); an installment the
 reference that is not there); an installment with nothing left (`422`). The charge is for **what is left of the
 installment**: its amount less what the settlements that are not reversed settled (ADR 0030). It falls due on
 the installment's due date unless the person gives another day (a boleto cannot be issued for a day in the past
-at most providers, and the server reads no clock, so the person chooses the day). The provider is asked, the
+at most providers, and the server reads no clock, so the person chooses the day). An installment that already has an open charge is refused before the provider is asked (a double click
+would otherwise make a boleto for nothing); the unique index still holds when two requests race. The provider is asked, the
 answer is checked by the domain (an answer that is not a charge is a `Rejected`), the charge is stored with its
 audit entry in one transaction, and **if storing fails the provider's charge is called off** (best effort,
 logged), so nothing is left that could be paid without us knowing.
@@ -77,7 +78,7 @@ edited meanwhile: the person cancels it, and the webhook (next slice) refuses to
 
 `cancel` calls the charge off **at the provider first** and then records it; with another provider configured
 than the one that made it (or none) it is refused, since the boleto would stay payable. Cancelling a charge that
-is not open is `409`.
+is not open is `409`; two cancels at once both succeed from the caller's view (the second finds it cancelled).
 
 ### Routes and roles
 

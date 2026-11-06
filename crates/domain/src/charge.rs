@@ -73,7 +73,7 @@ impl ChargeStatus {
 pub struct ChargePayment {
     /// The boleto's line, to type in an app.
     pub digitable_line: Option<String>,
-    /// The Pix copy-and-paste text.
+    /// The Pix copy-and-paste text: printable ASCII, spaces included (a merchant name has them).
     pub pix_payload: Option<String>,
     /// The provider's page: the boleto's paper, or the card checkout.
     pub payment_url: Option<String>,
@@ -117,8 +117,12 @@ fn is_provider_key(raw: &str) -> bool {
         && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
-fn has_no_control(text: &str) -> bool {
-    !text.chars().any(|c| c.is_control())
+/// A provider's id is one line: no control character and no space that is not a plain one (the line
+/// separators of Unicode are not control characters, and a database may judge them otherwise).
+fn is_one_line(text: &str) -> bool {
+    !text
+        .chars()
+        .any(|c| c.is_control() || (c.is_whitespace() && c != ' '))
 }
 
 /// An address the customer is sent to: https, no spaces, nothing a browser would take for a script.
@@ -161,7 +165,7 @@ impl Charge {
             MAX_EXTERNAL_ID_CHARS,
             DomainError::InvalidChargeProvider,
         )?;
-        if !has_no_control(&external_id) {
+        if !is_one_line(&external_id) {
             return Err(DomainError::InvalidChargeProvider);
         }
         let payment = clean_payment(draft.method, &draft.payment)?;
@@ -267,7 +271,7 @@ fn clean_payment(method: ChargeMethod, raw: &ChargePayment) -> Result<ChargePaym
     )?;
     if pix_payload
         .as_deref()
-        .is_some_and(|payload| !payload.chars().all(|c| c.is_ascii_graphic()))
+        .is_some_and(|payload| !payload.chars().all(|c| matches!(c, ' '..='~')))
     {
         return Err(DomainError::InvalidChargePayment);
     }

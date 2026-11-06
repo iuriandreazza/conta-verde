@@ -49,6 +49,7 @@ interface ChargesPanelProps {
 export function ChargesPanel({ companyId, entry, canWrite }: ChargesPanelProps) {
   const [charges, setCharges] = useState<Charge[] | null>(null);
   const [provider, setProvider] = useState<string | null | undefined>(undefined);
+  const [providerError, setProviderError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
@@ -71,10 +72,14 @@ export function ChargesPanel({ companyId, entry, canWrite }: ChargesPanelProps) 
 
   // The provider is the operator's setting: it does not change while the page is open.
   useEffect(() => {
+    let current = true;
     api
       .getCollection(companyId)
-      .then((collection) => setProvider(collection.provider))
-      .catch((failure) => setError(errorMessage(failure)));
+      .then((collection) => current && setProvider(collection.provider))
+      .catch((failure) => current && setProviderError(errorMessage(failure)));
+    return () => {
+      current = false;
+    };
   }, [companyId]);
 
   const open = new Set(
@@ -140,8 +145,13 @@ export function ChargesPanel({ companyId, entry, canWrite }: ChargesPanelProps) 
 
   return (
     <div className="charges">
-      <Notice message={error} />
+      <Notice message={error ?? providerError} />
       <Notice message={saved} tone="success" />
+      {provider === "fake" && (
+        <p className="muted">
+          Provedor de teste: as cobranças são de mentira e não podem ser pagas.
+        </p>
+      )}
       {charges === null && error === null ? (
         <p role="status" className="status">
           <Spinner /> Carregando…
@@ -235,6 +245,15 @@ export function ChargesPanel({ companyId, entry, canWrite }: ChargesPanelProps) 
 function PaymentDetails({ charge }: { charge: Charge }) {
   const [copied, setCopied] = useState(false);
 
+  // "Copiado" goes back to "Copiar" after a moment, so a second copy gives feedback again.
+  useEffect(() => {
+    if (!copied) {
+      return;
+    }
+    const timer = setTimeout(() => setCopied(false), 2000);
+    return () => clearTimeout(timer);
+  }, [copied]);
+
   async function copy(text: string) {
     try {
       await navigator.clipboard.writeText(text);
@@ -258,8 +277,11 @@ function PaymentDetails({ charge }: { charge: Charge }) {
             aria-label={`Copiar ${charge.method === "boleto" ? "a linha digitável" : "o código Pix"}`}
             onClick={() => void copy(text)}
           >
-            {copied ? "Copiado" : "Copiar"}
+            Copiar
           </Button>
+          <span role="status" className="muted">
+            {copied ? "Copiado." : ""}
+          </span>
         </>
       )}
       {charge.payment_url !== null && (

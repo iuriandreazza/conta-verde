@@ -324,7 +324,7 @@ mod tests {
             "UPDATE charges SET external_id = ' x'",
             "UPDATE charges SET external_id = 'a' || chr(10) || 'b'",
             "UPDATE charges SET pix_payload = NULL",
-            "UPDATE charges SET pix_payload = 'a b'",
+            "UPDATE charges SET pix_payload = 'a' || chr(10) || 'b'",
             "UPDATE charges SET digitable_line = '123'",
             "UPDATE charges SET method = 'card_link', pix_payload = NULL, payment_url = 'http://x.test/a'",
             "UPDATE charges SET method = 'card_link', pix_payload = NULL, payment_url = 'https://x.test/a b'",
