@@ -90,7 +90,9 @@ CREATE TABLE purchase_receipts (
     purchase_id UUID        NOT NULL,
     received_on DATE        NOT NULL,
     notes       TEXT,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- The clock at the insert, not at the start of the transaction: a receipt that waited for the order's lock
+    -- was written after the one it waited for, and must list after it.
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
     CONSTRAINT purchase_receipts_company_id_id_key UNIQUE (company_id, id),
     CONSTRAINT purchase_receipts_purchase_fk FOREIGN KEY (company_id, purchase_id)
         REFERENCES purchase_orders (company_id, id),

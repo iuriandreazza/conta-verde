@@ -12590,6 +12590,16 @@ pub async fn runs_the_purchase_lifecycle<P, E, F, R>(
         purchases.register(company, &ana, bad).await.unwrap_err(),
         ApplicationError::Domain(DomainError::ExpectedBeforeOrdered)
     );
+    // What was refused left no order behind and used no number.
+    assert_eq!(
+        purchase_numbers(
+            &purchases
+                .list(company, &PurchaseOrderQuery::default(), None, None)
+                .await
+                .unwrap()
+        ),
+        [2, 1]
+    );
     let third = purchases
         .register(company, &ana, purchase_draft(entry_seed, seed))
         .await

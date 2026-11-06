@@ -12,7 +12,7 @@ tags: [adr, purchases, finance, phase-5]
 Buying is the mirror of selling ([ADR 0039](0039-sales.md)): goods are ordered from a supplier, arrive in one or
 more deliveries, and are paid by a payment term. [ADR 0052](0052-purchases-and-inventory-plan.md) settled the
 `purchases` area and that stock is moved by receipts; this slice is the order, its receipts and the payable each
-receipt makes. The stock side of a receipt comes with the ledger ([ADR 0054](0054-stock-movements.md)).
+receipt makes. The stock side of a receipt comes with the ledger (ADR 0054 (stock movements)).
 
 ## Decision
 
