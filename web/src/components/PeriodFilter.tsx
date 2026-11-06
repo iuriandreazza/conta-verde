@@ -2,6 +2,8 @@ import { useState } from "react";
 import { isIsoDate } from "../lib/entryInstallments";
 import { CUSTOM, PRESETS, presetOf, shiftSpan, type Span } from "../lib/period";
 import { Button } from "./Button";
+import { ChevronLeftIcon } from "./icons/chevron-left";
+import { ChevronRightIcon } from "./icons/chevron-right";
 
 interface PeriodFilterProps {
   value: Span;
@@ -28,12 +30,14 @@ export function PeriodFilter({ value, onChange, today }: PeriodFilterProps) {
       <Button
         type="button"
         variant="ghost"
+        iconOnly
+        icon={ChevronLeftIcon}
         className="period-step"
         aria-label="Período anterior"
         disabled={!valid}
         onClick={() => onChange(shiftSpan(value, -1))}
       >
-        <span aria-hidden>‹</span>
+        Período anterior
       </Button>
       <label>
         Período
@@ -56,12 +60,14 @@ export function PeriodFilter({ value, onChange, today }: PeriodFilterProps) {
       <Button
         type="button"
         variant="ghost"
+        iconOnly
+        icon={ChevronRightIcon}
         className="period-step"
         aria-label="Próximo período"
         disabled={!valid}
         onClick={() => onChange(shiftSpan(value, 1))}
       >
-        <span aria-hidden>›</span>
+        Próximo período
       </Button>
       <label>
         De
