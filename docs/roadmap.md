@@ -56,7 +56,7 @@ register from the browser; no endpoint accepts a `company_id` the caller is not 
 Exit criteria: a business can run its monthly financial routine (launch, settle, reconcile,
 read cash flow) without another tool. First release recommended for real use.
 
-## Phase 3 — Sales (v0.4)
+## Phase 3 — Sales (v0.4, done)
 
 Planned in [ADR 0037](adr/0037-sales-module-plan.md), which also settles what the phase changes underneath
 (a voided mark on entries, a sale as an entry's origin, applying a payment term, the `sales` area, the one
@@ -65,8 +65,8 @@ rounding rule). No proposed ADR belongs to this phase. One slice per pull reques
 - [x] Quotes: items (products and services), discounts, validity, PDF, send by e-mail, public approval link ([ADR 0038](adr/0038-quotes.md)) — numbered quotes with discounted lines and a validity, a PDF, a link e-mailed to the customer (shown once, taken back when the quote changes or is sent again) where they approve or decline without an account, and the `sales` area; the quote becomes a sale in the next slice
 - [x] Sales orders and sales: status lifecycle, receivables generated according to payment terms, cancellation and returns; a quote becomes a sale ([ADR 0039](adr/0039-sales.md)) — an open order becomes a completed sale that makes its one receivable by the payment term (in the cash flow forecast), is cancelled with its receivable (entries gain a one-way cancelled mark), takes returns that refund with a payable, and is made from an approved quote
 - [x] Recurring contracts: billing cycle, automatic sale and receivable per period, adjustment and termination ([ADR 0040](adr/0040-contracts.md)) — a contract (monthly to yearly) bills each cycle on its day as a completed sale and its receivable, by an hourly job and when it is written, once per cycle day (a unique index), with a percentage adjustment and a termination; the tests move the clock through three cycles
-- [x] Sellers and commissions: rules per seller or product, commission statement
-- [x] Price lists
+- [x] Sellers and commissions: rules per seller or product, commission statement ([ADR 0041](adr/0041-commissions.md)) — a rate for one seller or all and one product or all over a span of sale days, the narrowest rule on the sale's day applying to each line, and a statement computed when read from the completed sales net of returns
+- [x] Price lists ([ADR 0042](adr/0042-price-lists.md)) — a named, audited set of unit prices per product; choosing one in a quote, sale or contract form fills the lines' prices, and documents keep the prices they were filled with
 - [x] Dashboard: balances, receivables and payables due, sales of the month, top products and customers (real figures replace the sample data) ([ADR 0043](adr/0043-sales-reports-and-dashboard.md)) — the home page reads the balance of each account and the statement lines waiting to be reconciled, mirrored receivable and payable blocks (overdue, due today, next days) and the due ranges, the cash flow of a chosen period and the top products and customers, each card on its own request, with an "atualizado em" stamp
 - [x] Reports: sales by customer, product, seller and period; ABC curve ([ADR 0043](adr/0043-sales-reports-and-dashboard.md)) — `GET /sales-reports` ranks the completed sales of a span net of returns by customer, product or seller with each row's share and its ABC class, and the Relatórios page has a Vendas view
 
