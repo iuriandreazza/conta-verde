@@ -498,11 +498,11 @@ main {
   position: relative;
   display: flex;
   flex-direction: column;
-  width: min(52rem, 100%);
-  max-height: 92vh;
-  max-height: 92dvh;
+  width: 100%;
+  height: calc(100vh - 1.25rem);
+  height: calc(100dvh - 1.25rem);
   border-radius: var(--radius) var(--radius) 0 0;
-  background: var(--surface);
+  background: var(--page);
   box-shadow: var(--shadow-lift);
 }
 
@@ -517,11 +517,59 @@ main {
   gap: 1rem;
   padding: 1rem 1.5rem;
   border-bottom: 1px solid var(--line);
+  border-radius: var(--radius) var(--radius) 0 0;
+  background: var(--surface);
 }
 
 .sheet-body {
+  flex: 1;
   overflow-y: auto;
+  padding: 1.25rem 1.5rem 0;
+}
+
+/* A form in a sheet is a column of cards with its buttons held at the bottom. */
+.sheet-body > * {
+  max-width: 70rem;
+  margin-inline: auto;
+}
+
+.record-form {
+  gap: 1.25rem;
+}
+
+.form-section {
+  display: grid;
+  gap: 1rem;
   padding: 1.25rem 1.5rem 1.5rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.form-section > h3 {
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--line);
+  font-size: 1rem;
+}
+
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 0.9rem 1rem;
+}
+
+.form-footer {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0 -1.5rem;
+  padding: 0.9rem 1.5rem;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
 }
 
 .list-actions {
