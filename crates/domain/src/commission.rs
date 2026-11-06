@@ -2,7 +2,7 @@ use rust_decimal::Decimal;
 
 use crate::{
     CalendarDate, CommissionRuleId, CompanyId, DomainError, PartyId, Percent, ProductId, Sale,
-    SaleReturn, SaleStatus, round_to_cents,
+    SaleReturn, SaleStatus, net_of_lines, round_to_cents,
 };
 
 /// Unvalidated input for registering or changing a commission rule.
@@ -153,17 +153,7 @@ pub fn commission_of_sale(
     }
     let mut base = Decimal::ZERO;
     let mut commission = Decimal::ZERO;
-    for (index, line) in sale.lines().iter().enumerate() {
-        let number = u16::try_from(index + 1).ok()?;
-        let returned: Decimal = returns
-            .iter()
-            .flat_map(|made| made.items())
-            .filter(|(returned_line, _)| *returned_line == number)
-            .map(|(_, quantity)| quantity.as_decimal())
-            .sum();
-        // What came back is taken off at the value it was refunded at: the cumulative refund of the line.
-        let refunded = round_to_cents(line.total() * returned / line.quantity().as_decimal());
-        let net = line.total() - refunded;
+    for (line, net) in sale.lines().iter().zip(net_of_lines(sale, returns)) {
         base += net;
         if let Some(rule) = applicable_rule(rules, seller, line.product_id(), sale.sold_on()) {
             commission += round_to_cents(net * rule.rate().as_decimal() / Decimal::ONE_HUNDRED);

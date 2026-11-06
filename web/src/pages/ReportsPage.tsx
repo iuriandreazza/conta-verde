@@ -15,6 +15,7 @@ import { StatTile } from "../components/charts/StatTile";
 import { Notice } from "../components/Notice";
 import { PeriodFilter } from "../components/PeriodFilter";
 import { PageHeader } from "../components/PageHeader";
+import { SalesReportView } from "../components/SalesReportView";
 import { Spinner } from "../components/Spinner";
 import { formatMoney } from "../lib/decimal";
 import { centsToApi, formatDate, isIsoDate, sumCents } from "../lib/entryInstallments";
@@ -43,7 +44,7 @@ const negative = (amount: string) => (amount.startsWith("-") ? "num negative" : 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one instance.
 export function ReportsPage() {
   const { companyId = "" } = useParams();
-  const [view, setView] = useState<"entries" | "overdue">("entries");
+  const [view, setView] = useState<"entries" | "overdue" | "sales">("entries");
   const [names, setNames] = useState<Map<string, string>>(new Map());
   const [namesError, setNamesError] = useState<string | null>(null);
 
@@ -71,7 +72,7 @@ export function ReportsPage() {
     <>
       <PageHeader
         title="Relatórios"
-        description="Para onde vai o dinheiro, por categoria, centro de custo e cliente ou fornecedor, e o que está vencido."
+        description="Para onde vai o dinheiro, o que está vencido e o que foi vendido, por cliente, produto e vendedor."
       />
       <div className="segmented" role="group" aria-label="Relatório">
         <button type="button" aria-pressed={view === "entries"} onClick={() => setView("entries")}>
@@ -80,12 +81,17 @@ export function ReportsPage() {
         <button type="button" aria-pressed={view === "overdue"} onClick={() => setView("overdue")}>
           Em atraso
         </button>
+        <button type="button" aria-pressed={view === "sales"} onClick={() => setView("sales")}>
+          Vendas
+        </button>
       </div>
       <Notice message={namesError} />
       {view === "entries" ? (
         <EntriesReportView companyId={companyId} names={names} />
-      ) : (
+      ) : view === "overdue" ? (
         <OverdueView companyId={companyId} names={names} />
+      ) : (
+        <SalesReportView companyId={companyId} names={names} />
       )}
     </>
   );

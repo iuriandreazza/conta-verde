@@ -42,9 +42,11 @@ mod quote_service;
 mod reconciliation_service;
 mod recurrence_repository;
 mod recurrence_service;
+mod sale_reading;
 mod sale_repository;
 mod sale_service;
 mod sales_references;
+mod sales_report_service;
 mod secret_service;
 mod statement_line_repository;
 mod transfer_repository;
@@ -110,6 +112,7 @@ pub use recurrence_service::{
 pub use sale_repository::{SaleQuery, SaleRepository};
 pub use sale_service::{Conversion, Refund, ReturnRecord, SalePage, SaleService};
 pub use sales_references::SalesReferences;
+pub use sales_report_service::{SalesReport, SalesReportService};
 pub use secret_service::{SecretError, SecretService};
 pub use statement_line_repository::{MatchedTargets, StatementLineQuery, StatementLineRepository};
 pub use transfer_repository::{

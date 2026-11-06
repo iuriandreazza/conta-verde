@@ -68,7 +68,7 @@ rounding rule). No proposed ADR belongs to this phase. One slice per pull reques
 - [x] Sellers and commissions: rules per seller or product, commission statement
 - [x] Price lists
 - [ ] Dashboard: balances, receivables and payables due, sales of the month, top products and customers (real figures replace the sample data)
-- [ ] Reports: sales by customer, product, seller and period; ABC curve
+- [x] Reports: sales by customer, product, seller and period; ABC curve ([ADR 0043](adr/0043-sales-reports-and-dashboard.md)) — `GET /sales-reports` ranks the completed sales of a span net of returns by customer, product or seller with each row's share and its ABC class, and the Relatórios page has a Vendas view
 
 Exit criteria: a quote becomes a sale and its receivables appear in cash flow; a recurring
 contract bills itself for three cycles in a test clock.

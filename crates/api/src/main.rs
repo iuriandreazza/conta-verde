@@ -6,7 +6,7 @@ use conta_verde_application::{
     CommissionService, ContractService, CostCenterService, FinancialEntryService, MemberService,
     PartyService, PaymentMethodService, PaymentTermService, PostalCodeService, PriceListService,
     ProductService, QuoteService, ReconciliationService, RecurrenceService, SaleService,
-    TransferService,
+    SalesReportService, TransferService,
 };
 use conta_verde_application::{EmailError, EmailMessage, EmailSender};
 use conta_verde_infrastructure::{
@@ -169,6 +169,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             PostgresPaymentTermRepository::new(pool.clone()),
         ),
     );
+    let sales_reports = SalesReportService::new(PostgresSaleRepository::new(pool.clone()));
     let sale_service = || {
         SaleService::new(
             PostgresSaleRepository::new(pool.clone()),
@@ -230,6 +231,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 payment_methods,
                 payment_terms,
                 price_lists,
+                sales_reports,
                 entries,
                 attachments,
                 transfers,
