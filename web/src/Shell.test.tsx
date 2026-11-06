@@ -22,6 +22,16 @@ const profile: Profile = {
 
 afterEach(() => vi.unstubAllGlobals());
 
+function renderAt(path: string) {
+  return render(
+    <MemoryRouter initialEntries={[path]}>
+      <AuthProvider>
+        <App />
+      </AuthProvider>
+    </MemoryRouter>,
+  );
+}
+
 describe("page shell", () => {
   it("names the tab after the page and takes the name back when the page goes away", () => {
     const { unmount } = render(
@@ -88,5 +98,65 @@ describe("page shell", () => {
     expect(await screen.findByRole("heading", { name: "Entrar" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Ir para o conteúdo" })).not.toBeInTheDocument();
     expect(document.title).toBe("Entrar · conta-verde");
+  });
+
+  it("groups the sections and folds a group away", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(profile), { status: 200 })));
+    renderAt("/companies/c1");
+
+    const finance = await screen.findByRole("button", { name: "Financeiro" });
+    expect(screen.getByRole("link", { name: "Fluxo de caixa" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Contas bancárias" })).toBeInTheDocument();
+
+    await userEvent.click(finance);
+
+    expect(finance).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("link", { name: "Fluxo de caixa" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Contas bancárias" })).toBeInTheDocument();
+  });
+
+  it("offers to create only what the role may write, from any page", async () => {
+    const reader = {
+      ...profile,
+      companies: [{ ...profile.companies[0], role: "viewer" as const, permissions: { parties: "write", finance: "read" } as const }],
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(reader), { status: 200 })));
+    renderAt("/companies/c1");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Novo registro" }));
+
+    expect(screen.getByRole("menuitem", { name: "Novo cliente ou fornecedor" })).toHaveAttribute("href", "/companies/c1/parties");
+    expect(screen.queryByRole("menuitem", { name: "Novo lançamento" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Novo produto ou serviço" })).not.toBeInTheDocument();
+  });
+
+  it("opens the phone menu onto the sections and closes it with Escape or the shade", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(profile), { status: 200 })));
+    renderAt("/companies/c1");
+
+    const menu = await screen.findByRole("button", { name: "Menu" });
+    expect(menu).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: "Fechar o menu" })).not.toBeInTheDocument();
+
+    await userEvent.click(menu);
+    expect(menu).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("link", { name: "Painel" })).toHaveFocus();
+
+    await userEvent.keyboard("{Escape}");
+    expect(menu).toHaveAttribute("aria-expanded", "false");
+    expect(menu).toHaveFocus();
+
+    await userEvent.click(menu);
+    await userEvent.click(screen.getByRole("button", { name: "Fechar o menu" }));
+    expect(menu).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("has no phone menu where there are no sections to open", async () => {
+    const two = { ...profile, companies: [profile.companies[0], { ...profile.companies[0], id: "c2", name: "Mercearia" }] };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(two), { status: 200 })));
+    renderAt("/");
+
+    expect(await screen.findByRole("heading", { name: "Escolha uma empresa" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Menu" })).not.toBeInTheDocument();
   });
 });

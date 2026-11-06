@@ -1,19 +1,30 @@
 import { motion } from "motion/react";
-import { useRef, useState, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { Link, Outlet, useLocation, useMatch } from "react-router-dom";
 import { useAuth } from "../auth";
-import { Button } from "./Button";
+import { AppTopbar } from "./AppTopbar";
 import { CompanyNav } from "./CompanyNav";
 import { Footer } from "./Footer";
-import { LogoutIcon } from "./icons/logout";
 import { Logo } from "./Logo";
 
 export function Layout() {
   const { session, signOut } = useAuth();
   const [signOutFailed, setSignOutFailed] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
+  const [navOpen, setNavOpen] = useState(false);
   const location = useLocation();
   const mainRef = useRef<HTMLElement>(null);
+  // The drawer on a phone covers the page: going somewhere closes it.
+  useEffect(() => setNavOpen(false), [location.pathname]);
+  // The drawer takes the focus when it opens, and gives it back to its button when it closes.
+  useEffect(() => {
+    if (navOpen) document.querySelector<HTMLElement>("#app-sidebar .side-nav a")?.focus();
+  }, [navOpen]);
+
+  function closeNav() {
+    setNavOpen(false);
+    document.querySelector<HTMLElement>(".topbar-menu")?.focus();
+  }
   const companyId = useMatch("/companies/:companyId/*")?.params.companyId;
 
   // The session only ends once the server confirms it, so a failure must stay visible.
@@ -95,7 +106,12 @@ export function Layout() {
     <div className="app">
       {/* Inside the sidebar, not before it: the sign-in layout and this one put <main> at the same position,
           which keeps the sign-up page mounted (and its outcome) when the session arrives. */}
-      <aside className="sidebar">
+      <aside
+        className="sidebar"
+        id="app-sidebar"
+        data-open={navOpen || undefined}
+        onKeyDown={(event) => event.key === "Escape" && navOpen && closeNav()}
+      >
         <a href="#main" className="skip-link" onClick={skipToContent}>
           Ir para o conteúdo
         </a>
@@ -112,21 +128,22 @@ export function Layout() {
         {companyId && (
           <CompanyNav companyId={companyId} canSeeMembers={company?.permissions.members !== undefined} />
         )}
-        <div className="sidebar-user">
-          <span className="avatar" aria-hidden>
-            {userName.trim().charAt(0).toUpperCase()}
-          </span>
-          <span className="user-name">{userName}</span>
-          <Button variant="ghost" icon={LogoutIcon} pending={signingOut} onClick={handleSignOut}>
-            Sair
-          </Button>
-          {signOutFailed && <span role="alert">Não foi possível sair, tente novamente.</span>}
-        </div>
       </aside>
       <div className="app-main">
+        <AppTopbar
+          userName={userName}
+          permissions={company?.permissions}
+          companyId={companyId}
+          signingOut={signingOut}
+          signOutFailed={signOutFailed}
+          navOpen={navOpen}
+          onToggleNav={() => (navOpen ? closeNav() : setNavOpen(true))}
+          onSignOut={handleSignOut}
+        />
         {page}
         <Footer />
       </div>
+      {navOpen && <button type="button" className="drawer-scrim" aria-label="Fechar o menu" onClick={closeNav} />}
     </div>
   );
 }
