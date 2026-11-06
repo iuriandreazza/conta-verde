@@ -837,7 +837,7 @@ function ReceivePanel({
       </label>
       <label>
         Observações
-        <input name="notes" maxLength={500} autoComplete="off" />
+        <input name="notes" maxLength={200} autoComplete="off" />
       </label>
       <Notice message={error} />
       <Button type="submit" icon={PlusIcon} pending={saving}>

@@ -76,6 +76,12 @@ are coarse, [ADR 0026](0026-membership-roles-and-permissions.md)).
 - A purchase is not cancelled after goods arrived; giving goods back is an adjustment of stock for now.
 - The entries page does not yet link a payable back to its purchase (the entry says which receipt made it).
 
+- Known limits: a receipt worth so little that a non-last installment would be under one cent is refused (the
+  payable could not be split); a category or cost center deactivated after approval blocks receipts until it is
+  reactivated (an approved order is not edited); the receipt day is the person's and is not checked against the
+  order's; the check that an order is worth more than 0 at approval reads the order just before the status is
+  written, so an edit that lands in that instant can slip through (the receipt of a worthless order still makes no payable).
+
 ## Revisit when
 
 A purchase return exists, a supplier's invoice must be matched to an order (ADR 0057 enters one from its XML), or an

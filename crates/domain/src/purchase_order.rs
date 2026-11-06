@@ -345,6 +345,13 @@ impl PurchaseReceipt {
         let received_on = CalendarDate::parse(&draft.received_on)
             .ok_or(DomainError::InvalidDate("received_on"))?;
         let notes = optional_text(draft.notes.as_deref(), 200, DomainError::InvalidNote)?;
+        // One line: the database refuses a control character, so the domain must too.
+        if notes
+            .as_deref()
+            .is_some_and(|text| text.chars().any(char::is_control))
+        {
+            return Err(DomainError::InvalidNote);
+        }
         if draft.items.is_empty() {
             return Err(DomainError::NoReceiptItems);
         }
@@ -607,6 +614,17 @@ mod tests {
             )
             .unwrap_err(),
             DomainError::PurchaseIsNotReceivable
+        );
+    }
+
+    #[test]
+    fn a_receipt_note_is_one_short_line() {
+        let order = order(vec![line("1", "1", "0")]).approved().unwrap();
+        let mut noted = receipt_draft(&[(1, "1")]);
+        noted.notes = Some("a\nb".into());
+        assert_eq!(
+            PurchaseReceipt::new(PurchaseReceiptId::generate(), &order, noted, &[]).unwrap_err(),
+            DomainError::InvalidNote
         );
     }
 
