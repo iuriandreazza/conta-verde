@@ -115,6 +115,11 @@ export function SalesReportView({ companyId, names: registers }: { companyId: st
         )
       ) : (
         <>
+          {loading && (
+            <p role="status" className="status muted">
+              <Spinner size={16} /> Atualizando…
+            </p>
+          )}
           <div className="kpi-row">
             <StatTile
               label="Total vendido"
