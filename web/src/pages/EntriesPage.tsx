@@ -102,6 +102,8 @@ export function EntriesPage() {
   const shown = useLastValue(editing);
   // An entry created from the top bar or from here: read the list again and flash the new row.
   useOnCreated("entry", (created) => {
+    // What an earlier change said is not about this one.
+    setSaved(null);
     setHighlightedId(created.id);
     void reload();
   });

@@ -112,7 +112,10 @@ export function PaymentTermForm({
   }
 
   return (
-    <form onSubmit={handleSubmit}>
+    <form className="record-form" onSubmit={handleSubmit}>
+      <section className="form-section" aria-labelledby="term-info">
+        <h3 id="term-info">Dados do prazo</h3>
+        <div className="field-grid">
       <label>
         Nome
         <input
@@ -124,7 +127,14 @@ export function PaymentTermForm({
           defaultValue={term?.name}
         />
       </label>
+      <label className="inline">
+        <input name="active" type="checkbox" defaultChecked={term?.active ?? true} /> Ativo
+      </label>
+        </div>
+      </section>
 
+      <section className="form-section" aria-labelledby="term-installments">
+        <h3 id="term-installments">Parcelas do prazo</h3>
       <fieldset className="installments">
         <legend>Parcelas</legend>
         {rows.map((row, index) => (
@@ -185,12 +195,13 @@ export function PaymentTermForm({
           {sumMessage}
         </p>
       </fieldset>
+      </section>
 
-      <label className="inline">
-        <input name="active" type="checkbox" defaultChecked={term?.active ?? true} /> Ativo
-      </label>
       <Notice message={fieldError ?? error} />
-      <div className="form-actions">
+      <div className="form-footer">
+        <Button type="button" variant="ghost" disabled={pending} onClick={onCancel}>
+          Voltar
+        </Button>
         <Button
           type="submit"
           icon={term === null ? PlusIcon : CheckIcon}
@@ -199,11 +210,6 @@ export function PaymentTermForm({
         >
           {term === null ? "Adicionar" : "Salvar alterações"}
         </Button>
-        {term !== null && (
-          <Button type="button" variant="ghost" disabled={pending} onClick={onCancel}>
-            Cancelar
-          </Button>
-        )}
       </div>
     </form>
   );

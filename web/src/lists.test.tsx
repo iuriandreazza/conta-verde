@@ -181,4 +181,51 @@ describe("creating from the top bar", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Clientes e fornecedores" })).toBeInTheDocument();
   });
+
+  it("registers a payment method from the top bar with its kind", async () => {
+    const created = { id: "pm1", company_id: "c1", kind: "bank_slip", name: "Boleto", active: true };
+    const fetchMock = mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "POST" && url.endsWith("/payment-methods")) return { status: 201, body: created };
+      return { status: 200, body: { items: [], next_cursor: null } };
+    });
+    renderAt("/companies/c1/parties");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Novo registro" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Nova forma de pagamento" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Nova forma de pagamento" }));
+    await userEvent.selectOptions(await dialog.findByLabelText("Tipo"), "bank_slip");
+    await userEvent.type(dialog.getByLabelText("Nome"), "Boleto");
+    await userEvent.click(dialog.getByRole("button", { name: "Adicionar" }));
+
+    expect(await screen.findByText("Boleto cadastrada.")).toBeInTheDocument();
+    const post = fetchMock.mock.calls.find(([, init]) => init?.method === "POST")!;
+    expect(JSON.parse(String(post[1]?.body))).toEqual({ kind: "bank_slip", name: "Boleto", active: true });
+  });
+
+  it("opens the payment term sheet from the top bar with a way back", async () => {
+    mockApi((url) =>
+      url === "/api/auth/me" ? { status: 200, body: profile } : { status: 200, body: { items: [], next_cursor: null } },
+    );
+    renderAt("/companies/c1/parties");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Novo registro" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Novo prazo de pagamento" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Novo prazo de pagamento" }));
+    await userEvent.click(await dialog.findByRole("button", { name: "Voltar" }));
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("offers no new-record button to a role that only reads", async () => {
+    const reader = { ...profile, companies: [{ ...profile.companies[0], permissions: { finance: "read" as const } }] };
+    mockApi((url) =>
+      url === "/api/auth/me" ? { status: 200, body: reader } : { status: 200, body: { items: [], next_cursor: null } },
+    );
+    renderAt("/companies/c1/cost-centers");
+
+    await screen.findByRole("heading", { name: "Centros de custo" });
+    expect(screen.queryByRole("button", { name: "Novo centro de custo" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Novo registro" })).not.toBeInTheDocument();
+  });
 });

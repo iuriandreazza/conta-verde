@@ -61,6 +61,8 @@ export function CostCentersPage() {
   const shown = useLastValue(editing);
   // A record made from the top bar or from here: read the list again and flash the new row.
   useOnCreated("costCenter", (created) => {
+    // What an earlier change said is not about this one.
+    setSaved(null);
     setHighlightedId(created.id);
     void reload();
   });
