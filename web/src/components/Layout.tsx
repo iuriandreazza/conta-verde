@@ -93,6 +93,8 @@ export function Layout() {
   const userName = session.profile.user.name;
   return (
     <div className="app">
+      {/* Inside the sidebar, not before it: the sign-in layout and this one put <main> at the same position,
+          which keeps the sign-up page mounted (and its outcome) when the session arrives. */}
       <aside className="sidebar">
         <a href="#main" className="skip-link" onClick={skipToContent}>
           Ir para o conteúdo

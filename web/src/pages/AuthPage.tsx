@@ -10,6 +10,7 @@ import { UserPlusIcon } from "../components/icons/user-plus";
 import { PasswordField } from "../components/PasswordField";
 import { Spinner } from "../components/Spinner";
 import { ROLE_LABELS } from "../lib/roles";
+import { usePageTitle } from "../lib/usePageTitle";
 
 /**
  * Where to go after signing in, when the page was opened from a link that needs an account: only an
@@ -67,6 +68,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
   const [submitting, setSubmitting] = useState(false);
   const shake = useAnimationControls();
   const registering = mode === "register";
+  usePageTitle(registering ? "Criar conta" : "Entrar");
   const invitation = useInvitation(registering ? invitationToken(next) : null);
   // What the sign-up made, so that the person is not sent back to an invitation that is used up or
   // was never usable: one who joined is a member of that company and of no other, and goes there; one

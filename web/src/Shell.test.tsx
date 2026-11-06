@@ -49,5 +49,21 @@ describe("page shell", () => {
 
     expect(screen.getByRole("main")).toHaveFocus();
     expect(document.title).toBe("Painel · conta-verde");
+    expect(window.location.hash).toBe("");
+  });
+
+  it("has nothing to skip, and still names the tab, when signed out", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 401 })));
+    render(
+      <MemoryRouter initialEntries={["/login"]}>
+        <AuthProvider>
+          <App />
+        </AuthProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Entrar" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Ir para o conteúdo" })).not.toBeInTheDocument();
+    expect(document.title).toBe("Entrar · conta-verde");
   });
 });
