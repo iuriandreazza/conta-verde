@@ -154,6 +154,7 @@ mod tests {
     use conta_verde_application::StockService;
 
     use super::*;
+    use crate::InMemoryStockMovementRepository;
     use crate::memory_entries::tests::Registers;
     use crate::{
         InMemoryFinancialEntryRepository, InMemoryPaymentTermRepository, InMemoryProductRepository,

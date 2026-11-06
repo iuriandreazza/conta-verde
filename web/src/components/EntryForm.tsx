@@ -34,6 +34,8 @@ export interface EntryTargets {
 }
 
 interface EntryFormProps {
+  /** The kind a new entry starts as: a receivable when the person asked for a revenue, a payable for an expense. */
+  defaultKind?: EntryKind;
   /** The entry being changed, or `null` to register one. */
   entry: Entry | null;
   targets: EntryTargets;
@@ -50,6 +52,7 @@ interface EntryFormProps {
  * (ADR 0003). Remount it (a `key`) to start over.
  */
 export function EntryForm({
+  defaultKind,
   entry,
   targets,
   pending,
@@ -169,7 +172,7 @@ export function EntryForm({
         <div className="field-grid">
       <label>
         Tipo
-        <select name="kind" defaultValue={entry?.kind ?? "receivable"}>
+        <select name="kind" defaultValue={entry?.kind ?? defaultKind ?? "receivable"}>
           <option value="receivable">A receber</option>
           <option value="payable">A pagar</option>
         </select>
