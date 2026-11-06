@@ -1,5 +1,7 @@
+import { useState } from "react";
 import { isIsoDate } from "../lib/entryInstallments";
 import { CUSTOM, PRESETS, presetOf, shiftSpan, type Span } from "../lib/period";
+import { Button } from "./Button";
 
 interface PeriodFilterProps {
   value: Span;
@@ -13,25 +15,33 @@ interface PeriodFilterProps {
  * control for every page that asks for a span, so the same question is answered the same way.
  */
 export function PeriodFilter({ value, onChange, today }: PeriodFilterProps) {
-  const valid = isIsoDate(value.from) && isIsoDate(value.to) && value.from <= value.to;
-  const current = valid ? presetOf(value, today) : CUSTOM;
+  // A date input passes through years like 0002 while the year is typed: such a span is not stepped.
+  const valid = isIsoDate(value.from) && isIsoDate(value.to) && value.from >= "1000-01-01" && value.from <= value.to;
+  // Two presets can be the same span (this quarter and "this month and the next two" in January,
+  // April, July and October): what the person picked stays shown while it still matches.
+  const [picked, setPicked] = useState<string | null>(null);
+  const pickedPreset = PRESETS.find((preset) => preset.key === picked);
+  const stillPicked = valid && pickedPreset !== undefined && presetOf(value, today, [pickedPreset]) === picked;
+  const current = !valid ? CUSTOM : stillPicked ? picked : presetOf(value, today);
   return (
     <div className="period-filter" role="group" aria-label="Filtro de período">
-      <button
+      <Button
         type="button"
+        variant="ghost"
         className="period-step"
         aria-label="Período anterior"
         disabled={!valid}
         onClick={() => onChange(shiftSpan(value, -1))}
       >
         <span aria-hidden>‹</span>
-      </button>
+      </Button>
       <label>
         Período
         <select
           value={current}
           onChange={(event) => {
             const preset = PRESETS.find((item) => item.key === event.target.value);
+            setPicked(event.target.value);
             if (preset) onChange(preset.span(today));
           }}
         >
@@ -43,15 +53,16 @@ export function PeriodFilter({ value, onChange, today }: PeriodFilterProps) {
           <option value={CUSTOM}>Personalizado</option>
         </select>
       </label>
-      <button
+      <Button
         type="button"
+        variant="ghost"
         className="period-step"
         aria-label="Próximo período"
         disabled={!valid}
         onClick={() => onChange(shiftSpan(value, 1))}
       >
         <span aria-hidden>›</span>
-      </button>
+      </Button>
       <label>
         De
         <input type="date" value={value.from} onChange={(event) => onChange({ ...value, from: event.target.value })} />

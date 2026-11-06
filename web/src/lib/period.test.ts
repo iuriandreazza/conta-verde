@@ -43,4 +43,14 @@ describe("shiftSpan", () => {
     expect(shiftSpan({ from: "2026-11-10", to: "2026-11-19" }, 1)).toEqual({ from: "2026-11-20", to: "2026-11-29" });
     expect(shiftSpan({ from: "2026-11-10", to: "2026-11-19" }, -1)).toEqual({ from: "2026-10-31", to: "2026-11-09" });
   });
+
+  it("falls back to days when the span starts on day 1 but does not end on a month's last day", () => {
+    expect(shiftSpan({ from: "2026-11-01", to: "2026-11-15" }, 1)).toEqual({ from: "2026-11-16", to: "2026-11-30" });
+  });
+
+  it("moves twelve months by twelve, and a leap February by a month", () => {
+    expect(shiftSpan({ from: "2026-01-01", to: "2026-12-31" }, 1)).toEqual({ from: "2027-01-01", to: "2027-12-31" });
+    expect(shiftSpan({ from: "2028-02-01", to: "2028-02-29" }, 1)).toEqual({ from: "2028-03-01", to: "2028-03-31" });
+    expect(shiftSpan({ from: "2028-03-01", to: "2028-03-31" }, -1)).toEqual({ from: "2028-02-01", to: "2028-02-29" });
+  });
 });

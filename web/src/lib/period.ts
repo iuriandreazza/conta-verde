@@ -49,8 +49,8 @@ export const PRESETS: Preset[] = [
 export const CUSTOM = "custom";
 
 /** The preset a span is exactly, or `custom` for any other span. */
-export function presetOf(span: Span, today: string): string {
-  return PRESETS.find((preset) => {
+export function presetOf(span: Span, today: string, among: Preset[] = PRESETS): string {
+  return among.find((preset) => {
     const wanted = preset.span(today);
     return wanted.from === span.from && wanted.to === span.to;
   })?.key ?? CUSTOM;
