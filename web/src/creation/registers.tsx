@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { api, errorMessage, type CostCenterInput, type PaymentMethodInput, type PaymentTermInput } from "../api";
+import { api, errorMessage, type BankAccountInput, type CostCenterInput, type PaymentMethodInput, type PaymentTermInput } from "../api";
+import { BankAccountForm } from "../components/BankAccountForm";
 import { CostCenterForm } from "../components/CostCenterForm";
 import { PaymentMethodForm } from "../components/PaymentMethodForm";
 import { PaymentTermForm } from "../components/PaymentTermForm";
@@ -61,4 +62,10 @@ export const PaymentTermCreator = registerCreator<PaymentTermInput, { id: string
   create: (companyId, input) => api.createPaymentTerm(companyId, input),
   message: (created) => `${created.name} cadastrado.`,
   form: (props) => <PaymentTermForm term={null} {...props} />,
+});
+
+export const BankAccountCreator = registerCreator<BankAccountInput, { id: string; name: string }>({
+  create: (companyId, input) => api.createBankAccount(companyId, input),
+  message: (created) => `${created.name} cadastrada.`,
+  form: (props) => <BankAccountForm account={null} {...props} />,
 });

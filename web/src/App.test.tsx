@@ -1266,6 +1266,7 @@ describe("bank accounts", () => {
     });
     renderAt("/companies/c1/bank-accounts");
 
+    await userEvent.click(await screen.findByRole("button", { name: "Nova conta bancária" }));
     await userEvent.type(await screen.findByLabelText("Nome"), "Conta da loja");
     await userEvent.type(screen.getByLabelText("Código do banco"), "341");
     await userEvent.type(screen.getByLabelText("Agência"), "12.34");
@@ -1292,6 +1293,7 @@ describe("bank accounts", () => {
     renderAt("/companies/c1/bank-accounts");
 
     // A card is asked for its issuer and never for a number.
+    await userEvent.click(await screen.findByRole("button", { name: "Nova conta bancária" }));
     await userEvent.selectOptions(await screen.findByLabelText("Tipo"), "card");
     expect(screen.getByLabelText("Banco emissor")).toBeInTheDocument();
     expect(screen.queryByLabelText("Agência")).not.toBeInTheDocument();
@@ -2749,7 +2751,7 @@ describe("what a role that cannot write is offered", () => {
     ["products", "Produtos e serviços", "Novo produto ou serviço"],
     ["categories", "Categorias", "Nova categoria"],
     ["cost-centers", "Centros de custo", "Novo centro de custo"],
-    ["bank-accounts", "Contas bancárias", "Nova conta"],
+    ["bank-accounts", "Contas bancárias", "Nova conta bancária"],
     ["payment-methods", "Formas de pagamento", "Nova forma de pagamento"],
     ["payment-terms", "Prazos de pagamento", "Novo prazo de pagamento"],
     ["entries", "Lançamentos", "Novo lançamento"],
@@ -2760,6 +2762,8 @@ describe("what a role that cannot write is offered", () => {
     // The page is there (its form would be too, for a role that writes) before anything is missing.
     await screen.findByRole("heading", { name: title });
     expect(screen.queryByRole("heading", { name: formHeading })).not.toBeInTheDocument();
+    // The register's own button, the one that raises the sheet, is not offered either.
+    expect(screen.queryByRole("button", { name: formHeading })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Importar/ })).not.toBeInTheDocument();
   });
 
@@ -3791,6 +3795,7 @@ describe("transfers", () => {
 
     await screen.findByRole("row", { name: /Depósito/ });
     expect(screen.queryByRole("heading", { name: "Nova transferência" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Nova transferência" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Estornar a transferência/ })).not.toBeInTheDocument();
   });
 });
