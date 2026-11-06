@@ -29,7 +29,7 @@ pnpm install
 pnpm --filter conta-verde-web dev
 ```
 
-Or start the database, a mail catcher, the API and the web app in one go with `pnpm dev`, which picks free ports when 5432, 3000, 5173, 1025 or 8025 are taken
+Or start the database, a mail catcher, the API and the web app in one go with `pnpm dev`, which picks free ports when 5432, 3000, 5173, 1025 or 8025 are taken (and points the invitation links at the web port it picked)
 (`pnpm db`, `pnpm api` and `pnpm web` run each one alone). Every e-mail the app sends (an invitation, for now) lands in
 [Mailpit](https://mailpit.axllent.org), at the address `pnpm dev` prints, and never in a real mailbox.
 
