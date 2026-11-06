@@ -1,4 +1,4 @@
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use conta_verde_application::{
     CostCenterQuery, CostCenterRepository, NameCursor, RepositoryError, ensure_audit_describes,
@@ -13,9 +13,9 @@ use crate::memory_list::{keyset_page, name_key};
 /// Keeps cost centers and their audit trail in process memory. Used by tests and for running the
 /// API without a database. Like the Postgres adapter, it records an audit entry only for a write
 /// that happened: a refused or missed write leaves nothing in the trail.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct InMemoryCostCenterRepository {
-    state: Mutex<CostCenterState>,
+    state: Arc<Mutex<CostCenterState>>,
 }
 
 #[derive(Default)]

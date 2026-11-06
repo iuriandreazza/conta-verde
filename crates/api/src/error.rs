@@ -99,6 +99,10 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
         ApplicationError::LookupDisabled | ApplicationError::PostalCodeLookupDisabled => {
             (StatusCode::CONFLICT, error.to_string())
         }
+        ApplicationError::EntryNotFound => (StatusCode::NOT_FOUND, error.to_string()),
+        ApplicationError::UnusableReference(_) => {
+            (StatusCode::UNPROCESSABLE_ENTITY, error.to_string())
+        }
         ApplicationError::InvitationNotFound | ApplicationError::MemberNotFound => {
             (StatusCode::NOT_FOUND, error.to_string())
         }

@@ -59,6 +59,11 @@ pub enum ApplicationError {
     BankAccountNotFound,
     /// No payment term with this id in the company (another company's looks the same).
     PaymentTermNotFound,
+    /// No financial entry with this id in the company (another company's looks the same).
+    EntryNotFound,
+    /// A category, cost center or party an entry points at is not usable in the company: it does
+    /// not exist there, or is inactive, or is the transfers category. Names the field.
+    UnusableReference(&'static str),
     /// No payment method with this id in the company (another company's looks the same).
     PaymentMethodNotFound,
     /// No cost center with this id in the company (another company's looks the same).
@@ -159,6 +164,13 @@ impl fmt::Display for ApplicationError {
             Self::BankAccountNotFound => f.write_str("bank account not found"),
             Self::PaymentMethodNotFound => f.write_str("payment method not found"),
             Self::PaymentTermNotFound => f.write_str("payment term not found"),
+            Self::EntryNotFound => f.write_str("entry not found"),
+            Self::UnusableReference(field) => {
+                write!(
+                    f,
+                    "the {field} does not exist in the company, or cannot be used here"
+                )
+            }
             Self::CategoryNotFound => f.write_str("category not found"),
             Self::ParentCategoryNotFound => f.write_str("the parent category does not exist"),
             Self::CategoryParentInactive => {

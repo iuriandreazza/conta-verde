@@ -33,9 +33,8 @@ fn area_of(pattern: &str) -> Option<Area> {
     match area {
         "parties" | "postal-codes" => Some(Area::Parties),
         "products" => Some(Area::Products),
-        "categories" | "cost-centers" | "bank-accounts" | "payment-methods" | "payment-terms" => {
-            Some(Area::Finance)
-        }
+        "categories" | "cost-centers" | "bank-accounts" | "payment-methods" | "payment-terms"
+        | "entries" => Some(Area::Finance),
         "members" | "invitations" => Some(Area::Members),
         _ => None,
     }
@@ -119,6 +118,7 @@ mod tests {
             "bank-accounts",
             "payment-methods",
             "payment-terms",
+            "entries",
         ] {
             assert_eq!(
                 area_of(&format!("/companies/{{company_id}}/{finance}")),
@@ -131,7 +131,7 @@ mod tests {
             Some(Area::Members)
         );
         // Fail closed: a segment nobody claimed, or a pattern that is not a company's at all.
-        assert_eq!(area_of("/companies/{company_id}/entries"), None);
+        assert_eq!(area_of("/companies/{company_id}/unclaimed"), None);
         assert_eq!(area_of("/companies/{company_id}"), None);
         assert_eq!(area_of("/auth/me"), None);
     }

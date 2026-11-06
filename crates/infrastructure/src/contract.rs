@@ -4755,3 +4755,616 @@ pub async fn filters_and_sorts_payment_terms<R: PaymentTermRepository>(
         ["Delta_x", "Charlie 100%", "Alfa"]
     );
 }
+
+// ---------- financial entries ----------
+
+use conta_verde_application::{
+    EntryCursor, EntryReferences, EntrySort, FinancialEntryQuery, FinancialEntryRepository,
+    FinancialEntryService,
+};
+use conta_verde_domain::{
+    EntryId, EntryInstallmentDraft, EntryKind, FinancialEntry, FinancialEntryDraft, entry_changes,
+    entry_creation_changes,
+};
+
+/// What an entry may point at, and what it may not, in one company: made by `seed_entry_records`
+/// through the registers' own ports, so any adapter can run the contract.
+pub struct EntrySeed {
+    pub category: CategoryId,
+    pub other_category: CategoryId,
+    pub inactive_category: CategoryId,
+    pub transfer_category: CategoryId,
+    pub cost_center: CostCenterId,
+    pub inactive_cost_center: CostCenterId,
+    pub party: PartyId,
+}
+
+pub async fn seed_entry_records<C, K, P>(
+    categories: &C,
+    cost_centers: &K,
+    parties: &P,
+    company: CompanyId,
+) -> EntrySeed
+where
+    C: CategoryRepository,
+    K: CostCenterRepository,
+    P: PartyRepository,
+{
+    let usable = root_category(company, "Vendas");
+    let other = root_category(company, "Serviços");
+    let retired = root_category(company, "Antiga");
+    for category in [&usable, &other, &retired] {
+        save_category(categories, category).await;
+    }
+    let deactivated = retired.changed("Antiga", false).unwrap();
+    let entry = category_entry(
+        &deactivated,
+        AuditAction::Updated,
+        category_changes(&retired, &deactivated),
+    );
+    categories.update(&deactivated, &entry).await.unwrap();
+    let transfers = Category::new_root(
+        CategoryId::generate(),
+        company,
+        "Transferências",
+        DreGroup::Transfers,
+        CashFlowGroup::Transfer,
+    )
+    .unwrap();
+    save_category(categories, &transfers).await;
+
+    let cost_center = new_cost_center(company, "Matriz");
+    let inactive_cost_center = CostCenter::new(
+        CostCenterId::generate(),
+        company,
+        cost_center_draft("Fechado", false),
+    )
+    .unwrap();
+    for center in [&cost_center, &inactive_cost_center] {
+        let entry = cost_center_entry(
+            center,
+            AuditAction::Created,
+            cost_center_creation_changes(center),
+        );
+        cost_centers.save(center, &entry).await.unwrap();
+    }
+
+    let party = Party::new(
+        PartyId::generate(),
+        company,
+        party_draft("Mercado Boa Compra", None),
+    )
+    .unwrap();
+    parties.save(&party, &created_entry(&party)).await.unwrap();
+
+    EntrySeed {
+        category: usable.id(),
+        other_category: other.id(),
+        inactive_category: retired.id(),
+        transfer_category: transfers.id(),
+        cost_center: cost_center.id(),
+        inactive_cost_center: inactive_cost_center.id(),
+        party: party.id(),
+    }
+}
+
+fn entry_draft(
+    seed: &EntrySeed,
+    description: &str,
+    competence: &str,
+    parts: &[(&str, &str)],
+) -> FinancialEntryDraft {
+    FinancialEntryDraft {
+        kind: EntryKind::Receivable,
+        description: description.into(),
+        party_id: None,
+        category_id: seed.category,
+        cost_center_id: None,
+        competence_date: competence.into(),
+        installments: parts
+            .iter()
+            .map(|(due, amount)| EntryInstallmentDraft {
+                due_date: (*due).into(),
+                amount: (*amount).into(),
+            })
+            .collect(),
+    }
+}
+
+fn new_entry(company: CompanyId, draft: FinancialEntryDraft) -> FinancialEntry {
+    FinancialEntry::new(EntryId::generate(), company, draft).unwrap()
+}
+
+fn entry_record(
+    entry: &FinancialEntry,
+    action: AuditAction,
+    changes: Vec<FieldChange>,
+) -> AuditEntry {
+    AuditEntry {
+        company_id: entry.company_id(),
+        actor: actor(),
+        entity: AuditEntity::FinancialEntry,
+        entity_id: entry.id().as_uuid(),
+        action,
+        changes,
+    }
+}
+
+async fn save_entry<R: FinancialEntryRepository>(
+    repository: &R,
+    entry: &FinancialEntry,
+) -> Result<(), RepositoryError> {
+    let record = entry_record(entry, AuditAction::Created, entry_creation_changes(entry));
+    repository.save(entry, &record).await
+}
+
+async fn entry_trail<R: FinancialEntryRepository>(
+    repository: &R,
+    company: CompanyId,
+    entry: &FinancialEntry,
+) -> usize {
+    repository.history(company, entry.id()).await.unwrap().len()
+}
+
+/// The registers say what an entry may point at: a category that exists in the company, is active
+/// and is not the one for transfers; a cost center that exists and is active; a party that exists.
+/// Another company's records answer like ones that do not exist.
+pub async fn entry_references_say_what_is_usable<R: EntryReferences>(
+    references: &R,
+    company: CompanyId,
+    other_company: CompanyId,
+    seed: &EntrySeed,
+) {
+    let category = |company, id| references.category_is_usable(company, id);
+    assert!(category(company, seed.category).await.unwrap());
+    assert!(category(company, seed.other_category).await.unwrap());
+    assert!(!category(company, seed.inactive_category).await.unwrap());
+    assert!(!category(company, seed.transfer_category).await.unwrap());
+    assert!(!category(other_company, seed.category).await.unwrap());
+    assert!(
+        !category(company, CategoryId::generate()).await.unwrap(),
+        "an unknown id"
+    );
+
+    let center = |company, id| references.cost_center_is_usable(company, id);
+    assert!(center(company, seed.cost_center).await.unwrap());
+    assert!(!center(company, seed.inactive_cost_center).await.unwrap());
+    assert!(!center(other_company, seed.cost_center).await.unwrap());
+    assert!(!center(company, CostCenterId::generate()).await.unwrap());
+
+    assert!(references.party_exists(company, seed.party).await.unwrap());
+    assert!(
+        !references
+            .party_exists(other_company, seed.party)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !references
+            .party_exists(company, PartyId::generate())
+            .await
+            .unwrap()
+    );
+}
+
+/// A write is stored with its audit entry and its installments, scoped by company; one that is
+/// refused or misses leaves nothing in the trail and the old installments in place.
+pub async fn stores_entries_with_their_trail<R: FinancialEntryRepository>(
+    repository: &R,
+    company: CompanyId,
+    other_company: CompanyId,
+    seed: &EntrySeed,
+) {
+    let mut draft = entry_draft(
+        seed,
+        "Venda parcelada",
+        "2026-11-05",
+        &[
+            ("2026-12-10", "100.50"),
+            ("2027-01-10", "100.5"),
+            ("2027-01-10", "0.01"),
+        ],
+    );
+    draft.party_id = Some(seed.party);
+    draft.cost_center_id = Some(seed.cost_center);
+    let sale = new_entry(company, draft);
+    save_entry(repository, &sale).await.unwrap();
+    // What comes back is what went in: the installments in order, a whole amount without zeros.
+    let stored = repository.find(company, sale.id()).await.unwrap();
+    assert_eq!(stored, Some(sale.clone()));
+    assert_eq!(
+        stored.unwrap().installments_text(),
+        "1:2026-12-10:100.5,2:2027-01-10:100.5,3:2027-01-10:0.01"
+    );
+    assert_eq!(
+        repository.find(other_company, sale.id()).await.unwrap(),
+        None
+    );
+    assert_eq!(entry_trail(repository, company, &sale).await, 1);
+    assert_eq!(entry_trail(repository, other_company, &sale).await, 0);
+
+    // An audit entry about another record, or another company, is refused and nothing is stored.
+    let stray = new_entry(
+        company,
+        entry_draft(seed, "Estranho", "2026-11-05", &[("2026-12-10", "1")]),
+    );
+    let wrong_record = entry_record(&sale, AuditAction::Created, vec![]);
+    assert!(repository.save(&stray, &wrong_record).await.is_err());
+    assert_eq!(repository.find(company, stray.id()).await.unwrap(), None);
+    let mut wrong_company = entry_record(&stray, AuditAction::Created, vec![]);
+    wrong_company.company_id = other_company;
+    assert!(repository.save(&stray, &wrong_company).await.is_err());
+    assert_eq!(entry_trail(repository, other_company, &stray).await, 0);
+
+    // An update replaces the fields and the installments as a whole: fewer, more or other ones.
+    let mut changed_draft = entry_draft(
+        seed,
+        "Venda à vista",
+        "2026-11-06",
+        &[("2026-11-06", "201.01")],
+    );
+    changed_draft.kind = EntryKind::Payable;
+    let changed = sale.replaced_with(changed_draft).unwrap();
+    let record = entry_record(
+        &changed,
+        AuditAction::Updated,
+        entry_changes(&sale, &changed),
+    );
+    repository.update(&changed, &record).await.unwrap();
+    assert_eq!(
+        repository.find(company, sale.id()).await.unwrap(),
+        Some(changed.clone())
+    );
+    assert_eq!(entry_trail(repository, company, &sale).await, 2);
+    let more = changed
+        .replaced_with(entry_draft(
+            seed,
+            "Venda à vista",
+            "2026-11-06",
+            &[
+                ("2026-11-06", "50"),
+                ("2026-12-06", "50"),
+                ("2027-01-06", "50"),
+                ("2027-02-06", "51.01"),
+            ],
+        ))
+        .unwrap();
+    let record = entry_record(&more, AuditAction::Updated, entry_changes(&changed, &more));
+    repository.update(&more, &record).await.unwrap();
+    assert_eq!(
+        repository.find(company, sale.id()).await.unwrap(),
+        Some(more.clone())
+    );
+
+    // An update that misses (another company's entry) changes nothing: not the fields, not the
+    // installments it was about to replace, and no audit entry.
+    let foreign = FinancialEntry::new(
+        sale.id(),
+        other_company,
+        entry_draft(seed, "Roubo", "2026-01-01", &[("2026-01-01", "9")]),
+    )
+    .unwrap();
+    let record = entry_record(
+        &foreign,
+        AuditAction::Updated,
+        entry_changes(&more, &foreign),
+    );
+    assert_eq!(
+        repository.update(&foreign, &record).await,
+        Err(RepositoryError::NotFound)
+    );
+    assert_eq!(
+        repository.find(company, sale.id()).await.unwrap(),
+        Some(more.clone())
+    );
+    assert_eq!(entry_trail(repository, company, &sale).await, 3);
+    assert_eq!(entry_trail(repository, other_company, &foreign).await, 0);
+}
+
+/// Registering and editing through the use case: references are checked before anything is written,
+/// an edit that changes nothing writes and records nothing, an edit records only what changed, and
+/// another company's entry is not found.
+pub async fn edits_entries_and_records_only_changes<R, F>(
+    service: &FinancialEntryService<R, F>,
+    company: CompanyId,
+    other_company: CompanyId,
+    seed: &EntrySeed,
+) where
+    R: FinancialEntryRepository,
+    F: EntryReferences,
+{
+    let ana = actor();
+    let draft = entry_draft(
+        seed,
+        "Aluguel de novembro",
+        "2026-11-01",
+        &[("2026-11-10", "2500")],
+    );
+    let rent = service
+        .register(company, &ana, draft.clone())
+        .await
+        .unwrap();
+    assert_eq!(service.history(company, rent.id()).await.unwrap().len(), 1);
+
+    // Pointing at what cannot be used is refused, naming the field, and leaves nothing behind.
+    let refused = [
+        (
+            "category",
+            FinancialEntryDraft {
+                category_id: seed.transfer_category,
+                ..draft.clone()
+            },
+        ),
+        (
+            "category",
+            FinancialEntryDraft {
+                category_id: seed.inactive_category,
+                ..draft.clone()
+            },
+        ),
+        (
+            "cost center",
+            FinancialEntryDraft {
+                cost_center_id: Some(seed.inactive_cost_center),
+                ..draft.clone()
+            },
+        ),
+        (
+            "party",
+            FinancialEntryDraft {
+                party_id: Some(PartyId::generate()),
+                ..draft.clone()
+            },
+        ),
+    ];
+    for (field, bad) in refused {
+        assert_eq!(
+            service
+                .register(company, &ana, bad.clone())
+                .await
+                .unwrap_err(),
+            ApplicationError::UnusableReference(field)
+        );
+        assert_eq!(
+            service
+                .update(company, &ana, rent.id(), bad)
+                .await
+                .unwrap_err(),
+            ApplicationError::UnusableReference(field)
+        );
+    }
+    let listed = service
+        .list(company, &FinancialEntryQuery::default(), None, None)
+        .await
+        .unwrap();
+    assert_eq!(listed.items.len(), 1, "a refused entry is not stored");
+    assert_eq!(service.history(company, rent.id()).await.unwrap().len(), 1);
+    // The company's records are not usable in another company.
+    assert_eq!(
+        service
+            .register(other_company, &ana, draft.clone())
+            .await
+            .unwrap_err(),
+        ApplicationError::UnusableReference("category")
+    );
+
+    // The same draft changes nothing: no write, no audit entry.
+    service
+        .update(company, &ana, rent.id(), draft.clone())
+        .await
+        .unwrap();
+    assert_eq!(service.history(company, rent.id()).await.unwrap().len(), 1);
+
+    // A change records only the fields that changed.
+    let mut moved = draft.clone();
+    moved.installments = vec![
+        EntryInstallmentDraft {
+            due_date: "2026-11-10".into(),
+            amount: "1250".into(),
+        },
+        EntryInstallmentDraft {
+            due_date: "2026-12-10".into(),
+            amount: "1250".into(),
+        },
+    ];
+    moved.cost_center_id = Some(seed.cost_center);
+    let updated = service
+        .update(company, &ana, rent.id(), moved)
+        .await
+        .unwrap();
+    assert_eq!(updated.total().to_string(), "2500");
+    let trail = service.history(company, rent.id()).await.unwrap();
+    assert_eq!(trail.len(), 2);
+    let mut fields: Vec<&str> = trail[1]
+        .entry
+        .changes
+        .iter()
+        .map(|change| change.field.as_str())
+        .collect();
+    fields.sort_unstable();
+    assert_eq!(fields, ["cost_center_id", "installments"]);
+
+    // A draft the domain refuses changes nothing.
+    let mut invalid = draft.clone();
+    invalid.installments[0].amount = "1.005".into();
+    assert_eq!(
+        service
+            .update(company, &ana, rent.id(), invalid)
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::InvalidInstallmentAmount)
+    );
+    assert_eq!(
+        service
+            .get(company, rent.id())
+            .await
+            .unwrap()
+            .installments_text(),
+        "1:2026-11-10:1250,2:2026-12-10:1250"
+    );
+
+    // Another company's entry is not found, and neither is its trail.
+    assert_eq!(
+        service.get(other_company, rent.id()).await.unwrap_err(),
+        ApplicationError::EntryNotFound
+    );
+    assert_eq!(
+        service
+            .update(other_company, &ana, rent.id(), draft)
+            .await
+            .unwrap_err(),
+        ApplicationError::EntryNotFound
+    );
+    assert_eq!(
+        service.history(other_company, rent.id()).await.unwrap_err(),
+        ApplicationError::EntryNotFound
+    );
+}
+
+/// Listing is by competence date, newest first unless asked otherwise, then by id; a page resumes
+/// right after its cursor; a filter narrows by kind, category or a piece of the description; and a
+/// company sees only its own entries.
+pub async fn filters_and_sorts_entries<R, F>(
+    service: &FinancialEntryService<R, F>,
+    company: CompanyId,
+    other_company: CompanyId,
+    other_seed: &EntrySeed,
+    seed: &EntrySeed,
+) where
+    R: FinancialEntryRepository,
+    F: EntryReferences,
+{
+    let ana = actor();
+    // Two entries share a competence day, so the id has to break the tie the same way everywhere.
+    for (description, kind, category, competence) in [
+        ("Aluguel", EntryKind::Payable, seed.category, "2026-09-01"),
+        (
+            "Venda de bolos 100%",
+            EntryKind::Receivable,
+            seed.category,
+            "2026-10-01",
+        ),
+        (
+            "Serviço_x",
+            EntryKind::Receivable,
+            seed.other_category,
+            "2026-10-01",
+        ),
+        (
+            "Fornecedor de farinha",
+            EntryKind::Payable,
+            seed.other_category,
+            "2026-11-01",
+        ),
+        (
+            "Venda de pães",
+            EntryKind::Receivable,
+            seed.category,
+            "2026-08-01",
+        ),
+    ] {
+        let mut draft = entry_draft(seed, description, competence, &[("2026-12-01", "10")]);
+        draft.kind = kind;
+        draft.category_id = category;
+        service.register(company, &ana, draft).await.unwrap();
+    }
+    service
+        .register(
+            other_company,
+            &ana,
+            entry_draft(other_seed, "Doutro", "2026-10-15", &[("2026-12-01", "10")]),
+        )
+        .await
+        .unwrap();
+
+    let descriptions = |query: FinancialEntryQuery| async move {
+        service
+            .list(company, &query, None, None)
+            .await
+            .unwrap()
+            .items
+            .iter()
+            .map(|entry| entry.description().to_owned())
+            .collect::<Vec<_>>()
+    };
+    let all = FinancialEntryQuery::default();
+    let newest_first = descriptions(all.clone()).await;
+    assert_eq!(newest_first.len(), 5, "only this company's entries");
+    assert_eq!(newest_first[0], "Fornecedor de farinha");
+    assert_eq!(newest_first[3], "Aluguel");
+    assert_eq!(newest_first[4], "Venda de pães");
+    let mut oldest_first = descriptions(all.clone().sorted(EntrySort::CompetenceAsc)).await;
+    oldest_first.reverse();
+    assert_eq!(
+        oldest_first, newest_first,
+        "the other direction is the exact reverse"
+    );
+
+    // Pages follow the cursor, in both directions, and never repeat or skip.
+    for sort in [EntrySort::CompetenceDesc, EntrySort::CompetenceAsc] {
+        let query = all.clone().sorted(sort);
+        let expected: Vec<EntryId> = service
+            .list(company, &query, None, None)
+            .await
+            .unwrap()
+            .items
+            .iter()
+            .map(FinancialEntry::id)
+            .collect();
+        let mut seen = Vec::new();
+        let mut after: Option<EntryCursor> = None;
+        loop {
+            let page = service
+                .list(company, &query, after.as_ref(), Some(2))
+                .await
+                .unwrap();
+            assert!(page.items.len() <= 2);
+            seen.extend(page.items.iter().map(FinancialEntry::id));
+            match page.next {
+                Some(next) => after = Some(next),
+                None => break,
+            }
+        }
+        assert_eq!(seen, expected, "{sort:?}");
+        assert_eq!(seen.len(), 5);
+    }
+
+    assert_eq!(
+        descriptions(all.clone().with_kind(EntryKind::Payable)).await,
+        ["Fornecedor de farinha", "Aluguel"]
+    );
+    assert_eq!(
+        descriptions(
+            all.clone()
+                .with_category(seed.other_category)
+                .sorted(EntrySort::CompetenceAsc)
+        )
+        .await,
+        ["Serviço_x", "Fornecedor de farinha"]
+    );
+    assert_eq!(descriptions(all.clone().searching("VENDA")).await.len(), 2);
+    assert_eq!(
+        descriptions(all.clone().searching("%")).await,
+        ["Venda de bolos 100%"]
+    );
+    assert_eq!(
+        descriptions(all.clone().searching("_")).await,
+        ["Serviço_x"]
+    );
+    assert!(
+        descriptions(all.clone().searching("nobody"))
+            .await
+            .is_empty()
+    );
+    assert_eq!(descriptions(all.clone().searching("  ")).await.len(), 5);
+    assert_eq!(
+        descriptions(all.clone().searching("ven\0da")).await.len(),
+        2
+    );
+    assert_eq!(
+        descriptions(all.with_kind(EntryKind::Receivable).searching("venda"))
+            .await
+            .len(),
+        2
+    );
+}

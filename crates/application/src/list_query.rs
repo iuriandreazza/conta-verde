@@ -1,7 +1,5 @@
 //! What every list query shares (ADR 0018); a register adds its own filters on top.
 
-use crate::NameCursor;
-
 /// Longest search text accepted; a person types a name or a number, not a paragraph.
 pub const MAX_SEARCH_CHARS: usize = 100;
 
@@ -31,14 +29,14 @@ pub(crate) fn clamp_limit(limit: Option<usize>) -> usize {
 
 /// Turns the `limit + 1` rows a repository was asked for into a page and the cursor of the next
 /// one: the extra row only tells whether another page exists, without a second query.
-pub(crate) fn split_page<T>(mut rows: Vec<T>, limit: usize) -> (Vec<T>, Option<NameCursor>)
+pub(crate) fn split_page<T, C>(mut rows: Vec<T>, limit: usize) -> (Vec<T>, Option<C>)
 where
-    NameCursor: for<'a> From<&'a T>,
+    C: for<'a> From<&'a T>,
 {
     let has_more = rows.len() > limit;
     rows.truncate(limit);
     let next = if has_more {
-        rows.last().map(NameCursor::from)
+        rows.last().map(C::from)
     } else {
         None
     };

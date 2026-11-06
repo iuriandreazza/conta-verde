@@ -5,6 +5,7 @@ mod categories;
 mod cost_centers;
 mod csv_import;
 mod cursor;
+mod entries;
 mod error;
 mod history;
 mod json;
@@ -25,10 +26,11 @@ use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
 use conta_verde_application::{
     AuthService, BankAccountRepository, BankAccountService, CategoryRepository, CategoryService,
-    CnpjRegistry, CostCenterRepository, CostCenterService, EmailSender, IdentityRepository,
-    InvitationRepository, MemberService, PartyRepository, PartyService, PaymentMethodRepository,
-    PaymentMethodService, PaymentTermRepository, PaymentTermService, PostalCodeDirectory,
-    PostalCodeService, ProductRepository, ProductService, SecretService,
+    CnpjRegistry, CostCenterRepository, CostCenterService, EmailSender, EntryReferences,
+    FinancialEntryRepository, FinancialEntryService, IdentityRepository, InvitationRepository,
+    MemberService, PartyRepository, PartyService, PaymentMethodRepository, PaymentMethodService,
+    PaymentTermRepository, PaymentTermService, PostalCodeDirectory, PostalCodeService,
+    ProductRepository, ProductService, SecretService,
 };
 use serde::Serialize;
 
@@ -51,6 +53,8 @@ pub trait Ports: 'static {
     type BankAccounts: BankAccountRepository + 'static;
     type PaymentMethods: PaymentMethodRepository + 'static;
     type PaymentTerms: PaymentTermRepository + 'static;
+    type Entries: FinancialEntryRepository + 'static;
+    type EntryReferences: EntryReferences + 'static;
     type PostalCodes: PostalCodeDirectory + 'static;
     type Invitations: InvitationRepository + 'static;
     type Emails: EmailSender + 'static;
@@ -65,6 +69,7 @@ pub struct Services<X: Ports> {
     pub bank_accounts: BankAccountService<X::BankAccounts>,
     pub payment_methods: PaymentMethodService<X::PaymentMethods>,
     pub payment_terms: PaymentTermService<X::PaymentTerms>,
+    pub entries: FinancialEntryService<X::Entries, X::EntryReferences>,
     pub postal_codes: PostalCodeService<X::PostalCodes>,
     pub members: MemberService<X::Invitations, X::Identity, X::Emails, X::Secrets>,
     pub auth: AuthService<X::Identity, X::Secrets>,
@@ -78,6 +83,7 @@ pub(crate) struct AppState<X: Ports> {
     bank_accounts: BankAccountService<X::BankAccounts>,
     payment_methods: PaymentMethodService<X::PaymentMethods>,
     payment_terms: PaymentTermService<X::PaymentTerms>,
+    entries: FinancialEntryService<X::Entries, X::EntryReferences>,
     postal_codes: PostalCodeService<X::PostalCodes>,
     members: MemberService<X::Invitations, X::Identity, X::Emails, X::Secrets>,
     auth: AuthService<X::Identity, X::Secrets>,
@@ -96,6 +102,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         bank_accounts: services.bank_accounts,
         payment_methods: services.payment_methods,
         payment_terms: services.payment_terms,
+        entries: services.entries,
         postal_codes: services.postal_codes,
         members: services.members,
         auth: services.auth,
@@ -211,6 +218,18 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
             get(payment_terms::payment_term_history::<X>),
         )
         .route(
+            "/companies/{company_id}/entries",
+            get(entries::list_entries::<X>).post(entries::register_entry::<X>),
+        )
+        .route(
+            "/companies/{company_id}/entries/{entry_id}",
+            get(entries::get_entry::<X>).put(entries::update_entry::<X>),
+        )
+        .route(
+            "/companies/{company_id}/entries/{entry_id}/history",
+            get(entries::entry_history::<X>),
+        )
+        .route(
             "/companies/{company_id}/members",
             get(members::list_members::<X>),
         )
@@ -260,9 +279,9 @@ mod tests {
     use conta_verde_infrastructure::{
         Argon2SecretService, InMemoryBankAccountRepository, InMemoryCategoryRepository,
         InMemoryCnpjRegistry, InMemoryCostCenterRepository, InMemoryEmailSender,
-        InMemoryIdentityRepository, InMemoryInvitationRepository, InMemoryPartyRepository,
-        InMemoryPaymentMethodRepository, InMemoryPaymentTermRepository,
-        InMemoryPostalCodeDirectory, InMemoryProductRepository,
+        InMemoryFinancialEntryRepository, InMemoryIdentityRepository, InMemoryInvitationRepository,
+        InMemoryPartyRepository, InMemoryPaymentMethodRepository, InMemoryPaymentTermRepository,
+        InMemoryPostalCodeDirectory, InMemoryProductRepository, RegisterReferences,
     };
     use http_body_util::BodyExt;
     use serde_json::{Value, json};
@@ -326,6 +345,8 @@ mod tests {
         type BankAccounts = InMemoryBankAccountRepository;
         type PaymentMethods = InMemoryPaymentMethodRepository;
         type PaymentTerms = InMemoryPaymentTermRepository;
+        type Entries = InMemoryFinancialEntryRepository;
+        type EntryReferences = TestReferences;
         type PostalCodes = InMemoryPostalCodeDirectory;
         type Invitations = InMemoryInvitationRepository;
         type Emails = InMemoryEmailSender;
@@ -345,9 +366,42 @@ mod tests {
         type BankAccounts = InMemoryBankAccountRepository;
         type PaymentMethods = InMemoryPaymentMethodRepository;
         type PaymentTerms = InMemoryPaymentTermRepository;
+        type Entries = InMemoryFinancialEntryRepository;
+        type EntryReferences = TestReferences;
         type PostalCodes = Option<InMemoryPostalCodeDirectory>;
         type Invitations = InMemoryInvitationRepository;
         type Emails = InMemoryEmailSender;
+    }
+
+    type TestReferences = RegisterReferences<
+        InMemoryCategoryRepository,
+        InMemoryCostCenterRepository,
+        InMemoryPartyRepository,
+    >;
+
+    type TestEntries = FinancialEntryService<InMemoryFinancialEntryRepository, TestReferences>;
+
+    /// Entries over registers that the app's own services do not share: for the tests that never
+    /// register an entry. `entries_over` is the one that does.
+    fn standalone_entries() -> TestEntries {
+        entries_over(
+            &InMemoryCategoryRepository::default(),
+            &InMemoryCostCenterRepository::default(),
+            &InMemoryPartyRepository::default(),
+        )
+    }
+
+    /// Entries that read the registers a test keeps a handle to, so what it registers there can be
+    /// pointed at.
+    fn entries_over(
+        categories: &InMemoryCategoryRepository,
+        cost_centers: &InMemoryCostCenterRepository,
+        parties: &InMemoryPartyRepository,
+    ) -> TestEntries {
+        FinancialEntryService::new(
+            InMemoryFinancialEntryRepository::default(),
+            RegisterReferences::new(categories.clone(), cost_centers.clone(), parties.clone()),
+        )
     }
 
     type TestMembers = MemberService<
@@ -419,6 +473,7 @@ mod tests {
                     InMemoryPaymentMethodRepository::default(),
                 ),
                 payment_terms: PaymentTermService::new(InMemoryPaymentTermRepository::default()),
+                entries: standalone_entries(),
                 postal_codes: PostalCodeService::new(postal_codes),
                 members,
                 auth,
@@ -1050,6 +1105,7 @@ mod tests {
                     InMemoryPaymentMethodRepository::default(),
                 ),
                 payment_terms: PaymentTermService::new(InMemoryPaymentTermRepository::default()),
+                entries: standalone_entries(),
                 postal_codes: PostalCodeService::new(None),
                 members: standalone_members(),
                 auth: auth_service(),
@@ -2523,6 +2579,7 @@ mod tests {
                     InMemoryPaymentMethodRepository::default(),
                 ),
                 payment_terms: PaymentTermService::new(InMemoryPaymentTermRepository::default()),
+                entries: standalone_entries(),
                 postal_codes: PostalCodeService::new(None),
                 members: standalone_members(),
                 auth: auth_service(),
@@ -3995,6 +4052,437 @@ mod tests {
         )
         .await;
         assert_eq!(history.body.as_array().unwrap().len(), 2);
+    }
+
+    fn entries_uri(company_id: Uuid) -> String {
+        format!("/companies/{company_id}/entries")
+    }
+
+    /// An app whose entries read the very registers its categories, cost centers and parties
+    /// write to, which is what pointing an entry at a record needs.
+    fn entry_app() -> Router {
+        let categories = InMemoryCategoryRepository::default();
+        let cost_centers = InMemoryCostCenterRepository::default();
+        let parties = InMemoryPartyRepository::default();
+        router::<MemoryPorts>(
+            Services {
+                parties: PartyService::new(parties.clone(), known_companies())
+                    .with_recheck_interval(Duration::ZERO),
+                products: ProductService::new(InMemoryProductRepository::default()),
+                cost_centers: CostCenterService::new(cost_centers.clone()),
+                categories: CategoryService::new(categories.clone()),
+                bank_accounts: BankAccountService::new(InMemoryBankAccountRepository::default()),
+                payment_methods: PaymentMethodService::new(
+                    InMemoryPaymentMethodRepository::default(),
+                ),
+                payment_terms: PaymentTermService::new(InMemoryPaymentTermRepository::default()),
+                entries: entries_over(&categories, &cost_centers, &parties),
+                postal_codes: PostalCodeService::new(known_postal_codes()),
+                members: standalone_members(),
+                auth: auth_service(),
+            },
+            ApiConfig::default(),
+        )
+    }
+
+    /// The ids an entry points at, made through the API.
+    struct EntryTargets {
+        category: String,
+        other_category: String,
+        transfers: String,
+        cost_center: String,
+        party: String,
+    }
+
+    async fn entry_targets(app: &Router, cookie: &str, company_id: Uuid) -> EntryTargets {
+        let id_of = |reply: Reply| {
+            assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.body);
+            reply.body["id"].as_str().unwrap().to_owned()
+        };
+        let category = |name: &str, dre: &str, flow: &str| {
+            post_category(
+                app,
+                cookie,
+                company_id,
+                json!({ "name": name, "dre_group": dre, "cash_flow_group": flow }),
+            )
+        };
+        EntryTargets {
+            category: id_of(category("Vendas", "gross_revenue", "operating").await),
+            other_category: id_of(category("Despesas", "operating_expenses", "operating").await),
+            transfers: id_of(category("Transferências", "transfers", "transfer").await),
+            cost_center: id_of(
+                post_cost_center(app, cookie, company_id, json!({ "name": "Matriz" })).await,
+            ),
+            party: id_of(
+                send(
+                    app,
+                    json_request("POST", &parties_uri(company_id), Some(cookie), party_body()),
+                )
+                .await,
+            ),
+        }
+    }
+
+    fn entry_body(targets: &EntryTargets, description: &str, parts: &[(&str, &str)]) -> Value {
+        json!({
+            "kind": "receivable",
+            "description": description,
+            "party_id": targets.party,
+            "category_id": targets.category,
+            "cost_center_id": targets.cost_center,
+            "competence_date": "2026-11-05",
+            "installments": parts
+                .iter()
+                .map(|(due, amount)| json!({ "due_date": due, "amount": amount }))
+                .collect::<Vec<_>>(),
+        })
+    }
+
+    #[tokio::test]
+    async fn registers_changes_and_lists_entries_with_their_history() {
+        let app = entry_app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let targets = entry_targets(&app, &cookie, company_id).await;
+        let uri = entries_uri(company_id);
+
+        let created = send(
+            &app,
+            json_request(
+                "POST",
+                &uri,
+                Some(&cookie),
+                entry_body(
+                    &targets,
+                    "Venda parcelada",
+                    &[("2026-12-10", "100.50"), ("2027-01-10", "100.5")],
+                ),
+            ),
+        )
+        .await;
+        assert_eq!(created.status, StatusCode::CREATED, "{}", created.body);
+        // Amounts are decimal strings without trailing zeros, the total is added up, and the
+        // installments come numbered.
+        assert_eq!(created.body["total"], "201");
+        assert_eq!(created.body["kind"], "receivable");
+        assert_eq!(
+            created.body["installments"][0],
+            json!({ "number": 1, "due_date": "2026-12-10", "amount": "100.5" })
+        );
+        assert_eq!(created.body["installments"][1]["number"], 2);
+        assert_eq!(created.body["party_id"], targets.party);
+        let id = created.body["id"].as_str().unwrap().to_owned();
+        let one = format!("{uri}/{id}");
+
+        let fetched = send(&app, get_request(&one, Some(&cookie))).await;
+        assert_eq!(fetched.status, StatusCode::OK);
+        assert_eq!(fetched.body, created.body);
+
+        // Replaced as a whole: the references left out are removed, the installments are the new ones.
+        let replaced = send(
+            &app,
+            json_request(
+                "PUT",
+                &one,
+                Some(&cookie),
+                json!({
+                    "kind": "payable",
+                    "description": "Aluguel",
+                    "category_id": targets.other_category,
+                    "competence_date": "2026-11-01",
+                    "installments": [{ "due_date": "2026-11-10", "amount": "2500" }],
+                }),
+            ),
+        )
+        .await;
+        assert_eq!(replaced.status, StatusCode::OK, "{}", replaced.body);
+        assert_eq!(replaced.body["party_id"], Value::Null);
+        assert_eq!(replaced.body["cost_center_id"], Value::Null);
+        assert_eq!(replaced.body["total"], "2500");
+
+        // The same body again changes nothing and records nothing.
+        let same = replaced.body.clone();
+        let again = send(
+            &app,
+            json_request(
+                "PUT",
+                &one,
+                Some(&cookie),
+                json!({
+                    "kind": same["kind"], "description": same["description"],
+                    "category_id": same["category_id"], "competence_date": same["competence_date"],
+                    "installments": [{ "due_date": "2026-11-10", "amount": "2500" }],
+                }),
+            ),
+        )
+        .await;
+        assert_eq!(again.status, StatusCode::OK);
+        let history = send(&app, get_request(&format!("{one}/history"), Some(&cookie))).await;
+        assert_eq!(history.status, StatusCode::OK);
+        let trail = history.body.as_array().unwrap();
+        assert_eq!(trail.len(), 2);
+        assert_eq!(trail[0]["action"], "created");
+        assert_eq!(trail[1]["action"], "updated");
+        let changed: Vec<&str> = trail[1]["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|change| change["field"].as_str().unwrap())
+            .collect();
+        assert!(
+            changed.contains(&"installments") && changed.contains(&"party_id"),
+            "{changed:?}"
+        );
+
+        let listed = send(&app, get_request(&uri, Some(&cookie))).await;
+        assert_eq!(listed.body["items"].as_array().unwrap().len(), 1);
+        assert_eq!(listed.body["next_cursor"], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn an_entry_that_points_at_what_cannot_be_used_or_says_what_is_not_a_date_is_refused_in_json()
+     {
+        let app = entry_app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let targets = entry_targets(&app, &cookie, company_id).await;
+        let uri = entries_uri(company_id);
+        let post = |body: Value| send(&app, json_request("POST", &uri, Some(&cookie), body));
+        let ok = entry_body(&targets, "x", &[("2026-12-10", "10")]);
+        let with = |field: &str, value: Value| {
+            let mut body = ok.clone();
+            body[field] = value;
+            body
+        };
+
+        // What cannot be pointed at is a 422 naming the field: the transfers category, a record
+        // that does not exist, and one that belongs to another company.
+        let transfers = post(with("category_id", json!(targets.transfers))).await;
+        assert_eq!(transfers.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            transfers.body["error"]
+                .as_str()
+                .unwrap()
+                .contains("category")
+        );
+        for (field, value) in [
+            ("category_id", json!(Uuid::new_v4())),
+            ("cost_center_id", json!(Uuid::new_v4())),
+            ("party_id", json!(Uuid::new_v4())),
+        ] {
+            let reply = post(with(field, value)).await;
+            assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "{field}");
+        }
+        let (stranger, _) = sign_up(&app, "bia@example.com").await;
+        let stolen = send(
+            &app,
+            json_request("POST", &uri, Some(&stranger), ok.clone()),
+        )
+        .await;
+        assert_eq!(
+            stolen.status,
+            StatusCode::NOT_FOUND,
+            "not a member of this company"
+        );
+
+        // The domain's rules are 422s that say what to change; a malformed body is JSON too.
+        for (body, what) in [
+            (
+                with("competence_date", json!("05/11/2026")),
+                "competence_date",
+            ),
+            (with("description", json!("")), "description"),
+            (with("installments", json!([])), "at least one installment"),
+            (
+                with(
+                    "installments",
+                    json!([{ "due_date": "2026-12-10", "amount": "1.005" }]),
+                ),
+                "cents",
+            ),
+            (
+                with(
+                    "installments",
+                    json!([{ "due_date": "2026-12-10", "amount": "0" }]),
+                ),
+                "cents",
+            ),
+            (
+                with(
+                    "installments",
+                    json!([{ "due_date": "2026-12-10", "amount": "-1" }]),
+                ),
+                "cents",
+            ),
+            (
+                with(
+                    "installments",
+                    json!([{ "due_date": "2026-12-11", "amount": "1" }, { "due_date": "2026-12-10", "amount": "1" }]),
+                ),
+                "decrease",
+            ),
+            (
+                with(
+                    "installments",
+                    json!([{ "due_date": "2026-13-01", "amount": "1" }]),
+                ),
+                "due_date",
+            ),
+            (with("kind", json!("sale")), "receivable or payable"),
+        ] {
+            let reply = post(body.clone()).await;
+            assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+            assert!(
+                reply.body["error"].as_str().unwrap().contains(what),
+                "{}",
+                reply.body
+            );
+        }
+        // Amounts are strings, never JSON numbers; unknown fields are refused, not ignored.
+        let number = post(with(
+            "installments",
+            json!([{ "due_date": "2026-12-10", "amount": 10 }]),
+        ))
+        .await;
+        assert_eq!(number.status, StatusCode::UNPROCESSABLE_ENTITY);
+        let unknown = post(with("total", json!("10"))).await;
+        assert_eq!(unknown.status, StatusCode::UNPROCESSABLE_ENTITY);
+        let none = send(&app, get_request(&uri, Some(&cookie))).await;
+        assert_eq!(
+            none.body["items"].as_array().unwrap().len(),
+            0,
+            "a refused entry is not stored"
+        );
+
+        // An id that is not one is a JSON 404 like any other miss.
+        let bad_id = send(
+            &app,
+            get_request(&format!("{uri}/not-an-id"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(bad_id.status, StatusCode::NOT_FOUND);
+        assert!(bad_id.body["error"].is_string());
+    }
+
+    #[tokio::test]
+    async fn lists_entries_newest_first_by_page_and_filters_them_from_query_parameters() {
+        let app = entry_app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let targets = entry_targets(&app, &cookie, company_id).await;
+        let uri = entries_uri(company_id);
+        for (description, kind, category, competence) in [
+            ("Aluguel", "payable", &targets.other_category, "2026-09-01"),
+            (
+                "Venda de bolos",
+                "receivable",
+                &targets.category,
+                "2026-10-01",
+            ),
+            (
+                "Fornecedor",
+                "payable",
+                &targets.other_category,
+                "2026-11-01",
+            ),
+        ] {
+            let mut body = entry_body(&targets, description, &[("2026-12-10", "10")]);
+            body["kind"] = json!(kind);
+            body["category_id"] = json!(category);
+            body["competence_date"] = json!(competence);
+            let reply = send(&app, json_request("POST", &uri, Some(&cookie), body)).await;
+            assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.body);
+        }
+        let descriptions = |reply: &Reply| -> Vec<String> {
+            reply.body["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|item| item["description"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        let list = |query: &str| send(&app, get_request(&format!("{uri}?{query}"), Some(&cookie)));
+
+        assert_eq!(
+            descriptions(&list("").await),
+            ["Fornecedor", "Venda de bolos", "Aluguel"]
+        );
+        assert_eq!(
+            descriptions(&list("sort=competence_date").await),
+            ["Aluguel", "Venda de bolos", "Fornecedor"]
+        );
+        assert_eq!(
+            descriptions(&list("kind=payable").await),
+            ["Fornecedor", "Aluguel"]
+        );
+        assert_eq!(
+            descriptions(&list(&format!("category={}", targets.category)).await),
+            ["Venda de bolos"]
+        );
+        assert_eq!(descriptions(&list("q=VENDA").await), ["Venda de bolos"]);
+
+        // A page says where the next one starts, and the cursor resumes right after it.
+        let first = list("limit=2").await;
+        assert_eq!(descriptions(&first), ["Fornecedor", "Venda de bolos"]);
+        let cursor = first.body["next_cursor"].as_str().unwrap().to_owned();
+        let second = list(&format!("limit=2&after={cursor}")).await;
+        assert_eq!(descriptions(&second), ["Aluguel"]);
+        assert_eq!(second.body["next_cursor"], Value::Null);
+
+        // What is not understood is a 400 in JSON, never ignored.
+        for query in [
+            "kind=sale",
+            "sort=name",
+            "category=abc",
+            "after=garbage",
+            "after=x|2026-01-01",
+        ] {
+            let reply = list(query).await;
+            assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{query}");
+            assert!(reply.body["error"].is_string(), "{query}");
+        }
+    }
+
+    #[tokio::test]
+    async fn entries_stay_private_and_follow_the_finance_role() {
+        use conta_verde_domain::Role;
+
+        let (app, identities, _) = app_with_mailbox();
+        let (_, company_id) = sign_up(&app, "dona@example.com").await;
+        let uri = entries_uri(company_id);
+        // A member of another company does not even learn that the company exists.
+        let (stranger, _) = sign_up(&app, "bia@example.com").await;
+        assert_eq!(
+            send(&app, get_request(&uri, Some(&stranger))).await.status,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            send(&app, get_request(&uri, None)).await.status,
+            StatusCode::UNAUTHORIZED
+        );
+
+        // Everyone who belongs reads; only the roles that write finance register, and the others are
+        // refused with 403 before the body is looked at.
+        for (role, may_write) in [
+            (Role::Admin, true),
+            (Role::Financial, true),
+            (Role::Sales, false),
+            (Role::Stock, false),
+            (Role::Accountant, false),
+            (Role::Viewer, false),
+        ] {
+            let cookie = member_with_role(&app, &identities, company_id, role).await;
+            assert_eq!(
+                send(&app, get_request(&uri, Some(&cookie))).await.status,
+                StatusCode::OK,
+                "{role:?} reads"
+            );
+            let write = send(&app, json_request("POST", &uri, Some(&cookie), json!({}))).await;
+            let expected = if may_write {
+                StatusCode::UNPROCESSABLE_ENTITY
+            } else {
+                StatusCode::FORBIDDEN
+            };
+            assert_eq!(write.status, expected, "{role:?} writes");
+        }
     }
 
     fn payment_terms_uri(company_id: Uuid) -> String {
