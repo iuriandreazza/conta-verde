@@ -12,6 +12,7 @@ import {
   type EntryInput,
   type PaymentMethod,
 } from "../api";
+import { ListFooter } from "../components/ListFooter";
 import { Button } from "../components/Button";
 import { EntryForm, type EntryTargets } from "../components/EntryForm";
 import { EntryHistory } from "../components/EntryHistory";
@@ -22,7 +23,6 @@ import { Notice } from "../components/Notice";
 import { PageHeader } from "../components/PageHeader";
 import { Spinner } from "../components/Spinner";
 import { BriefcaseBusinessIcon } from "../components/icons/briefcase-business";
-import { ChevronDownIcon } from "../components/icons/chevron-down";
 import { HistoryIcon } from "../components/icons/history";
 import { CircleDollarSignIcon } from "../components/icons/circle-dollar-sign";
 import { FileTextIcon } from "../components/icons/file-text";
@@ -196,7 +196,7 @@ export function EntriesPage() {
                   setFilters({ ...filters, kind: event.target.value as EntryFilters["kind"] })
                 }
               >
-                <option value="">A receber e a pagar</option>
+                <option value="">Todos</option>
                 <option value="receivable">Só a receber</option>
                 <option value="payable">Só a pagar</option>
               </select>
@@ -217,15 +217,15 @@ export function EntriesPage() {
               </select>
             </label>
             <label>
-              Ordem
+              Ordem por competência
               <select
                 value={filters.sort}
                 onChange={(event) =>
                   setFilters({ ...filters, sort: event.target.value as EntryFilters["sort"] })
                 }
               >
-                <option value="-competence_date">Competência (mais recente)</option>
-                <option value="competence_date">Competência (mais antiga)</option>
+                <option value="-competence_date">Mais recentes</option>
+                <option value="competence_date">Mais antigas</option>
               </select>
             </label>
           </div>
@@ -278,7 +278,7 @@ export function EntriesPage() {
                     const status = entryStatus(entry, today);
                     return (
                     <Fragment key={entry.id}>
-                      <ListRow index={index} highlighted={entry.id === highlightedId}>
+                      <ListRow index={index} highlighted={entry.id === highlightedId} tone={status === "overdue" && !entry.voided ? "critical" : undefined}>
                         <td>
                           <div className="cell-title">{entry.description}</div>
                           <div className="muted">
@@ -402,16 +402,14 @@ export function EntriesPage() {
               </table>
             </div>
           )}
-          {nextCursor !== null && (
-            <Button
-              type="button"
-              variant="ghost"
-              icon={ChevronDownIcon}
-              pending={loadingMore}
-              onClick={() => void loadMore()}
-            >
-              Carregar mais
-            </Button>
+          {!loading && entries.length > 0 && (
+            <ListFooter
+              count={entries.length}
+              noun={["lançamento", "lançamentos"]}
+              hasMore={nextCursor !== null}
+              loadingMore={loadingMore}
+              onLoadMore={() => void loadMore()}
+            />
           )}
         </section>
         {canWrite && (

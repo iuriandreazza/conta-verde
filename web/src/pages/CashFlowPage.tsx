@@ -19,7 +19,7 @@ const REALIZED = "Saldo realizado";
 const PROJECTED = "Saldo previsto";
 const SERIES: LegendItem[] = [
   { name: REALIZED, color: "var(--series-1)" },
-  { name: PROJECTED, color: "var(--chart-muted)" },
+  { name: PROJECTED, color: "var(--chart-muted)", dashed: true },
 ];
 
 const negative = (amount: string) => (amount.startsWith("-") ? "num negative" : "num");

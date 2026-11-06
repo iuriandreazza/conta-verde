@@ -1008,6 +1008,20 @@ tbody tr:hover td.row-actions {
   background: #f8faf9;
 }
 
+/* Needs attention: an edge on the row, beside the status badge that says it in words. */
+tr.row-critical > td:first-child {
+  box-shadow: inset 3px 0 0 var(--status-critical);
+}
+
+.list-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 1.5rem 1rem;
+}
+
 tbody tr:last-child td {
   border-bottom: 0;
 }
