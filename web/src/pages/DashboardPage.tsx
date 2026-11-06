@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, type EntryKind, type OverdueReport } from "../api";
+import { api, type CashFlow, type EntryKind, type OverdueReport } from "../api";
 import { AlertGlyph } from "../components/charts/AlertGlyph";
 import { BarChart } from "../components/charts/BarChart";
 import { ChartCard } from "../components/charts/ChartCard";
@@ -17,7 +17,7 @@ import { Spinner } from "../components/Spinner";
 import { useCreation, useOnCreated } from "../creation/CreationProvider";
 import { dueBuckets, granularityOf, periodLabel, spanDays } from "../dashboard/figures";
 import { CardBoundary } from "../dashboard/CardBoundary";
-import { useLoaded } from "../dashboard/useLoaded";
+import { useLoaded, type Loaded } from "../dashboard/useLoaded";
 import { formatMoney } from "../lib/decimal";
 import { centsToApi, formatDate, isIsoDate, sumCents } from "../lib/entryInstallments";
 import { PRESETS } from "../lib/period";
@@ -35,6 +35,8 @@ const DUE_SERIES = [
   { name: "A pagar", color: "var(--series-2)" },
 ];
 const TOP = 5;
+/** Names are read for the top rows of any company, so the cap is well above what a select offers. */
+const MAX_NAMES = 5000;
 /** The longest span the cash flow answers for by day (ADR 0032). */
 const MAX_DAYS = 400;
 
@@ -55,17 +57,21 @@ function Waiting({ error }: { error: string | null }) {
 export function DashboardPage() {
   const { companyId = "" } = useParams();
   // Today where the person is: the server reads no clock, and every figure is "as of" it.
-  const [today] = useState(() => todayIso());
+  const [today, setToday] = useState(() => todayIso());
   const [loadedAt, setLoadedAt] = useState(() => new Date());
   const [round, setRound] = useState(0);
   const [span, setSpan] = useState(() => PRESETS[0].span(today));
   const spanValid = isIsoDate(span.from) && isIsoDate(span.to) && span.from <= span.to && spanDays(span.from, span.to) <= MAX_DAYS;
   const reload = () => {
+    // A page left open past midnight is about the new day after a refresh.
+    setToday(todayIso());
     setLoadedAt(new Date());
     setRound((current) => current + 1);
   };
   // A new entry made from here or from the top bar changes every figure.
   useOnCreated("entry", reload);
+  // One reading of the next 60 days feeds both receivable and payable blocks and the due chart.
+  const forecast = useLoaded(() => api.getCashFlow(companyId, { from: today, to: addDays(today, 60), granularity: "day", account: "" }), [companyId, today, round]);
 
   return (
     <>
@@ -74,7 +80,7 @@ export function DashboardPage() {
         description="Como está o caixa, o que vence e o que foi vendido."
         actions={
           <>
-            <span className="muted" role="status">
+            <span className="muted">
               Atualizado em {clock.format(loadedAt)}
             </span>
             <Button type="button" variant="ghost" icon={RefreshCWIcon} onClick={reload}>
@@ -83,19 +89,19 @@ export function DashboardPage() {
           </>
         }
       />
-      <CardBoundary title="Saldo em caixa">
+      <CardBoundary key={round} title="Saldo em caixa">
         <AccountsCard companyId={companyId} today={today} round={round} />
       </CardBoundary>
       <div className="chart-row">
-        <CardBoundary title="A receber">
-          <DueBlock companyId={companyId} today={today} round={round} kind="receivable" />
+        <CardBoundary key={round} title="A receber">
+          <DueBlock companyId={companyId} today={today} round={round} forecast={forecast} kind="receivable" />
         </CardBoundary>
-        <CardBoundary title="A pagar">
-          <DueBlock companyId={companyId} today={today} round={round} kind="payable" />
+        <CardBoundary key={round} title="A pagar">
+          <DueBlock companyId={companyId} today={today} round={round} forecast={forecast} kind="payable" />
         </CardBoundary>
       </div>
-      <CardBoundary title="Contas por vencimento">
-        <DueChart companyId={companyId} today={today} round={round} />
+      <CardBoundary key={round} title="Contas por vencimento">
+        <DueChart today={today} forecast={forecast} />
       </CardBoundary>
       <section className="card filters-card" aria-label="Período">
         <PeriodFilter value={span} onChange={setSpan} today={today} />
@@ -105,10 +111,10 @@ export function DashboardPage() {
       </section>
       {spanValid && (
         <>
-          <CardBoundary title="Entradas e saídas">
+          <CardBoundary key={round} title="Entradas e saídas">
             <FlowCard companyId={companyId} round={round} from={span.from} to={span.to} />
           </CardBoundary>
-          <CardBoundary title="Vendas do período">
+          <CardBoundary key={round} title="Vendas do período">
             <SalesCard companyId={companyId} round={round} from={span.from} to={span.to} />
           </CardBoundary>
         </>
@@ -167,11 +173,22 @@ const BLOCK = {
 } as const;
 
 /** One of the two mirrored blocks: what is overdue, what is due today and in the week, and the way to start one. */
-function DueBlock({ companyId, today, round, kind }: { companyId: string; today: string; round: number; kind: EntryKind }) {
+function DueBlock({
+  companyId,
+  today,
+  round,
+  forecast,
+  kind,
+}: {
+  companyId: string;
+  today: string;
+  round: number;
+  forecast: Loaded<CashFlow>;
+  kind: EntryKind;
+}) {
   const canWrite = useCanWrite("finance");
   const { openCreate } = useCreation();
   const overdue = useLoaded(() => api.overdueReport(companyId, today, kind), [companyId, today, kind, round]);
-  const forecast = useLoaded(() => api.getCashFlow(companyId, { from: today, to: addDays(today, 60), granularity: "day", account: "" }), [companyId, today, round]);
   const words = BLOCK[kind];
   const buckets = forecast.data === null ? null : dueBuckets(forecast.data, today);
   const amount = (index: number) => (buckets === null ? null : buckets[index][kind]);
@@ -238,8 +255,7 @@ function OldestOverdue({ report, kind, companyId }: { report: OverdueReport; kin
   );
 }
 
-function DueChart({ companyId, today, round }: { companyId: string; today: string; round: number }) {
-  const forecast = useLoaded(() => api.getCashFlow(companyId, { from: today, to: addDays(today, 60), granularity: "day", account: "" }), [companyId, today, round]);
+function DueChart({ today, forecast }: { today: string; forecast: Loaded<CashFlow> }) {
   const buckets = useMemo(() => (forecast.data === null ? null : dueBuckets(forecast.data, today)), [forecast.data, today]);
   return (
     <ChartCard
@@ -310,8 +326,8 @@ function SalesCard({ companyId, round, from, to }: { companyId: string; round: n
   const names = useLoaded(
     async () => {
       const [parties, items] = await Promise.all([
-        readUpTo((after) => api.listParties(companyId, undefined, after)),
-        readUpTo((after) => api.listProducts(companyId, undefined, after)),
+        readUpTo((after) => api.listParties(companyId, undefined, after), MAX_NAMES),
+        readUpTo((after) => api.listProducts(companyId, undefined, after), MAX_NAMES),
       ]);
       return new Map([...parties, ...items].map((item) => [item.id, item.name]));
     },
