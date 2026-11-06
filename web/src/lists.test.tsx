@@ -370,4 +370,22 @@ describe("creating from the top bar", () => {
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
+
+  it.each([
+    ["Nova tabela de preço", "Nome"],
+    ["Nova regra de comissão", "Percentual (%)"],
+  ])("raises the %s sheet from the top bar, with its fields once what it points at is read", async (item, field) => {
+    mockApi((url) =>
+      url === "/api/auth/me" ? { status: 200, body: profile } : { status: 200, body: { items: [], next_cursor: null } },
+    );
+    renderAt("/companies/c1/parties");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Novo registro" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: item }));
+    const dialog = within(await screen.findByRole("dialog", { name: item }));
+
+    expect(await dialog.findByLabelText(field)).toBeInTheDocument();
+    await userEvent.click(dialog.getByRole("button", { name: "Voltar" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
 });

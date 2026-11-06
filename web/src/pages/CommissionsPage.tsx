@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import {
   NO_COMMISSION_RULE_FILTERS,
@@ -15,7 +15,6 @@ import {
 } from "../api";
 import { Button } from "../components/Button";
 import { History } from "../components/History";
-import { CheckIcon } from "../components/icons/check";
 import { ChevronDownIcon } from "../components/icons/chevron-down";
 import { HandCoinsIcon } from "../components/icons/hand-coins";
 import { HistoryIcon } from "../components/icons/history";
@@ -23,10 +22,14 @@ import { PlusIcon } from "../components/icons/plus";
 import { SquarePenIcon } from "../components/icons/square-pen";
 import { ListRow } from "../components/ListRow";
 import { Notice } from "../components/Notice";
+import { CommissionRuleForm } from "../components/CommissionRuleForm";
+import { Sheet } from "../components/Sheet";
+import { useCreation, useOnCreated } from "../creation/CreationProvider";
+import { useLastValue } from "../lib/useLastValue";
 import { PageHeader } from "../components/PageHeader";
 import { Spinner } from "../components/Spinner";
 import { StatusBadge } from "../components/StatusBadge";
-import { formatDecimal, formatMoney, isAmbiguousDecimal, toApiDecimal, toInputDecimal } from "../lib/decimal";
+import { formatDecimal, formatMoney } from "../lib/decimal";
 import { formatDate, isIsoDate } from "../lib/entryInstallments";
 import { readUpTo } from "../lib/readUpTo";
 import { todayIso } from "../lib/settlement";
@@ -227,7 +230,6 @@ interface RulesSectionProps {
 function RulesSection({ companyId, canWrite, parties, products, names, targetsLoaded }: RulesSectionProps) {
   const [filters, setFilters] = useState<CommissionRuleFilters>(NO_COMMISSION_RULE_FILTERS);
   const [editing, setEditing] = useState<CommissionRule | null>(null);
-  const [formVersion, setFormVersion] = useState(0);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
@@ -238,62 +240,34 @@ function RulesSection({ companyId, canWrite, parties, products, names, targetsLo
     usePagedList<CommissionRule, CommissionRuleFilters>((applied, after) => api.listCommissionRules(companyId, applied, after), filters);
   const isFiltered = applied.seller !== "" || applied.product !== "" || applied.active !== "";
   const sellers = parties.filter((party) => party.is_seller);
-  const productChoices = products.filter((product) => product.active || product.id === editing?.product_id);
-  // A rule keeps naming a seller who stopped being one; dropping it from the choices would widen the rule to everybody.
-  const sellerChoices = parties.filter((party) => party.is_seller || party.id === editing?.seller_id);
-
-  function startEditing(rule: CommissionRule | null) {
-    setEditing(rule);
-    setFormError(null);
+  const { openCreate } = useCreation();
+  const shown = useLastValue(editing);
+  // A rule made from the top bar or from here: read the list again and flash the new row.
+  useOnCreated("commissionRule", (created) => {
     setSaved(null);
-    setFormVersion((version) => version + 1);
+    setHighlightedId(created.id);
+    void reload();
+  });
+
+  function closeSheet() {
+    // A change on its way finishes first: closing now would hide what a failure has to say.
+    if (saving) return;
+    setEditing(null);
+    setFormError(null);
   }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (saving) {
-      return;
-    }
-    const form = new FormData(event.currentTarget);
-    const field = (name: string) => String(form.get(name) ?? "").trim();
-    if (isAmbiguousDecimal(field("rate")) || toApiDecimal(field("rate")) === undefined) {
-      setFormError("Informe o percentual, por exemplo 5 ou 7,5.");
-      return;
-    }
-    if (!isIsoDate(field("starts_on"))) {
-      setFormError("Informe o primeiro dia de venda que a regra cobre.");
-      return;
-    }
-    if (field("ends_on") !== "" && (!isIsoDate(field("ends_on")) || field("ends_on") < field("starts_on"))) {
-      setFormError("O último dia precisa ser uma data que não venha antes do primeiro.");
-      return;
-    }
-    const input: CommissionRuleInput = {
-      seller_id: field("seller_id") || undefined,
-      product_id: field("product_id") || undefined,
-      rate: toApiDecimal(field("rate")) ?? "",
-      starts_on: field("starts_on"),
-      ends_on: field("ends_on") || undefined,
-      active: form.get("active") === "on",
-    };
+  async function handleSubmit(input: CommissionRuleInput) {
+    if (editing === null) return;
     setSaving(true);
     setFormError(null);
     setSaved(null);
     try {
-      if (editing === null) {
-        const created = await api.createCommissionRule(companyId, input);
-        setHighlightedId(created.id);
-        startEditing(null);
-        setSaved(`Regra de ${rate(created.rate)} cadastrada.`);
-        await reload();
-      } else {
-        const updated = await api.updateCommissionRule(companyId, editing.id, input);
-        setHighlightedId(updated.id);
-        startEditing(null);
-        setSaved(`Regra de ${rate(updated.rate)} atualizada. As vendas já feitas são recalculadas no extrato.`);
-        // The new dates or situation may move it in the list or out of a filter.
-        await reload();
-      }
+      const updated = await api.updateCommissionRule(companyId, editing.id, input);
+      setHighlightedId(updated.id);
+      setEditing(null);
+      setSaved(`Regra de ${rate(updated.rate)} atualizada. As vendas já feitas são recalculadas no extrato.`);
+      // The new dates or situation may move it in the list or out of a filter.
+      await reload();
     } catch (failure) {
       setFormError(errorMessage(failure));
     } finally {
@@ -304,7 +278,15 @@ function RulesSection({ companyId, canWrite, parties, products, names, targetsLo
   const historyLoader = useCallback((id: string) => () => api.commissionRuleHistory(companyId, id), [companyId]);
 
   return (
-    <div className={canWrite ? "split" : "split split-single"}>
+    <>
+      {canWrite && (
+        <div className="list-actions">
+          <Button type="button" icon={PlusIcon} onClick={() => openCreate("commissionRule")}>
+            Nova regra de comissão
+          </Button>
+        </div>
+      )}
+      <Notice message={saved} tone="success" />
       <section className="card list-card" aria-label="Regras de comissão">
         <h2>Regras</h2>
         <div className="filters" role="search">
@@ -393,7 +375,11 @@ function RulesSection({ companyId, canWrite, parties, products, names, targetsLo
                             variant="ghost"
                             aria-label={`Alterar a regra de ${rate(item.rate)} desde ${formatDate(item.starts_on)}`}
                             disabled={saving}
-                            onClick={() => startEditing(item)}
+                            onClick={() => {
+                              setEditing(item);
+                              setFormError(null);
+                              setSaved(null);
+                            }}
                           >
                             Alterar
                           </Button>
@@ -436,68 +422,27 @@ function RulesSection({ companyId, canWrite, parties, products, names, targetsLo
         )}
       </section>
       {canWrite && (
-        <aside className="card form-card">
-          <h2>{editing === null ? "Nova regra" : "Alterar regra"}</h2>
-          {targetsLoaded && (
-            <form key={`${editing?.id ?? "new"}-${formVersion}`} onSubmit={(event) => void handleSubmit(event)}>
-              <label>
-                Vendedor
-                <select name="seller_id" defaultValue={editing?.seller_id ?? ""}>
-                  <option value="">Todos os vendedores</option>
-                  {sellerChoices.map((party) => (
-                    <option key={party.id} value={party.id}>
-                      {party.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Produto
-                <select name="product_id" defaultValue={editing?.product_id ?? ""}>
-                  <option value="">Todos os produtos</option>
-                  {productChoices.map((product) => (
-                    <option key={product.id} value={product.id}>
-                      {product.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Percentual (%)
-                <input name="rate" inputMode="decimal" autoComplete="off" required placeholder="5" defaultValue={toInputDecimal(editing?.rate ?? null)} />
-              </label>
-              <label>
-                Vale a partir de
-                <input name="starts_on" type="date" required defaultValue={editing?.starts_on ?? todayIso()} />
-              </label>
-              <label>
-                Vale até (opcional)
-                <input name="ends_on" type="date" defaultValue={editing?.ends_on ?? ""} />
-              </label>
-              <label className="inline">
-                <input name="active" type="checkbox" defaultChecked={editing?.active ?? true} /> Ativa
-              </label>
-              <p className="muted">
-                Vale a regra mais específica: vendedor e produto, depois só o vendedor, depois só o produto, depois a geral.
-                O dia que conta é o da venda.
+        <Sheet open={editing !== null} locked={saving} title="Alterar regra" onClose={closeSheet}>
+          {shown !== null &&
+            (targetsLoaded ? (
+              <CommissionRuleForm
+                key={shown.id}
+                rule={shown}
+                parties={parties}
+                products={products}
+                pending={saving}
+                error={formError}
+                onSubmit={(input) => void handleSubmit(input)}
+                onCancel={closeSheet}
+              />
+            ) : (
+              <p role="status" className="status">
+                <Spinner /> Carregando…
               </p>
-              <Notice message={formError} />
-              <div className="form-actions">
-                <Button type="submit" icon={editing === null ? PlusIcon : CheckIcon} pending={saving}>
-                  {editing === null ? "Cadastrar regra" : "Salvar alterações"}
-                </Button>
-                {editing !== null && (
-                  <Button type="button" variant="ghost" disabled={saving} onClick={() => startEditing(null)}>
-                    Cancelar edição
-                  </Button>
-                )}
-              </div>
-            </form>
-          )}
-          <Notice message={saved} tone="success" />
-        </aside>
+            ))}
+        </Sheet>
       )}
-    </div>
+    </>
   );
 }
 
