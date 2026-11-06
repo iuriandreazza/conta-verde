@@ -1038,6 +1038,77 @@ export interface SaleReturn {
   refund_entry_id: string | null;
 }
 
+export type PurchaseStatus = "draft" | "approved" | "partially_received" | "received" | "cancelled";
+
+/** An order to a supplier (ADR 0053); a line's `unit_price` is the unit cost. */
+export interface PurchaseOrder {
+  id: string;
+  company_id: string;
+  number: number;
+  supplier_id: string;
+  ordered_on: string;
+  expected_on: string | null;
+  payment_term_id: string | null;
+  /** The category of the payables the receipts make. */
+  category_id: string;
+  cost_center_id: string | null;
+  notes: string | null;
+  status: PurchaseStatus;
+  lines: DocumentLine[];
+  total: string;
+}
+
+export interface PurchaseOrderPage {
+  items: PurchaseOrder[];
+  next_cursor: string | null;
+}
+
+/** Replaces the whole order while it is a draft. */
+export interface PurchaseOrderInput {
+  supplier_id: string;
+  ordered_on: string;
+  expected_on?: string;
+  payment_term_id?: string;
+  category_id: string;
+  cost_center_id?: string;
+  notes?: string;
+  lines: LineInput[];
+}
+
+export interface PurchaseOrderFilters {
+  q: string;
+  status: "" | PurchaseStatus;
+  sort: "-number" | "number";
+}
+
+export const NO_PURCHASE_FILTERS: PurchaseOrderFilters = { q: "", status: "", sort: "-number" };
+
+export interface ReceiptItem {
+  /** The line's place in the order, from 1. */
+  line: number;
+  quantity: string;
+  /** What the quantity cost. */
+  value: string;
+}
+
+export interface PurchaseReceipt {
+  id: string;
+  purchase_id: string;
+  received_on: string;
+  notes: string | null;
+  items: ReceiptItem[];
+  /** The sum of the items, what the payable pays. */
+  total: string;
+  /** `null` for a receipt worth nothing, or while its payable is still to be made (finishing the receipt makes it). */
+  payable_id: string | null;
+}
+
+export interface ReceiptInput {
+  received_on: string;
+  notes?: string;
+  items: { line: number; quantity: string }[];
+}
+
 export type BillingCycle = "monthly" | "bimonthly" | "quarterly" | "semiannual" | "yearly";
 export type ContractStatus = "active" | "paused" | "terminated";
 
@@ -1688,6 +1759,38 @@ export const api = {
     request<{ items: SaleReturn[] }>(`/companies/${companyId}/sales/${id}/returns`),
   createReturn: (companyId: string, id: string, input: ReturnInput) =>
     post<SaleReturn>(`/companies/${companyId}/sales/${id}/returns`, input),
+  listPurchaseOrders: (companyId: string, filters: PurchaseOrderFilters = NO_PURCHASE_FILTERS, after?: string) => {
+    const params = new URLSearchParams();
+    if (filters.q) params.set("q", filters.q);
+    if (filters.status) params.set("status", filters.status);
+    if (filters.sort !== NO_PURCHASE_FILTERS.sort) params.set("sort", filters.sort);
+    if (after) params.set("after", after);
+    const query = params.size > 0 ? `?${params}` : "";
+    return request<PurchaseOrderPage>(`/companies/${companyId}/purchase-orders${query}`);
+  },
+  getPurchaseOrder: (companyId: string, id: string) =>
+    request<PurchaseOrder>(`/companies/${companyId}/purchase-orders/${id}`),
+  createPurchaseOrder: (companyId: string, input: PurchaseOrderInput) =>
+    post<PurchaseOrder>(`/companies/${companyId}/purchase-orders`, input),
+  updatePurchaseOrder: (companyId: string, id: string, input: PurchaseOrderInput) =>
+    request<PurchaseOrder>(`/companies/${companyId}/purchase-orders/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  purchaseOrderHistory: (companyId: string, id: string) =>
+    request<HistoryEntry[]>(`/companies/${companyId}/purchase-orders/${id}/history`),
+  approvePurchaseOrder: (companyId: string, id: string) =>
+    post<PurchaseOrder>(`/companies/${companyId}/purchase-orders/${id}/approve`),
+  cancelPurchaseOrder: (companyId: string, id: string) =>
+    post<PurchaseOrder>(`/companies/${companyId}/purchase-orders/${id}/cancel`),
+  closePurchaseOrder: (companyId: string, id: string) =>
+    post<PurchaseOrder>(`/companies/${companyId}/purchase-orders/${id}/close`),
+  listReceipts: (companyId: string, id: string) =>
+    request<{ items: PurchaseReceipt[] }>(`/companies/${companyId}/purchase-orders/${id}/receipts`),
+  receivePurchaseOrder: (companyId: string, id: string, input: ReceiptInput) =>
+    post<PurchaseReceipt>(`/companies/${companyId}/purchase-orders/${id}/receipts`, input),
+  finishReceipt: (companyId: string, id: string, receiptId: string) =>
+    post<PurchaseReceipt>(`/companies/${companyId}/purchase-orders/${id}/receipts/${receiptId}/finish`),
   /** The OFX file goes as it is, bytes and all: the API reads the charset. */
   importStatement: (companyId: string, accountId: string, file: File, dryRun: boolean) =>
     request<ImportResult>(

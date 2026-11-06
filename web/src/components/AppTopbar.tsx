@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "./Button";
 import { BoxIcon } from "./icons/box";
+import { BriefcaseBusinessIcon } from "./icons/briefcase-business";
 import { CalendarDaysIcon } from "./icons/calendar-days";
 import { CreditCardIcon } from "./icons/credit-card";
 import { FolderTreeIcon } from "./icons/folder-tree";
@@ -61,6 +62,7 @@ function creationItems(
     { key: "transfer", label: "Nova transferência", icon: SendIcon, creates: "transfer", area: "finance" },
     { key: "quote", label: "Novo orçamento", icon: FileTextIcon, to: `${base}/quotes`, area: "sales" },
     { key: "sale", label: "Nova venda", icon: HandCoinsIcon, to: `${base}/sales`, area: "sales" },
+    { key: "purchase", label: "Nova compra", icon: BriefcaseBusinessIcon, to: `${base}/purchases`, area: "purchases" },
     { key: "party", label: "Novo cliente ou fornecedor", icon: UsersIcon, creates: "party", area: "parties" },
     { key: "commissionRule", label: "Nova regra de comissão", icon: HandCoinsIcon, creates: "commissionRule", area: "sales" },
     { key: "priceList", label: "Nova tabela de preço", icon: LayersIcon, creates: "priceList", area: "sales" },

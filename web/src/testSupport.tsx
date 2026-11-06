@@ -10,6 +10,7 @@ export const OWNER_PERMISSIONS = {
   products: "write",
   finance: "write",
   sales: "write",
+  purchases: "write",
   members: "write",
 } as const;
 

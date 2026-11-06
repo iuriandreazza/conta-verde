@@ -96,7 +96,7 @@ payment link (`sends_reminders_on_schedule`).
 
 ## Phase 5 — Purchases and inventory (v0.6)
 
-- [ ] Purchase orders: items, supplier, expected dates, approval, receipt
+- [x] Purchase orders: items, supplier, expected dates, approval, receipt ([ADR 0053](adr/0053-purchase-orders.md)) — `/purchase-orders`: draft, approved, partly or fully received, cancelled; each receipt (partial ones allowed) values what arrived cumulatively and makes its own payable by the payment term; a `purchases` area (the `stock` role writes it)
 - [ ] Purchase entry from NF-e XML (parsing and validation only, no SEFAZ calls): supplier, items, taxes, payables
 - [ ] Stock movements: in, out, adjustment, transfer; balances and average cost per product
 - [ ] Minimum stock alerts; block sale without balance (configurable)

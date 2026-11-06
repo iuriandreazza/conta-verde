@@ -71,6 +71,11 @@ interface LinesEditorProps {
   onChange: (rows: LineRow[]) => void;
   /** What can be chosen: the active products and services, plus whatever the lines already hold. */
   products: Product[];
+  /**
+   * What fills the price of a chosen product: its sale price, through the price lists (a sale, a quote, a
+   * contract), or its cost price (a purchase, which has no price lists).
+   */
+  pricing?: "sale" | "cost";
 }
 
 /**
@@ -78,11 +83,14 @@ interface LinesEditorProps {
  * the unit price and a discount in reais. Each line and the total are worked out as the API will, so
  * what is shown is what is stored (ADR 0037).
  */
-export function LinesEditor({ companyId, rows, onChange, products }: LinesEditorProps) {
+export function LinesEditor({ companyId, rows, onChange, products, pricing = "sale" }: LinesEditorProps) {
+  const costed = pricing === "cost";
+  const priceLabel = costed ? "Custo" : "Preço";
   const [priceLists, setPriceLists] = useState<PriceList[]>([]);
   // Kept here and never sent: a document keeps the prices its lines were filled with (ADR 0042).
   const [priceListId, setPriceListId] = useState("");
   useEffect(() => {
+    if (costed) return;
     let current = true;
     readUpTo((after) => api.listPriceLists(companyId, { q: "", active: "true", sort: "name" }, after))
       .then((loaded) => current && setPriceLists(loaded))
@@ -91,11 +99,11 @@ export function LinesEditor({ companyId, rows, onChange, products }: LinesEditor
     return () => {
       current = false;
     };
-  }, [companyId]);
+  }, [companyId, costed]);
   const priceList = priceLists.find((list) => list.id === priceListId);
   const priceOf = (product: Product | undefined, list: PriceList | undefined): string => {
     const listed = list?.items.find((item) => item.product_id === product?.id);
-    const price = listed?.price ?? product?.sale_price ?? null;
+    const price = listed?.price ?? (costed ? product?.cost_price : product?.sale_price) ?? null;
     return price === null ? "" : toInputDecimal(price);
   };
 
@@ -188,9 +196,9 @@ export function LinesEditor({ companyId, rows, onChange, products }: LinesEditor
               />
             </label>
             <label>
-              Preço
+              {priceLabel}
               <input
-                aria-label={`Preço do item ${index + 1}`}
+                aria-label={`${priceLabel} do item ${index + 1}`}
                 inputMode="decimal"
                 autoComplete="off"
                 placeholder="0,00"

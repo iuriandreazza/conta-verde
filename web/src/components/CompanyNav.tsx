@@ -3,6 +3,7 @@ import { useState } from "react";
 import { NavLink } from "react-router-dom";
 import type { AnimatedIcon } from "./Button";
 import { BoxIcon } from "./icons/box";
+import { BriefcaseBusinessIcon } from "./icons/briefcase-business";
 import { BadgeAlertIcon } from "./icons/badge-alert";
 import { CalendarDaysIcon } from "./icons/calendar-days";
 import { ChartLineIcon } from "./icons/chart-line";
@@ -91,6 +92,11 @@ const SECTIONS: NavSection[] = [
       { path: "/commissions", label: "Comissões", icon: CircleDollarSignIcon },
       { path: "/price-lists", label: "Tabelas de preço", icon: LayersIcon },
     ],
+  },
+  {
+    key: "purchases",
+    label: "Suprimentos",
+    items: [{ path: "/purchases", label: "Compras", icon: BriefcaseBusinessIcon }],
   },
   {
     key: "finance",
