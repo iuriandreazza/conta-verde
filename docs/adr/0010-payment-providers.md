@@ -1,6 +1,6 @@
 ---
 title: "ADR 0010: Payment providers behind ports"
-status: proposed
+status: accepted
 date: 2026-11-04
 tags: [adr, payments, integrations]
 ---
@@ -39,6 +39,16 @@ the provider fee as a separate expense entry, and triggers notifications. Proces
 idempotent on the provider event id. Polling is a fallback when webhooks are unavailable.
 
 Bank-direct boleto adapters can be added behind the same port later.
+
+## Amendments (accepted with Phase 4, [ADR 0044](0044-collection-module-plan.md))
+
+- Credentials and webhook secrets are those of the **installation** (environment variables), not of each
+  company, because the product keeps no encrypted secrets yet; a company chooses its bank account and fee
+  category in its collection settings. Per-company credentials are the revisit point.
+- Without `PAYMENT_PROVIDER` the feature is off; `fake` is for development and tests.
+- Webhook events are stored raw and applied **inline** by the request, idempotently, instead of by a queued
+  job: the settlement path is idempotent on its own, and a failure answers `5xx` so the provider retries.
+  Polling as a fallback is not built in Phase 4.
 
 ## Consequences
 
