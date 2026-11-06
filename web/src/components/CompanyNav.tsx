@@ -1,3 +1,4 @@
+import { AnimatePresence, motion } from "motion/react";
 import { useState } from "react";
 import { NavLink } from "react-router-dom";
 import type { AnimatedIcon } from "./Button";
@@ -53,15 +54,25 @@ function NavGroup({ base, section }: { base: string; section: NavSection }) {
         onClick={() => setOpen(!open)}
       >
         {section.label}
-        <ChevronDownIcon size={14} aria-hidden className={open ? undefined : "nav-chevron-closed"} />
+        <motion.span className="nav-chevron" animate={{ rotate: open ? 0 : -90 }} transition={{ duration: 0.15 }}>
+          <ChevronDownIcon size={14} aria-hidden />
+        </motion.span>
       </button>
-      {open && (
-        <div className="nav-group-items">
-          {section.items.map((item) => (
-            <NavItemLink key={item.path} base={base} item={item} />
-          ))}
-        </div>
-      )}
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            className="nav-group-items"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.18, ease: "easeOut" }}
+          >
+            {section.items.map((item) => (
+              <NavItemLink key={item.path} base={base} item={item} />
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

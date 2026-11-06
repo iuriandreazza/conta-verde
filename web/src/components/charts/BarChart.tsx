@@ -1,3 +1,4 @@
+import { motion } from "motion/react";
 import { useRef, useState } from "react";
 import { niceScale, tickLabel, ticksOf, toDrawing, useElementWidth } from "../../lib/chart";
 import { formatMoney } from "../../lib/decimal";
@@ -79,7 +80,17 @@ export function BarChart({ groups, series, label }: { groups: BarGroup[]; series
                 const y = top + (ROW - stack) / 2 + index * (BAR + GAP);
                 return (
                   <g key={item.name}>
-                    {length > 0 && <path d={barPath(LABEL_ROOM, y, length)} fill={item.color} />}
+                    {length > 0 && (
+                      // Grows from the baseline once, when the chart first appears; the marks keep their shape.
+                      <motion.path
+                        d={barPath(LABEL_ROOM, y, length)}
+                        fill={item.color}
+                        style={{ transformBox: "fill-box", transformOrigin: "left center" }}
+                        initial={{ scaleX: 0 }}
+                        animate={{ scaleX: 1 }}
+                        transition={{ duration: 0.45, delay: row * 0.05, ease: "easeOut" }}
+                      />
+                    )}
                     {length > 0 && (
                       <text className="chart-value" x={LABEL_ROOM + length + 8} y={y + BAR - 3}>
                         {formatMoney(group.values[index])}

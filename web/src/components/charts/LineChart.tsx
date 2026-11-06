@@ -1,3 +1,4 @@
+import { motion } from "motion/react";
 import { useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { niceRange, rangeTicks, tickLabel, toDrawing, useElementWidth } from "../../lib/chart";
 import { formatMoney } from "../../lib/decimal";
@@ -87,7 +88,11 @@ export function LineChart({
         {active !== null && <line className="chart-crosshair" x1={x(active)} x2={x(active)} y1={MARGIN.top} y2={MARGIN.top + plotHeight} />}
         {series.map((item, seriesIndex) => (
           <g key={item.name}>
-            <polyline
+            <motion.polyline
+              // Drawing a line uses the dash array, which a dashed forecast needs for its own pattern: it fades in.
+              initial={item.dashed ? { opacity: 0 } : { pathLength: 0, opacity: 0 }}
+              animate={item.dashed ? { opacity: 1 } : { pathLength: 1, opacity: 1 }}
+              transition={{ duration: 0.7, ease: "easeOut" }}
               fill="none"
               stroke={item.color}
               strokeWidth={2}

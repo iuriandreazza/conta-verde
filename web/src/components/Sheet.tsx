@@ -1,6 +1,8 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useId, useRef, type KeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { Button } from "./Button";
+import { XIcon } from "./icons/x";
 
 interface SheetProps {
   open: boolean;
@@ -91,9 +93,9 @@ export function Sheet({ open, title, onClose, children }: SheetProps) {
           >
             <header className="sheet-head">
               <h2 id={titleId}>{title}</h2>
-              <button type="button" className="sheet-close" onClick={onClose}>
+              <Button type="button" variant="ghost" icon={XIcon} onClick={onClose}>
                 Fechar
-              </button>
+              </Button>
             </header>
             <div className="sheet-body">{children}</div>
           </motion.aside>

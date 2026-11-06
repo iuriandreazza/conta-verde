@@ -1,3 +1,4 @@
+import { motion } from "motion/react";
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Button, type AnimatedIcon } from "./Button";
@@ -111,7 +112,16 @@ export function MenuButton({ label, items, icon, variant = "ghost", align = "sta
         </span>
       </Button>
       {open && (
-        <div className={`menu menu-${align}`} role="menu" id={menuId} ref={menuRef} onKeyDown={moveFocus}>
+        <motion.div
+          className={`menu menu-${align}`}
+          role="menu"
+          id={menuId}
+          ref={menuRef}
+          onKeyDown={moveFocus}
+          initial={{ opacity: 0, y: -6, scale: 0.97 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          transition={{ duration: 0.12, ease: "easeOut" }}
+        >
           {items.map((item) => {
             const content = (
               <>
@@ -139,7 +149,7 @@ export function MenuButton({ label, items, icon, variant = "ghost", align = "sta
               </button>
             );
           })}
-        </div>
+        </motion.div>
       )}
     </div>
   );
