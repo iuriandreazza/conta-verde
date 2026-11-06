@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import {
   NO_ENTRY_FILTERS,
   api,
@@ -12,6 +12,8 @@ import {
   type EntryInput,
   type PaymentMethod,
 } from "../api";
+import { PlusIcon } from "../components/icons/plus";
+import { Sheet } from "../components/Sheet";
 import { ListFooter } from "../components/ListFooter";
 import { Button } from "../components/Button";
 import { EntryForm, type EntryTargets } from "../components/EntryForm";
@@ -63,6 +65,8 @@ export function EntriesPage() {
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [params, setParams] = useSearchParams();
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const [historyOpenFor, setHistoryOpenFor] = useState<string | null>(null);
   const [settlementsOpenFor, setSettlementsOpenFor] = useState<string | null>(null);
@@ -141,6 +145,27 @@ export function EntriesPage() {
     }
   }
 
+  function openNew() {
+    setEditing(null);
+    setFormError(null);
+    setSaved(null);
+    setSheetOpen(true);
+  }
+
+  function closeSheet() {
+    setSheetOpen(false);
+    setEditing(null);
+    setFormError(null);
+  }
+
+  // "Novo registro" in the top bar comes here asking for the sheet.
+  useEffect(() => {
+    if (params.get("novo") !== null && canWrite) {
+      openNew();
+      setParams({}, { replace: true });
+    }
+  }, [params, canWrite]);
+
   async function handleSubmit(input: EntryInput) {
     setSaving(true);
     setFormError(null);
@@ -151,12 +176,14 @@ export function EntriesPage() {
         setHighlightedId(created.id);
         setSaved(`${created.description} adicionado.`);
         setFormVersion((version) => version + 1);
+        setSheetOpen(false);
         await reload();
       } else {
         const updated = await api.updateEntry(companyId, editing.id, input);
         setEditing(null);
         setSaved(`${updated.description} atualizado.`);
         setFormVersion((version) => version + 1);
+        setSheetOpen(false);
         // Read again, not changed in place: a new date, kind or category can move the entry to
         // another place in the list, or out of the filter the list is showing.
         await reload();
@@ -174,7 +201,15 @@ export function EntriesPage() {
         title="Lançamentos"
         description="O que a empresa tem a receber e a pagar, dividido em parcelas."
       />
-      <div className={canWrite ? "split" : "split split-single"}>
+      {canWrite && (
+        <div className="list-actions">
+          <Button type="button" icon={PlusIcon} onClick={openNew}>
+            Novo lançamento
+          </Button>
+        </div>
+      )}
+      <Notice message={saved} tone="success" />
+      <div>
         <section className="card list-card">
           <h2>Lançados</h2>
           <div className="filters" role="search">
@@ -311,6 +346,7 @@ export function EntriesPage() {
                                 setEditing(entry);
                                 setFormError(null);
                                 setSaved(null);
+                                setSheetOpen(true);
                               }}
                             >
                               Alterar
@@ -415,23 +451,22 @@ export function EntriesPage() {
           )}
         </section>
         {canWrite && (
-          <aside className="card form-card">
-            <h2>{editing === null ? "Novo lançamento" : `Alterar ${editing.description}`}</h2>
+          <Sheet
+            open={sheetOpen}
+            title={editing === null ? "Novo lançamento" : `Alterar ${editing.description}`}
+            onClose={closeSheet}
+          >
             {targetsLoaded ? (
               <EntryForm
                 // A new key starts the form over for another entry, or an empty one after a save.
                 key={`${editing?.id ?? "new"}-${formVersion}`}
                 entry={editing}
                 targets={targets}
-                // After a save or when editing, the person is in the form: put the cursor back in it.
-                focusDescription={editing !== null || formVersion > 0}
+                focusDescription={false}
                 pending={saving}
                 error={formError}
                 onSubmit={(input) => void handleSubmit(input)}
-                onCancel={() => {
-                  setEditing(null);
-                  setFormError(null);
-                }}
+                onCancel={closeSheet}
               />
             ) : targetsError === null ? (
               // The choices are read before the form shows, so nothing typed is lost when they arrive.
@@ -439,8 +474,7 @@ export function EntriesPage() {
                 <Spinner /> Carregando…
               </p>
             ) : null}
-            <Notice message={saved} tone="success" />
-          </aside>
+          </Sheet>
         )}
       </div>
     </>

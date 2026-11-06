@@ -50,9 +50,12 @@ From top to bottom, in this order:
    so the pager is **"Carregar mais"** with the count; numbered pages would need a different API and are not planned.
 6. **Totals of the period**, collapsible, under the table, when the list has amounts.
 
-The create/edit form stays **beside the list** on wide screens (below it on narrow ones), as today. Other products
-open a page or a dialog; ours keeps the list in view while typing, which the registers' principle ("the list is the page")
-values more than matching them.
+A record is created or changed in a **bottom sheet** (`Sheet`) that rises over the page that is open, as in the
+products people come from: the list is full width and has **no add-record panel beside it**. The action row's primary
+button ("Novo lançamento") and a row's edit button open it; a save or "Fechar" closes it and the list shows what
+changed (the new row flashes, a "… adicionado." notice sits above the list). The global "Novo registro" menu goes to
+the page of that register with `?novo=1`, which opens the sheet. `Sheet` is a dialog: the focus goes in and stays in,
+Escape and the shade close it, and the focus returns to what opened it.
 
 ## 3. A report or overview page
 
@@ -69,6 +72,7 @@ that matter: **overdue** and **due today**. Charts follow the dataviz rules in t
 | `RowActions` | deferred | The row's "Ações" menu over `MenuButton`. Rows keep their one-click icon buttons (each toggles a panel under the row, with `aria-expanded`); a menu would make those two clicks and rewrite most page tests, so it comes with a page that has more than four actions per row |
 | `PeriodNavigator` | to build | Previous, period menu (month, quarter, year, custom range), next; replaces the free `De`/`Até` pair and the 3/6/12 months control |
 | `FilterBar`, `SummaryStrip` | to build | Layout of the filter row; the state tiles as a radio group |
+| `Sheet` | built (Lançamentos; the other registers follow) | The bottom sheet for a form; its panel is an `<aside role="dialog">` named by its title |
 | `PageHeader` | exists | Moves its title into the top bar; keeps the description and, for now, the page-level actions |
 | `Layout`, `AppTopbar`, `CompanyNav` | built | The top bar (menu on a phone, "Novo registro", user, sign out) and the grouped sidebar. A new section is one entry in `SECTIONS` of `CompanyNav` |
 
@@ -78,4 +82,4 @@ that matter: **overdue** and **due today**. Charts follow the dataviz rules in t
 2. Top bar, `MenuButton` and the grouped sidebar (done).
 3. The action row, the footer count and the status marker on **Lançamentos** and **Contas bancárias** (also fixes the sideways scroll).
 4. `PeriodNavigator` and `FilterBar` on **Fluxo de caixa** and **Relatórios**.
-5. `SummaryStrip` on Lançamentos once the server answers the totals by state.
+6. `SummaryStrip` on Lançamentos once the server answers the totals by state.
