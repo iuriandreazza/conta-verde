@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::access::CompanyAccess;
-use crate::clock::today;
+use crate::clock::customer_today;
 use crate::cursor::{decode_number_cursor, encode_number_cursor};
 use crate::error::ApiError;
 use crate::history::HistoryEntryResponse;
@@ -338,8 +338,8 @@ async fn print_of<X: Ports>(state: &SharedState<X>, quote: &Quote) -> Result<Pdf
         None => None,
     };
     Ok(PdfQuote {
-        company: state.auth.company_name(company).await?,
-        customer: customer.name().to_owned(),
+        company: clipped(&state.auth.company_name(company).await?),
+        customer: clipped(customer.name()),
         number: quote.number(),
         issued_on: quote.issued_on().to_string(),
         valid_until: quote.valid_until().to_string(),
@@ -388,7 +388,7 @@ async fn public_view<X: Ports>(
         number: quote.number(),
         issued_on: print.issued_on,
         valid_until: print.valid_until,
-        expired: quote.is_expired_on(today()),
+        expired: quote.is_expired_on(customer_today()),
         payment_term: print.payment_term,
         notes: print.notes,
         status: quote.status().as_str(),
@@ -418,7 +418,7 @@ pub(crate) async fn approve_quote<X: Ports>(
     State(state): State<SharedState<X>>,
     Path(token): Path<String>,
 ) -> Result<Json<PublicQuoteResponse>, ApiError> {
-    let quote = state.quotes.answer(&token, true, today()).await?;
+    let quote = state.quotes.answer(&token, true, customer_today()).await?;
     public_view(&state, &quote).await
 }
 
@@ -426,6 +426,11 @@ pub(crate) async fn decline_quote<X: Ports>(
     State(state): State<SharedState<X>>,
     Path(token): Path<String>,
 ) -> Result<Json<PublicQuoteResponse>, ApiError> {
-    let quote = state.quotes.answer(&token, false, today()).await?;
+    let quote = state.quotes.answer(&token, false, customer_today()).await?;
     public_view(&state, &quote).await
+}
+
+/// Names are as long as a person typed them; a line of the PDF is not.
+fn clipped(name: &str) -> String {
+    name.chars().take(70).collect()
 }

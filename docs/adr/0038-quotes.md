@@ -49,8 +49,9 @@ The routes outside the company, which need no session, are the second place the 
 .../decline`. The public view shows what the customer needs (company and customer names, the lines, the validity,
 the term's name, the notes, the status) and **no id of the company's books**. A token that leads nowhere is `404`.
 Approving or declining is allowed once, on a sent quote, and **a quote past its validity cannot be approved**
-(`410`): the validity's last day is still good. This is the one place besides the recurrence job where the server
-reads its clock (UTC), because a customer has no date of their own to send; `expired` in the view tells the page.
+(`410`): the validity's last day is still good, in the evening too: the day it is judged against is **yesterday by the
+server's UTC clock**, since UTC turns the day at 21:00 in Brazil. This is the one place besides the recurrence job where
+the server reads its clock, because a customer has no date of their own to send; `expired` in the view tells the page.
 
 The answer is recorded in the audit trail under **whoever sent the quote**, with a field that says it was the
 customer through the link (`answered_by`), because the trail's actors are users ([ADR 0008](0008-audit-trail.md))
