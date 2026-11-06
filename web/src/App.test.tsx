@@ -1016,6 +1016,7 @@ describe("cost centers", () => {
     await userEvent.click(await screen.findByRole("link", { name: "Centros de custo" }));
     expect(await screen.findByText("Loja Centro")).toBeInTheDocument();
 
+    await userEvent.click(await screen.findByRole("button", { name: "Novo centro de custo" }));
     await userEvent.type(screen.getByLabelText("Nome"), "Projeto X");
     await userEvent.click(screen.getByRole("button", { name: "Adicionar" }));
     expect(await screen.findByText("Projeto X cadastrado.")).toBeInTheDocument();
@@ -1053,6 +1054,7 @@ describe("cost centers", () => {
     });
     renderAt("/companies/c1/cost-centers");
 
+    await userEvent.click(await screen.findByRole("button", { name: "Novo centro de custo" }));
     await userEvent.type(await screen.findByLabelText("Nome"), "loja");
     await userEvent.click(screen.getByRole("button", { name: "Adicionar" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("already in use");
@@ -1402,6 +1404,7 @@ describe("payment methods", () => {
     renderAt("/companies/c1/payment-methods");
     await screen.findByRole("table");
 
+    await userEvent.click(await screen.findByRole("button", { name: "Nova forma de pagamento" }));
     await userEvent.selectOptions(screen.getByLabelText("Tipo"), "bank_slip");
     await userEvent.type(screen.getByLabelText("Nome"), "Boleto");
     await userEvent.click(screen.getByRole("button", { name: "Adicionar" }));
@@ -1440,6 +1443,7 @@ describe("payment methods", () => {
     renderAt("/companies/c1/payment-methods");
     await screen.findByRole("table");
 
+    await userEvent.click(await screen.findByRole("button", { name: "Nova forma de pagamento" }));
     await userEvent.type(screen.getByLabelText("Nome"), "pix");
     await userEvent.click(screen.getByRole("button", { name: "Adicionar" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("already in use");
@@ -1481,6 +1485,7 @@ describe("payment terms", () => {
 
     // The list's own "loading" status is gone once the empty state shows.
     await screen.findByText("Nenhum prazo de pagamento ainda.");
+    await userEvent.click(await screen.findByRole("button", { name: "Novo prazo de pagamento" }));
     const submit = screen.getByRole("button", { name: "Adicionar" });
     await userEvent.type(screen.getByLabelText("Nome"), "Entrada e 30");
     // One installment of 100% to begin with; a second starts 30 days later.
@@ -1515,6 +1520,7 @@ describe("payment terms", () => {
     renderAt("/companies/c1/payment-terms");
 
     await screen.findByText("Nenhum prazo de pagamento ainda.");
+    await userEvent.click(await screen.findByRole("button", { name: "Novo prazo de pagamento" }));
     await userEvent.click(screen.getByRole("button", { name: "Adicionar parcela" }));
     await userEvent.click(screen.getByRole("button", { name: "Adicionar parcela" }));
     await userEvent.click(screen.getByRole("button", { name: "Dividir igualmente" }));
@@ -1535,6 +1541,7 @@ describe("payment terms", () => {
     renderAt("/companies/c1/payment-terms");
 
     await screen.findByText("Nenhum prazo de pagamento ainda.");
+    await userEvent.click(await screen.findByRole("button", { name: "Novo prazo de pagamento" }));
     await userEvent.click(screen.getByRole("button", { name: "Adicionar parcela" }));
     await userEvent.clear(screen.getByLabelText("Porcentagem da parcela 1"));
     await userEvent.type(screen.getByLabelText("Porcentagem da parcela 1"), "33,330");
@@ -1553,6 +1560,7 @@ describe("payment terms", () => {
     renderAt("/companies/c1/payment-terms");
 
     await screen.findByText("Nenhum prazo de pagamento ainda.");
+    await userEvent.click(await screen.findByRole("button", { name: "Novo prazo de pagamento" }));
     await userEvent.clear(screen.getByLabelText("Dias da parcela 1"));
     await userEvent.type(screen.getByLabelText("Dias da parcela 1"), "3640");
     await userEvent.click(screen.getByRole("button", { name: "Adicionar parcela" }));
@@ -1618,6 +1626,7 @@ describe("payment terms", () => {
     renderAt("/companies/c1/payment-terms");
     await screen.findByRole("table");
 
+    await userEvent.click(await screen.findByRole("button", { name: "Novo prazo de pagamento" }));
     await userEvent.type(screen.getByLabelText("Nome"), "Novo");
     await userEvent.clear(screen.getByLabelText("Dias da parcela 1"));
     await userEvent.click(screen.getByRole("button", { name: "Adicionar" }));

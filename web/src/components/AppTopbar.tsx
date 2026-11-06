@@ -1,5 +1,8 @@
 import { Button } from "./Button";
 import { BoxIcon } from "./icons/box";
+import { CalendarDaysIcon } from "./icons/calendar-days";
+import { CreditCardIcon } from "./icons/credit-card";
+import { LayersIcon } from "./icons/layers";
 import { CircleDollarSignIcon } from "./icons/circle-dollar-sign";
 import { FileTextIcon } from "./icons/file-text";
 import { HandCoinsIcon } from "./icons/hand-coins";
@@ -35,6 +38,9 @@ function creationItems(
     { key: "quote", label: "Novo orçamento", icon: FileTextIcon, to: `${base}/quotes`, area: "sales" },
     { key: "sale", label: "Nova venda", icon: HandCoinsIcon, to: `${base}/sales`, area: "sales" },
     { key: "party", label: "Novo cliente ou fornecedor", icon: UsersIcon, creates: "party", area: "parties" },
+    { key: "costCenter", label: "Novo centro de custo", icon: LayersIcon, creates: "costCenter", area: "finance" },
+    { key: "paymentMethod", label: "Nova forma de pagamento", icon: CreditCardIcon, creates: "paymentMethod", area: "finance" },
+    { key: "paymentTerm", label: "Novo prazo de pagamento", icon: CalendarDaysIcon, creates: "paymentTerm", area: "finance" },
     { key: "product", label: "Novo produto ou serviço", icon: BoxIcon, creates: "product", area: "products" },
   ];
   return items
