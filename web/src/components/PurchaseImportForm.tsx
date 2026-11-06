@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent, type FormEvent } from "react";
+import { useState, type DragEvent, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import type { Category, CostCenter, InvoiceEntryParams, InvoicePreview, PaymentTerm, Product } from "../api";
 import { treeRows } from "../lib/categoryTree";
@@ -51,11 +51,18 @@ export function PurchaseImportForm(props: PurchaseImportFormProps) {
 function ChooseFile({ pending, error, onRead, onCancel }: PurchaseImportFormProps) {
   const [file, setFile] = useState<File | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
+  // Something is being dragged over the box: it says where to let go.
+  const [dragging, setDragging] = useState(false);
 
-  function choose(event: ChangeEvent<HTMLInputElement>) {
-    const chosen = event.target.files?.[0] ?? null;
+  function choose(chosen: File | null) {
     setFile(chosen);
     setProblem(chosen === null ? null : invoiceFileProblem(chosen));
+  }
+
+  function drop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setDragging(false);
+    if (!pending) choose(event.dataTransfer.files[0] ?? null);
   }
 
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -67,11 +74,32 @@ function ChooseFile({ pending, error, onRead, onCancel }: PurchaseImportFormProp
     <form className="record-form" onSubmit={submit}>
       <section className="form-section" aria-labelledby="import-file">
         <h3 id="import-file">Arquivo da nota</h3>
-        <p className="muted">Escolha o XML da NF-e do fornecedor. Nada é lançado antes de você conferir o que a nota diz.</p>
-        <label>
-          Arquivo XML da NF-e
-          <input type="file" accept=".xml,application/xml,text/xml" disabled={pending} onChange={choose} />
-        </label>
+        <p className="muted">
+          A NF-e fica salva no seu computador como um arquivo XML. Ao ler o arquivo, você vê a nota, o fornecedor e os produtos antes de lançar a compra.
+        </p>
+        <div
+          className={dragging ? "dropzone dropzone-active" : "dropzone"}
+          data-testid="invoice-dropzone"
+          onDragOver={(event) => {
+            event.preventDefault();
+            setDragging(true);
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={drop}
+        >
+          <label>
+            Escolha um arquivo
+            <input
+              type="file"
+              aria-label="Arquivo XML da NF-e"
+              accept=".xml,application/xml,text/xml"
+              disabled={pending}
+              onChange={(event) => choose(event.target.files?.[0] ?? null)}
+            />
+          </label>
+          <p className="muted">Ou arraste o XML para este espaço</p>
+          {file !== null && <p className="dropzone-file">{file.name}</p>}
+        </div>
       </section>
       <Notice message={problem ?? error} />
       <div className="form-footer">

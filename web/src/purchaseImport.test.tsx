@@ -235,6 +235,33 @@ describe("purchase entry from an NF-e", () => {
     expect(calls(fetchMock, "POST")).toHaveLength(0);
   });
 
+  it("takes a file dropped on the box like a chosen one, and refuses a dropped file that is not an XML", async () => {
+    const fetchMock = mockApi(answer(invoice()));
+    renderAt("/companies/c1/purchases");
+    await userEvent.click(await screen.findByRole("button", { name: "Entrar NF-e (XML)" }));
+    const sheet = within((await screen.findByRole("heading", { name: "Entrada por XML (NF-e)" })).closest("aside")!);
+    expect(sheet.getByText(/A NF-e fica salva no seu computador/)).toBeInTheDocument();
+    expect(sheet.getByText("Ou arraste o XML para este espaço")).toBeInTheDocument();
+    const zone = sheet.getByTestId("invoice-dropzone");
+
+    fireEvent.dragOver(zone);
+    expect(zone).toHaveClass("dropzone-active");
+    fireEvent.dragLeave(zone);
+    expect(zone).not.toHaveClass("dropzone-active");
+
+    fireEvent.drop(zone, { dataTransfer: { files: [new File(["x"], "notas.txt", { type: "text/plain" })] } });
+    expect(await sheet.findByRole("alert")).toHaveTextContent("Escolha o arquivo XML da nota");
+    expect(sheet.getByRole("button", { name: "Ler arquivo" })).toBeDisabled();
+    expect(calls(fetchMock, "POST")).toHaveLength(0);
+
+    const file = xml();
+    fireEvent.drop(zone, { dataTransfer: { files: [file] } });
+    expect(await sheet.findByText("nota.xml")).toBeInTheDocument();
+    await userEvent.click(sheet.getByRole("button", { name: "Ler arquivo" }));
+    await sheet.findByRole("button", { name: "Entrar compra" });
+    expect(calls(fetchMock, "POST")[0][1]?.body).toBe(file);
+  });
+
   it("offers no entry from an NF-e to a role that only reads", async () => {
     mockApi(answer(invoice(), readOnly));
     renderAt("/companies/c1/purchases");

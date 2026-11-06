@@ -226,6 +226,34 @@ describe("inventory counts", () => {
     });
   });
 
+  it("invites the first inventory when there is none, with a button that opens the sheet", async () => {
+    mockApi(answer([]));
+    renderAt("/companies/c1/inventory-counts");
+
+    expect(await screen.findByRole("heading", { name: "Realize um inventário para atualizar seu estoque" })).toBeInTheDocument();
+    expect(screen.getByText(/ao custo médio, na data da contagem/)).toBeInTheDocument();
+    // The button is in the empty state and in the page's actions: either opens the sheet.
+    const buttons = screen.getAllByRole("button", { name: "Novo inventário" });
+    await userEvent.click(buttons[buttons.length - 1]);
+    expect(await screen.findByRole("heading", { name: "Novo inventário" })).toBeInTheDocument();
+  });
+
+  it("shows the empty invitation without a button to a role that only reads", async () => {
+    mockApi(answer([], readOnly));
+    renderAt("/companies/c1/inventory-counts");
+    expect(await screen.findByRole("heading", { name: "Realize um inventário para atualizar seu estoque" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Novo inventário" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the plain message when a search finds nothing", async () => {
+    mockApi(answer([]));
+    renderAt("/companies/c1/inventory-counts");
+    await screen.findByRole("heading", { name: "Realize um inventário para atualizar seu estoque" });
+    await userEvent.selectOptions(screen.getByLabelText("Situação"), "applied");
+    expect(await screen.findByText("Nenhum inventário encontrado.")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Realize um inventário para atualizar seu estoque" })).not.toBeInTheDocument();
+  });
+
   it("shows the list and nothing to write to a role that only reads", async () => {
     mockApi(answer([open], readOnly));
     renderAt("/companies/c1/inventory-counts");

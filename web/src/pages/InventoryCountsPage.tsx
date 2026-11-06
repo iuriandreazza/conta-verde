@@ -200,8 +200,15 @@ export function InventoryCountsPage() {
           ) : items.length === 0 ? (
             <div className="empty">
               <LayersIcon size={40} aria-hidden />
-              <p>Nenhum inventário ainda.</p>
-              <p className="muted">Conte o que há nas prateleiras e aplique para acertar o estoque.</p>
+              <h3>Realize um inventário para atualizar seu estoque</h3>
+              <p className="muted">
+                Compare o estoque físico com o do sistema: informe o que foi contado e o sistema ajusta as diferenças, ao custo médio, na data da contagem.
+              </p>
+              {canWrite && (
+                <Button type="button" icon={PlusIcon} onClick={() => openCreate("inventoryCount")}>
+                  Novo inventário
+                </Button>
+              )}
             </div>
           ) : (
             <div className="table-wrap">
