@@ -2,6 +2,7 @@ mod audit;
 mod auth_service;
 mod bank_account_repository;
 mod bank_account_service;
+mod cash_flow;
 mod category_repository;
 mod category_service;
 mod cnpj_registry;
@@ -35,6 +36,7 @@ pub use audit::ensure_audit_describes;
 pub use auth_service::{AuthService, Member, Profile, SignedIn};
 pub use bank_account_repository::{BankAccountQuery, BankAccountRepository};
 pub use bank_account_service::{BankAccountPage, BankAccountService};
+pub use cash_flow::{CashFlow, CashFlowPeriod, CashFlowQuery, Granularity, PastDue};
 pub use category_repository::{CategoryRepository, MAX_CATEGORIES};
 pub use category_service::{CategoryService, NewCategory};
 pub use cnpj_registry::{CnpjLookupError, CnpjRegistry, RegistryEntry};
@@ -42,7 +44,7 @@ pub use cost_center_repository::{CostCenterQuery, CostCenterRepository};
 pub use cost_center_service::{CostCenterPage, CostCenterService};
 pub use email_sender::{EmailError, EmailMessage, EmailSender};
 pub use entry_repository::{
-    DateCursor, EntryCursor, EntryReferences, EntrySort, FinancialEntryQuery,
+    DateCursor, DayOpen, EntryCursor, EntryReferences, EntrySort, FinancialEntryQuery,
     FinancialEntryRepository,
 };
 pub use error::{ApplicationError, AuthError, RepositoryError};
@@ -69,7 +71,7 @@ pub use product_repository::{ProductQuery, ProductRepository};
 pub use product_service::{ProductPage, ProductService};
 pub use secret_service::{SecretError, SecretService};
 pub use transfer_repository::{
-    AccountMovement, OpeningRepository, TransferQuery, TransferRepository,
+    AccountMovement, DayMovement, OpeningRepository, TransferQuery, TransferRepository,
 };
 pub use transfer_service::{
     AccountBalance, BalanceService, Balances, TransferPage, TransferService,

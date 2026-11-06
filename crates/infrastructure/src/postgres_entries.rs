@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use conta_verde_application::{
-    AccountMovement, EntryCursor, EntrySort, FinancialEntryQuery, FinancialEntryRepository,
-    RepositoryError, ensure_audit_describes,
+    AccountMovement, DayMovement, DayOpen, EntryCursor, EntrySort, FinancialEntryQuery,
+    FinancialEntryRepository, RepositoryError, ensure_audit_describes,
 };
 use conta_verde_domain::{
     Amount, AuditEntity, AuditEntry, AuditRecord, BankAccountId, CalendarDate, CategoryId,
@@ -351,6 +351,85 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
         })
     }
 
+    async fn cash_by_day(
+        &self,
+        company_id: CompanyId,
+        account: BankAccountId,
+        since: CalendarDate,
+        until: CalendarDate,
+    ) -> Result<Vec<DayMovement>, RepositoryError> {
+        let rows = sqlx::query(
+            "SELECT to_char(s.settled_on, 'YYYY-MM-DD') AS day, \
+               COALESCE(SUM(s.applied + s.interest + s.fine - s.discount) \
+                   FILTER (WHERE e.kind = 'receivable'), 0)::text AS received, \
+               COALESCE(SUM(s.applied + s.interest + s.fine - s.discount) \
+                   FILTER (WHERE e.kind = 'payable'), 0)::text AS paid \
+             FROM entry_settlements s \
+             JOIN financial_entries e ON e.company_id = s.company_id AND e.id = s.entry_id \
+             WHERE s.company_id = $1 AND s.bank_account_id = $2 AND NOT s.reversed \
+               AND s.settled_on BETWEEN CAST($3 AS DATE) AND CAST($4 AS DATE) \
+             GROUP BY s.settled_on ORDER BY s.settled_on",
+        )
+        .bind(company_id.as_uuid())
+        .bind(account.as_uuid())
+        .bind(since.to_string())
+        .bind(until.to_string())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        rows.iter()
+            .map(|row| {
+                Ok(DayMovement {
+                    date: day_of(row)?,
+                    received: sum_of(row, "received")?,
+                    paid: sum_of(row, "paid")?,
+                })
+            })
+            .collect()
+    }
+
+    async fn open_by_due_day(
+        &self,
+        company_id: CompanyId,
+        since: CalendarDate,
+        until: CalendarDate,
+    ) -> Result<Vec<DayOpen>, RepositoryError> {
+        // What is left of an installment is its amount less what its settlements that are not
+        // reversed settled; only the installments that have something left count.
+        let rows = sqlx::query(
+            "SELECT to_char(i.due_date, 'YYYY-MM-DD') AS day, \
+               COALESCE(SUM(i.amount - COALESCE(s.settled, 0)) \
+                   FILTER (WHERE e.kind = 'receivable'), 0)::text AS receivable, \
+               COALESCE(SUM(i.amount - COALESCE(s.settled, 0)) \
+                   FILTER (WHERE e.kind = 'payable'), 0)::text AS payable \
+             FROM financial_entry_installments i \
+             JOIN financial_entries e ON e.company_id = i.company_id AND e.id = i.entry_id \
+             LEFT JOIN LATERAL ( \
+                 SELECT SUM(applied) AS settled FROM entry_settlements \
+                 WHERE company_id = i.company_id AND entry_id = i.entry_id \
+                   AND installment = i.number AND NOT reversed) s ON true \
+             WHERE i.company_id = $1 \
+               AND i.due_date BETWEEN CAST($2 AS DATE) AND CAST($3 AS DATE) \
+               AND i.amount - COALESCE(s.settled, 0) > 0 \
+             GROUP BY i.due_date ORDER BY i.due_date",
+        )
+        .bind(company_id.as_uuid())
+        .bind(since.to_string())
+        .bind(until.to_string())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        rows.iter()
+            .map(|row| {
+                Ok(DayOpen {
+                    date: day_of(row)?,
+                    receivable: sum_of(row, "receivable")?,
+                    payable: sum_of(row, "payable")?,
+                })
+            })
+            .collect()
+    }
+
     async fn history(
         &self,
         company_id: CompanyId,
@@ -415,6 +494,21 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
         tx.commit().await.map_err(storage_error)?;
         Ok(entries)
     }
+}
+
+/// The `day` column of a grouped query, as written by `to_char`.
+fn day_of(row: &PgRow) -> Result<CalendarDate, RepositoryError> {
+    let text: String = row.try_get("day").map_err(storage_error)?;
+    CalendarDate::parse(&text)
+        .ok_or_else(|| RepositoryError::Storage(format!("stored day {text} is invalid")))
+}
+
+/// A column that is a sum, read as text, like every amount.
+fn sum_of(row: &PgRow, column: &str) -> Result<Decimal, RepositoryError> {
+    row.try_get::<String, _>(column)
+        .map_err(storage_error)?
+        .parse::<Decimal>()
+        .map_err(|error| RepositoryError::Storage(format!("a sum that is not a number: {error}")))
 }
 
 const SELECT_SETTLEMENTS: &str = "SELECT id, company_id, entry_id, installment, \

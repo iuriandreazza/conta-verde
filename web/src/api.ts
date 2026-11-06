@@ -494,6 +494,46 @@ export interface Balances {
   total: string;
 }
 
+/** What a cash flow is asked for (ADR 0032): a span of days cut into periods, over every account or one. */
+export interface CashFlowFilters {
+  /** `YYYY-MM-DD`. */
+  from: string;
+  to: string;
+  granularity: "day" | "month";
+  /** The id of one account, or empty for all of them. */
+  account: string;
+}
+
+/** What happened in one period, and what is still to happen in it. Amounts are decimal strings. */
+export interface CashFlowPeriod {
+  start: string;
+  end: string;
+  received: string;
+  paid: string;
+  transfers_in: string;
+  transfers_out: string;
+  net: string;
+  /** The opening balances whose day falls in the period. */
+  new_opening_balances: string;
+  closing_balance: string;
+  /** Open on the installments due in the period; null when one account is asked for. */
+  to_receive: string | null;
+  to_pay: string | null;
+  projected_balance: string | null;
+}
+
+export interface CashFlow {
+  from: string;
+  to: string;
+  granularity: "day" | "month";
+  account_id: string | null;
+  /** The balance at the start of `from`. */
+  opening_balance: string;
+  /** Still open on installments that fell due before `from`, counted by the projected balances; null for one account. */
+  past_due: { to_receive: string; to_pay: string } | null;
+  periods: CashFlowPeriod[];
+}
+
 export type EntryKind = "receivable" | "payable";
 
 export interface EntryInstallment {
@@ -823,6 +863,11 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(input),
     }),
+  getCashFlow: (companyId: string, filters: CashFlowFilters) => {
+    const params = new URLSearchParams({ from: filters.from, to: filters.to, granularity: filters.granularity });
+    if (filters.account) params.set("account", filters.account);
+    return request<CashFlow>(`/companies/${companyId}/cash-flow?${params}`);
+  },
   /** The whole tree, flat and unpaged. */
   listCategories: (companyId: string) =>
     request<{ items: Category[] }>(`/companies/${companyId}/categories`),

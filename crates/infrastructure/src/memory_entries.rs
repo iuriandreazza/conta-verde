@@ -1,8 +1,9 @@
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use conta_verde_application::{
-    AccountMovement, EntryCursor, EntrySort, FinancialEntryQuery, FinancialEntryRepository,
-    RepositoryError, ensure_audit_describes,
+    AccountMovement, DayMovement, DayOpen, EntryCursor, EntrySort, FinancialEntryQuery,
+    FinancialEntryRepository, RepositoryError, ensure_audit_describes,
 };
 use conta_verde_domain::{
     AuditEntity, AuditEntry, AuditRecord, BankAccountId, CalendarDate, CompanyId, Decimal, EntryId,
@@ -209,6 +210,89 @@ impl FinancialEntryRepository for InMemoryFinancialEntryRepository {
         movement.received = movement.received.normalize();
         movement.paid = movement.paid.normalize();
         Ok(movement)
+    }
+
+    async fn cash_by_day(
+        &self,
+        company_id: CompanyId,
+        account: BankAccountId,
+        since: CalendarDate,
+        until: CalendarDate,
+    ) -> Result<Vec<DayMovement>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        let mut days: BTreeMap<CalendarDate, AccountMovement> = BTreeMap::new();
+        for settlement in state.settlements.iter().filter(|stored| {
+            stored.company_id() == company_id
+                && stored.bank_account_id() == account
+                && !stored.is_reversed()
+                && (since..=until).contains(&stored.settled_on())
+        }) {
+            let Some(kind) = state
+                .entries
+                .iter()
+                .find(|entry| {
+                    entry.company_id() == company_id && entry.id() == settlement.entry_id()
+                })
+                .map(FinancialEntry::kind)
+            else {
+                continue;
+            };
+            let day = days.entry(settlement.settled_on()).or_default();
+            match kind {
+                EntryKind::Receivable => day.received += settlement.cash(),
+                EntryKind::Payable => day.paid += settlement.cash(),
+            }
+        }
+        Ok(days
+            .into_iter()
+            .map(|(date, moved)| DayMovement {
+                date,
+                received: moved.received.normalize(),
+                paid: moved.paid.normalize(),
+            })
+            .collect())
+    }
+
+    async fn open_by_due_day(
+        &self,
+        company_id: CompanyId,
+        since: CalendarDate,
+        until: CalendarDate,
+    ) -> Result<Vec<DayOpen>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        let mut days: BTreeMap<CalendarDate, (Decimal, Decimal)> = BTreeMap::new();
+        for entry in state
+            .entries
+            .iter()
+            .filter(|entry| entry.company_id() == company_id)
+        {
+            let settlements: Vec<Settlement> = state
+                .settlements
+                .iter()
+                .filter(|settlement| settlement.entry_id() == entry.id())
+                .cloned()
+                .collect();
+            for installment in entry.installments() {
+                let left = installment.amount().as_decimal()
+                    - settled_of(&settlements, installment.number());
+                if left <= Decimal::ZERO || !(since..=until).contains(&installment.due_date()) {
+                    continue;
+                }
+                let day = days.entry(installment.due_date()).or_default();
+                match entry.kind() {
+                    EntryKind::Receivable => day.0 += left,
+                    EntryKind::Payable => day.1 += left,
+                }
+            }
+        }
+        Ok(days
+            .into_iter()
+            .map(|(date, (receivable, payable))| DayOpen {
+                date,
+                receivable: receivable.normalize(),
+                payable: payable.normalize(),
+            })
+            .collect())
     }
 
     async fn history(

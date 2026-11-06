@@ -138,10 +138,10 @@ const ACCOUNT_PAGE: usize = 200;
 /// from the ports of the accounts, of the entries (which own the settlements), of the transfers and of
 /// the opening balances, so every adapter gives the same answer.
 pub struct BalanceService<A, E, T, O> {
-    accounts: A,
-    entries: E,
-    transfers: T,
-    openings: O,
+    pub(crate) accounts: A,
+    pub(crate) entries: E,
+    pub(crate) transfers: T,
+    pub(crate) openings: O,
 }
 
 impl<A, E, T, O> BalanceService<A, E, T, O>
@@ -201,27 +201,7 @@ where
         on: CalendarDate,
     ) -> Result<Balances, ApplicationError> {
         let openings = self.openings.list_by_company(company_id).await?;
-        let mut accounts = Vec::new();
-        let mut after: Option<NameCursor> = None;
-        loop {
-            let page = self
-                .accounts
-                .list_by_company(
-                    company_id,
-                    &BankAccountQuery::default(),
-                    after.as_ref(),
-                    ACCOUNT_PAGE + 1,
-                )
-                .await?;
-            let more = page.len() > ACCOUNT_PAGE;
-            let page = &page[..page.len().min(ACCOUNT_PAGE)];
-            accounts.extend_from_slice(page);
-            match (more, page.last()) {
-                (true, Some(last)) => after = Some(NameCursor::from(last)),
-                _ => break,
-            }
-        }
-
+        let accounts = self.accounts_of(company_id).await?;
         let mut balances = Vec::with_capacity(accounts.len());
         let mut total = Decimal::ZERO;
         for account in accounts {
@@ -239,7 +219,34 @@ where
         })
     }
 
-    async fn balance_of(
+    /// Every account of the company, inactive ones included, by name.
+    pub(crate) async fn accounts_of(
+        &self,
+        company_id: CompanyId,
+    ) -> Result<Vec<BankAccount>, ApplicationError> {
+        let mut accounts = Vec::new();
+        let mut after: Option<NameCursor> = None;
+        loop {
+            let page = self
+                .accounts
+                .list_by_company(
+                    company_id,
+                    &BankAccountQuery::default(),
+                    after.as_ref(),
+                    ACCOUNT_PAGE + 1,
+                )
+                .await?;
+            let more = page.len() > ACCOUNT_PAGE;
+            let page = &page[..page.len().min(ACCOUNT_PAGE)];
+            accounts.extend_from_slice(page);
+            match (more, page.last()) {
+                (true, Some(last)) => after = Some(NameCursor::from(last)),
+                _ => return Ok(accounts),
+            }
+        }
+    }
+
+    pub(crate) async fn balance_of(
         &self,
         company_id: CompanyId,
         account: BankAccount,

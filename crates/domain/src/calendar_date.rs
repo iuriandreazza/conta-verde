@@ -17,6 +17,13 @@ pub struct CalendarDate {
 }
 
 impl CalendarDate {
+    /// The first day a date may have.
+    pub const EARLIEST: Self = Self {
+        year: FIRST_YEAR,
+        month: 1,
+        day: 1,
+    };
+
     /// Strict `YYYY-MM-DD`: four, two and two digits and two hyphens, a year from 1900 to 2200 and a
     /// day that exists in its month. Nothing is trimmed or guessed: `2026-2-1` is refused.
     pub fn parse(raw: &str) -> Option<Self> {
@@ -50,6 +57,57 @@ impl CalendarDate {
 
     pub fn day(&self) -> u8 {
         self.day
+    }
+
+    /// The next day, or `None` after the last day a date may have.
+    pub fn succ(&self) -> Option<Self> {
+        let next = if self.day < days_in_month(self.year, self.month) {
+            Self {
+                day: self.day + 1,
+                ..*self
+            }
+        } else if self.month < 12 {
+            Self {
+                month: self.month + 1,
+                day: 1,
+                ..*self
+            }
+        } else {
+            Self {
+                year: self.year + 1,
+                month: 1,
+                day: 1,
+            }
+        };
+        (next.year <= LAST_YEAR).then_some(next)
+    }
+
+    /// The day before, or `None` before the first day a date may have.
+    pub fn pred(&self) -> Option<Self> {
+        if self.day > 1 {
+            return Some(Self {
+                day: self.day - 1,
+                ..*self
+            });
+        }
+        let (year, month) = if self.month > 1 {
+            (self.year, self.month - 1)
+        } else {
+            (self.year.checked_sub(1)?, 12)
+        };
+        (year >= FIRST_YEAR).then(|| Self {
+            year,
+            month,
+            day: days_in_month(year, month),
+        })
+    }
+
+    /// The last day of this date's month.
+    pub fn last_of_month(&self) -> Self {
+        Self {
+            day: days_in_month(self.year, self.month),
+            ..*self
+        }
     }
 }
 
@@ -125,6 +183,44 @@ mod tests {
         assert!(CalendarDate::parse("1900-01-01").is_some());
         assert!(CalendarDate::parse("2200-12-31").is_some());
         assert!(CalendarDate::parse("2201-01-01").is_none());
+    }
+
+    #[test]
+    fn steps_a_day_forward_and_back_across_months_years_and_leap_days() {
+        let day = |raw| CalendarDate::parse(raw).unwrap();
+        for (before, after) in [
+            ("2026-11-05", "2026-11-06"),
+            ("2026-11-30", "2026-12-01"),
+            ("2026-12-31", "2027-01-01"),
+            ("2028-02-28", "2028-02-29"),
+            ("2028-02-29", "2028-03-01"),
+            ("2026-02-28", "2026-03-01"),
+        ] {
+            assert_eq!(day(before).succ(), Some(day(after)), "{before}");
+            assert_eq!(day(after).pred(), Some(day(before)), "{after}");
+        }
+    }
+
+    #[test]
+    fn has_no_day_beyond_its_bounds() {
+        assert_eq!(CalendarDate::parse("2200-12-31").unwrap().succ(), None);
+        assert_eq!(CalendarDate::parse("1900-01-01").unwrap().pred(), None);
+        assert!(CalendarDate::parse("2200-12-30").unwrap().succ().is_some());
+        assert!(CalendarDate::parse("1900-01-02").unwrap().pred().is_some());
+    }
+
+    #[test]
+    fn finds_the_last_day_of_its_month() {
+        let last = |raw: &str| {
+            CalendarDate::parse(raw)
+                .unwrap()
+                .last_of_month()
+                .to_string()
+        };
+        assert_eq!(last("2026-11-05"), "2026-11-30");
+        assert_eq!(last("2028-02-01"), "2028-02-29");
+        assert_eq!(last("2026-02-10"), "2026-02-28");
+        assert_eq!(last("2026-12-31"), "2026-12-31");
     }
 
     #[test]

@@ -2,12 +2,13 @@ use std::future::Future;
 
 use conta_verde_domain::{
     AuditEntry, AuditRecord, BankAccountId, CalendarDate, CategoryId, CompanyId, CostCenterId,
-    EntryId, EntryKind, FinancialEntry, PartyId, PaymentMethodId, Settlement, SettlementId,
+    Decimal, EntryId, EntryKind, FinancialEntry, PartyId, PaymentMethodId, Settlement,
+    SettlementId,
 };
 use uuid::Uuid;
 
 use crate::list_query::clean_search;
-use crate::{AccountMovement, RepositoryError};
+use crate::{AccountMovement, DayMovement, RepositoryError};
 
 /// Position of the last row of a list ordered by a day, then by id (both reversed for a descending
 /// sort): the day and id of the last row are enough to resume right after it in either direction.
@@ -28,6 +29,14 @@ impl From<&FinancialEntry> for DateCursor {
             id: entry.id().as_uuid(),
         }
     }
+}
+
+/// What is still open on installments that fall due on one day: 0 or more, exact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DayOpen {
+    pub date: CalendarDate,
+    pub receivable: Decimal,
+    pub payable: Decimal,
 }
 
 /// The order of the list of entries. Newest competence first is what a person looks at.
@@ -174,6 +183,25 @@ pub trait FinancialEntryRepository: Send + Sync {
         since: Option<CalendarDate>,
         until: CalendarDate,
     ) -> impl Future<Output = Result<AccountMovement, RepositoryError>> + Send;
+
+    /// The same, on each day from `since` through `until` that had any, oldest day first.
+    fn cash_by_day(
+        &self,
+        company_id: CompanyId,
+        account: BankAccountId,
+        since: CalendarDate,
+        until: CalendarDate,
+    ) -> impl Future<Output = Result<Vec<DayMovement>, RepositoryError>> + Send;
+
+    /// What is left of the installments, their amount less what the settlements that are not
+    /// reversed settled, summed by due day from `since` through `until`, oldest day first, only for
+    /// the days that have something left: `receivable` of receivables and `payable` of payables.
+    fn open_by_due_day(
+        &self,
+        company_id: CompanyId,
+        since: CalendarDate,
+        until: CalendarDate,
+    ) -> impl Future<Output = Result<Vec<DayOpen>, RepositoryError>> + Send;
 
     /// What was recorded about the entry, oldest first. Empty for another company's.
     fn history(

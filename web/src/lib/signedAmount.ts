@@ -12,3 +12,9 @@ export function toSignedApi(typed: string): string | null {
   if (cents === null) return null;
   return negative && cents !== 0n ? `-${centsToApi(cents)}` : centsToApi(cents);
 }
+
+/** `minuend` less `subtrahend`, both amounts in cents the API sent, as the decimal the page prints. */
+export function difference(minuend: string, subtrahend: string): string {
+  const cents = (toCents(minuend) ?? 0n) - (toCents(subtrahend) ?? 0n);
+  return cents < 0n ? `-${centsToApi(-cents)}` : centsToApi(cents);
+}

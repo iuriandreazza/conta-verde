@@ -48,7 +48,7 @@ register from the browser; no endpoint accepts a `company_id` the caller is not 
 - [x] Settlement: full and partial, interest, fine and discount, settlement date and bank account ([ADR 0030](adr/0030-settlements.md)) — pay an installment from an account, never for more than is left, reverse a settlement; an entry with settlements keeps its installments and kind; the list says paid, partial, overdue or open
 - [x] Transfers between accounts; opening balances; balance per account and consolidated ([ADR 0031](adr/0031-transfers-and-balances.md)) — move money between two accounts and reverse it, set an account's opening balance (signed), read every account's balance on a day and the total; the bank accounts page shows today's balance
 - [ ] Recurring entries generated ahead by a scheduled job ([ADR 0009](adr/0009-postgres-only-background-jobs.md))
-- [ ] Cash flow: daily and monthly, realized and forecast, per account and consolidated
+- [x] Cash flow: daily and monthly, realized and forecast, per account and consolidated ([ADR 0032](adr/0032-cash-flow.md)) — `GET /cash-flow` cuts a span into days or months: what settlements and transfers moved, the running balance, and what is still open by due date (late installments counted), with a page that draws the realized and projected balance
 - [ ] OFX import and reconciliation: match suggestions, create entry from statement line, ignore line ([ADR 0011](adr/0011-bank-data-ingestion.md))
 - [ ] Reports: entries by category, by cost center, by party, overdue list
 - [ ] Web app: entries, settlement, cash flow, reconciliation screens; "Source code" link in the footer (AGPL section 13)
