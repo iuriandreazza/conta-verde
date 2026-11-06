@@ -24,6 +24,7 @@ pub struct SaleQuery {
     status: Option<SaleStatus>,
     customer: Option<PartyId>,
     seller: Option<PartyId>,
+    with_a_seller: bool,
     contract: Option<ContractId>,
     sold_between: Option<(CalendarDate, CalendarDate)>,
     sort: NumberSort,
@@ -48,6 +49,12 @@ impl SaleQuery {
 
     pub fn with_seller(mut self, seller: PartyId) -> Self {
         self.seller = Some(seller);
+        self
+    }
+
+    /// Only the sales that name a seller.
+    pub fn with_a_seller(mut self) -> Self {
+        self.with_a_seller = true;
         self
     }
 
@@ -83,6 +90,10 @@ impl SaleQuery {
         self.seller
     }
 
+    pub fn requires_a_seller(&self) -> bool {
+        self.with_a_seller
+    }
+
     pub fn contract(&self) -> Option<ContractId> {
         self.contract
     }
@@ -104,6 +115,7 @@ impl SaleQuery {
             && self
                 .seller
                 .is_none_or(|seller| sale.seller_id() == Some(seller))
+            && (!self.with_a_seller || sale.seller_id().is_some())
             && self
                 .sold_between
                 .is_none_or(|(from, to)| (from..=to).contains(&sale.sold_on()))

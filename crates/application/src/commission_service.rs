@@ -156,7 +156,7 @@ where
 
     /// What the sellers (or one of them) earned on the completed sales sold from `from` through `to`, net of
     /// what came back, by the rules in force on each sale's day. A sale without a seller earns nothing and is
-    /// not listed; one that is cancelled is not a sale. More than 2000 sales are refused: narrow the span.
+    /// not read; one that is cancelled is not a sale. More than 2000 sales are refused: narrow the span.
     pub async fn statement(
         &self,
         company_id: CompanyId,
@@ -170,6 +170,7 @@ where
         let mut query = SaleQuery::default()
             .with_status(SaleStatus::Completed)
             .sold_between(from, to)
+            .with_a_seller()
             .sorted(crate::NumberSort::NumberAsc);
         if let Some(seller) = seller {
             query = query.with_seller(seller);
@@ -194,7 +195,6 @@ where
                 break;
             }
         }
-        sales.retain(|sale| sale.seller_id().is_some());
         let ids: Vec<_> = sales.iter().map(Sale::id).collect();
         let returns = self.sales.returns_of_sales(company_id, &ids).await?;
         let rules = self.all_rules(company_id).await?;

@@ -270,6 +270,9 @@ impl SaleRepository for PostgresSaleRepository {
         if let Some(seller) = query.seller() {
             sql.push(" AND seller_id = ").push_bind(seller.as_uuid());
         }
+        if query.requires_a_seller() {
+            sql.push(" AND seller_id IS NOT NULL");
+        }
         if let Some(contract) = query.contract() {
             sql.push(" AND contract_id = ")
                 .push_bind(contract.as_uuid());

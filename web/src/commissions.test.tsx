@@ -191,12 +191,15 @@ describe("commissions", () => {
   });
 
   it("edits a rule, replacing it as a whole", async () => {
+    let stored = special;
     const fetchMock = mockApi(
-      answer([special], (url, init) =>
-        url.endsWith("/commission-rules/r2") && init?.method === "PUT"
-          ? { status: 200, body: { ...special, rate: "8", active: false } }
-          : undefined,
-      ),
+      answer([], (url, init) => {
+        if (url.endsWith("/commission-rules/r2") && init?.method === "PUT") {
+          stored = { ...special, rate: "8", active: false };
+          return { status: 200, body: stored };
+        }
+        return url.includes("/commission-rules") && !init?.method ? { status: 200, body: { items: [stored], next_cursor: null } } : undefined;
+      }),
     );
     renderAt("/companies/c1/commissions");
     await userEvent.click(await screen.findByRole("button", { name: "Alterar a regra de 7,5% desde 01/01/2026" }));
@@ -218,6 +221,21 @@ describe("commissions", () => {
       active: false,
     });
     expect(await screen.findByRole("row", { name: /8%.*Inativa/ })).toBeInTheDocument();
+  });
+
+  it("keeps the seller of a rule in the choices when editing, even if they stopped being a seller", async () => {
+    mockApi(
+      answer([special], (url) =>
+        url.includes("/parties")
+          ? { status: 200, body: { items: [party("p1", "Mercado Boa Compra", false), party("s1", "Vera", false)], next_cursor: null } }
+          : undefined,
+      ),
+    );
+    renderAt("/companies/c1/commissions");
+    await userEvent.click(await screen.findByRole("button", { name: "Alterar a regra de 7,5% desde 01/01/2026" }));
+    const form = within(screen.getByRole("heading", { name: "Alterar regra" }).closest("aside")!);
+
+    expect(form.getByLabelText("Vendedor")).toHaveValue("s1");
   });
 
   it("shows the trail of a rule in words", async () => {

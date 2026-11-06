@@ -86,7 +86,7 @@ export function CommissionsPage() {
       <RulesSection
         companyId={companyId}
         canWrite={canWrite}
-        sellers={sellers}
+        parties={parties}
         products={products}
         names={names}
         targetsLoaded={targetsLoaded}
@@ -102,7 +102,7 @@ function StatementCard({ companyId, sellers, names }: { companyId: string; selle
   const [seller, setSeller] = useState("");
   const [statement, setStatement] = useState<CommissionStatement | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   // The server orders sellers by id, which means nothing to a person.
   const sortedSellers = [...(statement?.sellers ?? [])].sort((a, b) =>
@@ -113,9 +113,12 @@ function StatementCard({ companyId, sellers, names }: { companyId: string; selle
 
   useEffect(() => {
     if (!valid) {
+      setLoading(false);
       return;
     }
     let current = true;
+    // What was on screen belongs to other dates or another seller: never show it under the new ones.
+    setStatement(null);
     setLoading(true);
     setError(null);
     api
@@ -215,13 +218,13 @@ function StatementCard({ companyId, sellers, names }: { companyId: string; selle
 interface RulesSectionProps {
   companyId: string;
   canWrite: boolean;
-  sellers: Party[];
+  parties: Party[];
   products: Product[];
   names: Map<string, string>;
   targetsLoaded: boolean;
 }
 
-function RulesSection({ companyId, canWrite, sellers, products, names, targetsLoaded }: RulesSectionProps) {
+function RulesSection({ companyId, canWrite, parties, products, names, targetsLoaded }: RulesSectionProps) {
   const [filters, setFilters] = useState<CommissionRuleFilters>(NO_COMMISSION_RULE_FILTERS);
   const [editing, setEditing] = useState<CommissionRule | null>(null);
   const [formVersion, setFormVersion] = useState(0);
@@ -231,10 +234,13 @@ function RulesSection({ companyId, canWrite, sellers, products, names, targetsLo
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const [historyOf, setHistoryOf] = useState<string | null>(null);
 
-  const { items, setItems, nextCursor, loading, loadingMore, error, applied, reload, loadMore } =
+  const { items, nextCursor, loading, loadingMore, error, applied, reload, loadMore } =
     usePagedList<CommissionRule, CommissionRuleFilters>((applied, after) => api.listCommissionRules(companyId, applied, after), filters);
   const isFiltered = applied.seller !== "" || applied.product !== "" || applied.active !== "";
+  const sellers = parties.filter((party) => party.is_seller);
   const productChoices = products.filter((product) => product.active || product.id === editing?.product_id);
+  // A rule keeps naming a seller who stopped being one; dropping it from the choices would widen the rule to everybody.
+  const sellerChoices = parties.filter((party) => party.is_seller || party.id === editing?.seller_id);
 
   function startEditing(rule: CommissionRule | null) {
     setEditing(rule);
@@ -282,9 +288,11 @@ function RulesSection({ companyId, canWrite, sellers, products, names, targetsLo
         await reload();
       } else {
         const updated = await api.updateCommissionRule(companyId, editing.id, input);
-        setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+        setHighlightedId(updated.id);
         startEditing(null);
         setSaved(`Regra de ${rate(updated.rate)} atualizada. As vendas já feitas são recalculadas no extrato.`);
+        // The new dates or situation may move it in the list or out of a filter.
+        await reload();
       }
     } catch (failure) {
       setFormError(errorMessage(failure));
@@ -436,7 +444,7 @@ function RulesSection({ companyId, canWrite, sellers, products, names, targetsLo
                 Vendedor
                 <select name="seller_id" defaultValue={editing?.seller_id ?? ""}>
                   <option value="">Todos os vendedores</option>
-                  {sellers.map((party) => (
+                  {sellerChoices.map((party) => (
                     <option key={party.id} value={party.id}>
                       {party.name}
                     </option>
