@@ -80,9 +80,11 @@ export function BarChart({ groups, series, label }: { groups: BarGroup[]; series
                 return (
                   <g key={item.name}>
                     {length > 0 && <path d={barPath(LABEL_ROOM, y, length)} fill={item.color} />}
-                    <text className="chart-value" x={LABEL_ROOM + length + 8} y={y + BAR - 3}>
-                      {formatMoney(group.values[index])}
-                    </text>
+                    {length > 0 && (
+                      <text className="chart-value" x={LABEL_ROOM + length + 8} y={y + BAR - 3}>
+                        {formatMoney(group.values[index])}
+                      </text>
+                    )}
                   </g>
                 );
               })}

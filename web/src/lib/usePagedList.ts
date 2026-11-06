@@ -24,6 +24,8 @@ export function usePagedList<T, F extends object>(
 ) {
   const [items, setItems] = useState<T[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
+  // True while a first page is on its way, also when the old rows are still on screen.
+  const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -51,6 +53,7 @@ export function usePagedList<T, F extends object>(
     // The old cursor belongs to the old filters: "load more" must not be clickable until the new
     // first page says whether there is a next one.
     setNextCursor(null);
+    setRefreshing(true);
     try {
       const page = await fetchRef.current(filtersToApply);
       if (listing === latestListing.current) {
@@ -66,6 +69,7 @@ export function usePagedList<T, F extends object>(
     } finally {
       if (listing === latestListing.current) {
         setLoading(false);
+        setRefreshing(false);
       }
     }
   }, []);
@@ -99,5 +103,5 @@ export function usePagedList<T, F extends object>(
     }
   }
 
-  return { items, setItems, nextCursor, loading, loadingMore, error, setError, applied, reload, loadMore };
+  return { items, setItems, nextCursor, loading, refreshing, loadingMore, error, setError, applied, reload, loadMore };
 }

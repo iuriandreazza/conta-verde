@@ -91,6 +91,7 @@ export function LineChart({
               fill="none"
               stroke={item.color}
               strokeWidth={2}
+              strokeDasharray={item.dashed ? "6 4" : undefined}
               strokeLinejoin="round"
               strokeLinecap="round"
               points={numbers.map((row, index) => `${x(index)},${y(row[seriesIndex])}`).join(" ")}

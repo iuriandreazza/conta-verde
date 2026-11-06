@@ -1387,7 +1387,7 @@ describe("bank accounts", () => {
       number: "99999",
       active: true,
     });
-    expect(screen.getByText("99999")).toBeInTheDocument();
+    expect(screen.getByText(/conta 99999/)).toBeInTheDocument();
   });
 
   it("filters by kind, situation and text, and shows the history with the kind in words", async () => {

@@ -9,13 +9,16 @@ interface ListRowProps {
   index: number;
   /** A freshly added row flashes green and fades back to transparent. */
   highlighted: boolean;
+  /** An edge mark for a row that needs attention; the row says why in words too (a status badge). */
+  tone?: "critical";
   children: ReactNode;
 }
 
-export function ListRow({ index, highlighted, children }: ListRowProps) {
+export function ListRow({ index, highlighted, tone, children }: ListRowProps) {
   const flash = (alpha: 0 | 1) => `rgba(47, 178, 110, ${highlighted ? alpha * 0.25 : 0})`;
   return (
     <motion.tr
+      className={tone && `row-${tone}`}
       initial={{ opacity: 0, y: 8, backgroundColor: flash(1) }}
       animate={{ opacity: 1, y: 0, backgroundColor: flash(0) }}
       transition={{

@@ -13,6 +13,7 @@ import {
 } from "../api";
 import { BankAccountHistory } from "../components/BankAccountHistory";
 import { StatTile } from "../components/charts/StatTile";
+import { ListFooter } from "../components/ListFooter";
 import { Button } from "../components/Button";
 import { ListRow } from "../components/ListRow";
 import { OpeningBalanceForm } from "../components/OpeningBalanceForm";
@@ -21,13 +22,12 @@ import { Notice } from "../components/Notice";
 import { Spinner } from "../components/Spinner";
 import { BriefcaseBusinessIcon } from "../components/icons/briefcase-business";
 import { CheckIcon } from "../components/icons/check";
-import { ChevronDownIcon } from "../components/icons/chevron-down";
 import { HistoryIcon } from "../components/icons/history";
 import { PlusIcon } from "../components/icons/plus";
-import { BANK_ACCOUNT_KINDS, bankAccountKindLabel } from "../lib/kinds";
+import { BANK_ACCOUNT_KINDS } from "../lib/kinds";
 import { usePagedList } from "../lib/usePagedList";
 import { useCanWrite } from "../lib/useCanWrite";
-import { bankName } from "../lib/banks";
+import { accountDetails } from "../lib/banks";
 import { formatMoney } from "../lib/decimal";
 import { formatDate } from "../lib/entryInstallments";
 import { todayIso } from "../lib/settlement";
@@ -127,6 +127,7 @@ export function BankAccountsPage() {
     setItems,
     nextCursor,
     loading,
+    refreshing,
     loadingMore,
     error,
     applied,
@@ -286,9 +287,6 @@ export function BankAccountsPage() {
               <thead>
                 <tr>
                   <th>Conta</th>
-                  <th>Banco</th>
-                  <th>Agência</th>
-                  <th>Conta</th>
                   <th className="num">Saldo hoje</th>
                   <th>Situação</th>
                   <th>
@@ -305,22 +303,10 @@ export function BankAccountsPage() {
                           <KindIcon kind={account.kind} active={account.active} />
                           <div>
                             <div className="cell-title">{account.name}</div>
-                            <div className="muted">{bankAccountKindLabel(account.kind)}</div>
+                            <div className="muted">{accountDetails(account)}</div>
                           </div>
                         </div>
                       </td>
-                      <td>
-                        {account.bank_code === undefined || account.bank_code === null ? (
-                          "—"
-                        ) : (
-                          <>
-                            <span className="tabular">{account.bank_code}</span>
-                            <div className="muted">{bankName(account.bank_code)}</div>
-                          </>
-                        )}
-                      </td>
-                      <td className="tabular">{account.branch ?? "—"}</td>
-                      <td className="tabular">{account.number ?? "—"}</td>
                       <BalanceCell item={balanceOf.get(account.id)} />
                       <td><StatusBadge active={account.active} feminine /></td>
                       <td className="row-actions">
@@ -376,7 +362,7 @@ export function BankAccountsPage() {
                     </ListRow>
                     {openingOpenFor === account.id && balanceOf.has(account.id) && (
                       <tr id={`opening-${account.id}`}>
-                        <td colSpan={7} role="region" aria-label={`Saldo inicial de ${account.name}`}>
+                        <td colSpan={4} role="region" aria-label={`Saldo inicial de ${account.name}`}>
                           <OpeningBalanceForm
                             companyId={companyId}
                             item={balanceOf.get(account.id) as AccountBalance}
@@ -387,7 +373,7 @@ export function BankAccountsPage() {
                     )}
                     {historyOpenFor === account.id && (
                       <tr id={`history-${account.id}`}>
-                        <td colSpan={7} role="region" aria-label={`Histórico de ${account.name}`}>
+                        <td colSpan={4} role="region" aria-label={`Histórico de ${account.name}`}>
                           <BankAccountHistory
                             // Remounted when the account changes, so an open history follows an edit.
                             key={JSON.stringify(account)}
@@ -403,16 +389,15 @@ export function BankAccountsPage() {
             </table>
           </div>
         )}
-        {nextCursor !== null && (
-          <Button
-            type="button"
-            variant="ghost"
-            icon={ChevronDownIcon}
-            pending={loadingMore}
-            onClick={() => void loadMore()}
-          >
-            Carregar mais
-          </Button>
+        {!loading && accounts.length > 0 && (
+          <ListFooter
+            count={accounts.length}
+            noun={["conta", "contas"]}
+            hasMore={nextCursor !== null}
+            loadingMore={loadingMore}
+            refreshing={refreshing}
+            onLoadMore={() => void loadMore()}
+          />
         )}
       </section>
       {canWrite && (
