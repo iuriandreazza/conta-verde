@@ -59,6 +59,17 @@ impl Line {
         Ok(line)
     }
 
+    /// The line as it would be asked for again, to copy it into another document.
+    pub fn to_draft(&self) -> LineDraft {
+        LineDraft {
+            product_id: self.product_id,
+            description: self.description.clone(),
+            quantity: self.quantity.to_string(),
+            unit_price: self.unit_price.to_string(),
+            discount: self.discount.to_string(),
+        }
+    }
+
     pub fn product_id(&self) -> ProductId {
         self.product_id
     }

@@ -104,6 +104,7 @@ impl QuoteQuery {
 /// What a write does to the link that lets the customer answer a quote.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LinkChange {
+    Keep,
     /// The link stops working: what it showed is not what the quote is any more.
     Revoke,
     /// A new link, of which only the digest of the token is kept.

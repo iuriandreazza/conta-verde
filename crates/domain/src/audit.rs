@@ -3,8 +3,8 @@ use uuid::Uuid;
 use crate::line::lines_text;
 use crate::{
     AccountOpening, Attachment, BankAccount, Category, CompanyId, CostCenter, DocumentCheck,
-    FinancialEntry, LineMatch, Party, PaymentMethod, PaymentTerm, Product, Quote, Recurrence,
-    Settlement, StatementLine, Tag, Transfer, UserId,
+    FinancialEntry, LineMatch, Party, PaymentMethod, PaymentTerm, Product, Quote, Recurrence, Sale,
+    SaleReturn, Settlement, StatementLine, Tag, Transfer, UserId,
 };
 
 /// Who made a change. The name is a snapshot: history must keep reading the same after the user is
@@ -33,6 +33,8 @@ pub enum AuditEntity {
     StatementLine,
     Attachment,
     Quote,
+    Sale,
+    SaleReturn,
 }
 
 impl AuditEntity {
@@ -50,6 +52,8 @@ impl AuditEntity {
             Self::StatementLine => "statement_line",
             Self::Attachment => "attachment",
             Self::Quote => "quote",
+            Self::Sale => "sale",
+            Self::SaleReturn => "sale_return",
             Self::Settlement => "settlement",
             Self::Transfer => "transfer",
             Self::AccountOpening => "account_opening",
@@ -250,6 +254,34 @@ impl Audited for Settlement {
 impl Audited for Quote {
     fn audit_entity(&self) -> AuditEntity {
         AuditEntity::Quote
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.id().as_uuid()
+    }
+}
+
+impl Audited for Sale {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::Sale
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.id().as_uuid()
+    }
+}
+
+impl Audited for SaleReturn {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::SaleReturn
     }
 
     fn audit_company(&self) -> CompanyId {
@@ -557,6 +589,8 @@ fn entry_fields(entry: &FinancialEntry) -> Fields {
         ),
         ("competence_date", Some(entry.competence_date().to_string())),
         ("installments", Some(entry.installments_text())),
+        // Only a cancelled entry says so: the trail of the others reads as it always did.
+        ("voided", entry.is_voided().then(|| "true".to_owned())),
     ]
 }
 
@@ -632,6 +666,69 @@ pub fn quote_creation_changes(quote: &Quote) -> Vec<FieldChange> {
 
 pub fn quote_changes(before: &Quote, after: &Quote) -> Vec<FieldChange> {
     changes_between(quote_fields(before), quote_fields(after))
+}
+
+fn sale_fields(sale: &Sale) -> Fields {
+    vec![
+        (
+            "customer_id",
+            Some(sale.customer_id().as_uuid().to_string()),
+        ),
+        (
+            "seller_id",
+            sale.seller_id().map(|id| id.as_uuid().to_string()),
+        ),
+        ("sold_on", Some(sale.sold_on().to_string())),
+        (
+            "payment_term_id",
+            sale.payment_term_id().map(|id| id.as_uuid().to_string()),
+        ),
+        (
+            "category_id",
+            Some(sale.category_id().as_uuid().to_string()),
+        ),
+        (
+            "cost_center_id",
+            sale.cost_center_id().map(|id| id.as_uuid().to_string()),
+        ),
+        ("notes", sale.notes().map(str::to_owned)),
+        ("lines", Some(lines_text(sale.lines()))),
+        ("status", Some(sale.status().as_str().to_owned())),
+        (
+            "quote_id",
+            sale.quote_id().map(|id| id.as_uuid().to_string()),
+        ),
+    ]
+}
+
+/// Every field a new sale has set.
+pub fn sale_creation_changes(sale: &Sale) -> Vec<FieldChange> {
+    creation_from(sale_fields(sale))
+}
+
+pub fn sale_changes(before: &Sale, after: &Sale) -> Vec<FieldChange> {
+    changes_between(sale_fields(before), sale_fields(after))
+}
+
+/// Every field a new return has set.
+pub fn sale_return_creation_changes(sale_return: &SaleReturn) -> Vec<FieldChange> {
+    creation_from(vec![
+        ("sale_id", Some(sale_return.sale_id().as_uuid().to_string())),
+        ("returned_on", Some(sale_return.returned_on().to_string())),
+        ("reason", sale_return.reason().map(str::to_owned)),
+        (
+            "items",
+            Some(
+                sale_return
+                    .items()
+                    .iter()
+                    .map(|(line, quantity)| format!("{line}:{quantity}"))
+                    .collect::<Vec<_>>()
+                    .join(","),
+            ),
+        ),
+        ("refund", Some(sale_return.refund().to_string())),
+    ])
 }
 
 fn statement_line_fields(line: &StatementLine) -> Fields {

@@ -81,6 +81,16 @@ pub enum DomainError {
     QuoteValidityBeforeIssue,
     QuoteIsLocked,
     QuoteIsNotSent,
+    EntryIsVoided,
+    SaleIsLocked,
+    SaleIsNotCompleted,
+    SaleIsEmpty,
+    InvalidReturnQuantity,
+    NoReturnItems,
+    ReturnLineUnknown,
+    ReturnRefundIsNothing,
+    InstallmentTooSmall,
+    ReturnExceedsSold,
 }
 
 impl fmt::Display for DomainError {
@@ -251,6 +261,20 @@ impl fmt::Display for DomainError {
                 f.write_str("a quote that was approved, declined or turned into a sale cannot change")
             }
             Self::QuoteIsNotSent => f.write_str("only a quote that was sent can be answered"),
+            Self::EntryIsVoided => f.write_str("the entry was cancelled: it cannot change, and it counts nowhere"),
+            Self::SaleIsLocked => f.write_str("only an order that is still open can change"),
+            Self::SaleIsNotCompleted => f.write_str("only a completed sale has returns"),
+            Self::SaleIsEmpty => f.write_str("a sale to be completed must be worth more than 0"),
+            Self::InvalidReturnQuantity => f.write_str(
+                "a returned quantity must be more than 0, with at most 3 decimals, written like 1.5",
+            ),
+            Self::NoReturnItems => f.write_str("a return needs at least one item"),
+            Self::ReturnLineUnknown => f.write_str("a return is of the items the sale has, each once"),
+            Self::ReturnRefundIsNothing => f.write_str("what is returned is worth less than one cent"),
+            Self::InstallmentTooSmall => f.write_str(
+                "the amount is too small to be split by this payment term: an installment would be less than one cent",
+            ),
+            Self::ReturnExceedsSold => f.write_str("a return cannot be of more than was sold and not returned yet"),
             Self::KindCannotChange => f.write_str("the kind cannot change once registered"),
         }
     }

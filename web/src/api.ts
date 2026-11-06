@@ -782,6 +782,84 @@ export interface PublicQuote {
   total: string;
 }
 
+export type SaleStatus = "open" | "completed" | "cancelled";
+
+/** An order that becomes a sale (ADR 0039). */
+export interface Sale {
+  id: string;
+  company_id: string;
+  number: number;
+  customer_id: string;
+  seller_id: string | null;
+  sold_on: string;
+  payment_term_id: string | null;
+  /** The category of the receivable the sale makes. */
+  category_id: string;
+  cost_center_id: string | null;
+  notes: string | null;
+  status: SaleStatus;
+  quote_id: string | null;
+  lines: DocumentLine[];
+  total: string;
+  /** Only the answers about one sale say it; the lists leave it out. */
+  receivable_id: string | null;
+}
+
+export interface SalePage {
+  items: Sale[];
+  next_cursor: string | null;
+}
+
+/** Replaces the whole order while it is open. */
+export interface SaleInput {
+  customer_id: string;
+  seller_id?: string;
+  sold_on: string;
+  payment_term_id?: string;
+  category_id: string;
+  cost_center_id?: string;
+  notes?: string;
+  lines: LineInput[];
+}
+
+export interface SaleFilters {
+  q: string;
+  status: "" | SaleStatus;
+  sort: "-number" | "number";
+}
+
+export const NO_SALE_FILTERS: SaleFilters = { q: "", status: "", sort: "-number" };
+
+/** What a quote becomes a sale with: what the quote does not know. */
+export interface ConversionInput {
+  sold_on: string;
+  category_id: string;
+  cost_center_id?: string;
+  seller_id?: string;
+  payment_term_id?: string;
+}
+
+export interface ReturnInput {
+  returned_on: string;
+  reason?: string;
+  /** `line` is the line's place in the sale, from 1. */
+  items: { line: number; quantity: string }[];
+  /** The category of the payable that gives the money back. */
+  refund_category_id: string;
+  refund_due_on: string;
+}
+
+export interface SaleReturn {
+  id: string;
+  sale_id: string;
+  returned_on: string;
+  reason: string | null;
+  items: { line: number; quantity: string }[];
+  refund: string;
+  /** `null` only if the payable's write failed after the return was stored. */
+  refund_entry_id: string | null;
+}
+
 export interface EntryInstallment {
   number: number;
   /** `YYYY-MM-DD`. */
@@ -808,6 +886,12 @@ export interface Entry {
   total: string;
   /** The recurrence that generated it, if one did (ADR 0033). */
   recurrence_id: string | null;
+  /** The sale whose receivable it is, if one made it (ADR 0039). */
+  sale_id: string | null;
+  /** The return it refunds, if one made it. */
+  sale_return_id: string | null;
+  /** Cancelled: it counts nowhere and takes no edit or settlement (ADR 0037). */
+  voided: boolean;
 }
 
 export interface EntryPage {
@@ -1176,6 +1260,34 @@ export const api = {
   publicQuotePdfUrl: (token: string) => `/api/public/quotes/${token}/pdf`,
   approveQuote: (token: string) => post<PublicQuote>(`/public/quotes/${token}/approve`),
   declineQuote: (token: string) => post<PublicQuote>(`/public/quotes/${token}/decline`),
+  convertQuote: (companyId: string, quoteId: string, input: ConversionInput) =>
+    post<Sale>(`/companies/${companyId}/quotes/${quoteId}/convert`, input),
+  listSales: (companyId: string, filters: SaleFilters = NO_SALE_FILTERS, after?: string) => {
+    const params = new URLSearchParams();
+    if (filters.q) params.set("q", filters.q);
+    if (filters.status) params.set("status", filters.status);
+    if (filters.sort !== NO_SALE_FILTERS.sort) params.set("sort", filters.sort);
+    if (after) params.set("after", after);
+    const query = params.size > 0 ? `?${params}` : "";
+    return request<SalePage>(`/companies/${companyId}/sales${query}`);
+  },
+  createSale: (companyId: string, input: SaleInput) =>
+    post<Sale>(`/companies/${companyId}/sales`, input),
+  updateSale: (companyId: string, id: string, input: SaleInput) =>
+    request<Sale>(`/companies/${companyId}/sales/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  saleHistory: (companyId: string, id: string) =>
+    request<HistoryEntry[]>(`/companies/${companyId}/sales/${id}/history`),
+  completeSale: (companyId: string, id: string) =>
+    post<Sale>(`/companies/${companyId}/sales/${id}/complete`),
+  cancelSale: (companyId: string, id: string) =>
+    post<Sale>(`/companies/${companyId}/sales/${id}/cancel`),
+  listReturns: (companyId: string, id: string) =>
+    request<{ items: SaleReturn[] }>(`/companies/${companyId}/sales/${id}/returns`),
+  createReturn: (companyId: string, id: string, input: ReturnInput) =>
+    post<SaleReturn>(`/companies/${companyId}/sales/${id}/returns`, input),
   /** The OFX file goes as it is, bytes and all: the API reads the charset. */
   importStatement: (companyId: string, accountId: string, file: File, dryRun: boolean) =>
     request<ImportResult>(

@@ -24,6 +24,7 @@ mod product;
 mod quote;
 mod recurrence;
 mod role;
+mod sale;
 mod settlement;
 mod statement_line;
 mod tag;
@@ -41,7 +42,8 @@ pub use audit::{
     entry_changes, entry_creation_changes, opening_changes, opening_creation_changes,
     party_changes, payment_method_changes, payment_method_creation_changes, payment_term_changes,
     payment_term_creation_changes, product_changes, product_creation_changes, quote_changes,
-    quote_creation_changes, recurrence_changes, recurrence_creation_changes, settlement_changes,
+    quote_creation_changes, recurrence_changes, recurrence_creation_changes, sale_changes,
+    sale_creation_changes, sale_return_creation_changes, settlement_changes,
     settlement_creation_changes, statement_line_changes, statement_line_creation_changes,
     transfer_changes, transfer_creation_changes,
 };
@@ -56,12 +58,12 @@ pub use email::Email;
 pub use error::DomainError;
 pub use financial_entry::{
     EntryInstallment, EntryInstallmentDraft, EntryKind, EntryOrigin, FinancialEntry,
-    FinancialEntryDraft, MAX_ENTRY_INSTALLMENTS,
+    FinancialEntryDraft, MAX_ENTRY_INSTALLMENTS, RecurrenceOrigin,
 };
 pub use ids::{
     AttachmentId, BankAccountId, CategoryId, CompanyId, CostCenterId, EntryId, InvitationId,
-    PartyId, PaymentMethodId, PaymentTermId, ProductId, QuoteId, RecurrenceId, SettlementId,
-    StatementLineId, TransferId, UserId,
+    PartyId, PaymentMethodId, PaymentTermId, ProductId, QuoteId, RecurrenceId, SaleId,
+    SaleReturnId, SettlementId, StatementLineId, TransferId, UserId,
 };
 pub use invitation::Invitation;
 pub use line::{Line, LineDraft, MAX_LINES, lines_total};
@@ -77,6 +79,7 @@ pub use recurrence::{Frequency, Recurrence, RecurrenceDraft};
 pub use role::{Access, Area, Role};
 /// The exact decimal money is made of, so a layer that adds amounts need not depend on its crate.
 pub use rust_decimal::Decimal;
+pub use sale::{ReturnItemDraft, Sale, SaleDraft, SaleReturn, SaleReturnDraft, SaleStatus};
 pub use settlement::{Settlement, SettlementDraft, settled_of};
 pub use statement_line::{LineMatch, LineStatus, StatementLine, StatementLineDraft};
 pub use tag::{MAX_TAGS, Tag};

@@ -159,6 +159,17 @@ impl Quote {
         })
     }
 
+    /// The quote that became a sale. A quote that was declined, or already converted, cannot.
+    pub fn converted(&self) -> Result<Self, DomainError> {
+        if matches!(self.status, QuoteStatus::Declined | QuoteStatus::Converted) {
+            return Err(DomainError::QuoteIsLocked);
+        }
+        Ok(Self {
+            status: QuoteStatus::Converted,
+            ..self.clone()
+        })
+    }
+
     /// The customer's answer to a quote that was sent.
     pub fn answered(&self, approved: bool) -> Result<Self, DomainError> {
         if self.status != QuoteStatus::Sent {

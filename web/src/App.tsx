@@ -21,6 +21,7 @@ import { QuotesPage } from "./pages/QuotesPage";
 import { ReportsPage } from "./pages/ReportsPage";
 import { ReconciliationPage } from "./pages/ReconciliationPage";
 import { RecurrencesPage } from "./pages/RecurrencesPage";
+import { SalesPage } from "./pages/SalesPage";
 import { TransfersPage } from "./pages/TransfersPage";
 
 export function App() {
@@ -37,6 +38,7 @@ export function App() {
           <Route path="/companies/:companyId/parties" element={<PartiesPage />} />
           <Route path="/companies/:companyId/products" element={<ProductsPage />} />
           <Route path="/companies/:companyId/quotes" element={<QuotesPage />} />
+          <Route path="/companies/:companyId/sales" element={<SalesPage />} />
           <Route path="/companies/:companyId/entries" element={<EntriesPage />} />
           <Route path="/companies/:companyId/reports" element={<ReportsPage />} />
           <Route path="/companies/:companyId/reconciliation" element={<ReconciliationPage />} />

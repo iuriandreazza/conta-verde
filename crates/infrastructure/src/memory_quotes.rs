@@ -86,6 +86,7 @@ impl QuoteRepository for InMemoryQuoteRepository {
         // The number is the store's, not the draft's.
         *stored = quote.clone().with_number(stored.number());
         match link {
+            LinkChange::Keep => {}
             LinkChange::Revoke => *stored_link = None,
             LinkChange::Set(digest) => *stored_link = Some(digest),
         }

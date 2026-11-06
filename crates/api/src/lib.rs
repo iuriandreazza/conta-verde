@@ -25,6 +25,7 @@ mod quote_pdf;
 mod quotes;
 mod recurrences;
 mod reports;
+mod sales;
 mod session;
 mod statements;
 mod transfers;
@@ -41,8 +42,8 @@ use conta_verde_application::{
     MemberService, OpeningRepository, PartyRepository, PartyService, PaymentMethodRepository,
     PaymentMethodService, PaymentTermRepository, PaymentTermService, PostalCodeDirectory,
     PostalCodeService, ProductRepository, ProductService, QuoteRepository, QuoteService,
-    ReconciliationService, RecurrenceRepository, RecurrenceService, SalesReferences, SecretService,
-    StatementLineRepository, TransferRepository, TransferService,
+    ReconciliationService, RecurrenceRepository, RecurrenceService, SaleRepository, SaleService,
+    SalesReferences, SecretService, StatementLineRepository, TransferRepository, TransferService,
 };
 use serde::Serialize;
 
@@ -76,11 +77,21 @@ pub trait Ports: 'static {
     type Recurrences: RecurrenceRepository + 'static;
     type SalesReferences: SalesReferences + 'static;
     type Quotes: QuoteRepository + 'static;
+    type Sales: SaleRepository + 'static;
     type Statements: StatementLineRepository + 'static;
     type PostalCodes: PostalCodeDirectory + 'static;
     type Invitations: InvitationRepository + 'static;
     type Emails: EmailSender + 'static;
 }
+
+/// The sales use case over the adapters of `X`.
+type SalesOf<X> = SaleService<
+    <X as Ports>::Sales,
+    <X as Ports>::Quotes,
+    <X as Ports>::Entries,
+    <X as Ports>::EntryReferences,
+    <X as Ports>::SalesReferences,
+>;
 
 /// The use cases the API serves.
 pub struct Services<X: Ports> {
@@ -96,6 +107,7 @@ pub struct Services<X: Ports> {
     pub transfers: TransferService<X::Transfers, X::EntryReferences>,
     pub recurrences: RecurrenceService<X::Recurrences, X::Entries, X::EntryReferences>,
     pub quotes: QuoteService<X::Quotes, X::SalesReferences, X::Emails, X::Secrets>,
+    pub sales: SalesOf<X>,
     pub reconciliation:
         ReconciliationService<X::Statements, X::Entries, X::Transfers, X::EntryReferences>,
     pub balances: BalanceService<X::BankAccounts, X::Entries, X::Transfers, X::Openings>,
@@ -117,6 +129,7 @@ pub(crate) struct AppState<X: Ports> {
     transfers: TransferService<X::Transfers, X::EntryReferences>,
     recurrences: RecurrenceService<X::Recurrences, X::Entries, X::EntryReferences>,
     quotes: QuoteService<X::Quotes, X::SalesReferences, X::Emails, X::Secrets>,
+    sales: SalesOf<X>,
     reconciliation:
         ReconciliationService<X::Statements, X::Entries, X::Transfers, X::EntryReferences>,
     balances: BalanceService<X::BankAccounts, X::Entries, X::Transfers, X::Openings>,
@@ -143,6 +156,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         transfers: services.transfers,
         recurrences: services.recurrences,
         quotes: services.quotes,
+        sales: services.sales,
         reconciliation: services.reconciliation,
         balances: services.balances,
         postal_codes: services.postal_codes,
@@ -400,6 +414,34 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
             get(quotes::quote_pdf::<X>),
         )
         .route(
+            "/companies/{company_id}/quotes/{quote_id}/convert",
+            post(sales::convert_quote::<X>),
+        )
+        .route(
+            "/companies/{company_id}/sales",
+            get(sales::list_sales::<X>).post(sales::register_sale::<X>),
+        )
+        .route(
+            "/companies/{company_id}/sales/{sale_id}",
+            get(sales::get_sale::<X>).put(sales::update_sale::<X>),
+        )
+        .route(
+            "/companies/{company_id}/sales/{sale_id}/history",
+            get(sales::sale_history::<X>),
+        )
+        .route(
+            "/companies/{company_id}/sales/{sale_id}/complete",
+            post(sales::complete_sale::<X>),
+        )
+        .route(
+            "/companies/{company_id}/sales/{sale_id}/cancel",
+            post(sales::cancel_sale::<X>),
+        )
+        .route(
+            "/companies/{company_id}/sales/{sale_id}/returns",
+            get(sales::list_returns::<X>).post(sales::register_return::<X>),
+        )
+        .route(
             "/invitations/{token}",
             get(members::preview_invitation::<X>),
         )
@@ -454,8 +496,8 @@ mod tests {
         InMemoryIdentityRepository, InMemoryInvitationRepository, InMemoryOpeningRepository,
         InMemoryPartyRepository, InMemoryPaymentMethodRepository, InMemoryPaymentTermRepository,
         InMemoryPostalCodeDirectory, InMemoryProductRepository, InMemoryQuoteRepository,
-        InMemoryRecurrenceRepository, InMemoryStatementLineRepository, InMemoryTransferRepository,
-        RegisterReferences, RegisterSalesReferences,
+        InMemoryRecurrenceRepository, InMemorySaleRepository, InMemoryStatementLineRepository,
+        InMemoryTransferRepository, RegisterReferences, RegisterSalesReferences,
     };
     use http_body_util::BodyExt;
     use serde_json::{Value, json};
@@ -528,6 +570,7 @@ mod tests {
         type Recurrences = InMemoryRecurrenceRepository;
         type SalesReferences = TestSalesReferences;
         type Quotes = InMemoryQuoteRepository;
+        type Sales = InMemorySaleRepository;
         type Statements = InMemoryStatementLineRepository;
         type PostalCodes = InMemoryPostalCodeDirectory;
         type Invitations = InMemoryInvitationRepository;
@@ -557,6 +600,7 @@ mod tests {
         type Recurrences = InMemoryRecurrenceRepository;
         type SalesReferences = TestSalesReferences;
         type Quotes = InMemoryQuoteRepository;
+        type Sales = InMemorySaleRepository;
         type Statements = InMemoryStatementLineRepository;
         type PostalCodes = Option<InMemoryPostalCodeDirectory>;
         type Invitations = InMemoryInvitationRepository;
@@ -790,12 +834,13 @@ mod tests {
 
     /// Quotes over the registers a test keeps a handle to, so what it registers there can be pointed at.
     fn quotes_over(
+        store: InMemoryQuoteRepository,
         parties: &InMemoryPartyRepository,
         products: &InMemoryProductRepository,
         payment_terms: &InMemoryPaymentTermRepository,
     ) -> TestQuotes {
         QuoteService::new(
-            InMemoryQuoteRepository::default(),
+            store,
             RegisterSalesReferences::new(parties.clone(), products.clone(), payment_terms.clone()),
             InMemoryEmailSender::default(),
             Argon2SecretService::new().unwrap(),
@@ -806,7 +851,63 @@ mod tests {
     /// Quotes over registers that the app's own services do not share.
     fn standalone_quotes() -> TestQuotes {
         quotes_over(
+            InMemoryQuoteRepository::default(),
             &InMemoryPartyRepository::default(),
+            &InMemoryProductRepository::default(),
+            &InMemoryPaymentTermRepository::default(),
+        )
+    }
+
+    type TestSales = SaleService<
+        InMemorySaleRepository,
+        InMemoryQuoteRepository,
+        InMemoryFinancialEntryRepository,
+        TestReferences,
+        TestSalesReferences,
+    >;
+
+    /// Sales over the registers, the quotes and the entries a test keeps a handle to, so that a quote can be
+    /// turned into a sale and the sale's receivable shows in the entries and the cash flow.
+    #[allow(clippy::too_many_arguments)]
+    fn sales_over(
+        quotes: InMemoryQuoteRepository,
+        entries: InMemoryFinancialEntryRepository,
+        categories: &InMemoryCategoryRepository,
+        cost_centers: &InMemoryCostCenterRepository,
+        parties: &InMemoryPartyRepository,
+        bank_accounts: &InMemoryBankAccountRepository,
+        payment_methods: &InMemoryPaymentMethodRepository,
+        products: &InMemoryProductRepository,
+        payment_terms: &InMemoryPaymentTermRepository,
+    ) -> TestSales {
+        let references = || {
+            references_over(
+                categories,
+                cost_centers,
+                parties,
+                bank_accounts,
+                payment_methods,
+            )
+        };
+        SaleService::new(
+            InMemorySaleRepository::default(),
+            quotes,
+            FinancialEntryService::new(entries, references()),
+            references(),
+            RegisterSalesReferences::new(parties.clone(), products.clone(), payment_terms.clone()),
+        )
+    }
+
+    /// Sales over registers that the app's own services do not share.
+    fn standalone_sales() -> TestSales {
+        sales_over(
+            InMemoryQuoteRepository::default(),
+            InMemoryFinancialEntryRepository::default(),
+            &InMemoryCategoryRepository::default(),
+            &InMemoryCostCenterRepository::default(),
+            &InMemoryPartyRepository::default(),
+            &InMemoryBankAccountRepository::default(),
+            &InMemoryPaymentMethodRepository::default(),
             &InMemoryProductRepository::default(),
             &InMemoryPaymentTermRepository::default(),
         )
@@ -886,6 +987,7 @@ mod tests {
                 transfers: standalone_transfers(),
                 recurrences: standalone_recurrences(),
                 quotes: standalone_quotes(),
+                sales: standalone_sales(),
                 reconciliation: standalone_reconciliation(),
                 balances: standalone_balances(),
                 postal_codes: PostalCodeService::new(postal_codes),
@@ -1524,6 +1626,7 @@ mod tests {
                 transfers: standalone_transfers(),
                 recurrences: standalone_recurrences(),
                 quotes: standalone_quotes(),
+                sales: standalone_sales(),
                 reconciliation: standalone_reconciliation(),
                 balances: standalone_balances(),
                 postal_codes: PostalCodeService::new(None),
@@ -3004,6 +3107,7 @@ mod tests {
                 transfers: standalone_transfers(),
                 recurrences: standalone_recurrences(),
                 quotes: standalone_quotes(),
+                sales: standalone_sales(),
                 reconciliation: standalone_reconciliation(),
                 balances: standalone_balances(),
                 postal_codes: PostalCodeService::new(None),
@@ -4496,6 +4600,7 @@ mod tests {
         let payment_terms = InMemoryPaymentTermRepository::default();
         let entry_store = InMemoryFinancialEntryRepository::default();
         let transfer_store = InMemoryTransferRepository::default();
+        let quote_store = InMemoryQuoteRepository::default();
         router::<MemoryPorts>(
             Services {
                 parties: PartyService::new(parties.clone(), known_companies())
@@ -4546,7 +4651,18 @@ mod tests {
                     &bank_accounts,
                     &payment_methods,
                 ),
-                quotes: quotes_over(&parties, &products, &payment_terms),
+                quotes: quotes_over(quote_store.clone(), &parties, &products, &payment_terms),
+                sales: sales_over(
+                    quote_store,
+                    entry_store.clone(),
+                    &categories,
+                    &cost_centers,
+                    &parties,
+                    &bank_accounts,
+                    &payment_methods,
+                    &products,
+                    &payment_terms,
+                ),
                 balances: BalanceService::new(
                     bank_accounts.clone(),
                     entry_store,
@@ -6930,6 +7046,454 @@ mod tests {
             };
             assert_eq!(write.status, expected, "{role:?} writes");
         }
+    }
+
+    fn sales_uri(company_id: Uuid) -> String {
+        format!("/companies/{company_id}/sales")
+    }
+
+    async fn revenue_category(app: &Router, cookie: &str, company_id: Uuid) -> String {
+        let reply = post_category(
+            app,
+            cookie,
+            company_id,
+            json!({ "name": "Vendas", "dre_group": "gross_revenue", "cash_flow_group": "operating" }),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.body);
+        reply.body["id"].as_str().unwrap().to_owned()
+    }
+
+    fn sale_body(targets: &SalesTargets, category: &str) -> Value {
+        json!({
+            "customer_id": targets.customer,
+            "sold_on": "2026-11-06",
+            "payment_term_id": targets.term,
+            "category_id": category,
+            "notes": "Entrega em 5 dias",
+            "lines": [
+                { "product_id": targets.product, "description": "Café 500g", "quantity": "3",
+                  "unit_price": "10.10", "discount": "0.30" },
+                { "product_id": targets.other_product, "description": "Pão francês", "quantity": "1.5",
+                  "unit_price": "3.33" }
+            ],
+        })
+    }
+
+    #[tokio::test]
+    async fn a_quote_becomes_a_sale_whose_receivables_appear_in_the_cash_flow() {
+        let app = entry_app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let targets = sales_targets(&app, &cookie, company_id).await;
+        let category = revenue_category(&app, &cookie, company_id).await;
+
+        // The customer approves the quote through its link.
+        let quote = send(
+            &app,
+            json_request(
+                "POST",
+                &quotes_uri(company_id),
+                Some(&cookie),
+                quote_body(&targets, "2200-12-31"),
+            ),
+        )
+        .await;
+        let quote_id = quote.body["id"].as_str().unwrap().to_owned();
+        let sent = send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{}/{quote_id}/send", quotes_uri(company_id)),
+                Some(&cookie),
+                json!({ "to": "cliente@exemplo.com" }),
+            ),
+        )
+        .await;
+        let token = sent.body["link"]
+            .as_str()
+            .unwrap()
+            .rsplit('/')
+            .next()
+            .unwrap()
+            .to_owned();
+        let approved = send(
+            &app,
+            json_request(
+                "POST",
+                &format!("/public/quotes/{token}/approve"),
+                None,
+                Value::Null,
+            ),
+        )
+        .await;
+        assert_eq!(approved.body["status"], "approved");
+
+        // It becomes an open order: the quote's lines and term, a category for the receivable.
+        let convert_uri = format!("{}/{quote_id}/convert", quotes_uri(company_id));
+        let refused = send(
+            &app,
+            json_request(
+                "POST",
+                &convert_uri,
+                Some(&cookie),
+                json!({ "sold_on": "2026-11-06", "category_id": Uuid::new_v4() }),
+            ),
+        )
+        .await;
+        assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY);
+        let body = json!({ "sold_on": "2026-11-06", "category_id": category });
+        let sale = send(
+            &app,
+            json_request("POST", &convert_uri, Some(&cookie), body.clone()),
+        )
+        .await;
+        assert_eq!(sale.status, StatusCode::CREATED, "{}", sale.body);
+        assert_eq!(sale.body["status"], "open");
+        assert_eq!(sale.body["number"], 1);
+        assert_eq!(sale.body["quote_id"], quote_id);
+        assert_eq!(sale.body["total"], "35");
+        assert_eq!(sale.body["payment_term_id"], targets.term);
+        let sale_id = sale.body["id"].as_str().unwrap().to_owned();
+        let quote_now = send(
+            &app,
+            get_request(
+                &format!("{}/{quote_id}", quotes_uri(company_id)),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(quote_now.body["status"], "converted");
+        // Asking again gives the same sale; the quote's link still shows it, approved.
+        let again = send(
+            &app,
+            json_request("POST", &convert_uri, Some(&cookie), body),
+        )
+        .await;
+        assert_eq!(again.body["id"], sale_id);
+        let seen = send(&app, get_request(&format!("/public/quotes/{token}"), None)).await;
+        assert_eq!(seen.body["status"], "converted");
+
+        // Nothing is owed yet: an order has no receivable.
+        let one = format!("{}/{sale_id}", sales_uri(company_id));
+        let order = send(&app, get_request(&one, Some(&cookie))).await;
+        assert_eq!(order.body["receivable_id"], Value::Null);
+        let forecast =
+            |from: &str, to: &str| cash_flow_uri(company_id, &format!("from={from}&to={to}"));
+        let before = send(
+            &app,
+            get_request(&forecast("2026-12-01", "2027-01-31"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(before.body["periods"][0]["to_receive"], "0");
+
+        // Completed: the receivable is split by the term (30 and 60 days from the sale) into the cash flow.
+        let done = send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{one}/complete"),
+                Some(&cookie),
+                Value::Null,
+            ),
+        )
+        .await;
+        assert_eq!(done.status, StatusCode::OK, "{}", done.body);
+        assert_eq!(done.body["status"], "completed");
+        let receivable_id = done.body["receivable_id"].as_str().unwrap().to_owned();
+        let entry = send(
+            &app,
+            get_request(
+                &format!("{}/{receivable_id}", entries_uri(company_id)),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(entry.body["sale_id"], sale_id);
+        assert_eq!(entry.body["kind"], "receivable");
+        assert_eq!(entry.body["description"], "Venda nº 1");
+        assert_eq!(entry.body["party_id"], targets.customer);
+        assert_eq!(entry.body["total"], "35");
+        assert_eq!(
+            entry.body["installments"][0],
+            json!({ "number": 1, "due_date": "2026-12-06", "amount": "17.5", "settled": "0" })
+        );
+        assert_eq!(entry.body["installments"][1]["due_date"], "2027-01-05");
+        let months = send(
+            &app,
+            get_request(&forecast("2026-12-01", "2027-01-31"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(months.body["periods"][0]["to_receive"], "17.5");
+        assert_eq!(months.body["periods"][1]["to_receive"], "17.5");
+        assert_eq!(months.body["periods"][1]["projected_balance"], "35");
+
+        // Its items are fixed; completing again changes nothing; the quote is fixed too.
+        let locked = send(
+            &app,
+            json_request("PUT", &one, Some(&cookie), sale_body(&targets, &category)),
+        )
+        .await;
+        assert_eq!(locked.status, StatusCode::CONFLICT);
+        let twice = send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{one}/complete"),
+                Some(&cookie),
+                Value::Null,
+            ),
+        )
+        .await;
+        assert_eq!(twice.body["receivable_id"], receivable_id);
+        let all = send(&app, get_request(&entries_uri(company_id), Some(&cookie))).await;
+        assert_eq!(all.body["items"].as_array().unwrap().len(), 1);
+
+        // Cancelled: the receivable goes with it, out of the cash flow, and stays listed as cancelled.
+        let cancelled = send(
+            &app,
+            json_request("POST", &format!("{one}/cancel"), Some(&cookie), Value::Null),
+        )
+        .await;
+        assert_eq!(cancelled.status, StatusCode::OK, "{}", cancelled.body);
+        assert_eq!(cancelled.body["status"], "cancelled");
+        let after = send(
+            &app,
+            get_request(&forecast("2026-12-01", "2027-01-31"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(after.body["periods"][0]["to_receive"], "0");
+        assert_eq!(after.body["periods"][1]["to_receive"], "0");
+        let voided = send(
+            &app,
+            get_request(
+                &format!("{}?voided=true", entries_uri(company_id)),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(voided.body["items"][0]["voided"], true);
+        let live = send(
+            &app,
+            get_request(
+                &format!("{}?voided=false", entries_uri(company_id)),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert!(live.body["items"].as_array().unwrap().is_empty());
+        let bad = send(
+            &app,
+            get_request(
+                &format!("{}?voided=maybe", entries_uri(company_id)),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(bad.status, StatusCode::BAD_REQUEST);
+        let history = send(&app, get_request(&format!("{one}/history"), Some(&cookie))).await;
+        assert_eq!(history.body.as_array().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn writes_changes_lists_and_returns_part_of_a_sale_through_the_api() {
+        let app = entry_app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let targets = sales_targets(&app, &cookie, company_id).await;
+        let category = revenue_category(&app, &cookie, company_id).await;
+        let uri = sales_uri(company_id);
+
+        let created = send(
+            &app,
+            json_request("POST", &uri, Some(&cookie), sale_body(&targets, &category)),
+        )
+        .await;
+        assert_eq!(created.status, StatusCode::CREATED, "{}", created.body);
+        assert_eq!(created.body["status"], "open");
+        assert_eq!(created.body["lines"][0]["total"], "30");
+        let id = created.body["id"].as_str().unwrap().to_owned();
+        let one = format!("{uri}/{id}");
+        for (field, value) in [
+            ("seller_id", json!(targets.customer)),
+            ("category_id", json!(Uuid::new_v4())),
+            ("lines", json!([])),
+        ] {
+            let mut body = sale_body(&targets, &category);
+            body[field] = value;
+            assert_eq!(
+                send(&app, json_request("POST", &uri, Some(&cookie), body))
+                    .await
+                    .status,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "{field}"
+            );
+        }
+        let mut changed = sale_body(&targets, &category);
+        changed["lines"][0]["quantity"] = json!("4");
+        let replaced = send(&app, json_request("PUT", &one, Some(&cookie), changed)).await;
+        assert_eq!(replaced.body["total"], "45.1");
+        let found = send(
+            &app,
+            get_request(&format!("{uri}?q=franc%C3%AAs&status=open"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(found.body["items"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            send(
+                &app,
+                get_request(&format!("{uri}?status=paid"), Some(&cookie))
+            )
+            .await
+            .status,
+            StatusCode::BAD_REQUEST
+        );
+
+        // An order has no returns.
+        let returns_uri = format!("{one}/returns");
+        let return_body = json!({
+            "returned_on": "2026-11-10",
+            "reason": "Estragou",
+            "items": [{ "line": 1, "quantity": "1" }, { "line": 2, "quantity": "0.5" }],
+            "refund_category_id": category,
+            "refund_due_on": "2026-11-20",
+        });
+        let early = send(
+            &app,
+            json_request("POST", &returns_uri, Some(&cookie), return_body.clone()),
+        )
+        .await;
+        assert_eq!(early.status, StatusCode::CONFLICT);
+        let done = send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{one}/complete"),
+                Some(&cookie),
+                Value::Null,
+            ),
+        )
+        .await;
+        assert_eq!(done.status, StatusCode::OK, "{}", done.body);
+
+        // 1 of 4 of a line worth 40.1 is 10.03, and a third of a line worth 5 is 1.67.
+        let made = send(
+            &app,
+            json_request("POST", &returns_uri, Some(&cookie), return_body),
+        )
+        .await;
+        assert_eq!(made.status, StatusCode::CREATED, "{}", made.body);
+        assert_eq!(made.body["refund"], "11.7");
+        assert_eq!(
+            made.body["items"][1],
+            json!({ "line": 2, "quantity": "0.5" })
+        );
+        let refund_id = made.body["refund_entry_id"].as_str().unwrap();
+        let refund = send(
+            &app,
+            get_request(
+                &format!("{}/{refund_id}", entries_uri(company_id)),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(refund.body["kind"], "payable");
+        assert_eq!(refund.body["sale_return_id"], made.body["id"]);
+        assert_eq!(refund.body["installments"][0]["due_date"], "2026-11-20");
+        let too_much = send(
+            &app,
+            json_request(
+                "POST",
+                &returns_uri,
+                Some(&cookie),
+                json!({
+                    "returned_on": "2026-11-11",
+                    "items": [{ "line": 1, "quantity": "3.001" }],
+                    "refund_category_id": category,
+                    "refund_due_on": "2026-11-20",
+                }),
+            ),
+        )
+        .await;
+        assert_eq!(too_much.status, StatusCode::CONFLICT);
+        let listed = send(&app, get_request(&returns_uri, Some(&cookie))).await;
+        assert_eq!(listed.body["items"].as_array().unwrap().len(), 1);
+        // What was returned stands, so the sale cannot be cancelled.
+        let cancel = send(
+            &app,
+            json_request("POST", &format!("{one}/cancel"), Some(&cookie), Value::Null),
+        )
+        .await;
+        assert_eq!(cancel.status, StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn sales_follow_the_sales_role_and_stay_private_to_the_company() {
+        use conta_verde_domain::Role;
+
+        let (app, identities, _) = app_with_mailbox();
+        let (_, company_id) = sign_up(&app, "dona@example.com").await;
+        let uri = sales_uri(company_id);
+        for (role, may_write) in [
+            (Role::Admin, true),
+            (Role::Sales, true),
+            (Role::Financial, false),
+            (Role::Stock, false),
+            (Role::Accountant, false),
+            (Role::Viewer, false),
+        ] {
+            let cookie = member_with_role(&app, &identities, company_id, role).await;
+            assert_eq!(
+                send(&app, get_request(&uri, Some(&cookie))).await.status,
+                StatusCode::OK,
+                "{role:?} reads"
+            );
+            let write = send(&app, json_request("POST", &uri, Some(&cookie), json!({}))).await;
+            let expected = if may_write {
+                StatusCode::UNPROCESSABLE_ENTITY
+            } else {
+                StatusCode::FORBIDDEN
+            };
+            assert_eq!(write.status, expected, "{role:?} writes");
+            let convert = send(
+                &app,
+                json_request(
+                    "POST",
+                    &format!("{}/{}/convert", quotes_uri(company_id), Uuid::new_v4()),
+                    Some(&cookie),
+                    json!({}),
+                ),
+            )
+            .await;
+            assert_eq!(
+                convert.status,
+                if may_write {
+                    StatusCode::UNPROCESSABLE_ENTITY
+                } else {
+                    StatusCode::FORBIDDEN
+                },
+                "{role:?} converts"
+            );
+        }
+        let (other, other_company) = sign_up(&app, "outra@example.com").await;
+        let id = Uuid::new_v4();
+        for path in ["", "/history", "/returns"] {
+            let reply = send(
+                &app,
+                get_request(
+                    &format!("{}/{id}{path}", sales_uri(other_company)),
+                    Some(&other),
+                ),
+            )
+            .await;
+            assert_eq!(reply.status, StatusCode::NOT_FOUND, "{path}");
+        }
+        assert_eq!(
+            send(&app, get_request(&uri, Some(&other))).await.status,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            send(&app, get_request(&uri, None)).await.status,
+            StatusCode::UNAUTHORIZED
+        );
     }
 
     const STATEMENT: &str = "OFXHEADER:100\nDATA:OFXSGML\nVERSION:102\nCHARSET:1252\n\n<OFX><BANKMSGSRSV1><STMTTRNRS><STMTRS><BANKTRANLIST>\n\

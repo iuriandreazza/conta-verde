@@ -1,6 +1,7 @@
 use conta_verde_domain::{
     Actor, AuditAction, AuditRecord, CalendarDate, CompanyId, EntryOrigin, Recurrence,
-    RecurrenceDraft, RecurrenceId, recurrence_changes, recurrence_creation_changes,
+    RecurrenceDraft, RecurrenceId, RecurrenceOrigin, recurrence_changes,
+    recurrence_creation_changes,
 };
 
 use crate::audit::audit_entry;
@@ -203,13 +204,13 @@ where
         let mut made = 0;
         for day in &days {
             let draft = recurrence.entry_draft(*day);
-            let origin = EntryOrigin {
+            let origin = EntryOrigin::Recurrence(RecurrenceOrigin {
                 recurrence_id: recurrence.id(),
                 occurrence_on: *day,
-            };
+            });
             match self
                 .entries
-                .register_generated(
+                .register_with_origin(
                     recurrence.company_id(),
                     recurrence.saved_by(),
                     draft,
@@ -218,7 +219,7 @@ where
                 .await
             {
                 Ok(_) => made += 1,
-                Err(ApplicationError::Repository(RepositoryError::DuplicateOccurrence)) => {}
+                Err(ApplicationError::Repository(RepositoryError::DuplicateOrigin)) => {}
                 Err(error) => return Err(error),
             }
         }

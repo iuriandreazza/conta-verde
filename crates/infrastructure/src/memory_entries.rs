@@ -8,7 +8,7 @@ use conta_verde_application::{
 };
 use conta_verde_domain::{
     AuditEntity, AuditEntry, AuditRecord, BankAccountId, CalendarDate, CompanyId, Decimal, EntryId,
-    EntryKind, FinancialEntry, Settlement, SettlementId, settled_of,
+    EntryKind, EntryOrigin, FinancialEntry, Settlement, SettlementId, settled_of,
 };
 
 use crate::memory_audit::AuditLog;
@@ -45,7 +45,7 @@ impl FinancialEntryRepository for InMemoryFinancialEntryRepository {
                 .iter()
                 .any(|stored| stored.origin() == Some(origin))
         }) {
-            return Err(RepositoryError::DuplicateOccurrence);
+            return Err(RepositoryError::DuplicateOrigin);
         }
         state.entries.push(entry.clone());
         state.audit.record(audit);
@@ -80,6 +80,9 @@ impl FinancialEntryRepository for InMemoryFinancialEntryRepository {
             })
             .ok_or(RepositoryError::NotFound)?;
         let stored = &state.entries[position];
+        if stored.is_voided() {
+            return Err(RepositoryError::EntryVoided);
+        }
         let settled = state
             .settlements
             .iter()
@@ -102,14 +105,19 @@ impl FinancialEntryRepository for InMemoryFinancialEntryRepository {
     ) -> Result<(), RepositoryError> {
         ensure_audit_describes(audit, settlement)?;
         let mut state = self.state.lock().expect("repository lock poisoned");
-        let installment = state
+        let stored = state
             .entries
             .iter()
             .find(|stored| {
                 stored.company_id() == settlement.company_id()
                     && stored.id() == settlement.entry_id()
             })
-            .and_then(|stored| stored.installment(settlement.installment()))
+            .ok_or(RepositoryError::NotFound)?;
+        if stored.is_voided() {
+            return Err(RepositoryError::EntryVoided);
+        }
+        let installment = stored
+            .installment(settlement.installment())
             .ok_or(RepositoryError::NotFound)?;
         let settled = settled_of(
             &state
@@ -265,7 +273,7 @@ impl FinancialEntryRepository for InMemoryFinancialEntryRepository {
         for entry in state
             .entries
             .iter()
-            .filter(|entry| entry.company_id() == company_id)
+            .filter(|entry| entry.company_id() == company_id && !entry.is_voided())
         {
             let amount = match basis {
                 ReportBasis::Competence => (since..=until)
@@ -321,7 +329,9 @@ impl FinancialEntryRepository for InMemoryFinancialEntryRepository {
         let state = self.state.lock().expect("repository lock poisoned");
         let mut all: Vec<OverdueItem> = Vec::new();
         for entry in state.entries.iter().filter(|entry| {
-            entry.company_id() == company_id && kind.is_none_or(|kind| entry.kind() == kind)
+            entry.company_id() == company_id
+                && !entry.is_voided()
+                && kind.is_none_or(|kind| entry.kind() == kind)
         }) {
             let settlements: Vec<Settlement> = state
                 .settlements
@@ -416,7 +426,7 @@ impl FinancialEntryRepository for InMemoryFinancialEntryRepository {
         for entry in state
             .entries
             .iter()
-            .filter(|entry| entry.company_id() == company_id)
+            .filter(|entry| entry.company_id() == company_id && !entry.is_voided())
         {
             let settlements: Vec<Settlement> = state
                 .settlements
@@ -445,6 +455,54 @@ impl FinancialEntryRepository for InMemoryFinancialEntryRepository {
                 payable: payable.normalize(),
             })
             .collect())
+    }
+
+    async fn void(
+        &self,
+        voided: &FinancialEntry,
+        audit: &AuditEntry,
+    ) -> Result<(), RepositoryError> {
+        ensure_audit_describes(audit, voided)?;
+        let mut state = self.state.lock().expect("repository lock poisoned");
+        let position = state
+            .entries
+            .iter()
+            .position(|stored| {
+                stored.company_id() == voided.company_id()
+                    && stored.id() == voided.id()
+                    && !stored.is_voided()
+            })
+            .ok_or(RepositoryError::NotFound)?;
+        if state
+            .settlements
+            .iter()
+            .any(|settlement| settlement.entry_id() == voided.id() && !settlement.is_reversed())
+        {
+            return Err(RepositoryError::EntrySettled);
+        }
+        state.entries[position] = state.entries[position]
+            .voided()
+            .map_err(|_| RepositoryError::NotFound)?;
+        state.audit.record(audit);
+        Ok(())
+    }
+
+    async fn find_by_origin(
+        &self,
+        company_id: CompanyId,
+        origin: EntryOrigin,
+    ) -> Result<Option<FinancialEntry>, RepositoryError> {
+        if matches!(origin, EntryOrigin::Recurrence(_)) {
+            return Err(RepositoryError::Storage(
+                "an entry is looked up by sale or return, never by occurrence".to_owned(),
+            ));
+        }
+        let state = self.state.lock().expect("repository lock poisoned");
+        Ok(state
+            .entries
+            .iter()
+            .find(|stored| stored.company_id() == company_id && stored.origin() == Some(origin))
+            .cloned())
     }
 
     async fn history(

@@ -137,6 +137,7 @@ impl QuoteRepository for PostgresQuoteRepository {
         let mut tx = self.pool.begin().await.map_err(storage_error)?;
         let (user_id, user_name) = sent_by(quote);
         let (mode, digest) = match &link {
+            LinkChange::Keep => ("keep", None),
             LinkChange::Revoke => ("revoke", None),
             LinkChange::Set(digest) => ("set", Some(digest.as_str())),
         };
@@ -144,7 +145,7 @@ impl QuoteRepository for PostgresQuoteRepository {
             "UPDATE quotes SET customer_id = $3, issued_on = CAST($4 AS DATE), \
              valid_until = CAST($5 AS DATE), payment_term_id = $6, notes = $7, status = $8, \
              sent_by_user_id = $9, sent_by_name = $10, \
-             link_digest = CASE $11 WHEN 'revoke' THEN NULL ELSE $12 END \
+             link_digest = CASE $11 WHEN 'keep' THEN link_digest WHEN 'revoke' THEN NULL ELSE $12 END \
              WHERE id = $1 AND company_id = $2 AND status = $13",
         )
         .bind(quote.id().as_uuid())
