@@ -1135,6 +1135,7 @@ describe("categories", () => {
     renderAt("/companies/c1/categories");
 
     await screen.findByRole("table");
+    await userEvent.click(await screen.findByRole("button", { name: "Nova categoria" }));
     const select = screen.getByLabelText("Subcategoria de");
     const options = within(select).getAllByRole("option").map((option) => option.textContent);
     expect(options).toEqual(["Nenhuma: categoria principal", "Despesas", "— Aluguel", "Receitas", "— Vendas"]);
@@ -1165,6 +1166,7 @@ describe("categories", () => {
     });
     renderAt("/companies/c1/categories");
 
+    await userEvent.click(await screen.findByRole("button", { name: "Nova categoria" }));
     await userEvent.type(await screen.findByLabelText("Nome"), "Receitas extras");
     await userEvent.selectOptions(screen.getByLabelText("Grupo no DRE"), "financial_result");
     expect(screen.getByLabelText("Grupo no fluxo de caixa")).toHaveValue("financing");

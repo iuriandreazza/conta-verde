@@ -5,6 +5,7 @@ import { Button } from "../components/Button";
 import { CheckIcon } from "../components/icons/check";
 import { Sheet } from "../components/Sheet";
 import { EntryCreator } from "./EntryCreator";
+import { CategoryCreator } from "./CategoryCreator";
 import { RecurrenceCreator } from "./RecurrenceCreator";
 import { InviteCreator } from "./InviteCreator";
 import { BankAccountCreator, CostCenterCreator, PaymentMethodCreator, PaymentTermCreator } from "./registers";
@@ -12,7 +13,7 @@ import { PartyCreator } from "./PartyCreator";
 import { ProductCreator } from "./ProductCreator";
 import { TransferCreator } from "./TransferCreator";
 
-export type CreateKind = "entry" | "party" | "product" | "transfer" | "costCenter" | "paymentMethod" | "paymentTerm" | "bankAccount" | "invite" | "recurrence";
+export type CreateKind = "entry" | "party" | "product" | "transfer" | "costCenter" | "paymentMethod" | "paymentTerm" | "bankAccount" | "invite" | "recurrence" | "category";
 
 /** What a creator tells the host when the record exists: the words for the confirmation, and the new id. */
 export interface Created {
@@ -24,8 +25,14 @@ export interface Created {
   result?: ReactNode;
 }
 
+/** What a page may ask a creator to start with: the parent of a new subcategory. */
+export interface CreateOptions {
+  parentId?: string;
+}
+
 export interface CreatorProps {
   companyId: string;
+  options: CreateOptions;
   /** Tells the host a save is in flight: the sheet must not close under it. */
   onBusyChange: (busy: boolean) => void;
   onCreated: (created: Created) => void;
@@ -34,6 +41,7 @@ export interface CreatorProps {
 
 const CREATORS: Record<CreateKind, { title: string; Creator: (props: CreatorProps) => ReactNode }> = {
   entry: { title: "Novo lançamento", Creator: EntryCreator },
+  category: { title: "Nova categoria", Creator: CategoryCreator },
   recurrence: { title: "Nova recorrência", Creator: RecurrenceCreator },
   invite: { title: "Convidar alguém", Creator: InviteCreator },
   bankAccount: { title: "Nova conta bancária", Creator: BankAccountCreator },
@@ -47,7 +55,7 @@ const CREATORS: Record<CreateKind, { title: string; Creator: (props: CreatorProp
 
 interface Creation {
   /** Opens the sheet for a new record over the page that is showing, without leaving it. */
-  openCreate: (kind: CreateKind) => void;
+  openCreate: (kind: CreateKind, options?: CreateOptions) => void;
   /** Tells the page that a record of this kind was created, so it can read its list again. */
   subscribe: (kind: CreateKind, listener: (created: Created) => void) => () => void;
 }
@@ -70,8 +78,10 @@ export function CreationProvider({ companyId, children }: { companyId: string | 
   const confirmations = useRef(0);
   const listeners = useRef(new Map<CreateKind, Set<(created: Created) => void>>());
 
-  const openCreate = useCallback((wanted: CreateKind) => {
+  const [options, setOptions] = useState<CreateOptions>({});
+  const openCreate = useCallback((wanted: CreateKind, asked: CreateOptions = {}) => {
     setResult(null);
+    setOptions(asked);
     setKind(wanted);
   }, []);
   const closeUnlessSaving = useCallback(() => {
@@ -124,6 +134,7 @@ export function CreationProvider({ companyId, children }: { companyId: string | 
             <current.Creator
               key={companyId}
               companyId={companyId}
+              options={options}
               onBusyChange={(value) => {
                 busy.current = value;
               }}

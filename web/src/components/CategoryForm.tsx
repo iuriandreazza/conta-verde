@@ -26,7 +26,6 @@ interface CategoryFormProps {
   editing: Category | null;
   /** The parent to start with when creating a subcategory. */
   initialParentId: string | null;
-  focusName: boolean;
   pending: boolean;
   error: string | null;
   onCreate: (input: NewCategory) => void;
@@ -44,7 +43,6 @@ export function CategoryForm({
   categories,
   editing,
   initialParentId,
-  focusName,
   pending,
   error,
   onCreate,
@@ -79,7 +77,10 @@ export function CategoryForm({
   }
 
   return (
-    <form onSubmit={handleSubmit}>
+    <form className="record-form" onSubmit={handleSubmit}>
+      <section className="form-section" aria-labelledby="category-info">
+        <h3 id="category-info">Dados da categoria</h3>
+        <div className="field-grid">
       <label>
         Nome
         <input
@@ -87,7 +88,6 @@ export function CategoryForm({
           required
           maxLength={200}
           autoComplete="off"
-          autoFocus={focusName}
           defaultValue={editing?.name}
         />
       </label>
@@ -170,16 +170,16 @@ export function CategoryForm({
           )}
         </>
       )}
+        </div>
+      </section>
       <Notice message={error} />
-      <div className="form-actions">
+      <div className="form-footer">
+        <Button type="button" variant="ghost" disabled={pending} onClick={onCancel}>
+          Voltar
+        </Button>
         <Button type="submit" icon={editing === null ? PlusIcon : CheckIcon} pending={pending}>
           {editing === null ? "Adicionar" : "Salvar alterações"}
         </Button>
-        {editing !== null && (
-          <Button type="button" variant="ghost" onClick={onCancel}>
-            Cancelar
-          </Button>
-        )}
       </div>
     </form>
   );
