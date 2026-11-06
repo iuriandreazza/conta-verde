@@ -1,8 +1,8 @@
 use std::future::Future;
 
 use conta_verde_domain::{
-    AuditEntry, AuditRecord, CompanyId, PartyId, PurchaseOrder, PurchaseOrderId, PurchaseReceipt,
-    PurchaseReceiptId, PurchaseStatus,
+    AccessKey, AuditEntry, AuditRecord, CompanyId, PartyId, PurchaseOrder, PurchaseOrderId,
+    PurchaseReceipt, PurchaseReceiptId, PurchaseStatus,
 };
 
 use crate::list_query::clean_search;
@@ -88,7 +88,8 @@ impl PurchaseOrderQuery {
 ///
 /// Every write takes the audit entry that describes it and stores both **atomically** ([ADR 0008]).
 pub trait PurchaseOrderRepository: Send + Sync {
-    /// Stores a new order, giving it the next number of the company, which it returns.
+    /// Stores a new order, giving it the next number of the company, which it returns. `DuplicateInvoice` when it
+    /// says it was entered from an NF-e that already has an order.
     fn save(
         &self,
         order: &PurchaseOrder,
@@ -100,6 +101,13 @@ pub trait PurchaseOrderRepository: Send + Sync {
         &self,
         company_id: CompanyId,
         id: PurchaseOrderId,
+    ) -> impl Future<Output = Result<Option<PurchaseOrder>, RepositoryError>> + Send;
+
+    /// The order made from this NF-e, if one was.
+    fn find_by_invoice_key(
+        &self,
+        company_id: CompanyId,
+        key: &AccessKey,
     ) -> impl Future<Output = Result<Option<PurchaseOrder>, RepositoryError>> + Send;
 
     /// Replaces the content of a stored order, only if it still has the status `expected`: `NotFound` when

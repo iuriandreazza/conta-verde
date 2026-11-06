@@ -38,7 +38,9 @@ fn area_of(pattern: &str) -> Option<Area> {
         | "statement-lines" | "reports" | "collection" | "delinquency" => Some(Area::Finance),
         "quotes" | "sales" | "contracts" | "commission-rules" | "commissions" | "price-lists"
         | "sales-reports" => Some(Area::Sales),
-        "purchase-orders" | "stock" | "inventory-counts" => Some(Area::Purchases),
+        "purchase-orders" | "purchase-imports" | "stock" | "inventory-counts" => {
+            Some(Area::Purchases)
+        }
         "members" | "invitations" => Some(Area::Members),
         _ => None,
     }
@@ -172,6 +174,10 @@ mod tests {
         );
         assert_eq!(
             area_of("/companies/{company_id}/inventory-counts/{count_id}/apply"),
+            Some(Area::Purchases)
+        );
+        assert_eq!(
+            area_of("/companies/{company_id}/purchase-imports/preview"),
             Some(Area::Purchases)
         );
         assert_eq!(

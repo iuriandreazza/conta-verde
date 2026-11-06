@@ -5,8 +5,8 @@ use conta_verde_application::{
     ensure_audit_describes,
 };
 use conta_verde_domain::{
-    AuditEntity, AuditEntry, AuditRecord, CompanyId, Decimal, PurchaseOrder, PurchaseOrderId,
-    PurchaseReceipt, PurchaseReceiptId, PurchaseStatus,
+    AccessKey, AuditEntity, AuditEntry, AuditRecord, CompanyId, Decimal, PurchaseOrder,
+    PurchaseOrderId, PurchaseReceipt, PurchaseReceiptId, PurchaseStatus,
 };
 
 use crate::memory_audit::AuditLog;
@@ -34,6 +34,15 @@ impl PurchaseOrderRepository for InMemoryPurchaseOrderRepository {
     ) -> Result<i64, RepositoryError> {
         ensure_audit_describes(audit, order)?;
         let mut state = self.state.lock().expect("repository lock poisoned");
+        if order.invoice_key().is_some_and(|key| {
+            state.orders.iter().any(|stored| {
+                stored.company_id() == order.company_id()
+                    && stored.invoice_key() == Some(key)
+                    && stored.status() != PurchaseStatus::Cancelled
+            })
+        }) {
+            return Err(RepositoryError::DuplicateInvoice);
+        }
         let number = state
             .orders
             .iter()
@@ -57,6 +66,23 @@ impl PurchaseOrderRepository for InMemoryPurchaseOrderRepository {
             .orders
             .iter()
             .find(|stored| stored.company_id() == company_id && stored.id() == id)
+            .cloned())
+    }
+
+    async fn find_by_invoice_key(
+        &self,
+        company_id: CompanyId,
+        key: &AccessKey,
+    ) -> Result<Option<PurchaseOrder>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        Ok(state
+            .orders
+            .iter()
+            .find(|stored| {
+                stored.company_id() == company_id
+                    && stored.invoice_key() == Some(key)
+                    && stored.status() != PurchaseStatus::Cancelled
+            })
             .cloned())
     }
 
@@ -295,6 +321,46 @@ mod tests {
             &entries,
             company,
             other_company,
+            &entry_seed,
+            &seed,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn enters_a_supplier_invoice_once() {
+        let registers = Registers::new();
+        let (products, terms) = (
+            InMemoryProductRepository::default(),
+            InMemoryPaymentTermRepository::default(),
+        );
+        let company = CompanyId::generate();
+        let entry_seed = registers.seed(company).await;
+        let seed =
+            contract::seed_sales_records(&registers.parties, &products, &terms, company).await;
+        let (entry_store, ledger, settings) = (
+            InMemoryFinancialEntryRepository::default(),
+            InMemoryStockMovementRepository::default(),
+            InMemoryStockSettingsRepository::default(),
+        );
+        let stock_of = || StockService::new(ledger.clone(), products.clone(), settings.clone());
+        let purchases = PurchaseService::new(
+            InMemoryPurchaseOrderRepository::default(),
+            FinancialEntryService::new(entry_store.clone(), registers.references()),
+            registers.references(),
+            RegisterDocumentReferences::new(
+                registers.parties.clone(),
+                products.clone(),
+                terms.clone(),
+            ),
+            stock_of(),
+        );
+        let entries = FinancialEntryService::new(entry_store, registers.references());
+        contract::enters_a_supplier_invoice_once(
+            &purchases,
+            &stock_of(),
+            &entries,
+            company,
             &entry_seed,
             &seed,
         )

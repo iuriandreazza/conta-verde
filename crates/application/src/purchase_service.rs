@@ -1,7 +1,7 @@
 use conta_verde_domain::{
     Actor, AuditAction, AuditRecord, CompanyId, Decimal, DomainError, EntryOrigin, FinancialEntry,
     FinancialEntryDraft, PurchaseOrder, PurchaseOrderDraft, PurchaseOrderId, PurchaseReceipt,
-    PurchaseReceiptDraft, PurchaseReceiptId, purchase_order_changes,
+    PurchaseReceiptDraft, PurchaseReceiptId, ScheduleDraft, purchase_order_changes,
     purchase_order_creation_changes, purchase_receipt_creation_changes,
 };
 
@@ -62,6 +62,14 @@ where
             references,
             stock,
         }
+    }
+
+    pub(crate) fn purchases(&self) -> &P {
+        &self.purchases
+    }
+
+    pub(crate) fn references(&self) -> &R {
+        &self.references
     }
 
     /// Validates the draft and what it points at, and stores the order with the next number of the company.
@@ -175,6 +183,28 @@ where
         order_id: PurchaseOrderId,
         draft: PurchaseReceiptDraft,
     ) -> Result<ReceiptRecord, ApplicationError> {
+        if self
+            .find(company_id, order_id)
+            .await?
+            .invoice_key()
+            .is_some()
+        {
+            return Err(DomainError::OrderFollowsAnInvoice.into());
+        }
+        self.receive_scheduled(company_id, actor, order_id, draft, &[])
+            .await
+    }
+
+    /// Like `receive`, with the days the payable falls due when the receipt says them (an invoice does) instead of
+    /// the order's payment term; they must add up to what the receipt is worth.
+    pub async fn receive_scheduled(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        order_id: PurchaseOrderId,
+        draft: PurchaseReceiptDraft,
+        schedule: &[ScheduleDraft],
+    ) -> Result<ReceiptRecord, ApplicationError> {
         let order = self.find(company_id, order_id).await?;
         let made_before = self.purchases.receipts_of(company_id, order_id).await?;
         let before: Vec<(u16, Decimal)> = made_before
@@ -185,7 +215,11 @@ where
                     .map(|item| (item.line, item.quantity.as_decimal()))
             })
             .collect();
-        let receipt = PurchaseReceipt::new(PurchaseReceiptId::generate(), &order, draft, &before)?;
+        let mut receipt =
+            PurchaseReceipt::new(PurchaseReceiptId::generate(), &order, draft, &before)?;
+        if !schedule.is_empty() {
+            receipt = receipt.paid_in(schedule)?;
+        }
         if let Some(payable) = self.payable_of(&order, &receipt).await? {
             self.entries.validate(company_id, payable).await?;
         }
@@ -374,7 +408,7 @@ where
 
     /// What the order points at must be usable in the company, the answer naming the field. When the order was
     /// already stored, only what the edit **changes** is checked.
-    async fn check_references(
+    pub(crate) async fn check_references(
         &self,
         order: &PurchaseOrder,
         before: Option<&PurchaseOrder>,

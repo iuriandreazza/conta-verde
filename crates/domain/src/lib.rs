@@ -22,6 +22,7 @@ mod financial_entry;
 mod ids;
 mod inventory_count;
 mod invitation;
+mod invoice;
 mod line;
 mod name;
 mod notification;
@@ -101,6 +102,10 @@ pub use inventory_count::{
     CountLine, CountLineDraft, CountStatus, InventoryCount, InventoryCountDraft, MAX_COUNT_LINES,
 };
 pub use invitation::Invitation;
+pub use invoice::{
+    AccessKey, Invoice, InvoiceDraft, InvoiceInstallmentDraft, InvoiceItem, InvoiceItemDraft,
+    InvoiceTotalsDraft,
+};
 pub use line::{Line, LineDraft, MAX_LINES, lines_total};
 pub use notification::{MAX_NOTIFICATION_ATTEMPTS, Notification, NotificationStatus};
 pub use party::{Party, PartyDraft};
@@ -118,7 +123,7 @@ pub use price_list::{
 pub use product::{Product, ProductDraft, ProductKind};
 pub use purchase_order::{
     PurchaseOrder, PurchaseOrderDraft, PurchaseReceipt, PurchaseReceiptDraft, PurchaseStatus,
-    ReceiptItem, ReceiptItemDraft,
+    ReceiptItem, ReceiptItemDraft, ScheduleDraft,
 };
 pub use quote::{Quote, QuoteDraft, QuoteStatus};
 pub use recurrence::{Frequency, Recurrence, RecurrenceDraft};

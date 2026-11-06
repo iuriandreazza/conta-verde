@@ -5,7 +5,7 @@ use conta_verde_application::{
     ensure_audit_describes,
 };
 use conta_verde_domain::{
-    Amount, AuditEntity, AuditEntry, AuditRecord, CalendarDate, CategoryId, CompanyId,
+    AccessKey, Amount, AuditEntity, AuditEntry, AuditRecord, CalendarDate, CategoryId, CompanyId,
     CostCenterId, LineDraft, PartyId, PaymentTermId, ProductId, PurchaseOrder, PurchaseOrderDraft,
     PurchaseOrderId, PurchaseReceipt, PurchaseReceiptId, PurchaseStatus, ReceiptItem,
 };
@@ -16,10 +16,12 @@ use uuid::Uuid;
 use crate::postgres::{next_document_number, snapshot, storage_error};
 use crate::postgres_audit;
 
+const INVOICE_UNIQUE_INDEX: &str = "purchase_orders_invoice_key_key";
+
 const SELECT_ORDERS: &str = "SELECT id, company_id, number, supplier_id, \
      to_char(ordered_on, 'YYYY-MM-DD') AS ordered_on, \
      to_char(expected_on, 'YYYY-MM-DD') AS expected_on, payment_term_id, category_id, \
-     cost_center_id, notes, status FROM purchase_orders";
+     cost_center_id, notes, status, invoice_key FROM purchase_orders";
 
 pub struct PostgresPurchaseOrderRepository {
     pool: PgPool,
@@ -88,8 +90,8 @@ impl PurchaseOrderRepository for PostgresPurchaseOrderRepository {
         let number = next_document_number(&mut tx, order.company_id(), "purchase_order").await?;
         sqlx::query(
             "INSERT INTO purchase_orders (id, company_id, number, supplier_id, ordered_on, expected_on, \
-             payment_term_id, category_id, cost_center_id, notes, status) \
-             VALUES ($1, $2, $3, $4, CAST($5 AS DATE), CAST($6 AS DATE), $7, $8, $9, $10, $11)",
+             payment_term_id, category_id, cost_center_id, notes, status, invoice_key) \
+             VALUES ($1, $2, $3, $4, CAST($5 AS DATE), CAST($6 AS DATE), $7, $8, $9, $10, $11, $12)",
         )
         .bind(order.id().as_uuid())
         .bind(order.company_id().as_uuid())
@@ -102,9 +104,15 @@ impl PurchaseOrderRepository for PostgresPurchaseOrderRepository {
         .bind(order.cost_center_id().map(|id| id.as_uuid()))
         .bind(order.notes())
         .bind(order.status().as_str())
+        .bind(order.invoice_key().map(AccessKey::as_str))
         .execute(&mut *tx)
         .await
-        .map_err(storage_error)?;
+        .map_err(|error| match &error {
+            sqlx::Error::Database(db) if db.constraint() == Some(INVOICE_UNIQUE_INDEX) => {
+                RepositoryError::DuplicateInvoice
+            }
+            _ => storage_error(error),
+        })?;
         insert_lines(&mut tx, order).await?;
         postgres_audit::insert(&mut tx, audit).await?;
         tx.commit().await.map_err(storage_error)?;
@@ -122,6 +130,26 @@ impl PurchaseOrderRepository for PostgresPurchaseOrderRepository {
         ))
         .bind(company_id.as_uuid())
         .bind(id.as_uuid())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(storage_error)?;
+        let Some(row) = row else { return Ok(None) };
+        let mut orders = with_lines(&mut tx, vec![row]).await?;
+        tx.commit().await.map_err(storage_error)?;
+        Ok(orders.pop())
+    }
+
+    async fn find_by_invoice_key(
+        &self,
+        company_id: CompanyId,
+        key: &AccessKey,
+    ) -> Result<Option<PurchaseOrder>, RepositoryError> {
+        let mut tx = snapshot(&self.pool).await?;
+        let row = sqlx::query(&format!(
+            "{SELECT_ORDERS} WHERE company_id = $1 AND invoice_key = $2 AND status <> 'cancelled'"
+        ))
+        .bind(company_id.as_uuid())
+        .bind(key.as_str())
         .fetch_optional(&mut *tx)
         .await
         .map_err(storage_error)?;
@@ -346,6 +374,20 @@ impl PurchaseOrderRepository for PostgresPurchaseOrderRepository {
             .await
             .map_err(storage_error)?;
         }
+        for (index, (due, amount)) in receipt.schedule().iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO purchase_receipt_installments (company_id, receipt_id, position, due_date, amount) \
+                 VALUES ($1, $2, $3, CAST($4 AS DATE), CAST($5 AS NUMERIC))",
+            )
+            .bind(receipt.company_id().as_uuid())
+            .bind(receipt.id().as_uuid())
+            .bind(i16::try_from(index + 1).map_err(|_| RepositoryError::ReceiptTooMuch)?)
+            .bind(due.to_string())
+            .bind(amount.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(storage_error)?;
+        }
         postgres_audit::insert(&mut tx, receipt_audit).await?;
         if let Some(audit) = order_audit {
             sqlx::query("UPDATE purchase_orders SET status = $3 WHERE id = $1 AND company_id = $2")
@@ -390,7 +432,33 @@ impl PurchaseOrderRepository for PostgresPurchaseOrderRepository {
         .fetch_all(&mut *tx)
         .await
         .map_err(storage_error)?;
+        let schedule_rows = sqlx::query(
+            "SELECT receipt_id, to_char(due_date, 'YYYY-MM-DD') AS due_date, amount::text AS amount \
+             FROM purchase_receipt_installments WHERE company_id = $1 AND receipt_id = ANY($2) \
+             ORDER BY receipt_id, position",
+        )
+        .bind(company_id.as_uuid())
+        .bind(&ids)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(storage_error)?;
         tx.commit().await.map_err(storage_error)?;
+        let mut schedules: HashMap<Uuid, Vec<(CalendarDate, Amount)>> = HashMap::new();
+        for row in &schedule_rows {
+            let due: String = row.try_get("due_date").map_err(storage_error)?;
+            let amount: String = row.try_get("amount").map_err(storage_error)?;
+            schedules
+                .entry(row.try_get("receipt_id").map_err(storage_error)?)
+                .or_default()
+                .push((
+                    CalendarDate::parse(&due).ok_or_else(|| {
+                        RepositoryError::Storage(format!("stored day {due} is invalid"))
+                    })?,
+                    Amount::parse(&amount).ok_or_else(|| {
+                        RepositoryError::Storage(format!("stored installment {amount} is invalid"))
+                    })?,
+                ));
+        }
         let mut items: HashMap<Uuid, Vec<ReceiptItem>> = HashMap::new();
         for row in &item_rows {
             let line: i16 = row.try_get("line").map_err(storage_error)?;
@@ -424,6 +492,7 @@ impl PurchaseOrderRepository for PostgresPurchaseOrderRepository {
                     })?,
                     row.try_get("notes").map_err(storage_error)?,
                     items.remove(&raw).unwrap_or_default(),
+                    schedules.remove(&raw).unwrap_or_default(),
                 ))
             })
             .collect()
@@ -501,8 +570,16 @@ fn order_from_row(
         lines: lines.remove(&raw_id).unwrap_or_default(),
     };
     let number: i64 = row.try_get("number").map_err(storage_error)?;
+    let invoice_key: Option<String> = row.try_get("invoice_key").map_err(storage_error)?;
+    let invoice_key = invoice_key
+        .map(|key| {
+            AccessKey::parse(&key).map_err(|_| {
+                RepositoryError::Storage(format!("stored purchase order with key {key:?}"))
+            })
+        })
+        .transpose()?;
     PurchaseOrder::new(id, company_id, draft)
-        .map(|order| order.restored(number, status))
+        .map(|order| order.restored(number, status).with_invoice_key(invoice_key))
         .map_err(|error| {
             RepositoryError::Storage(format!("stored purchase order {id:?} is invalid: {error}"))
         })
@@ -670,5 +747,58 @@ mod tests {
             .await;
             assert_eq!(refused_by(result).as_deref(), Some(constraint));
         }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn enters_a_supplier_invoice_once() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let entry_seed = contract::seed_entry_records(
+            &PostgresCategoryRepository::new(pool.clone()),
+            &PostgresCostCenterRepository::new(pool.clone()),
+            &PostgresPartyRepository::new(pool.clone()),
+            &PostgresBankAccountRepository::new(pool.clone()),
+            &PostgresPaymentMethodRepository::new(pool.clone()),
+            company,
+        )
+        .await;
+        let seed = contract::seed_sales_records(
+            &PostgresPartyRepository::new(pool.clone()),
+            &PostgresProductRepository::new(pool.clone()),
+            &PostgresPaymentTermRepository::new(pool.clone()),
+            company,
+        )
+        .await;
+        let stock_of = || {
+            StockService::new(
+                PostgresStockMovementRepository::new(pool.clone()),
+                PostgresProductRepository::new(pool.clone()),
+                PostgresStockSettingsRepository::new(pool.clone()),
+            )
+        };
+        let purchases = PurchaseService::new(
+            PostgresPurchaseOrderRepository::new(pool.clone()),
+            FinancialEntryService::new(
+                PostgresFinancialEntryRepository::new(pool.clone()),
+                references(&pool),
+            ),
+            references(&pool),
+            document_references(&pool),
+            stock_of(),
+        );
+        let entries = FinancialEntryService::new(
+            PostgresFinancialEntryRepository::new(pool.clone()),
+            references(&pool),
+        );
+        contract::enters_a_supplier_invoice_once(
+            &purchases,
+            &stock_of(),
+            &entries,
+            company,
+            &entry_seed,
+            &seed,
+        )
+        .await;
     }
 }

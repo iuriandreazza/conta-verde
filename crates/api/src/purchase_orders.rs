@@ -111,6 +111,8 @@ pub(crate) struct PurchaseOrderResponse {
     cost_center_id: Option<Uuid>,
     notes: Option<String>,
     status: &'static str,
+    /// The access key of the NF-e the order was entered from ([ADR 0057]).
+    invoice_key: Option<String>,
     lines: Vec<LineResponse>,
     /// The sum of the lines.
     total: String,
@@ -130,6 +132,7 @@ impl From<&PurchaseOrder> for PurchaseOrderResponse {
             cost_center_id: order.cost_center_id().map(|id| id.as_uuid()),
             notes: order.notes().map(str::to_owned),
             status: order.status().as_str(),
+            invoice_key: order.invoice_key().map(|key| key.as_str().to_owned()),
             lines: order.lines().iter().map(LineResponse::from).collect(),
             total: order.total().to_string(),
         }
