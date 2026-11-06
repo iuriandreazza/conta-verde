@@ -3,8 +3,10 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { CheckIcon } from "../components/icons/check";
 import { Sheet } from "../components/Sheet";
 import { EntryCreator } from "./EntryCreator";
+import { ProductCreator } from "./ProductCreator";
+import { TransferCreator } from "./TransferCreator";
 
-export type CreateKind = "entry";
+export type CreateKind = "entry" | "product" | "transfer";
 
 /** What a creator tells the host when the record exists: the words for the confirmation, and the new id. */
 export interface Created {
@@ -22,6 +24,8 @@ export interface CreatorProps {
 
 const CREATORS: Record<CreateKind, { title: string; Creator: (props: CreatorProps) => ReactNode }> = {
   entry: { title: "Novo lançamento", Creator: EntryCreator },
+  product: { title: "Novo produto ou serviço", Creator: ProductCreator },
+  transfer: { title: "Nova transferência", Creator: TransferCreator },
 };
 
 interface Creation {

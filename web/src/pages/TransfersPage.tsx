@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import {
   NO_TRANSFER_FILTERS,
@@ -7,7 +7,6 @@ import {
   type BankAccount,
   type Transfer,
   type TransferFilters,
-  type TransferInput,
 } from "../api";
 import { Button } from "../components/Button";
 import { ListRow } from "../components/ListRow";
@@ -17,10 +16,11 @@ import { Spinner } from "../components/Spinner";
 import { ChevronDownIcon } from "../components/icons/chevron-down";
 import { RotateCCWIcon } from "../components/icons/rotate-ccw";
 import { SendIcon } from "../components/icons/send";
-import { formatMoney, isAmbiguousDecimal } from "../lib/decimal";
-import { centsToApi, formatDate, isIsoDate, toCents } from "../lib/entryInstallments";
+import { PlusIcon } from "../components/icons/plus";
+import { useCreation, useOnCreated } from "../creation/CreationProvider";
+import { formatMoney } from "../lib/decimal";
+import { formatDate } from "../lib/entryInstallments";
 import { readUpTo } from "../lib/readUpTo";
-import { todayIso } from "../lib/settlement";
 import { useCanWrite } from "../lib/useCanWrite";
 import { usePagedList } from "../lib/usePagedList";
 
@@ -33,11 +33,6 @@ export function TransfersPage() {
   const [filters, setFilters] = useState<TransferFilters>(NO_TRANSFER_FILTERS);
   const [accounts, setAccounts] = useState<BankAccount[]>([]);
   const [accountsError, setAccountsError] = useState<string | null>(null);
-  // Bumped after a transfer so the form starts over.
-  const [formVersion, setFormVersion] = useState(0);
-  const [saving, setSaving] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [saved, setSaved] = useState<string | null>(null);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const [reversingId, setReversingId] = useState<string | null>(null);
   const [listNotice, setListNotice] = useState<string | null>(null);
@@ -53,7 +48,6 @@ export function TransfersPage() {
   }, [companyId]);
 
   const names = useMemo(() => new Map(accounts.map((account) => [account.id, account.name])), [accounts]);
-  const activeAccounts = accounts.filter((account) => account.active);
 
   const { items, nextCursor, loading, loadingMore, error, applied, reload, loadMore } = usePagedList<
     Transfer,
@@ -61,49 +55,12 @@ export function TransfersPage() {
   >((applied, after) => api.listTransfers(companyId, applied, after), filters);
   const isFiltered = applied.account !== "";
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (saving) {
-      return;
-    }
-    const form = new FormData(event.currentTarget);
-    const field = (name: string) => String(form.get(name) ?? "").trim();
-    const typedAmount = field("amount");
-    const cents = isAmbiguousDecimal(typedAmount) ? null : toCents(typedAmount);
-    if (field("from_account_id") === field("to_account_id")) {
-      setFormError("Escolha duas contas diferentes.");
-      return;
-    }
-    if (cents === null || cents === 0n) {
-      setFormError("Informe o valor em reais e centavos, por exemplo 1.234,50.");
-      return;
-    }
-    if (!isIsoDate(field("occurred_on"))) {
-      setFormError("Informe a data da transferência.");
-      return;
-    }
-    const input: TransferInput = {
-      from_account_id: field("from_account_id"),
-      to_account_id: field("to_account_id"),
-      amount: centsToApi(cents),
-      occurred_on: field("occurred_on"),
-      note: field("note") || undefined,
-    };
-    setSaving(true);
-    setFormError(null);
-    setSaved(null);
-    try {
-      const created = await api.createTransfer(companyId, input);
-      setHighlightedId(created.id);
-      setSaved(`Transferência de ${formatMoney(created.amount)} registrada.`);
-      setFormVersion((version) => version + 1);
-      await reload();
-    } catch (failure) {
-      setFormError(errorMessage(failure));
-    } finally {
-      setSaving(false);
-    }
-  }
+  const { openCreate } = useCreation();
+  // A transfer made from the top bar or from here: read the list again and flash the new row.
+  useOnCreated("transfer", (created) => {
+    setHighlightedId(created.id);
+    void reload();
+  });
 
   async function reverse(transfer: Transfer) {
     if (reversingId !== null) {
@@ -129,7 +86,14 @@ export function TransfersPage() {
         title="Transferências"
         description="Dinheiro que muda de uma conta da empresa para outra, como um depósito ou o pagamento da fatura do cartão. Não entra no resultado."
       />
-      <div className={canWrite ? "split" : "split split-single"}>
+      {canWrite && (
+        <div className="list-actions">
+          <Button type="button" icon={PlusIcon} onClick={() => openCreate("transfer")}>
+            Nova transferência
+          </Button>
+        </div>
+      )}
+      <div>
         <section className="card list-card">
           <h2>Registradas</h2>
           <div className="filters" role="search">
@@ -242,58 +206,6 @@ export function TransfersPage() {
             </Button>
           )}
         </section>
-        {canWrite && (
-          <aside className="card form-card">
-            <h2>Nova transferência</h2>
-            <form key={formVersion} onSubmit={(event) => void handleSubmit(event)}>
-              <label>
-                De
-                <select name="from_account_id" required defaultValue="">
-                  <option value="" disabled>
-                    Escolha a conta de origem
-                  </option>
-                  {activeAccounts.map((account) => (
-                    <option key={account.id} value={account.id}>
-                      {account.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Para
-                <select name="to_account_id" required defaultValue="">
-                  <option value="" disabled>
-                    Escolha a conta de destino
-                  </option>
-                  {activeAccounts.map((account) => (
-                    <option key={account.id} value={account.id}>
-                      {account.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Valor
-                <input name="amount" inputMode="decimal" autoComplete="off" required placeholder="0,00" />
-              </label>
-              <label>
-                Data
-                <input name="occurred_on" type="date" required defaultValue={todayIso()} />
-              </label>
-              <label>
-                Observação
-                <input name="note" maxLength={200} autoComplete="off" placeholder="Opcional" />
-              </label>
-              <Notice message={formError} />
-              <div className="form-actions">
-                <Button type="submit" icon={SendIcon} pending={saving}>
-                  Transferir
-                </Button>
-              </div>
-            </form>
-            <Notice message={saved} tone="success" />
-          </aside>
-        )}
       </div>
     </>
   );
