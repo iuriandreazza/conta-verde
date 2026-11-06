@@ -1469,3 +1469,30 @@ tbody tr:last-child td {
 .negative {
   color: var(--status-critical);
 }
+
+/* The two reports of a page, one at a time: buttons that say which is shown. */
+.segmented {
+  display: inline-flex;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  margin-bottom: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  background: var(--surface);
+}
+
+.segmented button {
+  padding: 0.45rem 0.9rem;
+  border: 0;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.segmented button[aria-pressed="true"] {
+  background: var(--green-soft);
+  color: var(--ink);
+}

@@ -15,6 +15,7 @@ import { PartiesPage } from "./pages/PartiesPage";
 import { PaymentMethodsPage } from "./pages/PaymentMethodsPage";
 import { PaymentTermsPage } from "./pages/PaymentTermsPage";
 import { ProductsPage } from "./pages/ProductsPage";
+import { ReportsPage } from "./pages/ReportsPage";
 import { ReconciliationPage } from "./pages/ReconciliationPage";
 import { RecurrencesPage } from "./pages/RecurrencesPage";
 import { TransfersPage } from "./pages/TransfersPage";
@@ -32,6 +33,7 @@ export function App() {
           <Route path="/companies/:companyId/parties" element={<PartiesPage />} />
           <Route path="/companies/:companyId/products" element={<ProductsPage />} />
           <Route path="/companies/:companyId/entries" element={<EntriesPage />} />
+          <Route path="/companies/:companyId/reports" element={<ReportsPage />} />
           <Route path="/companies/:companyId/reconciliation" element={<ReconciliationPage />} />
           <Route path="/companies/:companyId/recurrences" element={<RecurrencesPage />} />
           <Route path="/companies/:companyId/cash-flow" element={<CashFlowPage />} />

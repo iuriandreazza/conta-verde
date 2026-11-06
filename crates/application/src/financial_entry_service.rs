@@ -9,8 +9,12 @@ use crate::audit::audit_entry;
 use crate::list_query::{clamp_limit, split_page};
 use crate::{
     ApplicationError, EntryCursor, EntryReferences, FinancialEntryQuery, FinancialEntryRepository,
-    RepositoryError,
+    OverdueReport, ReportBasis, ReportGroup, ReportRow, RepositoryError,
 };
+
+/// How many overdue installments are listed unless asked for more, and the most that can be asked for.
+pub const DEFAULT_OVERDUE_LIMIT: usize = 100;
+pub const MAX_OVERDUE_LIMIT: usize = 500;
 
 #[derive(Debug, Clone)]
 pub struct FinancialEntryPage {
@@ -74,6 +78,41 @@ impl<R: FinancialEntryRepository, F: EntryReferences> FinancialEntryService<R, F
         );
         self.repository.save(&record, &audit).await?;
         Ok(record)
+    }
+
+    /// The entries of the company added up by `group` over a span, see [ADR 0035]. `from` is not after `to`.
+    pub async fn report(
+        &self,
+        company_id: CompanyId,
+        group: ReportGroup,
+        basis: ReportBasis,
+        from: CalendarDate,
+        to: CalendarDate,
+    ) -> Result<Vec<ReportRow>, ApplicationError> {
+        if from > to {
+            return Err(ApplicationError::InvalidSpan("from must not be after to"));
+        }
+        Ok(self
+            .repository
+            .report_entries(company_id, group, basis, from, to)
+            .await?)
+    }
+
+    /// The installments that fell due before `on` and still have something left ([ADR 0035]).
+    pub async fn overdue(
+        &self,
+        company_id: CompanyId,
+        on: CalendarDate,
+        kind: Option<EntryKind>,
+        limit: Option<usize>,
+    ) -> Result<OverdueReport, ApplicationError> {
+        let limit = limit
+            .unwrap_or(DEFAULT_OVERDUE_LIMIT)
+            .clamp(1, MAX_OVERDUE_LIMIT);
+        Ok(self
+            .repository
+            .overdue_installments(company_id, on, kind, limit)
+            .await?)
     }
 
     /// The settlements a bank statement line may be, see `settlement_candidates` of the port.

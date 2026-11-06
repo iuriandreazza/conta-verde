@@ -2,7 +2,8 @@ use std::collections::HashMap;
 
 use conta_verde_application::{
     AccountMovement, DayMovement, DayOpen, EntryCursor, EntrySort, FinancialEntryQuery,
-    FinancialEntryRepository, RepositoryError, ensure_audit_describes,
+    FinancialEntryRepository, OverdueItem, OverdueReport, ReportBasis, ReportGroup, ReportRow,
+    RepositoryError, ensure_audit_describes,
 };
 use conta_verde_domain::{
     Amount, AuditEntity, AuditEntry, AuditRecord, BankAccountId, CalendarDate, CategoryId,
@@ -392,6 +393,149 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
         rows.iter().map(settlement_from_row).collect()
     }
 
+    async fn report_entries(
+        &self,
+        company_id: CompanyId,
+        group: ReportGroup,
+        basis: ReportBasis,
+        since: CalendarDate,
+        until: CalendarDate,
+    ) -> Result<Vec<ReportRow>, RepositoryError> {
+        // The column and the shape of the query are fixed text chosen by the enums, never a value from outside.
+        let column = match group {
+            ReportGroup::Category => "e.category_id",
+            ReportGroup::CostCenter => "e.cost_center_id",
+            ReportGroup::Party => "e.party_id",
+        };
+        let from = match basis {
+            // The total of an entry is the sum of its installments, which is never stored.
+            ReportBasis::Competence => {
+                "FROM financial_entries e \
+                 JOIN (SELECT company_id, entry_id, SUM(amount) AS total \
+                       FROM financial_entry_installments GROUP BY company_id, entry_id) t \
+                   ON t.company_id = e.company_id AND t.entry_id = e.id \
+                 WHERE e.company_id = $1 AND e.competence_date BETWEEN CAST($2 AS DATE) AND CAST($3 AS DATE)"
+            }
+            ReportBasis::Due => {
+                "FROM financial_entries e \
+                 JOIN financial_entry_installments t ON t.company_id = e.company_id AND t.entry_id = e.id \
+                 WHERE e.company_id = $1 AND t.due_date BETWEEN CAST($2 AS DATE) AND CAST($3 AS DATE)"
+            }
+        };
+        let amount = match basis {
+            ReportBasis::Competence => "t.total",
+            ReportBasis::Due => "t.amount",
+        };
+        let rows = sqlx::query(&format!(
+            "SELECT {column} AS key, \
+               COALESCE(SUM({amount}) FILTER (WHERE e.kind = 'receivable'), 0)::text AS receivable, \
+               COALESCE(SUM({amount}) FILTER (WHERE e.kind = 'payable'), 0)::text AS payable, \
+               COUNT(DISTINCT e.id) AS entries \
+             {from} GROUP BY {column}"
+        ))
+        .bind(company_id.as_uuid())
+        .bind(since.to_string())
+        .bind(until.to_string())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        let mut found = rows
+            .iter()
+            .map(|row| {
+                Ok(ReportRow {
+                    id: row.try_get("key").map_err(storage_error)?,
+                    receivable: sum_of(row, "receivable")?,
+                    payable: sum_of(row, "payable")?,
+                    entries: u64::try_from(
+                        row.try_get::<i64, _>("entries").map_err(storage_error)?,
+                    )
+                    .unwrap_or(0),
+                })
+            })
+            .collect::<Result<Vec<_>, RepositoryError>>()?;
+        sort_report(&mut found);
+        Ok(found)
+    }
+
+    async fn overdue_installments(
+        &self,
+        company_id: CompanyId,
+        before: CalendarDate,
+        kind: Option<EntryKind>,
+        limit: usize,
+    ) -> Result<OverdueReport, RepositoryError> {
+        // An installment is overdue when it fell due before the day and has something left: its amount less
+        // what its settlements that are not reversed settled.
+        const FROM: &str = "FROM financial_entry_installments i \
+             JOIN financial_entries e ON e.company_id = i.company_id AND e.id = i.entry_id \
+             LEFT JOIN LATERAL ( \
+                 SELECT SUM(applied) AS settled FROM entry_settlements \
+                 WHERE company_id = i.company_id AND entry_id = i.entry_id \
+                   AND installment = i.number AND NOT reversed) s ON true \
+             WHERE i.company_id = $1 AND i.due_date < CAST($2 AS DATE) \
+               AND i.amount - COALESCE(s.settled, 0) > 0 \
+               AND (CAST($3 AS TEXT) IS NULL OR e.kind = $3)";
+        let rows = sqlx::query(&format!(
+            "SELECT e.id AS entry_id, e.kind, e.description, e.party_id, e.category_id, i.number, \
+               to_char(i.due_date, 'YYYY-MM-DD') AS due_date, i.amount::text AS amount, \
+               COALESCE(s.settled, 0)::text AS settled {FROM} \
+             ORDER BY i.due_date, e.id, i.number LIMIT $4"
+        ))
+        .bind(company_id.as_uuid())
+        .bind(before.to_string())
+        .bind(kind.map(EntryKind::as_str))
+        .bind(i64::try_from(limit).unwrap_or(i64::MAX))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        let items = rows
+            .iter()
+            .map(|row| {
+                let kind: String = row.try_get("kind").map_err(storage_error)?;
+                let due: String = row.try_get("due_date").map_err(storage_error)?;
+                let party: Option<Uuid> = row.try_get("party_id").map_err(storage_error)?;
+                Ok(OverdueItem {
+                    entry_id: EntryId::from_uuid(row.try_get("entry_id").map_err(storage_error)?),
+                    kind: EntryKind::parse(&kind).ok_or_else(|| {
+                        RepositoryError::Storage(format!("stored entry with kind {kind:?}"))
+                    })?,
+                    description: row.try_get("description").map_err(storage_error)?,
+                    party_id: party.map(PartyId::from_uuid),
+                    category_id: CategoryId::from_uuid(
+                        row.try_get("category_id").map_err(storage_error)?,
+                    ),
+                    installment: u16::try_from(
+                        row.try_get::<i16, _>("number").map_err(storage_error)?,
+                    )
+                    .unwrap_or(0),
+                    due_date: CalendarDate::parse(&due).ok_or_else(|| {
+                        RepositoryError::Storage(format!("stored day {due} is invalid"))
+                    })?,
+                    amount: sum_of(row, "amount")?,
+                    settled: sum_of(row, "settled")?,
+                })
+            })
+            .collect::<Result<Vec<_>, RepositoryError>>()?;
+        let totals = sqlx::query(&format!(
+            "SELECT COALESCE(SUM(i.amount - COALESCE(s.settled, 0)) FILTER (WHERE e.kind = 'receivable'), 0)::text AS receivable, \
+               COALESCE(SUM(i.amount - COALESCE(s.settled, 0)) FILTER (WHERE e.kind = 'payable'), 0)::text AS payable, \
+               COUNT(*) AS count {FROM}"
+        ))
+        .bind(company_id.as_uuid())
+        .bind(before.to_string())
+        .bind(kind.map(EntryKind::as_str))
+        .fetch_one(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        Ok(OverdueReport {
+            items,
+            receivable: sum_of(&totals, "receivable")?,
+            payable: sum_of(&totals, "payable")?,
+            count: u64::try_from(totals.try_get::<i64, _>("count").map_err(storage_error)?)
+                .unwrap_or(0),
+        })
+    }
+
     async fn cash_by_day(
         &self,
         company_id: CompanyId,
@@ -550,6 +694,17 @@ fn sum_of(row: &PgRow, column: &str) -> Result<Decimal, RepositoryError> {
         .map_err(storage_error)?
         .parse::<Decimal>()
         .map_err(|error| RepositoryError::Storage(format!("a sum that is not a number: {error}")))
+}
+
+/// The biggest of the two totals first, then by id with the group that has none last: what both adapters do.
+pub(crate) fn sort_report(rows: &mut [ReportRow]) {
+    rows.sort_by(|a, b| {
+        let weight = |row: &ReportRow| row.receivable.max(row.payable);
+        weight(b)
+            .cmp(&weight(a))
+            .then_with(|| a.id.is_none().cmp(&b.id.is_none()))
+            .then_with(|| a.id.cmp(&b.id))
+    });
 }
 
 const SELECT_SETTLEMENTS: &str = "SELECT id, company_id, entry_id, installment, \
@@ -828,6 +983,20 @@ mod tests {
         );
         contract::settles_installments_and_reverses_them(&service, company, other_company, &seed)
             .await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn reports_the_entries() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let other_company = contract::create_company(&pool).await;
+        let seed = seed(&pool, company).await;
+        let service = FinancialEntryService::new(
+            PostgresFinancialEntryRepository::new(pool.clone()),
+            references(&pool),
+        );
+        contract::reports_the_entries(&service, company, other_company, &seed).await;
     }
 
     #[tokio::test]

@@ -34,6 +34,10 @@ export function CompanyNav({
         <CircleDollarSignIcon size={18} aria-hidden />
         Lançamentos
       </NavLink>
+      <NavLink to={`${base}/reports`}>
+        <ChartLineIcon size={18} aria-hidden />
+        Relatórios
+      </NavLink>
       <NavLink to={`${base}/reconciliation`}>
         <CheckIcon size={18} aria-hidden />
         Conciliação
