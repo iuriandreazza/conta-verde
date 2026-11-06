@@ -46,6 +46,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0028](0028-member-management.md) | Changing and removing members | accepted | 1 |
 | [0029](0029-financial-entries.md) | Financial entries and installments | accepted | 2 |
 | [0030](0030-settlements.md) | Settlements of entry installments | accepted | 2 |
+| [0031](0031-transfers-and-balances.md) | Transfers, opening balances and balance per account | accepted | 2 |
 
 ## Template
 

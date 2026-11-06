@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, vi } from "vitest";
 import { App } from "./App";
-import type { Entry, PaymentTerm, BankAccount, Category, CostCenter, PaymentMethod, DocumentCheck, HistoryEntry, Party, Product, Profile } from "./api";
+import type { AccountBalance, Entry, Transfer, PaymentTerm, BankAccount, Category, CostCenter, PaymentMethod, DocumentCheck, HistoryEntry, Party, Product, Profile } from "./api";
 import { AuthProvider } from "./auth";
 import { SOURCE_URL } from "./components/Footer";
 
@@ -51,6 +51,15 @@ function mockApi(handler: Handler) {
   });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
+}
+
+const noBalances = { on: "2026-11-05", accounts: [], total: "0" };
+
+/** The API, with the balances the bank accounts page reads answered by `balances`. */
+function mockBankAccounts(handler: Handler, balances: unknown = noBalances) {
+  return mockApi((url, init) =>
+    url.includes("/balances") ? { status: 200, body: balances } : handler(url, init),
+  );
 }
 
 function renderAt(path: string) {
@@ -1171,7 +1180,8 @@ describe("categories", () => {
     renderAt("/companies/c1/categories");
 
     await userEvent.click(await screen.findByRole("button", { name: "Usar categorias padrão" }));
-    expect(await screen.findByText("Transferências")).toBeInTheDocument();
+    // The sidebar has a link of the same name: the category is the one in the table.
+    expect(await within(await screen.findByRole("table")).findByText("Transferências")).toBeInTheDocument();
     expect(
       fetchMock.mock.calls.some(([url]) => String(url) === "/api/companies/c1/categories/default-template"),
     ).toBe(true);
@@ -1313,7 +1323,7 @@ describe("bank accounts", () => {
   };
 
   it("registers an account with the bank written as typed, for the API to put in one form", async () => {
-    const fetchMock = mockApi((url, init) => {
+    const fetchMock = mockBankAccounts((url, init) => {
       if (url === "/api/auth/me") return { status: 200, body: profile };
       if (init?.method === "POST") return { status: 201, body: account("Conta da loja") };
       return page();
@@ -1338,7 +1348,7 @@ describe("bank accounts", () => {
   });
 
   it("takes no bank for cash and only the issuer for a card, and sends no more", async () => {
-    const fetchMock = mockApi((url, init) => {
+    const fetchMock = mockBankAccounts((url, init) => {
       if (url === "/api/auth/me") return { status: 200, body: profile };
       if (init?.method === "POST") return { status: 201, body: account("Caixa", { kind: "cash" }) };
       return page();
@@ -1372,7 +1382,7 @@ describe("bank accounts", () => {
   it("changes an account with its kind fixed, and shows what the API refused", async () => {
     const main = account("Conta principal", { bank_code: "341", branch: "1234", number: "56789X" });
     let answer = 409;
-    const fetchMock = mockApi((url, init) => {
+    const fetchMock = mockBankAccounts((url, init) => {
       if (url === "/api/auth/me") return { status: 200, body: profile };
       if (init?.method === "PUT") {
         return answer === 200
@@ -1414,7 +1424,7 @@ describe("bank accounts", () => {
       action: "created",
       changes: [{ field: "kind", from: null, to: "savings" }],
     };
-    const fetchMock = mockApi((url) => {
+    const fetchMock = mockBankAccounts((url) => {
       if (url === "/api/auth/me") return { status: 200, body: profile };
       if (url.endsWith("/history")) return { status: 200, body: [entry] };
       return page(savings);
@@ -2768,7 +2778,9 @@ describe("what a role that cannot write is offered", () => {
   const lists = (url: string): { status: number; body: unknown } =>
     url === "/api/auth/me"
       ? { status: 200, body: null }
-      : { status: 200, body: { items: [], next_cursor: null } };
+      : url.includes("/balances")
+        ? { status: 200, body: noBalances }
+        : { status: 200, body: { items: [], next_cursor: null } };
 
   it.each([
     ["parties", "Clientes e fornecedores", "Novo cliente ou fornecedor"],
@@ -2860,7 +2872,7 @@ describe("how a list presents its rows", () => {
       number: "112234",
       active: false,
     };
-    mockApi(lists([account]));
+    mockBankAccounts(lists([account]));
     renderAt("/companies/c1/bank-accounts");
 
     const row = await screen.findByRole("row", { name: /Conta principal/ });
@@ -3472,5 +3484,287 @@ describe("financial entries", () => {
     mockApi(answer([entry]));
     renderAt("/companies/c1/entries");
     expect(await screen.findByRole("link", { name: "Lançamentos" })).toHaveAttribute("href", "/companies/c1/entries");
+  });
+});
+
+describe("transfers", () => {
+  const caixa: BankAccount = { id: "b1", company_id: "c1", kind: "cash", name: "Caixa", bank_code: null, branch: null, number: null, active: true };
+  const banco: BankAccount = { id: "b2", company_id: "c1", kind: "checking", name: "Banco", bank_code: "341", branch: "1234", number: "5678", active: true };
+  const closed: BankAccount = { ...caixa, id: "b3", name: "Caixa antigo", active: false };
+  const deposit: Transfer = {
+    id: "t1",
+    company_id: "c1",
+    from_account_id: "b1",
+    to_account_id: "b2",
+    amount: "250.5",
+    occurred_on: "2026-12-10",
+    note: "Depósito",
+    reversed: false,
+  };
+  const undone: Transfer = { ...deposit, id: "t2", amount: "10", occurred_on: "2026-12-01", note: null, reversed: true };
+
+  const sent = (fetchMock: ReturnType<typeof mockApi>, method: string) =>
+    fetchMock.mock.calls.filter(([, init]) => init?.method === method);
+
+  /** The accounts, and the transfers given; `extra` answers first. */
+  const answer =
+    (transfers: Transfer[], extra: (url: string, init?: RequestInit) => Reply | undefined = () => undefined) =>
+    (url: string, init?: RequestInit): Reply => {
+      const special = extra(url, init);
+      if (special) return special;
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (url.includes("/bank-accounts")) return { status: 200, body: { items: [caixa, banco, closed], next_cursor: null } };
+      if (url.includes("/transfers")) return { status: 200, body: { items: transfers, next_cursor: null } };
+      return { status: 404, body: { error: "not found" } };
+    };
+
+  const formPanel = async () => {
+    const panel = within((await screen.findByRole("heading", { name: "Nova transferência" })).closest("aside")!);
+    // The form offers the accounts once they have been read.
+    await waitFor(() => expect(panel.getByLabelText("De").querySelectorAll("option").length).toBeGreaterThan(1));
+    return panel;
+  };
+
+  it("lists the transfers with the accounts by name, what was moved, and whether one was undone", async () => {
+    mockApi(answer([deposit, undone]));
+    renderAt("/companies/c1/transfers");
+
+    const row = await screen.findByRole("row", { name: /Depósito/ });
+    expect(row).toHaveTextContent("10/12/2026");
+    expect(row).toHaveTextContent("Caixa");
+    expect(row).toHaveTextContent("Banco");
+    expect(row).toHaveTextContent("R$ 250,50");
+    expect(row).toHaveTextContent("Válida");
+    const reversed = screen.getByRole("row", { name: /01\/12\/2026/ });
+    expect(reversed).toHaveTextContent("Estornada");
+    // Only what still counts can be undone.
+    expect(within(reversed).queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("registers a transfer between two accounts and sends the amount in the API's form", async () => {
+    const fetchMock = mockApi(
+      answer([], (url, init) =>
+        url.endsWith("/transfers") && init?.method === "POST" ? { status: 201, body: { ...deposit, id: "t9" } } : undefined,
+      ),
+    );
+    renderAt("/companies/c1/transfers");
+    const form = await formPanel();
+
+    // Only an account that can be used is offered.
+    expect(within(form.getByLabelText("De")).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Escolha a conta de origem",
+      "Caixa",
+      "Banco",
+    ]);
+    await userEvent.selectOptions(form.getByLabelText("De"), "b1");
+    await userEvent.selectOptions(form.getByLabelText("Para"), "b2");
+    await userEvent.type(form.getByLabelText("Valor"), "1.250,50");
+    fireEvent.change(form.getByLabelText("Data"), { target: { value: "2026-12-10" } });
+    await userEvent.type(form.getByLabelText("Observação"), "Depósito");
+    await userEvent.click(form.getByRole("button", { name: "Transferir" }));
+
+    expect(await screen.findByText("Transferência de R$ 250,50 registrada.")).toBeInTheDocument();
+    expect(JSON.parse(String(sent(fetchMock, "POST")[0][1]?.body))).toEqual({
+      from_account_id: "b1",
+      to_account_id: "b2",
+      amount: "1250.5",
+      occurred_on: "2026-12-10",
+      note: "Depósito",
+    });
+  });
+
+  it("refuses the same account twice and an amount that is not clear, without asking the API", async () => {
+    const fetchMock = mockApi(answer([]));
+    renderAt("/companies/c1/transfers");
+    const form = await formPanel();
+
+    await userEvent.selectOptions(form.getByLabelText("De"), "b1");
+    await userEvent.selectOptions(form.getByLabelText("Para"), "b1");
+    await userEvent.type(form.getByLabelText("Valor"), "10");
+    await userEvent.click(form.getByRole("button", { name: "Transferir" }));
+    expect(await form.findByRole("alert")).toHaveTextContent("duas contas diferentes");
+
+    await userEvent.selectOptions(form.getByLabelText("Para"), "b2");
+    await userEvent.clear(form.getByLabelText("Valor"));
+    // `1.000` could be a thousand or one: the person has to say which.
+    await userEvent.type(form.getByLabelText("Valor"), "1.000");
+    await userEvent.click(form.getByRole("button", { name: "Transferir" }));
+    expect(await form.findByRole("alert")).toHaveTextContent("reais e centavos");
+    expect(sent(fetchMock, "POST")).toHaveLength(0);
+  });
+
+  it("shows what the API refused", async () => {
+    mockApi(
+      answer([], (_url, init) =>
+        init?.method === "POST" ? { status: 422, body: { error: "the account cannot be used" } } : undefined,
+      ),
+    );
+    renderAt("/companies/c1/transfers");
+    const form = await formPanel();
+    await userEvent.selectOptions(form.getByLabelText("De"), "b1");
+    await userEvent.selectOptions(form.getByLabelText("Para"), "b2");
+    await userEvent.type(form.getByLabelText("Valor"), "10");
+    await userEvent.click(form.getByRole("button", { name: "Transferir" }));
+    expect(await form.findByRole("alert")).toHaveTextContent("the account cannot be used");
+  });
+
+  it("undoes a transfer and shows the list as it is afterwards", async () => {
+    let reversed = false;
+    const fetchMock = mockApi(
+      answer([], (url, init) => {
+        if (url.endsWith("/transfers/t1") && init?.method === "DELETE") {
+          reversed = true;
+          return { status: 204 };
+        }
+        if (url.endsWith("/transfers")) {
+          return { status: 200, body: { items: [{ ...deposit, reversed }], next_cursor: null } };
+        }
+        return undefined;
+      }),
+    );
+    renderAt("/companies/c1/transfers");
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Estornar a transferência de R$ 250,50 em 10/12/2026" }),
+    );
+    expect(await screen.findByText("Estornada")).toBeInTheDocument();
+    expect(sent(fetchMock, "DELETE")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: /Estornar a transferência/ })).not.toBeInTheDocument();
+  });
+
+  it("says what happened when the transfer was already undone elsewhere, and reads the list again", async () => {
+    mockApi(
+      answer([deposit], (_url, init) =>
+        init?.method === "DELETE" ? { status: 404, body: { error: "transfer not found" } } : undefined,
+      ),
+    );
+    renderAt("/companies/c1/transfers");
+    await userEvent.click(await screen.findByRole("button", { name: /Estornar a transferência/ }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("transfer not found");
+  });
+
+  it("narrows the list to the transfers of one account", async () => {
+    const fetchMock = mockApi(answer([deposit]));
+    renderAt("/companies/c1/transfers");
+    await screen.findByRole("table");
+
+    await userEvent.selectOptions(screen.getByLabelText("Conta"), "b2");
+    await waitFor(() => {
+      const urls = fetchMock.mock.calls.map(([url]) => String(url));
+      expect(urls).toContain("/api/companies/c1/transfers?account=b2");
+    });
+  });
+
+  it("offers no form to a role that only reads finance", async () => {
+    const reader: Profile = {
+      ...profile,
+      companies: [{ id: "c1", name: "Padaria", role: "viewer", permissions: { ...OWNER_PERMISSIONS, finance: "read" } }],
+    };
+    mockApi((url, init) => (url === "/api/auth/me" ? { status: 200, body: reader } : answer([deposit])(url, init)));
+    renderAt("/companies/c1/transfers");
+
+    await screen.findByRole("row", { name: /Depósito/ });
+    expect(screen.queryByRole("heading", { name: "Nova transferência" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Estornar a transferência/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("the balance of the bank accounts", () => {
+  const caixa: BankAccount = { id: "b1", company_id: "c1", kind: "cash", name: "Caixa", bank_code: null, branch: null, number: null, active: true };
+  const cartao: BankAccount = { ...caixa, id: "b2", kind: "card", name: "Cartão" };
+  const balanceOf = (account: BankAccount, balance: string, opening: { balance: string; on: string } | null = null): AccountBalance => ({
+    account,
+    opening,
+    received: "0",
+    paid: "0",
+    transfers_in: "0",
+    transfers_out: "0",
+    balance,
+  });
+  const balances = (...accounts: AccountBalance[]) => ({
+    on: "2026-11-05",
+    accounts,
+    total: "1075.5",
+  });
+  const sent = (fetchMock: ReturnType<typeof mockApi>, method: string) =>
+    fetchMock.mock.calls.filter(([, init]) => init?.method === method);
+
+  it("asks for the balance on today's date and shows each account's, and the total of all of them", async () => {
+    const fetchMock = mockBankAccounts(
+      (url) => (url === "/api/auth/me" ? { status: 200, body: profile } : { status: 200, body: { items: [caixa, cartao], next_cursor: null } }),
+      balances(balanceOf(caixa, "1200.5", { balance: "1000", on: "2026-01-01" }), balanceOf(cartao, "-125")),
+    );
+    renderAt("/companies/c1/bank-accounts");
+
+    const row = await screen.findByRole("row", { name: /Caixa/ });
+    expect(row).toHaveTextContent("R$ 1.200,50");
+    // Where the balance started is said on the cell, not in the row.
+    expect(within(row).getByTitle("Saldo inicial de R$ 1.000,00 em 01/01/2026")).toHaveTextContent("R$ 1.200,50");
+    const card = screen.getByRole("row", { name: /Cartão/ });
+    expect(card).toHaveTextContent("R$ -125,00");
+    expect(card.querySelector(".negative")).not.toBeNull();
+    expect(screen.getByText("Saldo consolidado em 05/11/2026")).toBeInTheDocument();
+    expect(screen.getByText("R$ 1.075,50")).toBeInTheDocument();
+    const asked = fetchMock.mock.calls.map(([url]) => String(url)).find((url) => url.includes("/balances"));
+    expect(asked).toMatch(/^\/api\/companies\/c1\/balances\?on=\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it("sets the opening balance of an account, negative if it must be, and reads the balances again", async () => {
+    let stored = false;
+    const fetchMock = mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (url.includes("/opening-balance") && init?.method === "PUT") {
+        stored = true;
+        return { status: 200, body: { balance: "-1234.5", on: "2026-01-01" } };
+      }
+      if (url.includes("/balances")) {
+        return { status: 200, body: balances(balanceOf(caixa, stored ? "-1234.5" : "0", stored ? { balance: "-1234.5", on: "2026-01-01" } : null)) };
+      }
+      return { status: 200, body: { items: [caixa], next_cursor: null } };
+    });
+    renderAt("/companies/c1/bank-accounts");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Saldo inicial de Caixa" }));
+    const region = within(await screen.findByRole("region", { name: "Saldo inicial de Caixa" }));
+    await userEvent.type(region.getByLabelText("Saldo no início do dia"), "-1.234,50");
+    fireEvent.change(region.getByLabelText("Dia"), { target: { value: "2026-01-01" } });
+    await userEvent.click(region.getByRole("button", { name: "Salvar saldo inicial" }));
+
+    expect(await region.findByText("Saldo inicial salvo.")).toBeInTheDocument();
+    const [put] = sent(fetchMock, "PUT");
+    expect(String(put[0])).toBe("/api/companies/c1/bank-accounts/b1/opening-balance");
+    expect(JSON.parse(String(put[1]?.body))).toEqual({ balance: "-1234.5", on: "2026-01-01" });
+    expect(await screen.findByTitle("Saldo inicial de R$ -1.234,50 em 01/01/2026")).toHaveTextContent("R$ -1.234,50");
+  });
+
+  it("refuses an opening balance that is not clear or has no day, without asking the API", async () => {
+    const fetchMock = mockBankAccounts(
+      (url) => (url === "/api/auth/me" ? { status: 200, body: profile } : { status: 200, body: { items: [caixa], next_cursor: null } }),
+      balances(balanceOf(caixa, "0")),
+    );
+    renderAt("/companies/c1/bank-accounts");
+    await userEvent.click(await screen.findByRole("button", { name: "Saldo inicial de Caixa" }));
+    const region = within(await screen.findByRole("region", { name: "Saldo inicial de Caixa" }));
+
+    await userEvent.type(region.getByLabelText("Saldo no início do dia"), "-1.000");
+    fireEvent.change(region.getByLabelText("Dia"), { target: { value: "2026-01-01" } });
+    await userEvent.click(region.getByRole("button", { name: "Salvar saldo inicial" }));
+    expect(await region.findByRole("alert")).toHaveTextContent("reais e centavos");
+    expect(sent(fetchMock, "PUT")).toHaveLength(0);
+  });
+
+  it("offers no opening balance to a role that only reads finance", async () => {
+    const reader: Profile = {
+      ...profile,
+      companies: [{ id: "c1", name: "Padaria", role: "viewer", permissions: { ...OWNER_PERMISSIONS, finance: "read" } }],
+    };
+    mockBankAccounts(
+      (url) => (url === "/api/auth/me" ? { status: 200, body: reader } : { status: 200, body: { items: [caixa], next_cursor: null } }),
+      balances(balanceOf(caixa, "10")),
+    );
+    renderAt("/companies/c1/bank-accounts");
+
+    expect(await screen.findByRole("row", { name: /Caixa/ })).toHaveTextContent("R$ 10,00");
+    expect(screen.queryByRole("button", { name: /Saldo inicial de/ })).not.toBeInTheDocument();
   });
 });

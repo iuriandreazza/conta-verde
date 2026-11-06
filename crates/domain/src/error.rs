@@ -42,6 +42,10 @@ pub enum DomainError {
     /// Names the amount: what is applied, or the interest, fine or discount.
     InvalidSettlementAmount(&'static str),
     SettlementMovesNothing,
+    InvalidTransferAmount,
+    TransferToTheSameAccount,
+    InvalidNote,
+    InvalidOpeningBalance,
     TooManyEntryInstallments,
     InvalidInstallmentDays,
     InstallmentDaysNotIncreasing,
@@ -138,6 +142,18 @@ impl fmt::Display for DomainError {
             Self::InvalidSettlementAmount(field) => {
                 write!(f, "{field} must be 0 or more, in cents (at most two decimals)")
             }
+            Self::InvalidTransferAmount => {
+                f.write_str("amount must be more than 0, in cents (at most two decimals)")
+            }
+            Self::TransferToTheSameAccount => {
+                f.write_str("a transfer moves money between two different accounts")
+            }
+            Self::InvalidNote => {
+                f.write_str("note must be one line of at most 200 characters, without control characters")
+            }
+            Self::InvalidOpeningBalance => f.write_str(
+                "balance must be a number in cents (at most two decimals), negative if the account starts in debt",
+            ),
             Self::SettlementMovesNothing => f.write_str(
                 "a settlement must move some money: what is applied, with interest and fine, less the discount, must be more than 0",
             ),

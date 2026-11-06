@@ -22,18 +22,20 @@ mod product;
 mod role;
 mod settlement;
 mod tag;
+mod transfer;
 
 pub use account::{Account, AccountDraft, Company, User, validate_password};
 pub use address::{Address, AddressDraft, PostalCode, is_state};
-pub use amount::Amount;
+pub use amount::{Amount, SignedAmount};
 pub use audit::{
     Actor, AuditAction, AuditEntity, AuditEntry, AuditRecord, Audited, FieldChange,
     bank_account_changes, bank_account_creation_changes, category_changes,
     category_creation_changes, cost_center_changes, cost_center_creation_changes, creation_changes,
-    document_check_changes, entry_changes, entry_creation_changes, party_changes,
-    payment_method_changes, payment_method_creation_changes, payment_term_changes,
-    payment_term_creation_changes, product_changes, product_creation_changes, settlement_changes,
-    settlement_creation_changes,
+    document_check_changes, entry_changes, entry_creation_changes, opening_changes,
+    opening_creation_changes, party_changes, payment_method_changes,
+    payment_method_creation_changes, payment_term_changes, payment_term_creation_changes,
+    product_changes, product_creation_changes, settlement_changes, settlement_creation_changes,
+    transfer_changes, transfer_creation_changes,
 };
 pub use bank_account::{BankAccount, BankAccountDraft, BankAccountKind};
 pub use calendar_date::CalendarDate;
@@ -50,7 +52,7 @@ pub use financial_entry::{
 };
 pub use ids::{
     BankAccountId, CategoryId, CompanyId, CostCenterId, EntryId, InvitationId, PartyId,
-    PaymentMethodId, PaymentTermId, ProductId, SettlementId, UserId,
+    PaymentMethodId, PaymentTermId, ProductId, SettlementId, TransferId, UserId,
 };
 pub use invitation::Invitation;
 pub use party::{Party, PartyDraft};
@@ -61,5 +63,8 @@ pub use payment_term::{
 };
 pub use product::{Product, ProductDraft, ProductKind};
 pub use role::{Access, Area, Role};
+/// The exact decimal money is made of, so a layer that adds amounts need not depend on its crate.
+pub use rust_decimal::Decimal;
 pub use settlement::{Settlement, SettlementDraft, settled_of};
 pub use tag::{MAX_TAGS, Tag};
+pub use transfer::{AccountOpening, Transfer, TransferDraft};

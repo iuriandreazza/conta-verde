@@ -14,6 +14,7 @@ import { PartiesPage } from "./pages/PartiesPage";
 import { PaymentMethodsPage } from "./pages/PaymentMethodsPage";
 import { PaymentTermsPage } from "./pages/PaymentTermsPage";
 import { ProductsPage } from "./pages/ProductsPage";
+import { TransfersPage } from "./pages/TransfersPage";
 
 export function App() {
   return (
@@ -28,6 +29,7 @@ export function App() {
           <Route path="/companies/:companyId/parties" element={<PartiesPage />} />
           <Route path="/companies/:companyId/products" element={<ProductsPage />} />
           <Route path="/companies/:companyId/entries" element={<EntriesPage />} />
+          <Route path="/companies/:companyId/transfers" element={<TransfersPage />} />
           <Route path="/companies/:companyId/categories" element={<CategoriesPage />} />
           <Route path="/companies/:companyId/cost-centers" element={<CostCentersPage />} />
           <Route path="/companies/:companyId/bank-accounts" element={<BankAccountsPage />} />

@@ -29,27 +29,9 @@ import { treeRows } from "../lib/categoryTree";
 import { formatMoney } from "../lib/decimal";
 import { STATUS_LABELS, entryStatus, todayIso, type InstallmentStatus } from "../lib/settlement";
 import { formatDate } from "../lib/entryInstallments";
+import { readUpTo } from "../lib/readUpTo";
 import { usePagedList } from "../lib/usePagedList";
 import { useCanWrite } from "../lib/useCanWrite";
-
-/** The most records of a register the form offers to point an entry at: the first by name. */
-const MAX_CHOICES = 200;
-
-/** Reads a list page after page, up to `cap` records: a select cannot be paged. */
-async function readUpTo<T>(
-  fetchPage: (after?: string) => Promise<{ items: T[]; next_cursor: string | null }>,
-  cap: number,
-): Promise<T[]> {
-  const items: T[] = [];
-  let after: string | undefined;
-  while (items.length < cap) {
-    const page = await fetchPage(after);
-    items.push(...page.items);
-    if (page.next_cursor === null) break;
-    after = page.next_cursor;
-  }
-  return items.slice(0, cap);
-}
 
 const STATUS_BADGES: Record<InstallmentStatus, string> = {
   open: "badge badge-dot badge-muted",
@@ -95,10 +77,10 @@ export function EntriesPage() {
     let current = true;
     Promise.all([
       api.listCategories(companyId),
-      readUpTo((after) => api.listCostCenters(companyId, { q: "", active: "", sort: "name" }, after), MAX_CHOICES),
-      readUpTo((after) => api.listParties(companyId, undefined, after), MAX_CHOICES),
-      readUpTo((after) => api.listBankAccounts(companyId, undefined, after), MAX_CHOICES),
-      readUpTo((after) => api.listPaymentMethods(companyId, undefined, after), MAX_CHOICES),
+      readUpTo((after) => api.listCostCenters(companyId, { q: "", active: "", sort: "name" }, after)),
+      readUpTo((after) => api.listParties(companyId, undefined, after)),
+      readUpTo((after) => api.listBankAccounts(companyId, undefined, after)),
+      readUpTo((after) => api.listPaymentMethods(companyId, undefined, after)),
     ])
       .then(([categoryList, costCenterList, partyList, bankList, methodList]) => {
         if (current) {

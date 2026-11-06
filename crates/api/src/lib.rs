@@ -19,18 +19,20 @@ mod postal_codes;
 mod products;
 mod products_import;
 mod session;
+mod transfers;
 
 use std::sync::Arc;
 
 use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
 use conta_verde_application::{
-    AuthService, BankAccountRepository, BankAccountService, CategoryRepository, CategoryService,
-    CnpjRegistry, CostCenterRepository, CostCenterService, EmailSender, EntryReferences,
-    FinancialEntryRepository, FinancialEntryService, IdentityRepository, InvitationRepository,
-    MemberService, PartyRepository, PartyService, PaymentMethodRepository, PaymentMethodService,
-    PaymentTermRepository, PaymentTermService, PostalCodeDirectory, PostalCodeService,
-    ProductRepository, ProductService, SecretService,
+    AuthService, BalanceService, BankAccountRepository, BankAccountService, CategoryRepository,
+    CategoryService, CnpjRegistry, CostCenterRepository, CostCenterService, EmailSender,
+    EntryReferences, FinancialEntryRepository, FinancialEntryService, IdentityRepository,
+    InvitationRepository, MemberService, OpeningRepository, PartyRepository, PartyService,
+    PaymentMethodRepository, PaymentMethodService, PaymentTermRepository, PaymentTermService,
+    PostalCodeDirectory, PostalCodeService, ProductRepository, ProductService, SecretService,
+    TransferRepository, TransferService,
 };
 use serde::Serialize;
 
@@ -55,6 +57,8 @@ pub trait Ports: 'static {
     type PaymentTerms: PaymentTermRepository + 'static;
     type Entries: FinancialEntryRepository + 'static;
     type EntryReferences: EntryReferences + 'static;
+    type Transfers: TransferRepository + 'static;
+    type Openings: OpeningRepository + 'static;
     type PostalCodes: PostalCodeDirectory + 'static;
     type Invitations: InvitationRepository + 'static;
     type Emails: EmailSender + 'static;
@@ -70,6 +74,8 @@ pub struct Services<X: Ports> {
     pub payment_methods: PaymentMethodService<X::PaymentMethods>,
     pub payment_terms: PaymentTermService<X::PaymentTerms>,
     pub entries: FinancialEntryService<X::Entries, X::EntryReferences>,
+    pub transfers: TransferService<X::Transfers, X::EntryReferences>,
+    pub balances: BalanceService<X::BankAccounts, X::Entries, X::Transfers, X::Openings>,
     pub postal_codes: PostalCodeService<X::PostalCodes>,
     pub members: MemberService<X::Invitations, X::Identity, X::Emails, X::Secrets>,
     pub auth: AuthService<X::Identity, X::Secrets>,
@@ -84,6 +90,8 @@ pub(crate) struct AppState<X: Ports> {
     payment_methods: PaymentMethodService<X::PaymentMethods>,
     payment_terms: PaymentTermService<X::PaymentTerms>,
     entries: FinancialEntryService<X::Entries, X::EntryReferences>,
+    transfers: TransferService<X::Transfers, X::EntryReferences>,
+    balances: BalanceService<X::BankAccounts, X::Entries, X::Transfers, X::Openings>,
     postal_codes: PostalCodeService<X::PostalCodes>,
     members: MemberService<X::Invitations, X::Identity, X::Emails, X::Secrets>,
     auth: AuthService<X::Identity, X::Secrets>,
@@ -103,6 +111,8 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         payment_methods: services.payment_methods,
         payment_terms: services.payment_terms,
         entries: services.entries,
+        transfers: services.transfers,
+        balances: services.balances,
         postal_codes: services.postal_codes,
         members: services.members,
         auth: services.auth,
@@ -238,6 +248,22 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
             delete(entries::reverse_settlement::<X>),
         )
         .route(
+            "/companies/{company_id}/transfers",
+            get(transfers::list_transfers::<X>).post(transfers::register_transfer::<X>),
+        )
+        .route(
+            "/companies/{company_id}/transfers/{transfer_id}",
+            delete(transfers::reverse_transfer::<X>),
+        )
+        .route(
+            "/companies/{company_id}/bank-accounts/{bank_account_id}/opening-balance",
+            put(transfers::set_opening_balance::<X>),
+        )
+        .route(
+            "/companies/{company_id}/balances",
+            get(transfers::balances::<X>),
+        )
+        .route(
             "/companies/{company_id}/members",
             get(members::list_members::<X>),
         )
@@ -288,8 +314,9 @@ mod tests {
         Argon2SecretService, InMemoryBankAccountRepository, InMemoryCategoryRepository,
         InMemoryCnpjRegistry, InMemoryCostCenterRepository, InMemoryEmailSender,
         InMemoryFinancialEntryRepository, InMemoryIdentityRepository, InMemoryInvitationRepository,
-        InMemoryPartyRepository, InMemoryPaymentMethodRepository, InMemoryPaymentTermRepository,
-        InMemoryPostalCodeDirectory, InMemoryProductRepository, RegisterReferences,
+        InMemoryOpeningRepository, InMemoryPartyRepository, InMemoryPaymentMethodRepository,
+        InMemoryPaymentTermRepository, InMemoryPostalCodeDirectory, InMemoryProductRepository,
+        InMemoryTransferRepository, RegisterReferences,
     };
     use http_body_util::BodyExt;
     use serde_json::{Value, json};
@@ -355,6 +382,8 @@ mod tests {
         type PaymentTerms = InMemoryPaymentTermRepository;
         type Entries = InMemoryFinancialEntryRepository;
         type EntryReferences = TestReferences;
+        type Transfers = InMemoryTransferRepository;
+        type Openings = InMemoryOpeningRepository;
         type PostalCodes = InMemoryPostalCodeDirectory;
         type Invitations = InMemoryInvitationRepository;
         type Emails = InMemoryEmailSender;
@@ -376,6 +405,8 @@ mod tests {
         type PaymentTerms = InMemoryPaymentTermRepository;
         type Entries = InMemoryFinancialEntryRepository;
         type EntryReferences = TestReferences;
+        type Transfers = InMemoryTransferRepository;
+        type Openings = InMemoryOpeningRepository;
         type PostalCodes = Option<InMemoryPostalCodeDirectory>;
         type Invitations = InMemoryInvitationRepository;
         type Emails = InMemoryEmailSender;
@@ -395,6 +426,7 @@ mod tests {
     /// register an entry. `entries_over` is the one that does.
     fn standalone_entries() -> TestEntries {
         entries_over(
+            InMemoryFinancialEntryRepository::default(),
             &InMemoryCategoryRepository::default(),
             &InMemoryCostCenterRepository::default(),
             &InMemoryPartyRepository::default(),
@@ -406,6 +438,7 @@ mod tests {
     /// Entries that read the registers a test keeps a handle to, so what it registers there can be
     /// pointed at.
     fn entries_over(
+        entries: InMemoryFinancialEntryRepository,
         categories: &InMemoryCategoryRepository,
         cost_centers: &InMemoryCostCenterRepository,
         parties: &InMemoryPartyRepository,
@@ -413,14 +446,62 @@ mod tests {
         payment_methods: &InMemoryPaymentMethodRepository,
     ) -> TestEntries {
         FinancialEntryService::new(
-            InMemoryFinancialEntryRepository::default(),
-            RegisterReferences::new(
-                categories.clone(),
-                cost_centers.clone(),
-                parties.clone(),
-                bank_accounts.clone(),
-                payment_methods.clone(),
+            entries,
+            references_over(
+                categories,
+                cost_centers,
+                parties,
+                bank_accounts,
+                payment_methods,
             ),
+        )
+    }
+
+    fn references_over(
+        categories: &InMemoryCategoryRepository,
+        cost_centers: &InMemoryCostCenterRepository,
+        parties: &InMemoryPartyRepository,
+        bank_accounts: &InMemoryBankAccountRepository,
+        payment_methods: &InMemoryPaymentMethodRepository,
+    ) -> TestReferences {
+        RegisterReferences::new(
+            categories.clone(),
+            cost_centers.clone(),
+            parties.clone(),
+            bank_accounts.clone(),
+            payment_methods.clone(),
+        )
+    }
+
+    type TestTransfers = TransferService<InMemoryTransferRepository, TestReferences>;
+
+    type TestBalances = BalanceService<
+        InMemoryBankAccountRepository,
+        InMemoryFinancialEntryRepository,
+        InMemoryTransferRepository,
+        InMemoryOpeningRepository,
+    >;
+
+    /// Transfers and balances over registers that the app's own services do not share.
+    fn standalone_transfers() -> TestTransfers {
+        TransferService::new(
+            InMemoryTransferRepository::default(),
+            references_over(
+                &InMemoryCategoryRepository::default(),
+                &InMemoryCostCenterRepository::default(),
+                &InMemoryPartyRepository::default(),
+                &InMemoryBankAccountRepository::default(),
+                &InMemoryPaymentMethodRepository::default(),
+            ),
+        )
+    }
+
+    fn standalone_balances() -> TestBalances {
+        BalanceService::new(
+            InMemoryBankAccountRepository::default(),
+            InMemoryFinancialEntryRepository::default(),
+            InMemoryTransferRepository::default(),
+            InMemoryOpeningRepository::default(),
         )
     }
 
@@ -494,6 +575,8 @@ mod tests {
                 ),
                 payment_terms: PaymentTermService::new(InMemoryPaymentTermRepository::default()),
                 entries: standalone_entries(),
+                transfers: standalone_transfers(),
+                balances: standalone_balances(),
                 postal_codes: PostalCodeService::new(postal_codes),
                 members,
                 auth,
@@ -1126,6 +1209,8 @@ mod tests {
                 ),
                 payment_terms: PaymentTermService::new(InMemoryPaymentTermRepository::default()),
                 entries: standalone_entries(),
+                transfers: standalone_transfers(),
+                balances: standalone_balances(),
                 postal_codes: PostalCodeService::new(None),
                 members: standalone_members(),
                 auth: auth_service(),
@@ -2600,6 +2685,8 @@ mod tests {
                 ),
                 payment_terms: PaymentTermService::new(InMemoryPaymentTermRepository::default()),
                 entries: standalone_entries(),
+                transfers: standalone_transfers(),
+                balances: standalone_balances(),
                 postal_codes: PostalCodeService::new(None),
                 members: standalone_members(),
                 auth: auth_service(),
@@ -4086,6 +4173,8 @@ mod tests {
         let parties = InMemoryPartyRepository::default();
         let bank_accounts = InMemoryBankAccountRepository::default();
         let payment_methods = InMemoryPaymentMethodRepository::default();
+        let entry_store = InMemoryFinancialEntryRepository::default();
+        let transfer_store = InMemoryTransferRepository::default();
         router::<MemoryPorts>(
             Services {
                 parties: PartyService::new(parties.clone(), known_companies())
@@ -4097,11 +4186,28 @@ mod tests {
                 payment_methods: PaymentMethodService::new(payment_methods.clone()),
                 payment_terms: PaymentTermService::new(InMemoryPaymentTermRepository::default()),
                 entries: entries_over(
+                    entry_store.clone(),
                     &categories,
                     &cost_centers,
                     &parties,
                     &bank_accounts,
                     &payment_methods,
+                ),
+                transfers: TransferService::new(
+                    transfer_store.clone(),
+                    references_over(
+                        &categories,
+                        &cost_centers,
+                        &parties,
+                        &bank_accounts,
+                        &payment_methods,
+                    ),
+                ),
+                balances: BalanceService::new(
+                    bank_accounts.clone(),
+                    entry_store,
+                    transfer_store,
+                    InMemoryOpeningRepository::default(),
                 ),
                 postal_codes: PostalCodeService::new(known_postal_codes()),
                 members: standalone_members(),
@@ -5052,5 +5158,358 @@ mod tests {
             assert!(reply.status.is_client_error(), "{query}");
             assert!(reply.body["error"].is_string(), "{query}");
         }
+    }
+
+    fn transfers_uri(company_id: Uuid) -> String {
+        format!("/companies/{company_id}/transfers")
+    }
+
+    fn balances_uri(company_id: Uuid, on: &str) -> String {
+        format!("/companies/{company_id}/balances?on={on}")
+    }
+
+    #[tokio::test]
+    async fn moves_money_between_accounts_and_reverses_it_through_the_api() {
+        let app = entry_app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let caixa = registered_account(&app, &cookie, company_id, "Caixa").await;
+        let banco = registered_account(&app, &cookie, company_id, "Banco").await;
+        let uri = transfers_uri(company_id);
+        let body = |from: &str, to: &str, amount: &str, day: &str| json!({ "from_account_id": from, "to_account_id": to, "amount": amount, "occurred_on": day });
+
+        let created = send(
+            &app,
+            json_request(
+                "POST",
+                &uri,
+                Some(&cookie),
+                json!({
+                    "from_account_id": caixa, "to_account_id": banco, "amount": "250.50",
+                    "occurred_on": "2026-12-10", "note": " Depósito ",
+                }),
+            ),
+        )
+        .await;
+        assert_eq!(created.status, StatusCode::CREATED, "{}", created.body);
+        assert_eq!(created.body["amount"], "250.5");
+        assert_eq!(created.body["note"], "Depósito");
+        assert_eq!(created.body["reversed"], false);
+        assert_eq!(created.body["from_account_id"], caixa);
+        let id = created.body["id"].as_str().unwrap().to_owned();
+        let later = send(
+            &app,
+            json_request(
+                "POST",
+                &uri,
+                Some(&cookie),
+                body(&banco, &caixa, "10", "2026-12-12"),
+            ),
+        )
+        .await;
+        assert_eq!(later.status, StatusCode::CREATED);
+
+        // Newest first; narrowed by an account on either side; paged by an opaque cursor.
+        let listed = send(&app, get_request(&uri, Some(&cookie))).await;
+        assert_eq!(listed.status, StatusCode::OK);
+        assert_eq!(listed.body["items"][0]["id"], later.body["id"]);
+        assert_eq!(listed.body["items"][1]["id"], id);
+        let narrowed = send(
+            &app,
+            get_request(&format!("{uri}?account={caixa}"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(narrowed.body["items"].as_array().unwrap().len(), 2);
+        let first_page = send(&app, get_request(&format!("{uri}?limit=1"), Some(&cookie))).await;
+        assert_eq!(first_page.body["items"].as_array().unwrap().len(), 1);
+        let cursor = first_page.body["next_cursor"].as_str().unwrap().to_owned();
+        let second_page = send(
+            &app,
+            get_request(&format!("{uri}?limit=1&after={cursor}"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(second_page.body["items"][0]["id"], id);
+        assert_eq!(second_page.body["next_cursor"], Value::Null);
+        for query in ["account=abc", "after=garbage", "after=x|2026-01-01"] {
+            let reply = send(&app, get_request(&format!("{uri}?{query}"), Some(&cookie))).await;
+            assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{query}");
+            assert!(reply.body["error"].is_string(), "{query}");
+        }
+
+        // What is refused is JSON and stores nothing: the same account twice, an amount that is not
+        // positive cents or is a JSON number, a date that is not one, an account of another company.
+        let (stranger, other_company) = sign_up(&app, "bia@example.com").await;
+        let alien = registered_account(&app, &stranger, other_company, "Outra").await;
+        for (request, status) in [
+            (
+                body(&caixa, &caixa, "1", "2026-12-10"),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                body(&caixa, &banco, "0", "2026-12-10"),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                body(&caixa, &banco, "1.005", "2026-12-10"),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                body(&caixa, &banco, "1", "2026-02-30"),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                body(&caixa, &alien, "1", "2026-12-10"),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                json!({ "from_account_id": caixa, "to_account_id": banco, "amount": 1, "occurred_on": "2026-12-10" }),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                json!({ "from_account_id": caixa, "to_account_id": banco, "amount": "1", "occurred_on": "2026-12-10", "extra": true }),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+        ] {
+            let reply = send(&app, json_request("POST", &uri, Some(&cookie), request)).await;
+            assert_eq!(reply.status, status, "{}", reply.body);
+            assert!(reply.body["error"].is_string());
+        }
+        let after_refusals = send(&app, get_request(&uri, Some(&cookie))).await;
+        assert_eq!(after_refusals.body["items"].as_array().unwrap().len(), 2);
+
+        // Reversing: 204, it stays listed and flagged; once more, a malformed id and another
+        // company's are all 404.
+        let one = format!("{uri}/{id}");
+        let delete = |target: &str, cookie: &str| {
+            send(
+                &app,
+                json_request("DELETE", target, Some(cookie), Value::Null),
+            )
+        };
+        assert_eq!(delete(&one, &stranger).await.status, StatusCode::NOT_FOUND);
+        assert_eq!(delete(&one, &cookie).await.status, StatusCode::NO_CONTENT);
+        assert_eq!(delete(&one, &cookie).await.status, StatusCode::NOT_FOUND);
+        assert_eq!(
+            delete(&format!("{uri}/not-an-id"), &cookie).await.status,
+            StatusCode::NOT_FOUND
+        );
+        let flags = send(&app, get_request(&uri, Some(&cookie))).await;
+        assert_eq!(flags.body["items"][1]["reversed"], true);
+        assert_eq!(flags.body["items"][0]["reversed"], false);
+    }
+
+    #[tokio::test]
+    async fn gives_the_balance_of_every_account_and_the_total_through_the_api() {
+        let app = entry_app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let targets = entry_targets(&app, &cookie, company_id).await;
+        let caixa = registered_account(&app, &cookie, company_id, "Caixa").await;
+        let banco = registered_account(&app, &cookie, company_id, "Banco").await;
+
+        // An opening balance, signed, replaced as a whole, refused when it is not cents.
+        let opening_uri = format!("/companies/{company_id}/bank-accounts/{caixa}/opening-balance");
+        let set = |balance: &str, on: &str| {
+            send(
+                &app,
+                json_request(
+                    "PUT",
+                    &opening_uri,
+                    Some(&cookie),
+                    json!({ "balance": balance, "on": on }),
+                ),
+            )
+        };
+        let opening = set("1000.50", "2026-12-01").await;
+        assert_eq!(opening.status, StatusCode::OK, "{}", opening.body);
+        assert_eq!(
+            opening.body,
+            json!({ "balance": "1000.5", "on": "2026-12-01" })
+        );
+        assert_eq!(set("-5", "2026-12-01").await.body["balance"], "-5");
+        assert_eq!(
+            set("1.001", "2026-12-01").await.status,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        assert_eq!(
+            set("1", "2026-13-01").await.status,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        assert_eq!(set("1000.50", "2026-12-01").await.status, StatusCode::OK);
+        let unknown = format!(
+            "/companies/{company_id}/bank-accounts/{}/opening-balance",
+            Uuid::new_v4()
+        );
+        let missing = send(
+            &app,
+            json_request(
+                "PUT",
+                &unknown,
+                Some(&cookie),
+                json!({ "balance": "1", "on": "2026-12-01" }),
+            ),
+        )
+        .await;
+        assert_eq!(missing.status, StatusCode::NOT_FOUND);
+
+        // A settlement and a transfer move it.
+        let sale = send(
+            &app,
+            json_request(
+                "POST",
+                &entries_uri(company_id),
+                Some(&cookie),
+                entry_body(&targets, "Venda", &[("2026-12-10", "100")]),
+            ),
+        )
+        .await;
+        let settled = send(
+            &app,
+            json_request(
+                "POST",
+                &format!(
+                    "{}/{}/settlements",
+                    entries_uri(company_id),
+                    sale.body["id"].as_str().unwrap()
+                ),
+                Some(&cookie),
+                json!({ "installment": 1, "settled_on": "2026-12-10", "applied": "100", "interest": "5", "bank_account_id": caixa }),
+            ),
+        )
+        .await;
+        assert_eq!(settled.status, StatusCode::CREATED, "{}", settled.body);
+        let moved = send(
+            &app,
+            json_request(
+                "POST",
+                &transfers_uri(company_id),
+                Some(&cookie),
+                json!({ "from_account_id": caixa, "to_account_id": banco, "amount": "200.25", "occurred_on": "2026-12-15" }),
+            ),
+        )
+        .await;
+        assert_eq!(moved.status, StatusCode::CREATED);
+
+        let balances = send(
+            &app,
+            get_request(&balances_uri(company_id, "2026-12-31"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(balances.status, StatusCode::OK, "{}", balances.body);
+        assert_eq!(balances.body["on"], "2026-12-31");
+        assert_eq!(balances.body["total"], "1105.5");
+        let accounts = balances.body["accounts"].as_array().unwrap();
+        assert_eq!(accounts.len(), 2);
+        let of = |id: &str| {
+            accounts
+                .iter()
+                .find(|item| item["account"]["id"] == id)
+                .unwrap()
+        };
+        assert_eq!(
+            of(&caixa),
+            &json!({
+                "account": of(&caixa)["account"],
+                "opening": { "balance": "1000.5", "on": "2026-12-01" },
+                "received": "105", "paid": "0", "transfers_in": "0", "transfers_out": "200.25",
+                "balance": "905.25",
+            })
+        );
+        assert_eq!(of(&caixa)["account"]["name"], "Caixa");
+        assert_eq!(of(&banco)["opening"], Value::Null);
+        assert_eq!(of(&banco)["balance"], "200.25");
+
+        // Before the opening day the balance of an account that has one is 0.
+        let before = send(
+            &app,
+            get_request(&balances_uri(company_id, "2026-11-30"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(before.body["total"], "0");
+
+        // `on` is required and has to be a date; nothing of another company shows.
+        for uri in [
+            format!("/companies/{company_id}/balances"),
+            balances_uri(company_id, "tomorrow"),
+            balances_uri(company_id, "2026-02-30"),
+        ] {
+            let reply = send(&app, get_request(&uri, Some(&cookie))).await;
+            assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{uri}");
+            assert!(reply.body["error"].is_string(), "{uri}");
+        }
+        let (stranger, _) = sign_up(&app, "bia@example.com").await;
+        assert_eq!(
+            send(
+                &app,
+                get_request(&balances_uri(company_id, "2026-12-31"), Some(&stranger))
+            )
+            .await
+            .status,
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn transfers_and_balances_follow_the_finance_role() {
+        use conta_verde_domain::Role;
+
+        let (app, identities, _) = app_with_mailbox();
+        let (_, company_id) = sign_up(&app, "dona@example.com").await;
+        for (role, may_write) in [
+            (Role::Admin, true),
+            (Role::Financial, true),
+            (Role::Sales, false),
+            (Role::Stock, false),
+            (Role::Accountant, false),
+            (Role::Viewer, false),
+        ] {
+            let cookie = member_with_role(&app, &identities, company_id, role).await;
+            let reads = send(
+                &app,
+                get_request(&balances_uri(company_id, "2026-12-31"), Some(&cookie)),
+            )
+            .await;
+            assert_eq!(reads.status, StatusCode::OK, "{role:?} reads balances");
+            let lists = send(&app, get_request(&transfers_uri(company_id), Some(&cookie))).await;
+            assert_eq!(lists.status, StatusCode::OK, "{role:?} reads transfers");
+            for (method, uri) in [
+                ("POST", transfers_uri(company_id)),
+                (
+                    "PUT",
+                    format!(
+                        "/companies/{company_id}/bank-accounts/{}/opening-balance",
+                        Uuid::new_v4()
+                    ),
+                ),
+            ] {
+                let write = send(&app, json_request(method, &uri, Some(&cookie), json!({}))).await;
+                let expected = if may_write {
+                    StatusCode::UNPROCESSABLE_ENTITY
+                } else {
+                    StatusCode::FORBIDDEN
+                };
+                assert_eq!(write.status, expected, "{role:?} {method} {uri}");
+            }
+            let reverse = send(
+                &app,
+                json_request(
+                    "DELETE",
+                    &format!("{}/{}", transfers_uri(company_id), Uuid::new_v4()),
+                    Some(&cookie),
+                    Value::Null,
+                ),
+            )
+            .await;
+            let expected = if may_write {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::FORBIDDEN
+            };
+            assert_eq!(reverse.status, expected, "{role:?} reverses");
+        }
+        assert_eq!(
+            send(&app, get_request(&transfers_uri(company_id), None))
+                .await
+                .status,
+            StatusCode::UNAUTHORIZED
+        );
     }
 }

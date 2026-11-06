@@ -877,6 +877,19 @@ tbody tr:hover {
   background: #f8faf9;
 }
 
+/* A table wider than its card scrolls sideways; the row actions stay in view. */
+.table-wrap td.row-actions,
+.table-wrap th:last-child:has(> .visually-hidden) {
+  position: sticky;
+  right: 0;
+  background: var(--surface);
+}
+
+.table-wrap th:last-child:has(> .visually-hidden),
+tbody tr:hover td.row-actions {
+  background: #f8faf9;
+}
+
 tbody tr:last-child td {
   border-bottom: 0;
 }
@@ -1429,4 +1442,30 @@ tbody tr:last-child td {
 .installments-off {
   color: var(--warning);
   font-weight: 500;
+}
+
+/* The opening balance of an account, under its row. */
+.opening-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.75rem 1rem;
+  align-items: end;
+  padding: 0.5rem 0 1rem;
+  /* Narrower than a table that scrolls sideways, so it stays in view. */
+  max-width: 36rem;
+}
+
+.opening-form > .opening-hint,
+.opening-form > .notice {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.opening-form > .btn {
+  justify-self: start;
+}
+
+/* A balance below zero: an account in overdraft, or a card with a bill to pay. */
+.negative {
+  color: var(--status-critical);
 }

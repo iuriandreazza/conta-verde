@@ -6,6 +6,7 @@ import { ChartLineIcon } from "./icons/chart-line";
 import { CreditCardIcon } from "./icons/credit-card";
 import { FolderTreeIcon } from "./icons/folder-tree";
 import { LayersIcon } from "./icons/layers";
+import { SendIcon } from "./icons/send";
 import { UserPlusIcon } from "./icons/user-plus";
 import { UsersIcon } from "./icons/users";
 import { WalletIcon } from "./icons/wallet";
@@ -29,6 +30,10 @@ export function CompanyNav({
       <NavLink to={`${base}/entries`}>
         <CircleDollarSignIcon size={18} aria-hidden />
         Lançamentos
+      </NavLink>
+      <NavLink to={`${base}/transfers`}>
+        <SendIcon size={18} aria-hidden />
+        Transferências
       </NavLink>
       <NavLink to={`${base}/parties`}>
         <UsersIcon size={18} aria-hidden />

@@ -65,6 +65,8 @@ pub enum ApplicationError {
     PaymentTermNotFound,
     /// No financial entry with this id in the company (another company's looks the same).
     EntryNotFound,
+    /// No transfer with this id in the company, or it was reversed already.
+    TransferNotFound,
     /// No settlement with this id in the entry (another company's looks the same), or it was
     /// reversed already.
     SettlementNotFound,
@@ -182,6 +184,7 @@ impl fmt::Display for ApplicationError {
             Self::PaymentTermNotFound => f.write_str("payment term not found"),
             Self::EntryNotFound => f.write_str("entry not found"),
             Self::SettlementNotFound => f.write_str("settlement not found"),
+            Self::TransferNotFound => f.write_str("transfer not found"),
             Self::SettlementExceedsBalance => {
                 f.write_str("this settles more of the installment than is left of it")
             }

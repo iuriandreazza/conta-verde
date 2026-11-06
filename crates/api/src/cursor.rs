@@ -1,4 +1,5 @@
-use conta_verde_application::NameCursor;
+use conta_verde_application::{DateCursor, NameCursor};
+use conta_verde_domain::CalendarDate;
 use uuid::Uuid;
 
 use crate::error::ApiError;
@@ -22,6 +23,19 @@ pub(crate) fn decode_cursor(raw: &str) -> Result<NameCursor, ApiError> {
     })
 }
 
+// The same, for lists ordered by a day: entries by competence date, transfers by the day they occurred.
+pub(crate) fn encode_date_cursor(cursor: &DateCursor) -> String {
+    format!("{}|{}", cursor.id, cursor.date)
+}
+
+pub(crate) fn decode_date_cursor(raw: &str) -> Result<DateCursor, ApiError> {
+    let (id, date) = raw.split_once('|').ok_or(ApiError::InvalidCursor)?;
+    Ok(DateCursor {
+        id: Uuid::parse_str(id).map_err(|_| ApiError::InvalidCursor)?,
+        date: CalendarDate::parse(date).ok_or(ApiError::InvalidCursor)?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -34,6 +48,21 @@ mod tests {
         };
         let decoded = decode_cursor(&encode_cursor(&original)).unwrap();
         assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn a_date_cursor_survives_a_round_trip_and_rejects_garbage() {
+        let original = DateCursor {
+            date: CalendarDate::parse("2026-12-10").unwrap(),
+            id: Uuid::new_v4(),
+        };
+        assert_eq!(
+            decode_date_cursor(&encode_date_cursor(&original)).unwrap(),
+            original
+        );
+        assert!(decode_date_cursor("nonsense").is_err());
+        assert!(decode_date_cursor(&format!("{}|2026-02-30", Uuid::new_v4())).is_err());
+        assert!(decode_date_cursor("not-a-uuid|2026-12-10").is_err());
     }
 
     #[test]
