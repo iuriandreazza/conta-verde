@@ -22,6 +22,7 @@ mod name;
 mod party;
 mod payment_method;
 mod payment_term;
+mod price_list;
 mod product;
 mod quote;
 mod recurrence;
@@ -45,11 +46,11 @@ pub use audit::{
     document_check_changes, entry_changes, entry_creation_changes, opening_changes,
     opening_creation_changes, party_changes, payment_method_changes,
     payment_method_creation_changes, payment_term_changes, payment_term_creation_changes,
-    product_changes, product_creation_changes, quote_changes, quote_creation_changes,
-    recurrence_changes, recurrence_creation_changes, sale_changes, sale_creation_changes,
-    sale_return_creation_changes, settlement_changes, settlement_creation_changes,
-    statement_line_changes, statement_line_creation_changes, transfer_changes,
-    transfer_creation_changes,
+    price_list_changes, price_list_creation_changes, product_changes, product_creation_changes,
+    quote_changes, quote_creation_changes, recurrence_changes, recurrence_creation_changes,
+    sale_changes, sale_creation_changes, sale_return_creation_changes, settlement_changes,
+    settlement_creation_changes, statement_line_changes, statement_line_creation_changes,
+    transfer_changes, transfer_creation_changes,
 };
 pub use bank_account::{BankAccount, BankAccountDraft, BankAccountKind};
 pub use calendar_date::CalendarDate;
@@ -70,8 +71,8 @@ pub use financial_entry::{
 };
 pub use ids::{
     AttachmentId, BankAccountId, CategoryId, CommissionRuleId, CompanyId, ContractId, CostCenterId,
-    EntryId, InvitationId, PartyId, PaymentMethodId, PaymentTermId, ProductId, QuoteId,
-    RecurrenceId, SaleId, SaleReturnId, SettlementId, StatementLineId, TransferId, UserId,
+    EntryId, InvitationId, PartyId, PaymentMethodId, PaymentTermId, PriceListId, ProductId,
+    QuoteId, RecurrenceId, SaleId, SaleReturnId, SettlementId, StatementLineId, TransferId, UserId,
 };
 pub use invitation::Invitation;
 pub use line::{Line, LineDraft, MAX_LINES, lines_total};
@@ -80,6 +81,9 @@ pub use payment_method::{PaymentMethod, PaymentMethodDraft, PaymentMethodKind};
 pub use payment_term::{
     Installment, InstallmentDraft, MAX_INSTALLMENT_DAYS, MAX_INSTALLMENTS, PaymentTerm,
     PaymentTermDraft, Percent,
+};
+pub use price_list::{
+    MAX_PRICE_LIST_ITEMS, PriceList, PriceListDraft, PriceListItem, PriceListItemDraft,
 };
 pub use product::{Product, ProductDraft, ProductKind};
 pub use quote::{Quote, QuoteDraft, QuoteStatus};

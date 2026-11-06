@@ -32,6 +32,9 @@ pub enum DomainError {
     CardAccountHasNoNumber,
     NoInstallments,
     TooManyInstallments,
+    NoPriceListItems,
+    TooManyPriceListItems,
+    DuplicatePriceListProduct,
     InvalidDescription,
     /// Names the date: an entry has a competence date and a due date for each installment.
     InvalidDate(&'static str),
@@ -214,6 +217,11 @@ impl fmt::Display for DomainError {
             Self::TooManyEntryInstallments => f.write_str("an entry has at most 120 installments"),
             Self::NoInstallments => f.write_str("a payment term needs at least one installment"),
             Self::TooManyInstallments => f.write_str("a payment term has at most 24 installments"),
+            Self::NoPriceListItems => f.write_str("a price list needs at least one price"),
+            Self::TooManyPriceListItems => f.write_str("a price list has at most 1000 prices"),
+            Self::DuplicatePriceListProduct => {
+                f.write_str("a price list names each product once")
+            }
             Self::InvalidInstallmentDays => {
                 f.write_str("an installment is due in 0 to 3650 days")
             }

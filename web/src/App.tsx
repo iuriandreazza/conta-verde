@@ -8,6 +8,7 @@ import { CashFlowPage } from "./pages/CashFlowPage";
 import { CategoriesPage } from "./pages/CategoriesPage";
 import { CompaniesPage } from "./pages/CompaniesPage";
 import { CommissionsPage } from "./pages/CommissionsPage";
+import { PriceListsPage } from "./pages/PriceListsPage";
 import { ContractsPage } from "./pages/ContractsPage";
 import { CostCentersPage } from "./pages/CostCentersPage";
 import { DashboardPage } from "./pages/DashboardPage";
@@ -43,6 +44,7 @@ export function App() {
           <Route path="/companies/:companyId/sales" element={<SalesPage />} />
           <Route path="/companies/:companyId/contracts" element={<ContractsPage />} />
           <Route path="/companies/:companyId/commissions" element={<CommissionsPage />} />
+          <Route path="/companies/:companyId/price-lists" element={<PriceListsPage />} />
           <Route path="/companies/:companyId/entries" element={<EntriesPage />} />
           <Route path="/companies/:companyId/reports" element={<ReportsPage />} />
           <Route path="/companies/:companyId/reconciliation" element={<ReconciliationPage />} />

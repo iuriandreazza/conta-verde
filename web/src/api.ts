@@ -407,6 +407,36 @@ export interface PaymentTermFilters {
 
 export const NO_PAYMENT_TERM_FILTERS: PaymentTermFilters = { q: "", active: "", sort: "name" };
 
+/** What each product sells for in a set of unit prices (ADR 0042); choosing a list only fills the price of a line. */
+export interface PriceList {
+  id: string;
+  company_id: string;
+  name: string;
+  /** In the order they were written, each product once. */
+  items: { product_id: string; price: string }[];
+  active: boolean;
+}
+
+export interface PriceListPage {
+  items: PriceList[];
+  next_cursor: string | null;
+}
+
+/** Replaces the whole list. */
+export interface PriceListInput {
+  name: string;
+  items: { product_id: string; price: string }[];
+  active: boolean;
+}
+
+export interface PriceListFilters {
+  q: string;
+  active: "" | "true" | "false";
+  sort: "name" | "-name";
+}
+
+export const NO_PRICE_LIST_FILTERS: PriceListFilters = { q: "", active: "", sort: "name" };
+
 /** A payment of an installment, in part or in full (ADR 0030). */
 export interface Settlement {
   id: string;
@@ -1270,6 +1300,24 @@ export const api = {
     const query = params.size > 0 ? `?${params}` : "";
     return request<PaymentTermPage>(`/companies/${companyId}/payment-terms${query}`);
   },
+  listPriceLists: (companyId: string, filters: PriceListFilters = NO_PRICE_LIST_FILTERS, after?: string) => {
+    const params = new URLSearchParams();
+    if (filters.q) params.set("q", filters.q);
+    if (filters.active) params.set("active", filters.active);
+    if (filters.sort !== NO_PRICE_LIST_FILTERS.sort) params.set("sort", filters.sort);
+    if (after) params.set("after", after);
+    const query = params.size > 0 ? `?${params}` : "";
+    return request<PriceListPage>(`/companies/${companyId}/price-lists${query}`);
+  },
+  createPriceList: (companyId: string, input: PriceListInput) =>
+    post<PriceList>(`/companies/${companyId}/price-lists`, input),
+  updatePriceList: (companyId: string, id: string, input: PriceListInput) =>
+    request<PriceList>(`/companies/${companyId}/price-lists/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  priceListHistory: (companyId: string, id: string) =>
+    request<HistoryEntry[]>(`/companies/${companyId}/price-lists/${id}/history`),
   createPaymentTerm: (companyId: string, input: PaymentTermInput) =>
     post<PaymentTerm>(`/companies/${companyId}/payment-terms`, input),
   updatePaymentTerm: (companyId: string, id: string, input: PaymentTermInput) =>

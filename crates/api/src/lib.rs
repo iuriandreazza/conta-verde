@@ -21,6 +21,7 @@ mod parties_import;
 mod payment_methods;
 mod payment_terms;
 mod postal_codes;
+mod price_lists;
 mod products;
 mod products_import;
 mod quote_pdf;
@@ -44,9 +45,10 @@ use conta_verde_application::{
     FinancialEntryRepository, FinancialEntryService, IdentityRepository, InvitationRepository,
     MemberService, OpeningRepository, PartyRepository, PartyService, PaymentMethodRepository,
     PaymentMethodService, PaymentTermRepository, PaymentTermService, PostalCodeDirectory,
-    PostalCodeService, ProductRepository, ProductService, QuoteRepository, QuoteService,
-    ReconciliationService, RecurrenceRepository, RecurrenceService, SaleRepository, SaleService,
-    SalesReferences, SecretService, StatementLineRepository, TransferRepository, TransferService,
+    PostalCodeService, PriceListRepository, PriceListService, ProductRepository, ProductService,
+    QuoteRepository, QuoteService, ReconciliationService, RecurrenceRepository, RecurrenceService,
+    SaleRepository, SaleService, SalesReferences, SecretService, StatementLineRepository,
+    TransferRepository, TransferService,
 };
 use serde::Serialize;
 
@@ -71,6 +73,7 @@ pub trait Ports: 'static {
     type BankAccounts: BankAccountRepository + 'static;
     type PaymentMethods: PaymentMethodRepository + 'static;
     type PaymentTerms: PaymentTermRepository + 'static;
+    type PriceLists: PriceListRepository + 'static;
     type Entries: FinancialEntryRepository + 'static;
     type EntryReferences: EntryReferences + 'static;
     type Attachments: AttachmentRepository + 'static;
@@ -115,6 +118,9 @@ type CommissionsOf<X> = CommissionService<
     <X as Ports>::SalesReferences,
 >;
 
+/// The price lists use case over the adapters of `X`.
+type PriceListsOf<X> = PriceListService<<X as Ports>::PriceLists, <X as Ports>::SalesReferences>;
+
 /// The use cases the API serves.
 pub struct Services<X: Ports> {
     pub parties: PartyService<X::Parties, X::Registry>,
@@ -124,6 +130,7 @@ pub struct Services<X: Ports> {
     pub bank_accounts: BankAccountService<X::BankAccounts>,
     pub payment_methods: PaymentMethodService<X::PaymentMethods>,
     pub payment_terms: PaymentTermService<X::PaymentTerms>,
+    pub price_lists: PriceListsOf<X>,
     pub entries: FinancialEntryService<X::Entries, X::EntryReferences>,
     pub attachments: AttachmentService<X::Attachments, X::Blobs, X::Entries>,
     pub transfers: TransferService<X::Transfers, X::EntryReferences>,
@@ -148,6 +155,7 @@ pub(crate) struct AppState<X: Ports> {
     bank_accounts: BankAccountService<X::BankAccounts>,
     payment_methods: PaymentMethodService<X::PaymentMethods>,
     payment_terms: PaymentTermService<X::PaymentTerms>,
+    price_lists: PriceListsOf<X>,
     entries: FinancialEntryService<X::Entries, X::EntryReferences>,
     attachments: AttachmentService<X::Attachments, X::Blobs, X::Entries>,
     transfers: TransferService<X::Transfers, X::EntryReferences>,
@@ -177,6 +185,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         bank_accounts: services.bank_accounts,
         payment_methods: services.payment_methods,
         payment_terms: services.payment_terms,
+        price_lists: services.price_lists,
         entries: services.entries,
         attachments: services.attachments,
         transfers: services.transfers,
@@ -300,6 +309,18 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         .route(
             "/companies/{company_id}/payment-terms/{payment_term_id}/history",
             get(payment_terms::payment_term_history::<X>),
+        )
+        .route(
+            "/companies/{company_id}/price-lists",
+            get(price_lists::list_price_lists::<X>).post(price_lists::register_price_list::<X>),
+        )
+        .route(
+            "/companies/{company_id}/price-lists/{price_list_id}",
+            put(price_lists::update_price_list::<X>),
+        )
+        .route(
+            "/companies/{company_id}/price-lists/{price_list_id}/history",
+            get(price_lists::price_list_history::<X>),
         )
         .route(
             "/companies/{company_id}/entries",
@@ -560,9 +581,10 @@ mod tests {
         InMemoryEmailSender, InMemoryFinancialEntryRepository, InMemoryIdentityRepository,
         InMemoryInvitationRepository, InMemoryOpeningRepository, InMemoryPartyRepository,
         InMemoryPaymentMethodRepository, InMemoryPaymentTermRepository,
-        InMemoryPostalCodeDirectory, InMemoryProductRepository, InMemoryQuoteRepository,
-        InMemoryRecurrenceRepository, InMemorySaleRepository, InMemoryStatementLineRepository,
-        InMemoryTransferRepository, RegisterReferences, RegisterSalesReferences,
+        InMemoryPostalCodeDirectory, InMemoryPriceListRepository, InMemoryProductRepository,
+        InMemoryQuoteRepository, InMemoryRecurrenceRepository, InMemorySaleRepository,
+        InMemoryStatementLineRepository, InMemoryTransferRepository, RegisterReferences,
+        RegisterSalesReferences,
     };
     use http_body_util::BodyExt;
     use serde_json::{Value, json};
@@ -626,6 +648,7 @@ mod tests {
         type BankAccounts = InMemoryBankAccountRepository;
         type PaymentMethods = InMemoryPaymentMethodRepository;
         type PaymentTerms = InMemoryPaymentTermRepository;
+        type PriceLists = InMemoryPriceListRepository;
         type Entries = InMemoryFinancialEntryRepository;
         type EntryReferences = TestReferences;
         type Attachments = InMemoryAttachmentRepository;
@@ -658,6 +681,7 @@ mod tests {
         type BankAccounts = InMemoryBankAccountRepository;
         type PaymentMethods = InMemoryPaymentMethodRepository;
         type PaymentTerms = InMemoryPaymentTermRepository;
+        type PriceLists = InMemoryPriceListRepository;
         type Entries = InMemoryFinancialEntryRepository;
         type EntryReferences = TestReferences;
         type Attachments = InMemoryAttachmentRepository;
@@ -984,6 +1008,29 @@ mod tests {
         )
     }
 
+    type TestPriceLists = PriceListService<InMemoryPriceListRepository, TestSalesReferences>;
+
+    /// Price lists over the registers a test keeps a handle to.
+    fn price_lists_over(
+        parties: &InMemoryPartyRepository,
+        products: &InMemoryProductRepository,
+        payment_terms: &InMemoryPaymentTermRepository,
+    ) -> TestPriceLists {
+        PriceListService::new(
+            InMemoryPriceListRepository::default(),
+            RegisterSalesReferences::new(parties.clone(), products.clone(), payment_terms.clone()),
+        )
+    }
+
+    /// Price lists over registers that the app's own do not share.
+    fn standalone_price_lists() -> TestPriceLists {
+        price_lists_over(
+            &InMemoryPartyRepository::default(),
+            &InMemoryProductRepository::default(),
+            &InMemoryPaymentTermRepository::default(),
+        )
+    }
+
     type TestCommissions = CommissionService<
         InMemoryCommissionRuleRepository,
         InMemorySaleRepository,
@@ -1094,6 +1141,7 @@ mod tests {
                     standalone_sales(),
                 ),
                 commissions: standalone_commissions(),
+                price_lists: standalone_price_lists(),
                 reconciliation: standalone_reconciliation(),
                 balances: standalone_balances(),
                 postal_codes: PostalCodeService::new(postal_codes),
@@ -1738,6 +1786,7 @@ mod tests {
                     standalone_sales(),
                 ),
                 commissions: standalone_commissions(),
+                price_lists: standalone_price_lists(),
                 reconciliation: standalone_reconciliation(),
                 balances: standalone_balances(),
                 postal_codes: PostalCodeService::new(None),
@@ -3224,6 +3273,7 @@ mod tests {
                     standalone_sales(),
                 ),
                 commissions: standalone_commissions(),
+                price_lists: standalone_price_lists(),
                 reconciliation: standalone_reconciliation(),
                 balances: standalone_balances(),
                 postal_codes: PostalCodeService::new(None),
@@ -4791,6 +4841,7 @@ mod tests {
                     &products,
                     &payment_terms,
                 ),
+                price_lists: price_lists_over(&parties, &products, &payment_terms),
                 balances: BalanceService::new(
                     bank_accounts.clone(),
                     entry_store,
@@ -8041,6 +8092,171 @@ mod tests {
                 "{role:?} reads"
             );
             let write = send(&app, json_request("POST", &rules, Some(&cookie), json!({}))).await;
+            let expected = if may_write {
+                StatusCode::UNPROCESSABLE_ENTITY
+            } else {
+                StatusCode::FORBIDDEN
+            };
+            assert_eq!(write.status, expected, "{role:?} writes");
+        }
+    }
+
+    fn price_lists_uri(company_id: Uuid) -> String {
+        format!("/companies/{company_id}/price-lists")
+    }
+
+    #[tokio::test]
+    async fn price_lists_are_registered_replaced_whole_and_kept_private_through_the_api() {
+        let app = entry_app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let targets = sales_targets(&app, &cookie, company_id).await;
+        let uri = price_lists_uri(company_id);
+
+        let created = send(
+            &app,
+            json_request(
+                "POST",
+                &uri,
+                Some(&cookie),
+                json!({ "name": " Atacado ", "items": [{ "product_id": targets.product, "price": "8.50" }] }),
+            ),
+        )
+        .await;
+        assert_eq!(created.status, StatusCode::CREATED, "{}", created.body);
+        assert_eq!(created.body["name"], "Atacado");
+        assert_eq!(created.body["active"], true);
+        assert_eq!(
+            created.body["items"],
+            json!([{ "product_id": targets.product, "price": "8.5" }])
+        );
+        let id = created.body["id"].as_str().unwrap().to_owned();
+
+        for (body, status) in [
+            (
+                json!({ "name": "Vazia", "items": [] }),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                json!({ "name": "Número", "items": [{ "product_id": targets.product, "price": 8.5 }] }),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                json!({ "name": "Negativa", "items": [{ "product_id": targets.product, "price": "-1" }] }),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                json!({ "name": "Estranho", "items": [{ "product_id": Uuid::new_v4(), "price": "1" }] }),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                json!({ "name": "atacado", "items": [{ "product_id": targets.product, "price": "1" }] }),
+                StatusCode::CONFLICT,
+            ),
+        ] {
+            let reply = send(
+                &app,
+                json_request("POST", &uri, Some(&cookie), body.clone()),
+            )
+            .await;
+            assert_eq!(reply.status, status, "{body}: {}", reply.body);
+        }
+
+        // Replacing says whether it is active, or it is refused.
+        let one = json!([{ "product_id": targets.product, "price": "9" }]);
+        let missing = send(
+            &app,
+            json_request(
+                "PUT",
+                &format!("{uri}/{id}"),
+                Some(&cookie),
+                json!({ "name": "Atacado", "items": one }),
+            ),
+        )
+        .await;
+        assert_eq!(missing.status, StatusCode::UNPROCESSABLE_ENTITY);
+        let replaced = send(
+            &app,
+            json_request(
+                "PUT",
+                &format!("{uri}/{id}"),
+                Some(&cookie),
+                json!({ "name": "Atacado", "items": one, "active": false }),
+            ),
+        )
+        .await;
+        assert_eq!(replaced.status, StatusCode::OK, "{}", replaced.body);
+        assert_eq!(replaced.body["items"][0]["price"], "9");
+        assert_eq!(replaced.body["active"], false);
+
+        let history = send(
+            &app,
+            get_request(&format!("{uri}/{id}/history"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(history.body.as_array().unwrap().len(), 2);
+        let active = send(
+            &app,
+            get_request(&format!("{uri}?active=true"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(active.body["items"], json!([]));
+        let found = send(&app, get_request(&format!("{uri}?q=ATAC"), Some(&cookie))).await;
+        assert_eq!(found.body["items"].as_array().unwrap().len(), 1);
+        let bad = send(
+            &app,
+            get_request(&format!("{uri}?active=maybe"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(bad.status, StatusCode::BAD_REQUEST);
+
+        // Another company sees nothing of it.
+        let (other, other_company) = sign_up(&app, "bia@example.com").await;
+        let theirs = price_lists_uri(other_company);
+        assert_eq!(
+            send(&app, get_request(&theirs, Some(&other))).await.body["items"],
+            json!([])
+        );
+        let stolen = send(
+            &app,
+            json_request(
+                "PUT",
+                &format!("{theirs}/{id}"),
+                Some(&other),
+                json!({ "name": "x", "items": one, "active": true }),
+            ),
+        )
+        .await;
+        assert_eq!(stolen.status, StatusCode::NOT_FOUND);
+        assert_eq!(
+            send(
+                &app,
+                get_request(&format!("{theirs}/{id}/history"), Some(&other))
+            )
+            .await
+            .status,
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn price_lists_follow_the_sales_role() {
+        use conta_verde_domain::Role;
+
+        let (app, identities, _) = app_with_mailbox();
+        let (_, company_id) = sign_up(&app, "dona@example.com").await;
+        let uri = price_lists_uri(company_id);
+        for (role, may_write) in [
+            (Role::Sales, true),
+            (Role::Financial, false),
+            (Role::Viewer, false),
+        ] {
+            let cookie = member_with_role(&app, &identities, company_id, role).await;
+            assert_eq!(
+                send(&app, get_request(&uri, Some(&cookie))).await.status,
+                StatusCode::OK,
+                "{role:?} reads"
+            );
+            let write = send(&app, json_request("POST", &uri, Some(&cookie), json!({}))).await;
             let expected = if may_write {
                 StatusCode::UNPROCESSABLE_ENTITY
             } else {

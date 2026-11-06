@@ -4,8 +4,9 @@ use conta_verde_api::{ApiConfig, Ports, Services, router};
 use conta_verde_application::{
     AttachmentService, AuthService, BalanceService, BankAccountService, CategoryService,
     CommissionService, ContractService, CostCenterService, FinancialEntryService, MemberService,
-    PartyService, PaymentMethodService, PaymentTermService, PostalCodeService, ProductService,
-    QuoteService, ReconciliationService, RecurrenceService, SaleService, TransferService,
+    PartyService, PaymentMethodService, PaymentTermService, PostalCodeService, PriceListService,
+    ProductService, QuoteService, ReconciliationService, RecurrenceService, SaleService,
+    TransferService,
 };
 use conta_verde_application::{EmailError, EmailMessage, EmailSender};
 use conta_verde_infrastructure::{
@@ -14,10 +15,10 @@ use conta_verde_infrastructure::{
     PostgresCategoryRepository, PostgresCommissionRuleRepository, PostgresContractRepository,
     PostgresCostCenterRepository, PostgresFinancialEntryRepository, PostgresIdentityRepository,
     PostgresInvitationRepository, PostgresOpeningRepository, PostgresPartyRepository,
-    PostgresPaymentMethodRepository, PostgresPaymentTermRepository, PostgresProductRepository,
-    PostgresQuoteRepository, PostgresRecurrenceRepository, PostgresSaleRepository,
-    PostgresStatementLineRepository, PostgresTransferRepository, RegisterReferences,
-    RegisterSalesReferences, SmtpEmailSender, connect_and_migrate,
+    PostgresPaymentMethodRepository, PostgresPaymentTermRepository, PostgresPriceListRepository,
+    PostgresProductRepository, PostgresQuoteRepository, PostgresRecurrenceRepository,
+    PostgresSaleRepository, PostgresStatementLineRepository, PostgresTransferRepository,
+    RegisterReferences, RegisterSalesReferences, SmtpEmailSender, connect_and_migrate,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -35,6 +36,7 @@ impl Ports for PostgresPorts {
     type BankAccounts = PostgresBankAccountRepository;
     type PaymentMethods = PostgresPaymentMethodRepository;
     type PaymentTerms = PostgresPaymentTermRepository;
+    type PriceLists = PostgresPriceListRepository;
     type Entries = PostgresFinancialEntryRepository;
     type EntryReferences = RegisterReferences<
         PostgresCategoryRepository,
@@ -159,6 +161,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Argon2SecretService::new()?,
         &public_url,
     );
+    let price_lists = PriceListService::new(
+        PostgresPriceListRepository::new(pool.clone()),
+        RegisterSalesReferences::new(
+            PostgresPartyRepository::new(pool.clone()),
+            PostgresProductRepository::new(pool.clone()),
+            PostgresPaymentTermRepository::new(pool.clone()),
+        ),
+    );
     let sale_service = || {
         SaleService::new(
             PostgresSaleRepository::new(pool.clone()),
@@ -219,6 +229,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 bank_accounts,
                 payment_methods,
                 payment_terms,
+                price_lists,
                 entries,
                 attachments,
                 transfers,

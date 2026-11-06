@@ -118,6 +118,7 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
         | ApplicationError::BankAccountNotFound
         | ApplicationError::PaymentMethodNotFound
         | ApplicationError::PaymentTermNotFound
+        | ApplicationError::PriceListNotFound
         | ApplicationError::CategoryNotFound => (StatusCode::NOT_FOUND, error.to_string()),
         ApplicationError::LookupDisabled | ApplicationError::PostalCodeLookupDisabled => {
             (StatusCode::CONFLICT, error.to_string())

@@ -4,7 +4,8 @@ use crate::line::lines_text;
 use crate::{
     AccountOpening, Attachment, BankAccount, Category, CommissionRule, CompanyId, Contract,
     CostCenter, DocumentCheck, FinancialEntry, LineMatch, Party, PaymentMethod, PaymentTerm,
-    Product, Quote, Recurrence, Sale, SaleReturn, Settlement, StatementLine, Tag, Transfer, UserId,
+    PriceList, Product, Quote, Recurrence, Sale, SaleReturn, Settlement, StatementLine, Tag,
+    Transfer, UserId,
 };
 
 /// Who made a change. The name is a snapshot: history must keep reading the same after the user is
@@ -24,6 +25,7 @@ pub enum AuditEntity {
     BankAccount,
     PaymentMethod,
     PaymentTerm,
+    PriceList,
     FinancialEntry,
     Settlement,
     Transfer,
@@ -49,6 +51,7 @@ impl AuditEntity {
             Self::BankAccount => "bank_account",
             Self::PaymentMethod => "payment_method",
             Self::PaymentTerm => "payment_term",
+            Self::PriceList => "price_list",
             Self::FinancialEntry => "financial_entry",
             Self::Recurrence => "recurrence",
             Self::StatementLine => "statement_line",
@@ -188,6 +191,20 @@ impl Audited for PaymentMethod {
 impl Audited for PaymentTerm {
     fn audit_entity(&self) -> AuditEntity {
         AuditEntity::PaymentTerm
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.id().as_uuid()
+    }
+}
+
+impl Audited for PriceList {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::PriceList
     }
 
     fn audit_company(&self) -> CompanyId {
@@ -977,6 +994,23 @@ pub fn payment_term_creation_changes(term: &PaymentTerm) -> Vec<FieldChange> {
 
 pub fn payment_term_changes(before: &PaymentTerm, after: &PaymentTerm) -> Vec<FieldChange> {
     changes_between(payment_term_fields(before), payment_term_fields(after))
+}
+
+fn price_list_fields(list: &PriceList) -> Fields {
+    vec![
+        ("name", Some(list.name().to_owned())),
+        ("items", Some(list.items_text())),
+        ("active", Some(list.is_active().to_string())),
+    ]
+}
+
+/// Every field a new price list has set.
+pub fn price_list_creation_changes(list: &PriceList) -> Vec<FieldChange> {
+    creation_from(price_list_fields(list))
+}
+
+pub fn price_list_changes(before: &PriceList, after: &PriceList) -> Vec<FieldChange> {
+    changes_between(price_list_fields(before), price_list_fields(after))
 }
 
 fn cost_center_fields(cost_center: &CostCenter) -> Fields {

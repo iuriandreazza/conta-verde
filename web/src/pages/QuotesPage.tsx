@@ -589,7 +589,7 @@ export function QuotesPage() {
                     ))}
                   </select>
                 </label>
-                <LinesEditor rows={rows} onChange={setRows} products={productChoices} />
+                <LinesEditor companyId={companyId} rows={rows} onChange={setRows} products={productChoices} />
                 <label>
                   Observações
                   <textarea name="notes" rows={3} maxLength={2000} defaultValue={editing?.notes ?? ""} />
