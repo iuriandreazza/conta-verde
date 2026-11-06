@@ -4763,8 +4763,8 @@ use conta_verde_application::{
     FinancialEntryService,
 };
 use conta_verde_domain::{
-    EntryId, EntryInstallmentDraft, EntryKind, FinancialEntry, FinancialEntryDraft, entry_changes,
-    entry_creation_changes,
+    EntryId, EntryInstallmentDraft, EntryKind, FinancialEntry, FinancialEntryDraft, Settlement,
+    SettlementDraft, SettlementId, entry_changes, entry_creation_changes,
 };
 
 /// What an entry may point at, and what it may not, in one company: made by `seed_entry_records`
@@ -4777,18 +4777,26 @@ pub struct EntrySeed {
     pub cost_center: CostCenterId,
     pub inactive_cost_center: CostCenterId,
     pub party: PartyId,
+    pub bank_account: BankAccountId,
+    pub inactive_bank_account: BankAccountId,
+    pub payment_method: PaymentMethodId,
+    pub inactive_payment_method: PaymentMethodId,
 }
 
-pub async fn seed_entry_records<C, K, P>(
+pub async fn seed_entry_records<C, K, P, B, M>(
     categories: &C,
     cost_centers: &K,
     parties: &P,
+    bank_accounts: &B,
+    payment_methods: &M,
     company: CompanyId,
 ) -> EntrySeed
 where
     C: CategoryRepository,
     K: CostCenterRepository,
     P: PartyRepository,
+    B: BankAccountRepository,
+    M: PaymentMethodRepository,
 {
     let usable = root_category(company, "Vendas");
     let other = root_category(company, "Serviços");
@@ -4837,6 +4845,27 @@ where
     .unwrap();
     parties.save(&party, &created_entry(&party)).await.unwrap();
 
+    let account = new_account(company, "Conta principal", None);
+    let closed_account = BankAccount::new(
+        BankAccountId::generate(),
+        company,
+        account_draft(BankAccountKind::Cash, "Caixa antigo", None, false),
+    )
+    .unwrap();
+    for item in [&account, &closed_account] {
+        save_account(bank_accounts, item).await.unwrap();
+    }
+    let method = new_method(company, "Pix");
+    let closed_method = PaymentMethod::new(
+        PaymentMethodId::generate(),
+        company,
+        method_draft(PaymentMethodKind::Cash, "Cheque antigo", false),
+    )
+    .unwrap();
+    for item in [&method, &closed_method] {
+        save_method(payment_methods, item).await.unwrap();
+    }
+
     EntrySeed {
         category: usable.id(),
         other_category: other.id(),
@@ -4845,6 +4874,10 @@ where
         cost_center: cost_center.id(),
         inactive_cost_center: inactive_cost_center.id(),
         party: party.id(),
+        bank_account: account.id(),
+        inactive_bank_account: closed_account.id(),
+        payment_method: method.id(),
+        inactive_payment_method: closed_method.id(),
     }
 }
 
@@ -4931,6 +4964,17 @@ pub async fn entry_references_say_what_is_usable<R: EntryReferences>(
     assert!(!center(company, seed.inactive_cost_center).await.unwrap());
     assert!(!center(other_company, seed.cost_center).await.unwrap());
     assert!(!center(company, CostCenterId::generate()).await.unwrap());
+
+    let account = |company, id| references.bank_account_is_usable(company, id);
+    assert!(account(company, seed.bank_account).await.unwrap());
+    assert!(!account(company, seed.inactive_bank_account).await.unwrap());
+    assert!(!account(other_company, seed.bank_account).await.unwrap());
+    assert!(!account(company, BankAccountId::generate()).await.unwrap());
+    let method = |company, id| references.payment_method_is_usable(company, id);
+    assert!(method(company, seed.payment_method).await.unwrap());
+    assert!(!method(company, seed.inactive_payment_method).await.unwrap());
+    assert!(!method(other_company, seed.payment_method).await.unwrap());
+    assert!(!method(company, PaymentMethodId::generate()).await.unwrap());
 
     assert!(references.party_exists(company, seed.party).await.unwrap());
     assert!(
@@ -5425,4 +5469,302 @@ pub async fn an_edit_may_keep_what_was_deactivated_since<R, F, C>(
             .unwrap_err(),
         ApplicationError::UnusableReference("category")
     );
+}
+
+fn settlement_draft(seed: &EntrySeed, installment: u16, applied: &str) -> SettlementDraft {
+    SettlementDraft {
+        installment,
+        settled_on: "2026-12-10".into(),
+        applied: applied.into(),
+        interest: None,
+        fine: None,
+        discount: None,
+        bank_account_id: seed.bank_account,
+        payment_method_id: None,
+    }
+}
+
+fn applied_of(settlements: &[Settlement], number: u16) -> String {
+    conta_verde_domain::settled_of(settlements, number).to_string()
+}
+
+/// Paying installments: in part and in full, never for more than is left, only from a usable account
+/// and method, only an installment the entry has, undone by reversing, and nothing of another
+/// company's. What an entry may change while it has settlements, and after they are reversed.
+pub async fn settles_installments_and_reverses_them<R, F>(
+    service: &FinancialEntryService<R, F>,
+    company: CompanyId,
+    other_company: CompanyId,
+    seed: &EntrySeed,
+) where
+    R: FinancialEntryRepository,
+    F: EntryReferences,
+{
+    let ana = actor();
+    let entry = service
+        .register(
+            company,
+            &ana,
+            entry_draft(
+                seed,
+                "Venda parcelada",
+                "2026-11-05",
+                &[("2026-12-10", "100"), ("2027-01-10", "50.5")],
+            ),
+        )
+        .await
+        .unwrap();
+    let settle = |draft: SettlementDraft| service.settle(company, &ana, entry.id(), draft);
+
+    // In part, then the rest; what is applied, with interest, fine and discount, is the cash.
+    let first = settle(SettlementDraft {
+        interest: Some("1.5".into()),
+        fine: Some("0.5".into()),
+        discount: Some("2".into()),
+        payment_method_id: Some(seed.payment_method),
+        ..settlement_draft(seed, 1, "40")
+    })
+    .await
+    .unwrap();
+    assert_eq!(first.cash().to_string(), "40");
+    let second = settle(settlement_draft(seed, 1, "60")).await.unwrap();
+    let stored = service.settlements(company, entry.id()).await.unwrap();
+    assert_eq!(stored.len(), 2);
+    assert_eq!(applied_of(&stored, 1), "100");
+    assert_eq!(applied_of(&stored, 2), "0");
+    // What comes back is what went in, adjustments and method included.
+    let found = stored.iter().find(|item| item.id() == first.id()).unwrap();
+    assert_eq!(found, &first);
+    assert_eq!(found.payment_method_id(), Some(seed.payment_method));
+
+    // Never for more than is left, by a cent; a refused settlement leaves nothing behind.
+    assert_eq!(
+        settle(settlement_draft(seed, 1, "0.01")).await.unwrap_err(),
+        ApplicationError::SettlementExceedsBalance
+    );
+    assert_eq!(
+        settle(settlement_draft(seed, 2, "50.51"))
+            .await
+            .unwrap_err(),
+        ApplicationError::SettlementExceedsBalance
+    );
+    assert_eq!(
+        service
+            .settlements(company, entry.id())
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+
+    // What it points at has to exist and be usable.
+    assert_eq!(
+        settle(settlement_draft(seed, 3, "1")).await.unwrap_err(),
+        ApplicationError::UnusableReference("installment")
+    );
+    for (field, draft) in [
+        (
+            "bank account",
+            SettlementDraft {
+                bank_account_id: seed.inactive_bank_account,
+                ..settlement_draft(seed, 2, "10")
+            },
+        ),
+        (
+            "bank account",
+            SettlementDraft {
+                bank_account_id: BankAccountId::generate(),
+                ..settlement_draft(seed, 2, "10")
+            },
+        ),
+        (
+            "payment method",
+            SettlementDraft {
+                payment_method_id: Some(seed.inactive_payment_method),
+                ..settlement_draft(seed, 2, "10")
+            },
+        ),
+    ] {
+        assert_eq!(
+            settle(draft).await.unwrap_err(),
+            ApplicationError::UnusableReference(field)
+        );
+    }
+    // The domain's rules say what to change.
+    assert_eq!(
+        settle(settlement_draft(seed, 2, "1.005"))
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::InvalidSettlementAmount("applied"))
+    );
+    assert_eq!(
+        settle(SettlementDraft {
+            discount: Some("10".into()),
+            ..settlement_draft(seed, 2, "10")
+        })
+        .await
+        .unwrap_err(),
+        ApplicationError::Domain(DomainError::SettlementMovesNothing)
+    );
+
+    // Another company's entry is not found, and a record of another company is not usable.
+    assert_eq!(
+        service
+            .settle(
+                other_company,
+                &ana,
+                entry.id(),
+                settlement_draft(seed, 2, "10")
+            )
+            .await
+            .unwrap_err(),
+        ApplicationError::EntryNotFound
+    );
+    assert_eq!(
+        service
+            .settlements(other_company, entry.id())
+            .await
+            .unwrap_err(),
+        ApplicationError::EntryNotFound
+    );
+
+    // While it has settlements, the installments and the kind are fixed; what only classifies is not.
+    let same = entry_draft(
+        seed,
+        "Venda parcelada",
+        "2026-11-05",
+        &[("2026-12-10", "100"), ("2027-01-10", "50.5")],
+    );
+    let renamed = FinancialEntryDraft {
+        description: "Venda de bolos".into(),
+        category_id: seed.other_category,
+        competence_date: "2026-11-06".into(),
+        ..same.clone()
+    };
+    service
+        .update(company, &ana, entry.id(), renamed.clone())
+        .await
+        .unwrap();
+    for changed in [
+        FinancialEntryDraft {
+            installments: vec![EntryInstallmentDraft {
+                due_date: "2026-12-10".into(),
+                amount: "150.5".into(),
+            }],
+            ..renamed.clone()
+        },
+        FinancialEntryDraft {
+            kind: EntryKind::Payable,
+            ..renamed.clone()
+        },
+        FinancialEntryDraft {
+            installments: vec![
+                EntryInstallmentDraft {
+                    due_date: "2026-12-11".into(),
+                    amount: "100".into(),
+                },
+                EntryInstallmentDraft {
+                    due_date: "2027-01-10".into(),
+                    amount: "50.5".into(),
+                },
+            ],
+            ..renamed.clone()
+        },
+    ] {
+        assert_eq!(
+            service
+                .update(company, &ana, entry.id(), changed)
+                .await
+                .unwrap_err(),
+            ApplicationError::EntryIsSettled
+        );
+    }
+    let kept = service.get(company, entry.id()).await.unwrap();
+    assert_eq!(
+        kept.installments_text(),
+        "1:2026-12-10:100,2:2027-01-10:50.5"
+    );
+    assert_eq!(kept.kind(), EntryKind::Receivable);
+    // The same installments written another way are the same installments.
+    service
+        .update(
+            company,
+            &ana,
+            entry.id(),
+            FinancialEntryDraft {
+                installments: vec![
+                    EntryInstallmentDraft {
+                        due_date: "2026-12-10".into(),
+                        amount: "100.00".into(),
+                    },
+                    EntryInstallmentDraft {
+                        due_date: "2027-01-10".into(),
+                        amount: "50.50".into(),
+                    },
+                ],
+                description: "Venda de bolos II".into(),
+                ..renamed.clone()
+            },
+        )
+        .await
+        .unwrap();
+
+    // Reversing: not found twice, nor for another company; it stops counting, and the installment
+    // can be settled again.
+    assert_eq!(
+        service
+            .reverse(other_company, &ana, entry.id(), second.id())
+            .await
+            .unwrap_err(),
+        ApplicationError::SettlementNotFound
+    );
+    let undone = service
+        .reverse(company, &ana, entry.id(), second.id())
+        .await
+        .unwrap();
+    assert!(undone.is_reversed());
+    assert_eq!(
+        service
+            .reverse(company, &ana, entry.id(), second.id())
+            .await
+            .unwrap_err(),
+        ApplicationError::SettlementNotFound
+    );
+    assert_eq!(
+        service
+            .reverse(company, &ana, entry.id(), SettlementId::generate())
+            .await
+            .unwrap_err(),
+        ApplicationError::SettlementNotFound
+    );
+    let after = service.settlements(company, entry.id()).await.unwrap();
+    assert_eq!(after.len(), 2, "a reversed settlement stays");
+    assert_eq!(applied_of(&after, 1), "40");
+    settle(settlement_draft(seed, 1, "60")).await.unwrap();
+    assert_eq!(
+        settle(settlement_draft(seed, 1, "0.01")).await.unwrap_err(),
+        ApplicationError::SettlementExceedsBalance
+    );
+
+    // Reversing them all frees the installments again.
+    let all = service.settlements(company, entry.id()).await.unwrap();
+    for settlement in all.iter().filter(|item| !item.is_reversed()) {
+        service
+            .reverse(company, &ana, entry.id(), settlement.id())
+            .await
+            .unwrap();
+    }
+    let single = FinancialEntryDraft {
+        installments: vec![EntryInstallmentDraft {
+            due_date: "2026-12-10".into(),
+            amount: "150.5".into(),
+        }],
+        kind: EntryKind::Payable,
+        ..renamed
+    };
+    let freed = service
+        .update(company, &ana, entry.id(), single)
+        .await
+        .unwrap();
+    assert_eq!(freed.total().to_string(), "150.5");
 }

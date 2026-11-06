@@ -405,6 +405,35 @@ export interface PaymentTermFilters {
 
 export const NO_PAYMENT_TERM_FILTERS: PaymentTermFilters = { q: "", active: "", sort: "name" };
 
+/** A payment of an installment, in part or in full (ADR 0030). */
+export interface Settlement {
+  id: string;
+  entry_id: string;
+  installment: number;
+  settled_on: string;
+  /** How much of the installment it settles. */
+  applied: string;
+  interest: string;
+  fine: string;
+  discount: string;
+  /** What moved in the account: applied, with interest and fine, less the discount. */
+  cash: string;
+  bank_account_id: string;
+  payment_method_id: string | null;
+  reversed: boolean;
+}
+
+export interface SettlementInput {
+  installment: number;
+  settled_on: string;
+  applied: string;
+  interest?: string;
+  fine?: string;
+  discount?: string;
+  bank_account_id: string;
+  payment_method_id?: string;
+}
+
 export type EntryKind = "receivable" | "payable";
 
 export interface EntryInstallment {
@@ -413,6 +442,8 @@ export interface EntryInstallment {
   due_date: string;
   /** A decimal string without trailing zeros, in cents at most. */
   amount: string;
+  /** How much of it the settlements that are not reversed have settled, a decimal string. */
+  settled: string;
 }
 
 /** Money owed to the company (`receivable`) or by it (`payable`), split into installments (ADR 0029). */
@@ -698,8 +729,19 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(input),
     }),
+  getEntry: (companyId: string, id: string) =>
+    request<Entry>(`/companies/${companyId}/entries/${id}`),
   entryHistory: (companyId: string, id: string) =>
     request<HistoryEntry[]>(`/companies/${companyId}/entries/${id}/history`),
+  settleInstallment: (companyId: string, entryId: string, input: SettlementInput) =>
+    post<Settlement>(`/companies/${companyId}/entries/${entryId}/settlements`, input),
+  listSettlements: (companyId: string, entryId: string) =>
+    request<Settlement[]>(`/companies/${companyId}/entries/${entryId}/settlements`),
+  /** Undoes a settlement: it stops counting and stays listed as reversed. */
+  reverseSettlement: (companyId: string, entryId: string, settlementId: string) =>
+    request<void>(`/companies/${companyId}/entries/${entryId}/settlements/${settlementId}`, {
+      method: "DELETE",
+    }),
   /** The whole tree, flat and unpaged. */
   listCategories: (companyId: string) =>
     request<{ items: Category[] }>(`/companies/${companyId}/categories`),

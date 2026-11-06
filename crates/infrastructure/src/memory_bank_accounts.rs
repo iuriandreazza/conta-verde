@@ -1,4 +1,4 @@
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use conta_verde_application::{
     BankAccountQuery, BankAccountRepository, NameCursor, RepositoryError, ensure_audit_describes,
@@ -13,9 +13,9 @@ use crate::memory_list::{keyset_page, name_key};
 /// Keeps bank accounts and their audit trail in process memory. Used by tests and for running the
 /// API without a database. Like the Postgres adapter, it records an audit entry only for a write
 /// that happened: a refused or missed write leaves nothing in the trail.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct InMemoryBankAccountRepository {
-    state: Mutex<BankAccountState>,
+    state: Arc<Mutex<BankAccountState>>,
 }
 
 #[derive(Default)]

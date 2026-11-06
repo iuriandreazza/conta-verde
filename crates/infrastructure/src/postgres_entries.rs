@@ -5,8 +5,9 @@ use conta_verde_application::{
     ensure_audit_describes,
 };
 use conta_verde_domain::{
-    AuditEntity, AuditEntry, AuditRecord, CategoryId, CompanyId, CostCenterId, EntryId,
-    EntryInstallmentDraft, EntryKind, FinancialEntry, FinancialEntryDraft, PartyId,
+    Amount, AuditEntity, AuditEntry, AuditRecord, BankAccountId, CategoryId, CompanyId,
+    CostCenterId, EntryId, EntryInstallmentDraft, EntryKind, FinancialEntry, FinancialEntryDraft,
+    PartyId, PaymentMethodId, Settlement, SettlementDraft, SettlementId,
 };
 use sqlx::postgres::PgRow;
 use sqlx::{PgConnection, PgPool, Postgres, QueryBuilder, Row};
@@ -112,6 +113,20 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
     ) -> Result<(), RepositoryError> {
         ensure_audit_describes(audit, entry)?;
         let mut tx = self.pool.begin().await.map_err(storage_error)?;
+        // The entry row is locked for the check and the write, so a settlement cannot slip in
+        // between: it takes the same lock before it looks at the installments.
+        let stored_kind: Option<String> = sqlx::query_scalar(
+            "SELECT kind FROM financial_entries WHERE id = $1 AND company_id = $2 FOR UPDATE",
+        )
+        .bind(entry.id().as_uuid())
+        .bind(entry.company_id().as_uuid())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(storage_error)?;
+        let Some(stored_kind) = stored_kind else {
+            return Err(RepositoryError::NotFound);
+        };
+        refuse_to_change_what_was_settled(&mut tx, entry, &stored_kind).await?;
         let result = sqlx::query(
             "UPDATE financial_entries SET kind = $3, description = $4, party_id = $5, \
              category_id = $6, cost_center_id = $7, competence_date = CAST($8 AS DATE) \
@@ -146,6 +161,152 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
         insert_installments(&mut tx, entry).await?;
         postgres_audit::insert(&mut tx, audit).await?;
         tx.commit().await.map_err(storage_error)
+    }
+
+    async fn settle(
+        &self,
+        settlement: &Settlement,
+        audit: &AuditEntry,
+    ) -> Result<(), RepositoryError> {
+        ensure_audit_describes(audit, settlement)?;
+        let mut tx = self.pool.begin().await.map_err(storage_error)?;
+        // The entry row is locked first, like an edit does, and then the installment: two
+        // settlements of the same installment, or one and an edit, take turns, and what is left of the
+        // installment is read after the one before has committed.
+        let entry_exists: Option<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM financial_entries WHERE id = $1 AND company_id = $2 FOR SHARE",
+        )
+        .bind(settlement.entry_id().as_uuid())
+        .bind(settlement.company_id().as_uuid())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(storage_error)?;
+        if entry_exists.is_none() {
+            return Err(RepositoryError::NotFound);
+        }
+        // The installment row is locked in a statement of its own, and the balance is read in the next
+        // one: in READ COMMITTED each statement sees what was committed when it starts, so a
+        // settlement that held the lock and committed is counted. Reading the balance in the same
+        // statement as the lock would use the snapshot from before the wait.
+        let (company, entry, number) = (
+            settlement.company_id().as_uuid(),
+            settlement.entry_id().as_uuid(),
+            i16::try_from(settlement.installment()).map_err(|_| RepositoryError::NotFound)?,
+        );
+        let locked: Option<Uuid> = sqlx::query_scalar(
+            "SELECT entry_id FROM financial_entry_installments \
+             WHERE company_id = $1 AND entry_id = $2 AND number = $3 FOR UPDATE",
+        )
+        .bind(company)
+        .bind(entry)
+        .bind(number)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(storage_error)?;
+        if locked.is_none() {
+            return Err(RepositoryError::NotFound);
+        }
+        let fits: bool = sqlx::query_scalar(
+            "SELECT i.amount - COALESCE(( \
+                 SELECT SUM(s.applied) FROM entry_settlements s \
+                 WHERE s.company_id = i.company_id AND s.entry_id = i.entry_id \
+                   AND s.installment = i.number AND NOT s.reversed), 0) >= CAST($4 AS NUMERIC) \
+             FROM financial_entry_installments i \
+             WHERE i.company_id = $1 AND i.entry_id = $2 AND i.number = $3",
+        )
+        .bind(company)
+        .bind(entry)
+        .bind(number)
+        .bind(settlement.applied().to_string())
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(storage_error)?;
+        if !fits {
+            return Err(RepositoryError::Overpaid);
+        }
+        sqlx::query(
+            "INSERT INTO entry_settlements \
+             (id, company_id, entry_id, installment, settled_on, applied, interest, fine, discount, \
+              bank_account_id, payment_method_id, reversed) \
+             VALUES ($1, $2, $3, $4, CAST($5 AS DATE), CAST($6 AS NUMERIC), CAST($7 AS NUMERIC), \
+                     CAST($8 AS NUMERIC), CAST($9 AS NUMERIC), $10, $11, false)",
+        )
+        .bind(settlement.id().as_uuid())
+        .bind(settlement.company_id().as_uuid())
+        .bind(settlement.entry_id().as_uuid())
+        .bind(i16::try_from(settlement.installment()).map_err(|_| RepositoryError::NotFound)?)
+        .bind(settlement.settled_on().to_string())
+        .bind(settlement.applied().to_string())
+        .bind(settlement.interest().to_string())
+        .bind(settlement.fine().to_string())
+        .bind(settlement.discount().to_string())
+        .bind(settlement.bank_account_id().as_uuid())
+        .bind(settlement.payment_method_id().map(|id| id.as_uuid()))
+        .execute(&mut *tx)
+        .await
+        .map_err(storage_error)?;
+        postgres_audit::insert(&mut tx, audit).await?;
+        tx.commit().await.map_err(storage_error)
+    }
+
+    async fn reverse(
+        &self,
+        reversed: &Settlement,
+        audit: &AuditEntry,
+    ) -> Result<(), RepositoryError> {
+        ensure_audit_describes(audit, reversed)?;
+        let mut tx = self.pool.begin().await.map_err(storage_error)?;
+        let result = sqlx::query(
+            "UPDATE entry_settlements SET reversed = true \
+             WHERE id = $1 AND company_id = $2 AND entry_id = $3 AND NOT reversed",
+        )
+        .bind(reversed.id().as_uuid())
+        .bind(reversed.company_id().as_uuid())
+        .bind(reversed.entry_id().as_uuid())
+        .execute(&mut *tx)
+        .await
+        .map_err(storage_error)?;
+        if result.rows_affected() == 0 {
+            return Err(RepositoryError::NotFound);
+        }
+        postgres_audit::insert(&mut tx, audit).await?;
+        tx.commit().await.map_err(storage_error)
+    }
+
+    async fn settlement(
+        &self,
+        company_id: CompanyId,
+        entry_id: EntryId,
+        id: SettlementId,
+    ) -> Result<Option<Settlement>, RepositoryError> {
+        let row = sqlx::query(&format!(
+            "{SELECT_SETTLEMENTS} WHERE company_id = $1 AND entry_id = $2 AND id = $3"
+        ))
+        .bind(company_id.as_uuid())
+        .bind(entry_id.as_uuid())
+        .bind(id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        row.as_ref().map(settlement_from_row).transpose()
+    }
+
+    async fn settlements_of(
+        &self,
+        company_id: CompanyId,
+        entry_ids: &[EntryId],
+    ) -> Result<Vec<Settlement>, RepositoryError> {
+        let ids: Vec<Uuid> = entry_ids.iter().map(|id| id.as_uuid()).collect();
+        let rows = sqlx::query(&format!(
+            "{SELECT_SETTLEMENTS} WHERE company_id = $1 AND entry_id = ANY($2) \
+             ORDER BY settled_on, id"
+        ))
+        .bind(company_id.as_uuid())
+        .bind(&ids)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        rows.iter().map(settlement_from_row).collect()
     }
 
     async fn history(
@@ -212,6 +373,88 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
         tx.commit().await.map_err(storage_error)?;
         Ok(entries)
     }
+}
+
+const SELECT_SETTLEMENTS: &str = "SELECT id, company_id, entry_id, installment, \
+     to_char(settled_on, 'YYYY-MM-DD') AS settled_on, applied::text AS applied, \
+     interest::text AS interest, fine::text AS fine, discount::text AS discount, \
+     bank_account_id, payment_method_id, reversed FROM entry_settlements";
+
+fn settlement_from_row(row: &PgRow) -> Result<Settlement, RepositoryError> {
+    let id = SettlementId::from_uuid(row.try_get("id").map_err(storage_error)?);
+    let installment: i16 = row.try_get("installment").map_err(storage_error)?;
+    let method: Option<Uuid> = row.try_get("payment_method_id").map_err(storage_error)?;
+    let draft = SettlementDraft {
+        installment: u16::try_from(installment).map_err(|_| {
+            RepositoryError::Storage(format!("stored settlement of installment {installment}"))
+        })?,
+        settled_on: row.try_get("settled_on").map_err(storage_error)?,
+        applied: row.try_get("applied").map_err(storage_error)?,
+        interest: Some(row.try_get("interest").map_err(storage_error)?),
+        fine: Some(row.try_get("fine").map_err(storage_error)?),
+        discount: Some(row.try_get("discount").map_err(storage_error)?),
+        bank_account_id: BankAccountId::from_uuid(
+            row.try_get("bank_account_id").map_err(storage_error)?,
+        ),
+        payment_method_id: method.map(PaymentMethodId::from_uuid),
+    };
+    let company_id = CompanyId::from_uuid(row.try_get("company_id").map_err(storage_error)?);
+    let entry_id = EntryId::from_uuid(row.try_get("entry_id").map_err(storage_error)?);
+    let reversed: bool = row.try_get("reversed").map_err(storage_error)?;
+    Settlement::new(id, company_id, entry_id, draft)
+        .map(|settlement| settlement.with_reversed(reversed))
+        .map_err(|error| {
+            RepositoryError::Storage(format!("stored settlement {id:?} is invalid: {error}"))
+        })
+}
+
+/// An entry with settlements that are not reversed keeps its installments and its kind: the balances
+/// and the bank movements were made against them ([ADR 0030]). Called with the entry row locked.
+async fn refuse_to_change_what_was_settled(
+    connection: &mut PgConnection,
+    entry: &FinancialEntry,
+    stored_kind: &str,
+) -> Result<(), RepositoryError> {
+    let settled: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM entry_settlements \
+         WHERE company_id = $1 AND entry_id = $2 AND NOT reversed)",
+    )
+    .bind(entry.company_id().as_uuid())
+    .bind(entry.id().as_uuid())
+    .fetch_one(&mut *connection)
+    .await
+    .map_err(storage_error)?;
+    if !settled {
+        return Ok(());
+    }
+    let rows = sqlx::query(
+        "SELECT to_char(due_date, 'YYYY-MM-DD') AS due_date, amount::text AS amount \
+         FROM financial_entry_installments WHERE company_id = $1 AND entry_id = $2 ORDER BY number",
+    )
+    .bind(entry.company_id().as_uuid())
+    .bind(entry.id().as_uuid())
+    .fetch_all(&mut *connection)
+    .await
+    .map_err(storage_error)?;
+    let stored: Vec<(String, String)> = rows
+        .iter()
+        .map(|row| {
+            let due: String = row.try_get("due_date").map_err(storage_error)?;
+            let amount: String = row.try_get("amount").map_err(storage_error)?;
+            // The same text the domain writes, whatever trailing zeros the database kept.
+            let amount = Amount::parse(&amount).map_or(amount, |parsed| parsed.to_string());
+            Ok((due, amount))
+        })
+        .collect::<Result<_, RepositoryError>>()?;
+    let wanted: Vec<(String, String)> = entry
+        .installments()
+        .iter()
+        .map(|item| (item.due_date().to_string(), item.amount().to_string()))
+        .collect();
+    if stored_kind != entry.kind().as_str() || stored != wanted {
+        return Err(RepositoryError::EntrySettled);
+    }
+    Ok(())
 }
 
 /// The entries of these rows, each with its installments in order: one query for all of them.
@@ -283,8 +526,8 @@ mod tests {
     use super::*;
     use crate::contract::{self, EntrySeed};
     use crate::{
-        PostgresCategoryRepository, PostgresCostCenterRepository, PostgresPartyRepository,
-        RegisterReferences,
+        PostgresBankAccountRepository, PostgresCategoryRepository, PostgresCostCenterRepository,
+        PostgresPartyRepository, PostgresPaymentMethodRepository, RegisterReferences,
     };
 
     async fn seed(pool: &PgPool, company: CompanyId) -> EntrySeed {
@@ -292,6 +535,8 @@ mod tests {
             &PostgresCategoryRepository::new(pool.clone()),
             &PostgresCostCenterRepository::new(pool.clone()),
             &PostgresPartyRepository::new(pool.clone()),
+            &PostgresBankAccountRepository::new(pool.clone()),
+            &PostgresPaymentMethodRepository::new(pool.clone()),
             company,
         )
         .await
@@ -303,11 +548,15 @@ mod tests {
         PostgresCategoryRepository,
         PostgresCostCenterRepository,
         PostgresPartyRepository,
+        PostgresBankAccountRepository,
+        PostgresPaymentMethodRepository,
     > {
         RegisterReferences::new(
             PostgresCategoryRepository::new(pool.clone()),
             PostgresCostCenterRepository::new(pool.clone()),
             PostgresPartyRepository::new(pool.clone()),
+            PostgresBankAccountRepository::new(pool.clone()),
+            PostgresPaymentMethodRepository::new(pool.clone()),
         )
     }
 
@@ -375,6 +624,284 @@ mod tests {
             &seed,
         )
         .await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn settles_installments_and_reverses_them() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let other_company = contract::create_company(&pool).await;
+        let seed = seed(&pool, company).await;
+        let service = FinancialEntryService::new(
+            PostgresFinancialEntryRepository::new(pool.clone()),
+            references(&pool),
+        );
+        contract::settles_installments_and_reverses_them(&service, company, other_company, &seed)
+            .await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn two_settlements_at_the_same_moment_cannot_both_fit_and_each_leaves_its_trail() {
+        use conta_verde_application::ApplicationError;
+        use conta_verde_domain::{
+            EntryInstallmentDraft, EntryKind, FinancialEntryDraft, SettlementDraft,
+        };
+
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let seed = seed(&pool, company).await;
+        let service = FinancialEntryService::new(
+            PostgresFinancialEntryRepository::new(pool.clone()),
+            references(&pool),
+        );
+        let actor = contract::actor();
+        let draft = FinancialEntryDraft {
+            kind: EntryKind::Receivable,
+            description: "Venda".into(),
+            party_id: None,
+            category_id: seed.category,
+            cost_center_id: None,
+            competence_date: "2026-11-05".into(),
+            installments: vec![EntryInstallmentDraft {
+                due_date: "2026-12-10".into(),
+                amount: "100".into(),
+            }],
+        };
+        let sixty = || SettlementDraft {
+            installment: 1,
+            settled_on: "2026-12-10".into(),
+            applied: "60".into(),
+            interest: None,
+            fine: None,
+            discount: None,
+            bank_account_id: seed.bank_account,
+            payment_method_id: None,
+        };
+        // Several rounds, each on its own entry: the lock has to hold every time, not by luck.
+        for _ in 0..8 {
+            let entry = service
+                .register(company, &actor, draft.clone())
+                .await
+                .unwrap();
+            let (first, second) = tokio::join!(
+                service.settle(company, &actor, entry.id(), sixty()),
+                service.settle(company, &actor, entry.id(), sixty()),
+            );
+            let results = [first, second];
+            assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+            let refused = results
+                .iter()
+                .find_map(|result| result.as_ref().err())
+                .unwrap();
+            assert_eq!(refused, &ApplicationError::SettlementExceedsBalance);
+            let stored = service.settlements(company, entry.id()).await.unwrap();
+            assert_eq!(stored.len(), 1, "the refused one left nothing behind");
+
+            // The settlement and its reversal are in the trail, in the write that made them; the
+            // refused one is not.
+            let trail = |id: uuid::Uuid| {
+                let pool = pool.clone();
+                async move {
+                    sqlx::query_scalar::<_, i64>(
+                        "SELECT count(*) FROM audit_log WHERE entity = 'settlement' AND entity_id = $1",
+                    )
+                    .bind(id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap()
+                }
+            };
+            let id = stored[0].id();
+            assert_eq!(trail(id.as_uuid()).await, 1);
+            service
+                .reverse(company, &actor, entry.id(), id)
+                .await
+                .unwrap();
+            assert_eq!(trail(id.as_uuid()).await, 2);
+            let total: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM audit_log WHERE entity = 'settlement' AND company_id = $1",
+            )
+            .bind(company.as_uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert!(total >= 2);
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn the_database_refuses_what_a_settlement_row_can_show() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let other_company = contract::create_company(&pool).await;
+        let seed = seed(&pool, company).await;
+        let other_seed = self::seed(&pool, other_company).await;
+        let entry_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO financial_entries (id, company_id, kind, description, category_id, competence_date) \
+             VALUES ($1, $2, 'payable', 'Base', $3, DATE '2026-01-01')",
+        )
+        .bind(entry_id)
+        .bind(company.as_uuid())
+        .bind(seed.category.as_uuid())
+        .execute(&pool)
+        .await
+        .unwrap();
+        let refused_by = |result: Result<_, sqlx::Error>| match result {
+            Err(sqlx::Error::Database(db)) => db.constraint().map(str::to_owned),
+            _ => None,
+        };
+        let insert = |company: CompanyId,
+                      entry: Uuid,
+                      installment: i16,
+                      date: &'static str,
+                      amounts: [&'static str; 4],
+                      account: Uuid,
+                      method: Option<Uuid>| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query(
+                    "INSERT INTO entry_settlements \
+                     (id, company_id, entry_id, installment, settled_on, applied, interest, fine, discount, \
+                      bank_account_id, payment_method_id) \
+                     VALUES ($1, $2, $3, $4, CAST($5 AS DATE), CAST($6 AS NUMERIC), CAST($7 AS NUMERIC), \
+                             CAST($8 AS NUMERIC), CAST($9 AS NUMERIC), $10, $11)",
+                )
+                .bind(Uuid::new_v4())
+                .bind(company.as_uuid())
+                .bind(entry)
+                .bind(installment)
+                .bind(date)
+                .bind(amounts[0])
+                .bind(amounts[1])
+                .bind(amounts[2])
+                .bind(amounts[3])
+                .bind(account)
+                .bind(method)
+                .execute(&pool)
+                .await
+            }
+        };
+        let account = seed.bank_account.as_uuid();
+        let fine = |installment: i16, date: &'static str, amounts: [&'static str; 4]| {
+            insert(company, entry_id, installment, date, amounts, account, None)
+        };
+        for (installment, date, amounts, constraint) in [
+            (
+                0,
+                "2026-12-10",
+                ["1", "0", "0", "0"],
+                "entry_settlements_installment_valid",
+            ),
+            (
+                121,
+                "2026-12-10",
+                ["1", "0", "0", "0"],
+                "entry_settlements_installment_valid",
+            ),
+            (
+                1,
+                "1899-12-31",
+                ["1", "0", "0", "0"],
+                "entry_settlements_settled_on_valid",
+            ),
+            (
+                1,
+                "2026-12-10",
+                ["0", "0", "0", "0"],
+                "entry_settlements_applied_valid",
+            ),
+            (
+                1,
+                "2026-12-10",
+                ["1.005", "0", "0", "0"],
+                "entry_settlements_applied_valid",
+            ),
+            (
+                1,
+                "2026-12-10",
+                ["1", "-1", "0", "0"],
+                "entry_settlements_adjustments_valid",
+            ),
+            (
+                1,
+                "2026-12-10",
+                ["1", "0", "0.001", "0"],
+                "entry_settlements_adjustments_valid",
+            ),
+            (
+                1,
+                "2026-12-10",
+                ["1", "0", "0", "1"],
+                "entry_settlements_moves_money",
+            ),
+            (
+                1,
+                "2026-12-10",
+                ["1", "0", "0", "2"],
+                "entry_settlements_moves_money",
+            ),
+        ] {
+            assert_eq!(
+                refused_by(fine(installment, date, amounts).await).as_deref(),
+                Some(constraint),
+                "{installment} {date} {amounts:?}"
+            );
+        }
+        assert!(fine(1, "2026-12-10", ["1", "0", "0", "0.99"]).await.is_ok());
+
+        // An account, a method or an entry of another company is refused, and so is one that is not there.
+        assert_eq!(
+            refused_by(
+                insert(
+                    company,
+                    entry_id,
+                    1,
+                    "2026-12-10",
+                    ["1", "0", "0", "0"],
+                    other_seed.bank_account.as_uuid(),
+                    None
+                )
+                .await
+            )
+            .as_deref(),
+            Some("entry_settlements_bank_account_fk")
+        );
+        assert_eq!(
+            refused_by(
+                insert(
+                    company,
+                    entry_id,
+                    1,
+                    "2026-12-10",
+                    ["1", "0", "0", "0"],
+                    account,
+                    Some(other_seed.payment_method.as_uuid())
+                )
+                .await
+            )
+            .as_deref(),
+            Some("entry_settlements_payment_method_fk")
+        );
+        assert_eq!(
+            refused_by(
+                insert(
+                    other_company,
+                    entry_id,
+                    1,
+                    "2026-12-10",
+                    ["1", "0", "0", "0"],
+                    other_seed.bank_account.as_uuid(),
+                    None
+                )
+                .await
+            )
+            .as_deref(),
+            Some("entry_settlements_entry_fk")
+        );
     }
 
     #[tokio::test]

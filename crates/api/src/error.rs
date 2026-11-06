@@ -65,6 +65,8 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
             | RepositoryError::DuplicateTransferCategory
             | RepositoryError::DuplicateBankAccount
             | RepositoryError::DuplicateMembership
+            | RepositoryError::Overpaid
+            | RepositoryError::EntrySettled
             | RepositoryError::DuplicateInvitation),
         ) => (StatusCode::CONFLICT, error.to_string()),
         ApplicationError::Auth(error) => {
@@ -99,7 +101,12 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
         ApplicationError::LookupDisabled | ApplicationError::PostalCodeLookupDisabled => {
             (StatusCode::CONFLICT, error.to_string())
         }
-        ApplicationError::EntryNotFound => (StatusCode::NOT_FOUND, error.to_string()),
+        ApplicationError::EntryNotFound | ApplicationError::SettlementNotFound => {
+            (StatusCode::NOT_FOUND, error.to_string())
+        }
+        ApplicationError::SettlementExceedsBalance | ApplicationError::EntryIsSettled => {
+            (StatusCode::CONFLICT, error.to_string())
+        }
         ApplicationError::UnusableReference(_) => {
             (StatusCode::UNPROCESSABLE_ENTITY, error.to_string())
         }

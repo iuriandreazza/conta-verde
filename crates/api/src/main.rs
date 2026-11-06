@@ -36,6 +36,8 @@ impl Ports for PostgresPorts {
         PostgresCategoryRepository,
         PostgresCostCenterRepository,
         PostgresPartyRepository,
+        PostgresBankAccountRepository,
+        PostgresPaymentMethodRepository,
     >;
     type PostalCodes = Option<BrasilApiPostalCodeDirectory>;
     type Invitations = PostgresInvitationRepository;
@@ -77,6 +79,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             PostgresCategoryRepository::new(pool.clone()),
             PostgresCostCenterRepository::new(pool.clone()),
             PostgresPartyRepository::new(pool.clone()),
+            PostgresBankAccountRepository::new(pool.clone()),
+            PostgresPaymentMethodRepository::new(pool.clone()),
         ),
     );
     let postal_codes = PostalCodeService::new(postal_code_directory_from_env()?);

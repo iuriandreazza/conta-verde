@@ -20,6 +20,10 @@ pub enum RepositoryError {
     DuplicateBankAccount,
     /// An update matched no row.
     NotFound,
+    /// A settlement would settle more of an installment than is left of it.
+    Overpaid,
+    /// The entry has settlements that are not reversed, so its installments and kind are fixed.
+    EntrySettled,
     Storage(String),
 }
 
@@ -61,6 +65,14 @@ pub enum ApplicationError {
     PaymentTermNotFound,
     /// No financial entry with this id in the company (another company's looks the same).
     EntryNotFound,
+    /// No settlement with this id in the entry (another company's looks the same), or it was
+    /// reversed already.
+    SettlementNotFound,
+    /// What is applied would settle more of the installment than is left of it.
+    SettlementExceedsBalance,
+    /// The entry has settlements that are not reversed: its installments and kind are fixed until
+    /// they are reversed ([ADR 0030]).
+    EntryIsSettled,
     /// A category, cost center or party an entry points at is not usable in the company: it does
     /// not exist there, or is inactive, or is the transfers category. Names the field.
     UnusableReference(&'static str),
@@ -134,6 +146,10 @@ impl fmt::Display for RepositoryError {
                 f.write_str("the company already has a category for transfers between accounts")
             }
             Self::NotFound => f.write_str("no matching record"),
+            Self::Overpaid => {
+                f.write_str("this settles more of the installment than is left of it")
+            }
+            Self::EntrySettled => f.write_str("the entry has settlements that are not reversed"),
             Self::Storage(message) => write!(f, "storage failure: {message}"),
         }
     }
@@ -165,6 +181,13 @@ impl fmt::Display for ApplicationError {
             Self::PaymentMethodNotFound => f.write_str("payment method not found"),
             Self::PaymentTermNotFound => f.write_str("payment term not found"),
             Self::EntryNotFound => f.write_str("entry not found"),
+            Self::SettlementNotFound => f.write_str("settlement not found"),
+            Self::SettlementExceedsBalance => {
+                f.write_str("this settles more of the installment than is left of it")
+            }
+            Self::EntryIsSettled => f.write_str(
+                "the installments and the kind of an entry with settlements cannot change: reverse them first",
+            ),
             Self::UnusableReference(field) => {
                 write!(
                     f,

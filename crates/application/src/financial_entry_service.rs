@@ -1,6 +1,7 @@
 use conta_verde_domain::{
     Actor, AuditAction, AuditRecord, CompanyId, EntryId, FinancialEntry, FinancialEntryDraft,
-    entry_changes, entry_creation_changes,
+    Settlement, SettlementDraft, SettlementId, entry_changes, entry_creation_changes,
+    settlement_changes, settlement_creation_changes,
 };
 
 use crate::audit::audit_entry;
@@ -75,9 +76,115 @@ impl<R: FinancialEntryRepository, F: EntryReferences> FinancialEntryService<R, F
             .map_err(|error| match error {
                 // It vanished between the read and the write.
                 RepositoryError::NotFound => ApplicationError::EntryNotFound,
+                RepositoryError::EntrySettled => ApplicationError::EntryIsSettled,
                 other => other.into(),
             })?;
         Ok(after)
+    }
+
+    /// Pays an installment, in part or in full ([ADR 0030]): the bank account and the payment
+    /// method must be usable, the entry must have the installment, and what is applied must fit
+    /// in what is left of it. The creation is recorded in the audit trail in the same write.
+    pub async fn settle(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        entry_id: EntryId,
+        draft: SettlementDraft,
+    ) -> Result<Settlement, ApplicationError> {
+        let entry = self.find(company_id, entry_id).await?;
+        let settlement = Settlement::new(SettlementId::generate(), company_id, entry_id, draft)?;
+        if entry.installment(settlement.installment()).is_none() {
+            return Err(ApplicationError::UnusableReference("installment"));
+        }
+        if !self
+            .references
+            .bank_account_is_usable(company_id, settlement.bank_account_id())
+            .await?
+        {
+            return Err(ApplicationError::UnusableReference("bank account"));
+        }
+        if let Some(method) = settlement.payment_method_id()
+            && !self
+                .references
+                .payment_method_is_usable(company_id, method)
+                .await?
+        {
+            return Err(ApplicationError::UnusableReference("payment method"));
+        }
+        let audit = audit_entry(
+            &settlement,
+            actor,
+            AuditAction::Created,
+            settlement_creation_changes(&settlement),
+        );
+        self.repository
+            .settle(&settlement, &audit)
+            .await
+            .map_err(|error| match error {
+                RepositoryError::NotFound => ApplicationError::EntryNotFound,
+                RepositoryError::Overpaid => ApplicationError::SettlementExceedsBalance,
+                other => other.into(),
+            })?;
+        Ok(settlement)
+    }
+
+    /// Undoes a settlement: it is marked reversed, stops counting, and stays in the trail. One
+    /// that is not there, or was reversed already, is not found.
+    pub async fn reverse(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        entry_id: EntryId,
+        id: SettlementId,
+    ) -> Result<Settlement, ApplicationError> {
+        let stored = self
+            .repository
+            .settlement(company_id, entry_id, id)
+            .await?
+            .filter(|settlement| !settlement.is_reversed())
+            .ok_or(ApplicationError::SettlementNotFound)?;
+        let reversed = stored.clone().with_reversed(true);
+        let audit = audit_entry(
+            &reversed,
+            actor,
+            AuditAction::Updated,
+            settlement_changes(&stored, &reversed),
+        );
+        self.repository
+            .reverse(&reversed, &audit)
+            .await
+            .map_err(|error| match error {
+                RepositoryError::NotFound => ApplicationError::SettlementNotFound,
+                other => other.into(),
+            })?;
+        Ok(reversed)
+    }
+
+    /// The settlements of an entry of the company, reversed ones included.
+    pub async fn settlements(
+        &self,
+        company_id: CompanyId,
+        entry_id: EntryId,
+    ) -> Result<Vec<Settlement>, ApplicationError> {
+        self.find(company_id, entry_id).await?;
+        Ok(self
+            .repository
+            .settlements_of(company_id, &[entry_id])
+            .await?)
+    }
+
+    /// The settlements of several entries of the company at once (a page of the list), reversed
+    /// ones included: one read instead of one per entry.
+    pub async fn settlements_of(
+        &self,
+        company_id: CompanyId,
+        entry_ids: &[EntryId],
+    ) -> Result<Vec<Settlement>, ApplicationError> {
+        Ok(self
+            .repository
+            .settlements_of(company_id, entry_ids)
+            .await?)
     }
 
     pub async fn get(
