@@ -70,6 +70,7 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
             | RepositoryError::DuplicateOccurrence
             | RepositoryError::DuplicateLine
             | RepositoryError::AlreadyMatched
+            | RepositoryError::LineChanged
             | RepositoryError::DuplicateInvitation),
         ) => (StatusCode::CONFLICT, error.to_string()),
         ApplicationError::Auth(error) => {
@@ -112,7 +113,9 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
         ApplicationError::SettlementExceedsBalance | ApplicationError::EntryIsSettled => {
             (StatusCode::CONFLICT, error.to_string())
         }
-        ApplicationError::AlreadyMatched => (StatusCode::CONFLICT, error.to_string()),
+        ApplicationError::AlreadyMatched | ApplicationError::LineChanged => {
+            (StatusCode::CONFLICT, error.to_string())
+        }
         ApplicationError::MatchDoesNotFit | ApplicationError::TooManyImportRows => {
             (StatusCode::UNPROCESSABLE_ENTITY, error.to_string())
         }

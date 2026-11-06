@@ -56,12 +56,13 @@ CREATE TABLE statement_lines (
     )
 );
 
--- At most one line per fingerprint in an account, and at most one line per settlement or transfer.
+-- At most one line per fingerprint in an account, one per settlement, and one per transfer in each account.
 CREATE UNIQUE INDEX statement_lines_account_fingerprint_key ON statement_lines (account_id, fingerprint);
 CREATE UNIQUE INDEX statement_lines_settlement_key
     ON statement_lines (matched_settlement_id) WHERE matched_settlement_id IS NOT NULL;
+-- A transfer is two lines of two statements, one in each account: each account matches it once.
 CREATE UNIQUE INDEX statement_lines_transfer_key
-    ON statement_lines (matched_transfer_id) WHERE matched_transfer_id IS NOT NULL;
+    ON statement_lines (matched_transfer_id, account_id) WHERE matched_transfer_id IS NOT NULL;
 
 -- The list is newest day first, then id (ADR 0018), narrowed by account and status.
 CREATE INDEX statement_lines_company_day_idx ON statement_lines (company_id, posted_on, id);

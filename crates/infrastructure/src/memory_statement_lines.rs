@@ -5,8 +5,8 @@ use conta_verde_application::{
     ensure_audit_describes,
 };
 use conta_verde_domain::{
-    AuditEntity, AuditEntry, AuditRecord, CompanyId, LineMatch, SettlementId, StatementLine,
-    StatementLineId, TransferId,
+    AuditEntity, AuditEntry, AuditRecord, BankAccountId, CompanyId, LineMatch, LineStatus,
+    SettlementId, StatementLine, StatementLineId, TransferId,
 };
 
 use crate::memory_audit::AuditLog;
@@ -29,10 +29,14 @@ struct LineState {
 impl LineState {
     /// Whether another line is matched to what this one is matched to.
     fn match_taken(&self, line: &StatementLine) -> bool {
+        // A settlement is matched once; a transfer once in each account, since it is a line in each.
         line.matched().is_some_and(|target| {
-            self.lines
-                .iter()
-                .any(|other| other.id() != line.id() && other.matched() == Some(target))
+            self.lines.iter().any(|other| {
+                other.id() != line.id()
+                    && other.matched() == Some(target)
+                    && (matches!(target, LineMatch::Settlement(_))
+                        || other.account_id() == line.account_id())
+            })
         })
     }
 }
@@ -70,6 +74,7 @@ impl StatementLineRepository for InMemoryStatementLineRepository {
     async fn update(
         &self,
         line: &StatementLine,
+        was: LineStatus,
         audit: &AuditEntry,
     ) -> Result<(), RepositoryError> {
         ensure_audit_describes(audit, line)?;
@@ -79,6 +84,9 @@ impl StatementLineRepository for InMemoryStatementLineRepository {
             .iter()
             .position(|stored| stored.company_id() == line.company_id() && stored.id() == line.id())
             .ok_or(RepositoryError::NotFound)?;
+        if state.lines[position].status() != was {
+            return Err(RepositoryError::LineChanged);
+        }
         if state.match_taken(line) {
             return Err(RepositoryError::AlreadyMatched);
         }
@@ -123,6 +131,7 @@ impl StatementLineRepository for InMemoryStatementLineRepository {
     async fn matched_among(
         &self,
         company_id: CompanyId,
+        account: BankAccountId,
         settlements: &[SettlementId],
         transfers: &[TransferId],
     ) -> Result<MatchedTargets, RepositoryError> {
@@ -137,7 +146,9 @@ impl StatementLineRepository for InMemoryStatementLineRepository {
                 Some(LineMatch::Settlement(id)) if settlements.contains(&id) => {
                     found.settlements.push(id)
                 }
-                Some(LineMatch::Transfer(id)) if transfers.contains(&id) => {
+                Some(LineMatch::Transfer(id))
+                    if transfers.contains(&id) && line.account_id() == account =>
+                {
                     found.transfers.push(id)
                 }
                 _ => {}

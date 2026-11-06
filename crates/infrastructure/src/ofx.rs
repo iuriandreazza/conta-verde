@@ -1,5 +1,8 @@
 use conta_verde_domain::StatementLineDraft;
 
+/// The most characters of a description a line keeps.
+const MAX_DESCRIPTION_CHARS: usize = 200;
+
 /// Why a statement file is refused. Each message says what to change.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OfxError {
@@ -29,12 +32,25 @@ impl std::fmt::Display for OfxError {
     }
 }
 
-/// The text of a statement file: UTF-8 when it is, and otherwise the Latin-1 that Brazilian banks still
-/// send (`CHARSET:1252`), where every byte is the character of the same number.
+/// The text of a statement file: UTF-8 when it is, and otherwise the Windows-1252 that Brazilian banks still
+/// send (`CHARSET:1252`): Latin-1, except that bytes 0x80 to 0x9F are the punctuation of the Windows
+/// code page (the euro, quotation marks, dashes) and not control characters.
 pub fn decode(bytes: &[u8]) -> String {
     match std::str::from_utf8(bytes) {
         Ok(text) => text.to_owned(),
-        Err(_) => bytes.iter().map(|byte| char::from(*byte)).collect(),
+        Err(_) => bytes.iter().map(|byte| windows_1252(*byte)).collect(),
+    }
+}
+
+fn windows_1252(byte: u8) -> char {
+    const HIGH: [char; 32] = [
+        '€', '\u{81}', '‚', 'ƒ', '„', '…', '†', '‡', 'ˆ', '‰', 'Š', '‹', 'Œ', '\u{8d}', 'Ž',
+        '\u{8f}', '\u{90}', '‘', '’', '“', '”', '•', '–', '—', '˜', '™', 'š', '›', 'œ', '\u{9d}',
+        'ž', 'Ÿ',
+    ];
+    match byte {
+        0x80..=0x9f => HIGH[usize::from(byte - 0x80)],
+        other => char::from(other),
     }
 }
 
@@ -51,14 +67,14 @@ pub fn parse_ofx(text: &str) -> Result<Vec<StatementLineDraft>, OfxError> {
     let mut from = 0;
     while let Some(start) = upper[from..].find("<STMTTRN>") {
         let body_start = from + start + "<STMTTRN>".len();
-        let body_end = [
-            upper[body_start..].find("</STMTTRN>"),
-            upper[body_start..].find("<STMTTRN>"),
-        ]
-        .into_iter()
-        .flatten()
-        .min()
-        .map_or(text.len(), |offset| body_start + offset);
+        // The next transaction bounds the search for the closing tag: a file with no closing tags is read
+        // in one pass, not by a search to its end for every transaction.
+        let next = upper[body_start..]
+            .find("<STMTTRN>")
+            .map_or(text.len(), |offset| body_start + offset);
+        let body_end = upper[body_start..next]
+            .find("</STMTTRN>")
+            .map_or(next, |offset| body_start + offset);
         lines.push(transaction(&text[body_start..body_end], lines.len() + 1)?);
         from = body_end;
     }
@@ -84,6 +100,9 @@ fn transaction(body: &str, number: usize) -> Result<StatementLineDraft, OfxError
         (None, Some(name)) => name,
         (None, None) => value("TRNTYPE").unwrap_or_default(),
     };
+    // OFX allows 255 characters for a memo and a line keeps 200: the rest of a long one is cut, not
+    // a reason to refuse the file.
+    let description: String = description.chars().take(MAX_DESCRIPTION_CHARS).collect();
     Ok(StatementLineDraft {
         posted_on: day_of(&posted).ok_or_else(|| unreadable("DTPOSTED is not a date"))?,
         amount: decimal_of(&amount).ok_or_else(|| unreadable("TRNAMT is not a number"))?,
@@ -100,8 +119,17 @@ fn value_of(body: &str, tag: &str) -> Option<String> {
     let end = body[start..]
         .find('<')
         .map_or(body.len(), |offset| start + offset);
-    let text = body[start..end].trim();
-    (!text.is_empty()).then(|| text.to_owned())
+    let text = unescape(body[start..end].trim());
+    (!text.is_empty()).then_some(text)
+}
+
+/// The five entities XML (OFX 2.x) writes in a value; `&amp;` last, so that `&amp;lt;` stays `&lt;`.
+fn unescape(text: &str) -> String {
+    text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
 }
 
 /// `YYYYMMDD`, optionally followed by a time and a zone (`20261105120000[-3:BRT]`), as `YYYY-MM-DD`: the
@@ -119,8 +147,14 @@ fn day_of(raw: &str) -> Option<String> {
 fn decimal_of(raw: &str) -> Option<String> {
     let text = raw.trim().replace(',', ".");
     let unsigned = text.strip_prefix(['-', '+']).unwrap_or(&text);
+    // Three decimals would be a thousands separator (`1.000`, `1,000`), which is not what a bank means by
+    // an amount in cents and must not be read as 1.
+    let decimals_fit = unsigned
+        .split_once('.')
+        .is_none_or(|(_, decimals)| decimals.len() <= 2);
     let valid = !unsigned.is_empty()
         && unsigned.matches('.').count() <= 1
+        && decimals_fit
         && unsigned
             .bytes()
             .all(|byte| byte.is_ascii_digit() || byte == b'.');
@@ -213,6 +247,52 @@ mod tests {
                 transaction: 1,
                 reason: "TRNAMT is not a number"
             }
+        );
+    }
+
+    #[test]
+    fn a_thousands_separator_is_not_an_amount_in_cents() {
+        let amount = |raw: &str| {
+            parse_ofx(&format!(
+                "<OFX><STMTTRN><DTPOSTED>20261105<TRNAMT>{raw}<MEMO>x</STMTTRN></OFX>"
+            ))
+        };
+        assert_eq!(amount("1.50").unwrap()[0].amount, "1.50");
+        assert_eq!(amount("-1,5").unwrap()[0].amount, "-1.5");
+        for raw in ["1.000", "1,000", "1.234,50", "1,234.50"] {
+            assert_eq!(
+                amount(raw),
+                Err(OfxError::Unreadable {
+                    transaction: 1,
+                    reason: "TRNAMT is not a number"
+                }),
+                "{raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn keeps_a_long_description_cut_and_reads_windows_1252_punctuation() {
+        let long = format!(
+            "<OFX><STMTTRN><DTPOSTED>20261105<TRNAMT>-1<MEMO>{}</STMTTRN></OFX>",
+            "x".repeat(255)
+        );
+        assert_eq!(
+            parse_ofx(&long).unwrap()[0].description.chars().count(),
+            200
+        );
+        assert_eq!(
+            decode(b"Pagto \x96 Cia \x93ok\x94 \x80"),
+            "Pagto – Cia “ok” €"
+        );
+    }
+
+    #[test]
+    fn reads_the_entities_of_an_xml_value() {
+        let xml = "<OFX><STMTTRN><DTPOSTED>20261105</DTPOSTED><TRNAMT>-1</TRNAMT><MEMO>Bar &amp; Cia &lt;centro&gt; &amp;lt;</MEMO></STMTTRN></OFX>";
+        assert_eq!(
+            parse_ofx(xml).unwrap()[0].description,
+            "Bar & Cia <centro> &lt;"
         );
     }
 

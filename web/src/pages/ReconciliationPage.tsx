@@ -55,6 +55,8 @@ export function ReconciliationPage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  // Bumped after every action, so that the suggestions open are asked for again: one just taken is gone.
+  const [suggestionsVersion, setSuggestionsVersion] = useState(0);
 
   useEffect(() => {
     let current = true;
@@ -101,6 +103,7 @@ export function ReconciliationPage() {
       setActionError(errorMessage(failure));
     } finally {
       await reload();
+      setSuggestionsVersion((version) => version + 1);
       setBusyId(null);
     }
   }
@@ -292,6 +295,7 @@ export function ReconciliationPage() {
                         <td colSpan={6} role="region" aria-label={open.mode === "suggestions" ? `Sugestões para ${line.description}` : `Lançamento para ${line.description}`}>
                           {open.mode === "suggestions" ? (
                             <Suggestions
+                              key={`${line.id}-${suggestionsVersion}`}
                               companyId={companyId}
                               line={line}
                               accountName={accountName}

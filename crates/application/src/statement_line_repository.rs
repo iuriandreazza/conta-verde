@@ -77,10 +77,13 @@ pub trait StatementLineRepository: Send + Sync {
     ) -> impl Future<Output = Result<Option<StatementLine>, RepositoryError>> + Send;
 
     /// Stores the status and what the stored line is matched to. `NotFound` when the company has no
-    /// such line, and `AlreadyMatched` when another line is matched to the settlement or the transfer.
+    /// such line, `LineChanged` when it is no longer in the status `was` (two people moved it at once,
+    /// and the move was made from a line that is out of date), and `AlreadyMatched` when another line of
+    /// the same account is matched to the settlement or the transfer.
     fn update(
         &self,
         line: &StatementLine,
+        was: LineStatus,
         audit: &AuditEntry,
     ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
 
@@ -101,10 +104,12 @@ pub trait StatementLineRepository: Send + Sync {
         limit: usize,
     ) -> impl Future<Output = Result<Vec<StatementLine>, RepositoryError>> + Send;
 
-    /// Which of these settlements and transfers of the company have a line matched to them.
+    /// Which of these settlements of the company have a line matched to them, and which of these
+    /// transfers have a line of `account` matched to them: a transfer is two lines, one in each account.
     fn matched_among(
         &self,
         company_id: CompanyId,
+        account: BankAccountId,
         settlements: &[SettlementId],
         transfers: &[TransferId],
     ) -> impl Future<Output = Result<MatchedTargets, RepositoryError>> + Send;

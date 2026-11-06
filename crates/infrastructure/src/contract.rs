@@ -7690,6 +7690,94 @@ pub async fn reconciles_statement_lines<S, E, T, F>(
         ApplicationError::Domain(DomainError::LineIsNotPending)
     );
 
+    // A transfer is a line in each of two statements: matched once in each account, and not twice in one.
+    let reserve_file = vec![
+        line_draft("2026-11-08", "-200", "TED ENVIADO", Some("R1")),
+        line_draft("2026-11-08", "-200", "TED DE NOVO", Some("R2")),
+    ];
+    let reserve_import = service
+        .import(company, &ana, reserve, file_of(reserve_file), false)
+        .await
+        .unwrap();
+    assert_eq!(reserve_import.created, 2);
+    let reserve_lines = listed(StatementLineQuery::default().of_account(reserve)).await;
+    let sent_line = reserve_lines
+        .iter()
+        .find(|line| line.description() == "TED ENVIADO")
+        .unwrap();
+    let repeated = reserve_lines
+        .iter()
+        .find(|line| line.description() == "TED DE NOVO")
+        .unwrap();
+    assert_eq!(
+        suggested(&service.suggestions(company, sent_line.id()).await.unwrap()),
+        ["transfer"]
+    );
+    service
+        .match_line(
+            company,
+            &ana,
+            sent_line.id(),
+            LineMatch::Transfer(moved.id()),
+        )
+        .await
+        .unwrap();
+    assert!(
+        service
+            .suggestions(company, repeated.id())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        service
+            .match_line(
+                company,
+                &ana,
+                repeated.id(),
+                LineMatch::Transfer(moved.id())
+            )
+            .await
+            .unwrap_err(),
+        ApplicationError::AlreadyMatched
+    );
+    // The line in the other account is still matched to it.
+    assert_eq!(
+        service.get(company, ted.id()).await.unwrap().matched(),
+        Some(LineMatch::Transfer(moved.id()))
+    );
+
+    // A move made from a line that someone else has moved since is refused by the store.
+    let stale = service.get(company, other.id()).await.unwrap();
+    let moved_on = stale.ignored().unwrap();
+    let audit = AuditEntry {
+        company_id: company,
+        actor: ana.clone(),
+        entity: AuditEntity::StatementLine,
+        entity_id: stale.id().as_uuid(),
+        action: AuditAction::Updated,
+        changes: conta_verde_domain::statement_line_changes(&stale, &moved_on),
+    };
+    assert_eq!(
+        store
+            .update(&moved_on, LineStatus::Matched, &audit)
+            .await
+            .unwrap_err(),
+        RepositoryError::LineChanged
+    );
+    assert_eq!(
+        service.get(company, other.id()).await.unwrap().status(),
+        LineStatus::Pending
+    );
+    store
+        .update(&moved_on, LineStatus::Pending, &audit)
+        .await
+        .unwrap();
+    assert_eq!(
+        service.get(company, other.id()).await.unwrap().status(),
+        LineStatus::Ignored
+    );
+
     // Nothing of another company's.
     assert_eq!(
         service.get(other_company, pix.id()).await.unwrap_err(),

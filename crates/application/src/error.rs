@@ -28,6 +28,8 @@ pub enum RepositoryError {
     DuplicateLine,
     /// Another statement line is matched to the settlement or the transfer.
     AlreadyMatched,
+    /// The statement line is no longer in the status the move was made from.
+    LineChanged,
     /// The recurrence already has the entry of that occurrence day.
     DuplicateOccurrence,
     Storage(String),
@@ -77,6 +79,8 @@ pub enum ApplicationError {
     StatementLineNotFound,
     /// Another statement line is already matched to the settlement or the transfer.
     AlreadyMatched,
+    /// The statement line was moved by someone else while this was being done.
+    LineChanged,
     /// The settlement or the transfer is not one that fits the line: another account, reversed, not the
     /// same amount or direction, or too far from its day.
     MatchDoesNotFit,
@@ -173,6 +177,7 @@ impl fmt::Display for RepositoryError {
             Self::EntrySettled => f.write_str("the entry has settlements that are not reversed"),
             Self::DuplicateLine => f.write_str("the account already has this statement line"),
             Self::AlreadyMatched => f.write_str("another statement line is already matched to it"),
+            Self::LineChanged => f.write_str("the statement line was changed meanwhile"),
             Self::DuplicateOccurrence => {
                 f.write_str("the recurrence already has the entry of this occurrence")
             }
@@ -212,6 +217,7 @@ impl fmt::Display for ApplicationError {
             Self::RecurrenceNotFound => f.write_str("recurrence not found"),
             Self::StatementLineNotFound => f.write_str("statement line not found"),
             Self::AlreadyMatched => f.write_str("another statement line is already matched to it"),
+            Self::LineChanged => f.write_str("the statement line was changed meanwhile: read it again"),
             Self::MatchDoesNotFit => f.write_str(
                 "that settlement or transfer does not fit the line: it has to be in the same account, not reversed, for the same amount in the same direction, and within five days",
             ),

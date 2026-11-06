@@ -13,9 +13,12 @@ use crate::import::import_rows;
 use crate::list_query::{clamp_limit, split_page};
 use crate::{
     ApplicationError, DateCursor, EntryReferences, FinancialEntryRepository, FinancialEntryService,
-    ImportReport, ImportRow, MAX_IMPORT_ROWS, RepositoryError, StatementLineQuery,
-    StatementLineRepository, TransferRepository, TransferService,
+    ImportReport, ImportRow, RepositoryError, StatementLineQuery, StatementLineRepository,
+    TransferRepository, TransferService,
 };
+
+/// The most lines one statement import takes: a busy account's month is more than a register's file.
+pub const MAX_STATEMENT_LINES: usize = 5000;
 
 /// How many days either side of a line a settlement or a transfer may be and still be suggested for it.
 pub const SUGGESTION_WINDOW_DAYS: u32 = 5;
@@ -91,7 +94,7 @@ where
         rows: Vec<ImportRow<StatementLineDraft>>,
         dry_run: bool,
     ) -> Result<ImportReport, ApplicationError> {
-        if rows.len() > MAX_IMPORT_ROWS {
+        if rows.len() > MAX_STATEMENT_LINES {
             return Err(ApplicationError::TooManyImportRows);
         }
         if !self
@@ -235,6 +238,7 @@ where
             .lines
             .matched_among(
                 company_id,
+                line.account_id(),
                 &settlements.iter().map(Settlement::id).collect::<Vec<_>>(),
                 &transfers.iter().map(Transfer::id).collect::<Vec<_>>(),
             )
@@ -339,8 +343,24 @@ where
         choice: EntryFromLine,
     ) -> Result<(StatementLine, Settlement), ApplicationError> {
         let line = self.find(company_id, id).await?;
-        // Checked before anything is written.
+        // Checked before anything is written, so that a refusal cannot leave an entry that is not settled:
+        // the line is pending, and the account and the method the settlement will use are usable.
         line.ignored()?;
+        if !self
+            .references
+            .bank_account_is_usable(company_id, line.account_id())
+            .await?
+        {
+            return Err(ApplicationError::UnusableReference("account"));
+        }
+        if let Some(method) = choice.payment_method_id
+            && !self
+                .references
+                .payment_method_is_usable(company_id, method)
+                .await?
+        {
+            return Err(ApplicationError::UnusableReference("payment method"));
+        }
         let day = line.posted_on().to_string();
         let amount = line.magnitude().to_string();
         let description = choice
@@ -471,11 +491,12 @@ where
             statement_line_changes(before, &after),
         );
         self.lines
-            .update(&after, &audit)
+            .update(&after, before.status(), &audit)
             .await
             .map_err(|error| match error {
                 RepositoryError::NotFound => ApplicationError::StatementLineNotFound,
                 RepositoryError::AlreadyMatched => ApplicationError::AlreadyMatched,
+                RepositoryError::LineChanged => ApplicationError::LineChanged,
                 other => other.into(),
             })?;
         Ok(after)

@@ -103,6 +103,7 @@ impl StatementLineRepository for PostgresStatementLineRepository {
     async fn update(
         &self,
         line: &StatementLine,
+        was: LineStatus,
         audit: &AuditEntry,
     ) -> Result<(), RepositoryError> {
         ensure_audit_describes(audit, line)?;
@@ -110,18 +111,32 @@ impl StatementLineRepository for PostgresStatementLineRepository {
         let (settlement, transfer) = targets(line);
         let result = sqlx::query(
             "UPDATE statement_lines SET status = $3, matched_settlement_id = $4, matched_transfer_id = $5 \
-             WHERE id = $1 AND company_id = $2",
+             WHERE id = $1 AND company_id = $2 AND status = $6",
         )
         .bind(line.id().as_uuid())
         .bind(line.company_id().as_uuid())
         .bind(line.status().as_str())
         .bind(settlement)
         .bind(transfer)
+        .bind(was.as_str())
         .execute(&mut *tx)
         .await
         .map_err(write_error)?;
         if result.rows_affected() == 0 {
-            return Err(RepositoryError::NotFound);
+            // The line is not there, or someone moved it since it was read.
+            let there: Option<Uuid> = sqlx::query_scalar(
+                "SELECT id FROM statement_lines WHERE id = $1 AND company_id = $2",
+            )
+            .bind(line.id().as_uuid())
+            .bind(line.company_id().as_uuid())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(storage_error)?;
+            return Err(if there.is_some() {
+                RepositoryError::LineChanged
+            } else {
+                RepositoryError::NotFound
+            });
         }
         postgres_audit::insert(&mut tx, audit).await?;
         tx.commit().await.map_err(storage_error)
@@ -177,6 +192,7 @@ impl StatementLineRepository for PostgresStatementLineRepository {
     async fn matched_among(
         &self,
         company_id: CompanyId,
+        account: BankAccountId,
         settlements: &[SettlementId],
         transfers: &[TransferId],
     ) -> Result<MatchedTargets, RepositoryError> {
@@ -184,11 +200,13 @@ impl StatementLineRepository for PostgresStatementLineRepository {
         let transfer_ids: Vec<Uuid> = transfers.iter().map(|id| id.as_uuid()).collect();
         let rows = sqlx::query(
             "SELECT matched_settlement_id, matched_transfer_id FROM statement_lines \
-             WHERE company_id = $1 AND (matched_settlement_id = ANY($2) OR matched_transfer_id = ANY($3))",
+             WHERE company_id = $1 AND (matched_settlement_id = ANY($2) \
+                 OR (matched_transfer_id = ANY($3) AND account_id = $4))",
         )
         .bind(company_id.as_uuid())
         .bind(&settlement_ids)
         .bind(&transfer_ids)
+        .bind(account.as_uuid())
         .fetch_all(&self.pool)
         .await
         .map_err(storage_error)?;

@@ -23,7 +23,10 @@ A **statement line** belongs to one bank account of the company: the day it was 
 `amount` in cents (positive came in, negative went out, never 0), a one-line `description` (at most 200
 characters, white space collapsed), the bank's own reference when the file has one, and a **status**:
 `pending`, `matched` or `ignored`. A matched line points at the **one** settlement or the **one** transfer it
-is; a settlement or a transfer is matched by at most one line (unique indexes). Lines are never edited and
+is; a settlement or a transfer is matched by at most one line (unique indexes), except that a **transfer is two lines**, one in the statement of each
+account, and is matched once in each. A move of the status is made from the status the line was read in:
+if someone else moved it meanwhile it is refused (`409`), so two people, or a double submit, cannot both
+make an entry of the same line. Lines are never edited and
 never deleted: only the status moves (`pending` to `matched` and back, `pending` to `ignored` and back), and
 every move is in the audit trail ([ADR 0008](0008-audit-trail.md)), as is the creation of each line.
 
@@ -31,10 +34,12 @@ every move is in the audit trail ([ADR 0008](0008-audit-trail.md)), as is the cr
 
 `POST /companies/{id}/bank-accounts/{account}/statement-import` takes the OFX file **as it is** (the same
 way as the CSV imports, [ADR 0025](0025-csv-import.md)): `?dry_run=true` only says what would happen, a file
-with a line that is refused writes nothing, at most 1000 lines, and the account has to be an active one of
-the company. The parser reads OFX 1.x (SGML) and 2.x (XML), in UTF-8 or in the Latin-1 that Brazilian banks
-still send, and only takes `STMTTRN` entries: `DTPOSTED`, `TRNAMT`, `FITID` and `MEMO`/`NAME`. CSV with a
-column mapper, which ADR 0011 also lists, is **not** in this slice.
+with a line that is refused writes nothing, at most 5000 lines, and the account has to be an active one of
+the company. The parser reads OFX 1.x (SGML) and 2.x (XML), in UTF-8 or in the Windows-1252 that Brazilian banks
+still send, and only takes `STMTTRN` entries: `DTPOSTED`, `TRNAMT`, `FITID` and `MEMO`/`NAME`. An amount with three
+decimals (`1.000`) is refused rather than read as 1, and a memo longer than a line keeps its first 200
+characters. CSV with a column mapper, which ADR 0011 also lists, is **not** in this slice, and every
+`STMTTRN` of a file goes to the account chosen (the file's own account and currency are not checked).
 
 Importing the same file twice, or two files that overlap, must not double a line. Each line gets a
 **fingerprint** from its day, amount, description, bank reference and its **position among identical lines
@@ -54,8 +59,10 @@ again), and the account keeps at most one line per fingerprint: a line that is a
 - **Create an entry from a line**: for a pending line that is not in the books, the person chooses a category
   (and may choose a party and a cost center and change the description) and the line becomes an entry with
   one installment for the amount, due on the day, **settled** the same day in the line's account, and is
-  matched to that settlement. The steps are separate writes, each audited: if the settlement is refused the
-  entry stays, unsettled, and the line stays pending.
+  matched to that settlement. The steps are separate writes, each audited. What can be checked first is
+  (the line is pending, the account and the payment method are usable) so that a refusal leaves nothing; a
+  storage failure between the writes can still leave an entry that is not settled, and a settled one whose
+  line is still pending.
 
 All of it is in the `finance` area ([ADR 0026](0026-membership-roles-and-permissions.md)): the lines under
 `statement-lines`, the import under `bank-accounts`.
@@ -74,6 +81,8 @@ the entries and the transfers, so both adapters answer alike.
   not touched by a line: only a settlement or a transfer moves money.
 - A line the person marks `matched` to the wrong settlement is undone by unmatching it.
 - No balance check against the statement's closing balance yet.
+- Reversing a settlement or a transfer that a line is matched to does not touch the line: it stays matched to
+  what is reversed, and has to be unmatched by hand. Nothing flags it yet.
 
 ## Revisit when
 

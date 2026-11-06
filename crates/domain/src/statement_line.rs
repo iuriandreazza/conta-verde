@@ -95,7 +95,7 @@ impl StatementLine {
             ),
         };
         let fingerprint = format!(
-            "{posted_on}|{amount}|{}|{}|{occurrence}",
+            "{posted_on}\u{1f}{amount}\u{1f}{}\u{1f}{}\u{1f}{occurrence}",
             description.to_lowercase(),
             bank_ref.as_deref().unwrap_or("")
         );
