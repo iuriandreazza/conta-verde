@@ -26,7 +26,7 @@ This is the spec the new pages (Phase 3 on) are built to, and the one the existi
 
 Group contents today: **Financeiro**: Lançamentos, Fluxo de caixa, Transferências, Conciliação, Recorrências.
 **Cadastros**: Clientes e fornecedores, Produtos e serviços, Categorias, Centros de custo, Contas bancárias,
-Formas de pagamento, Prazos de pagamento. **Relatórios**: Relatórios. **Configurações**: Membros.
+Formas de pagamento, Prazos de pagamento. **Suprimentos**: Compras, Estoque, Inventários, Relatórios de estoque. **Relatórios**: Relatórios. **Configurações**: Membros.
 
 ## 2. A list page
 
@@ -67,6 +67,8 @@ Title in the top bar; below it one **filter row** (period navigator, grouping, a
 charts, each chart in a card with its menu ("Ver como tabela", "Exportar") and an **"atualizado em"** stamp. Money in
 and money out come as **two mirrored blocks** (receivable, payable), each with its create action and the two tiles
 that matter: **overdue** and **due today**. Charts follow the dataviz rules in the [screens review](screens-review-2026-11.md).
+
+**Relatórios de estoque** follow the same anatomy as **Relatórios**: a segmented switch (Valorização, Movimentações do período), one filter row (the day "Em", or the period navigator), the total and the products with stock as tiles, the eight biggest values as a bar chart with its table, and the full table; the movements report is one table with opening, in, out, adjustments and closing, and a totals row of the values.
 
 ## 4. Components
 

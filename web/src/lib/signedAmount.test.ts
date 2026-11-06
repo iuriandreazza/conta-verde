@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { difference, toSignedApi } from "./signedAmount";
+import { difference, sumSigned, toSignedApi } from "./signedAmount";
 
 describe("toSignedApi", () => {
   it("reads amounts the way every other amount is read", () => {
@@ -27,5 +27,18 @@ describe("difference", () => {
     expect(difference("50.25", "200.25")).toBe("-150");
     expect(difference("0.3", "0.1")).toBe("0.2");
     expect(difference("5", "5")).toBe("0");
+  });
+});
+
+describe("sumSigned", () => {
+  it("adds amounts of either sign exactly", () => {
+    expect(sumSigned(["0.1", "0.2"])).toBe("0.3");
+    expect(sumSigned(["-15", "7.5"])).toBe("-7.5");
+    expect(sumSigned(["-5", "5"])).toBe("0");
+    expect(sumSigned([])).toBe("0");
+  });
+
+  it("is null while one is not an amount", () => {
+    expect(sumSigned(["1", "abc"])).toBeNull();
   });
 });
