@@ -59,6 +59,32 @@ impl CalendarDate {
         self.day
     }
 
+    /// The day that is `days` days after 1970-01-01 (before it when negative), or `None` outside the
+    /// years a date may have. It is how a clock's seconds become a day.
+    pub fn from_unix_days(days: i64) -> Option<Self> {
+        // Civil from days, after Howard Hinnant: shift to a year that starts in March, so the leap
+        // day is the last of the year.
+        let shifted = days.checked_add(719_468)?;
+        let era = shifted.div_euclid(146_097);
+        let day_of_era = shifted.rem_euclid(146_097);
+        let year_of_era =
+            (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+        let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+        let month_index = (5 * day_of_year + 2) / 153;
+        let day = u8::try_from(day_of_year - (153 * month_index + 2) / 5 + 1).ok()?;
+        let month = u8::try_from(if month_index < 10 {
+            month_index + 3
+        } else {
+            month_index - 9
+        })
+        .ok()?;
+        let year = year_of_era + era * 400 + i64::from(month <= 2);
+        let year = u16::try_from(year).ok()?;
+        (FIRST_YEAR..=LAST_YEAR)
+            .contains(&year)
+            .then_some(Self { year, month, day })
+    }
+
     /// The next day, or `None` after the last day a date may have.
     pub fn succ(&self) -> Option<Self> {
         let next = if self.day < days_in_month(self.year, self.month) {
@@ -99,6 +125,21 @@ impl CalendarDate {
             year,
             month,
             day: days_in_month(year, month),
+        })
+    }
+
+    /// This day `months` months later, with the day clipped to the end of a month that is shorter (the
+    /// 31st plus one month is the 30th or the 28th), or `None` past the last year a date may have.
+    pub fn plus_months(&self, months: u32) -> Option<Self> {
+        let total = u64::from(self.year) * 12 + u64::from(self.month - 1) + u64::from(months);
+        let year = u16::try_from(total / 12)
+            .ok()
+            .filter(|year| *year <= LAST_YEAR)?;
+        let month = u8::try_from(total % 12).ok()? + 1;
+        Some(Self {
+            year,
+            month,
+            day: self.day.min(days_in_month(year, month)),
         })
     }
 
@@ -207,6 +248,40 @@ mod tests {
         assert_eq!(CalendarDate::parse("1900-01-01").unwrap().pred(), None);
         assert!(CalendarDate::parse("2200-12-30").unwrap().succ().is_some());
         assert!(CalendarDate::parse("1900-01-02").unwrap().pred().is_some());
+    }
+
+    #[test]
+    fn adds_months_clipping_the_day_and_stopping_at_the_last_year() {
+        let plus = |raw: &str, months| {
+            CalendarDate::parse(raw)
+                .unwrap()
+                .plus_months(months)
+                .map(|day| day.to_string())
+        };
+        assert_eq!(plus("2026-01-31", 1).as_deref(), Some("2026-02-28"));
+        assert_eq!(plus("2026-01-31", 2).as_deref(), Some("2026-03-31"));
+        assert_eq!(plus("2028-01-31", 1).as_deref(), Some("2028-02-29"));
+        assert_eq!(plus("2026-11-15", 3).as_deref(), Some("2027-02-15"));
+        assert_eq!(plus("2026-11-15", 0).as_deref(), Some("2026-11-15"));
+        assert_eq!(plus("2028-02-29", 12).as_deref(), Some("2029-02-28"));
+        assert_eq!(plus("2200-12-31", 1), None);
+        assert_eq!(plus("2200-01-31", 11).as_deref(), Some("2200-12-31"));
+        assert_eq!(plus("2026-01-01", u32::MAX), None);
+    }
+
+    #[test]
+    fn reads_a_day_from_the_days_since_1970() {
+        let from = |days| CalendarDate::from_unix_days(days).map(|day| day.to_string());
+        assert_eq!(from(0).as_deref(), Some("1970-01-01"));
+        assert_eq!(from(1).as_deref(), Some("1970-01-02"));
+        assert_eq!(from(-1).as_deref(), Some("1969-12-31"));
+        assert_eq!(from(59).as_deref(), Some("1970-03-01"));
+        assert_eq!(from(11_016).as_deref(), Some("2000-02-29"));
+        assert_eq!(from(20_397).as_deref(), Some("2025-11-05"));
+        assert_eq!(from(20_762).as_deref(), Some("2026-11-05"));
+        assert_eq!(from(-25_567).as_deref(), Some("1900-01-01"));
+        assert_eq!(from(-25_568), None);
+        assert_eq!(from(i64::MAX), None);
     }
 
     #[test]

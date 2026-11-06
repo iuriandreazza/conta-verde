@@ -35,19 +35,30 @@ pub(crate) fn push_name_keyset(
     after: Option<&NameCursor>,
     limit: usize,
 ) {
+    push_text_keyset(sql, "name", sort, after, limit);
+}
+
+/// The same keyset over another text column (`column` is fixed text, never a value from outside).
+pub(crate) fn push_text_keyset(
+    sql: &mut QueryBuilder<'_, Postgres>,
+    column: &str,
+    sort: NameSort,
+    after: Option<&NameCursor>,
+    limit: usize,
+) {
     let (comparison, direction) = match sort {
         NameSort::NameAsc => (">", "ASC"),
         NameSort::NameDesc => ("<", "DESC"),
     };
     if let Some(cursor) = after {
-        sql.push(format!(" AND (lower(name), id) {comparison} (lower("))
+        sql.push(format!(" AND (lower({column}), id) {comparison} (lower("))
             .push_bind(cursor.name.clone())
             .push("), ")
             .push_bind(cursor.id)
             .push(")");
     }
     sql.push(format!(
-        " ORDER BY lower(name) {direction}, id {direction} LIMIT "
+        " ORDER BY lower({column}) {direction}, id {direction} LIMIT "
     ))
     .push_bind(i64::try_from(limit).unwrap_or(i64::MAX));
 }

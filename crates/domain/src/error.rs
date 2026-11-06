@@ -46,6 +46,8 @@ pub enum DomainError {
     TransferToTheSameAccount,
     InvalidNote,
     InvalidOpeningBalance,
+    InvalidRecurrenceAmount,
+    RecurrenceEndsBeforeItStarts,
     TooManyEntryInstallments,
     InvalidInstallmentDays,
     InstallmentDaysNotIncreasing,
@@ -150,6 +152,12 @@ impl fmt::Display for DomainError {
             }
             Self::InvalidNote => {
                 f.write_str("note must be one line of at most 200 characters, without control characters")
+            }
+            Self::InvalidRecurrenceAmount => {
+                f.write_str("amount must be more than 0, in cents (at most two decimals)")
+            }
+            Self::RecurrenceEndsBeforeItStarts => {
+                f.write_str("ends_on must not be before starts_on")
             }
             Self::InvalidOpeningBalance => f.write_str(
                 "balance must be a number in cents (at most two decimals), negative if the account starts in debt",

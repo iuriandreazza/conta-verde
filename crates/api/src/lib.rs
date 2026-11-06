@@ -3,6 +3,7 @@ mod auth;
 mod bank_accounts;
 mod cash_flow;
 mod categories;
+mod clock;
 mod cost_centers;
 mod csv_import;
 mod cursor;
@@ -19,6 +20,7 @@ mod payment_terms;
 mod postal_codes;
 mod products;
 mod products_import;
+mod recurrences;
 mod session;
 mod transfers;
 
@@ -32,8 +34,8 @@ use conta_verde_application::{
     EntryReferences, FinancialEntryRepository, FinancialEntryService, IdentityRepository,
     InvitationRepository, MemberService, OpeningRepository, PartyRepository, PartyService,
     PaymentMethodRepository, PaymentMethodService, PaymentTermRepository, PaymentTermService,
-    PostalCodeDirectory, PostalCodeService, ProductRepository, ProductService, SecretService,
-    TransferRepository, TransferService,
+    PostalCodeDirectory, PostalCodeService, ProductRepository, ProductService,
+    RecurrenceRepository, RecurrenceService, SecretService, TransferRepository, TransferService,
 };
 use serde::Serialize;
 
@@ -45,6 +47,8 @@ pub struct ApiConfig {
 
 /// The adapters the use cases run on, named once so that a handler has one type parameter however
 /// many registers there are. Generic rather than `dyn`, like the use cases themselves.
+pub use clock::today;
+
 pub trait Ports: 'static {
     type Parties: PartyRepository + 'static;
     type Registry: CnpjRegistry + 'static;
@@ -60,6 +64,7 @@ pub trait Ports: 'static {
     type EntryReferences: EntryReferences + 'static;
     type Transfers: TransferRepository + 'static;
     type Openings: OpeningRepository + 'static;
+    type Recurrences: RecurrenceRepository + 'static;
     type PostalCodes: PostalCodeDirectory + 'static;
     type Invitations: InvitationRepository + 'static;
     type Emails: EmailSender + 'static;
@@ -76,6 +81,7 @@ pub struct Services<X: Ports> {
     pub payment_terms: PaymentTermService<X::PaymentTerms>,
     pub entries: FinancialEntryService<X::Entries, X::EntryReferences>,
     pub transfers: TransferService<X::Transfers, X::EntryReferences>,
+    pub recurrences: RecurrenceService<X::Recurrences, X::Entries, X::EntryReferences>,
     pub balances: BalanceService<X::BankAccounts, X::Entries, X::Transfers, X::Openings>,
     pub postal_codes: PostalCodeService<X::PostalCodes>,
     pub members: MemberService<X::Invitations, X::Identity, X::Emails, X::Secrets>,
@@ -92,6 +98,7 @@ pub(crate) struct AppState<X: Ports> {
     payment_terms: PaymentTermService<X::PaymentTerms>,
     entries: FinancialEntryService<X::Entries, X::EntryReferences>,
     transfers: TransferService<X::Transfers, X::EntryReferences>,
+    recurrences: RecurrenceService<X::Recurrences, X::Entries, X::EntryReferences>,
     balances: BalanceService<X::BankAccounts, X::Entries, X::Transfers, X::Openings>,
     postal_codes: PostalCodeService<X::PostalCodes>,
     members: MemberService<X::Invitations, X::Identity, X::Emails, X::Secrets>,
@@ -113,6 +120,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         payment_terms: services.payment_terms,
         entries: services.entries,
         transfers: services.transfers,
+        recurrences: services.recurrences,
         balances: services.balances,
         postal_codes: services.postal_codes,
         members: services.members,
@@ -249,6 +257,18 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
             delete(entries::reverse_settlement::<X>),
         )
         .route(
+            "/companies/{company_id}/recurrences",
+            get(recurrences::list_recurrences::<X>).post(recurrences::register_recurrence::<X>),
+        )
+        .route(
+            "/companies/{company_id}/recurrences/{recurrence_id}",
+            put(recurrences::update_recurrence::<X>),
+        )
+        .route(
+            "/companies/{company_id}/recurrences/{recurrence_id}/history",
+            get(recurrences::recurrence_history::<X>),
+        )
+        .route(
             "/companies/{company_id}/transfers",
             get(transfers::list_transfers::<X>).post(transfers::register_transfer::<X>),
         )
@@ -321,7 +341,7 @@ mod tests {
         InMemoryFinancialEntryRepository, InMemoryIdentityRepository, InMemoryInvitationRepository,
         InMemoryOpeningRepository, InMemoryPartyRepository, InMemoryPaymentMethodRepository,
         InMemoryPaymentTermRepository, InMemoryPostalCodeDirectory, InMemoryProductRepository,
-        InMemoryTransferRepository, RegisterReferences,
+        InMemoryRecurrenceRepository, InMemoryTransferRepository, RegisterReferences,
     };
     use http_body_util::BodyExt;
     use serde_json::{Value, json};
@@ -389,6 +409,7 @@ mod tests {
         type EntryReferences = TestReferences;
         type Transfers = InMemoryTransferRepository;
         type Openings = InMemoryOpeningRepository;
+        type Recurrences = InMemoryRecurrenceRepository;
         type PostalCodes = InMemoryPostalCodeDirectory;
         type Invitations = InMemoryInvitationRepository;
         type Emails = InMemoryEmailSender;
@@ -412,6 +433,7 @@ mod tests {
         type EntryReferences = TestReferences;
         type Transfers = InMemoryTransferRepository;
         type Openings = InMemoryOpeningRepository;
+        type Recurrences = InMemoryRecurrenceRepository;
         type PostalCodes = Option<InMemoryPostalCodeDirectory>;
         type Invitations = InMemoryInvitationRepository;
         type Emails = InMemoryEmailSender;
@@ -501,6 +523,55 @@ mod tests {
         )
     }
 
+    type TestRecurrences = RecurrenceService<
+        InMemoryRecurrenceRepository,
+        InMemoryFinancialEntryRepository,
+        TestReferences,
+    >;
+
+    /// Recurrences over registers that the app's own services do not share.
+    fn standalone_recurrences() -> TestRecurrences {
+        let registers = (
+            InMemoryCategoryRepository::default(),
+            InMemoryCostCenterRepository::default(),
+            InMemoryPartyRepository::default(),
+            InMemoryBankAccountRepository::default(),
+            InMemoryPaymentMethodRepository::default(),
+        );
+        recurrences_over(
+            InMemoryFinancialEntryRepository::default(),
+            &registers.0,
+            &registers.1,
+            &registers.2,
+            &registers.3,
+            &registers.4,
+        )
+    }
+
+    fn recurrences_over(
+        entries: InMemoryFinancialEntryRepository,
+        categories: &InMemoryCategoryRepository,
+        cost_centers: &InMemoryCostCenterRepository,
+        parties: &InMemoryPartyRepository,
+        bank_accounts: &InMemoryBankAccountRepository,
+        payment_methods: &InMemoryPaymentMethodRepository,
+    ) -> TestRecurrences {
+        let references = || {
+            references_over(
+                categories,
+                cost_centers,
+                parties,
+                bank_accounts,
+                payment_methods,
+            )
+        };
+        RecurrenceService::new(
+            InMemoryRecurrenceRepository::default(),
+            FinancialEntryService::new(entries, references()),
+            references(),
+        )
+    }
+
     fn standalone_balances() -> TestBalances {
         BalanceService::new(
             InMemoryBankAccountRepository::default(),
@@ -581,6 +652,7 @@ mod tests {
                 payment_terms: PaymentTermService::new(InMemoryPaymentTermRepository::default()),
                 entries: standalone_entries(),
                 transfers: standalone_transfers(),
+                recurrences: standalone_recurrences(),
                 balances: standalone_balances(),
                 postal_codes: PostalCodeService::new(postal_codes),
                 members,
@@ -1215,6 +1287,7 @@ mod tests {
                 payment_terms: PaymentTermService::new(InMemoryPaymentTermRepository::default()),
                 entries: standalone_entries(),
                 transfers: standalone_transfers(),
+                recurrences: standalone_recurrences(),
                 balances: standalone_balances(),
                 postal_codes: PostalCodeService::new(None),
                 members: standalone_members(),
@@ -2691,6 +2764,7 @@ mod tests {
                 payment_terms: PaymentTermService::new(InMemoryPaymentTermRepository::default()),
                 entries: standalone_entries(),
                 transfers: standalone_transfers(),
+                recurrences: standalone_recurrences(),
                 balances: standalone_balances(),
                 postal_codes: PostalCodeService::new(None),
                 members: standalone_members(),
@@ -4208,6 +4282,14 @@ mod tests {
                         &payment_methods,
                     ),
                 ),
+                recurrences: recurrences_over(
+                    entry_store.clone(),
+                    &categories,
+                    &cost_centers,
+                    &parties,
+                    &bank_accounts,
+                    &payment_methods,
+                ),
                 balances: BalanceService::new(
                     bank_accounts.clone(),
                     entry_store,
@@ -5717,5 +5799,249 @@ mod tests {
         let viewer = member_with_role(&app, &identities, company_id, Role::Viewer).await;
         let write = send(&app, json_request("POST", &uri, Some(&viewer), json!({}))).await;
         assert!(write.status.is_client_error(), "{:?}", write.status);
+    }
+
+    fn recurrences_uri(company_id: Uuid) -> String {
+        format!("/companies/{company_id}/recurrences")
+    }
+
+    fn recurrence_body(targets: &EntryTargets, description: &str) -> Value {
+        // A span in the past that is bounded, so that what is generated does not depend on today.
+        json!({
+            "kind": "payable",
+            "description": description,
+            "category_id": targets.category,
+            "amount": "120.50",
+            "frequency": "monthly",
+            "starts_on": "2026-01-05",
+            "ends_on": "2026-03-05",
+        })
+    }
+
+    #[tokio::test]
+    async fn registers_a_recurrence_that_generates_its_entries_and_changes_only_what_comes_after() {
+        let app = entry_app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let targets = entry_targets(&app, &cookie, company_id).await;
+        let uri = recurrences_uri(company_id);
+
+        let created = send(
+            &app,
+            json_request(
+                "POST",
+                &uri,
+                Some(&cookie),
+                recurrence_body(&targets, "Aluguel"),
+            ),
+        )
+        .await;
+        assert_eq!(created.status, StatusCode::CREATED, "{}", created.body);
+        assert_eq!(created.body["amount"], "120.5");
+        assert_eq!(created.body["frequency"], "monthly");
+        assert_eq!(created.body["active"], true);
+        assert_eq!(created.body["generated_through"], "2026-03-05");
+        let id = created.body["id"].as_str().unwrap().to_owned();
+
+        // Its three occurrences are ordinary entries that know where they came from.
+        let generated = send(
+            &app,
+            get_request(
+                &format!("{}?q=Aluguel&sort=competence_date", entries_uri(company_id)),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        let items = generated.body["items"].as_array().unwrap();
+        assert_eq!(items.len(), 3);
+        let days: Vec<&str> = items
+            .iter()
+            .map(|item| item["competence_date"].as_str().unwrap())
+            .collect();
+        assert_eq!(days, ["2026-01-05", "2026-02-05", "2026-03-05"]);
+        assert!(items.iter().all(|item| item["recurrence_id"] == id
+            && item["total"] == "120.5"
+            && item["kind"] == "payable"));
+
+        // Replaced as a whole: what was generated stays, and nothing new is made past its end.
+        let one = format!("{uri}/{id}");
+        let mut changed = recurrence_body(&targets, "Aluguel");
+        changed["amount"] = json!("130");
+        changed["active"] = json!(true);
+        let replaced = send(
+            &app,
+            json_request("PUT", &one, Some(&cookie), changed.clone()),
+        )
+        .await;
+        assert_eq!(replaced.status, StatusCode::OK, "{}", replaced.body);
+        assert_eq!(replaced.body["amount"], "130");
+        let again = send(
+            &app,
+            json_request("PUT", &one, Some(&cookie), changed.clone()),
+        )
+        .await;
+        assert_eq!(again.status, StatusCode::OK);
+        let after = send(
+            &app,
+            get_request(
+                &format!("{}?q=Aluguel", entries_uri(company_id)),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(after.body["items"].as_array().unwrap().len(), 3);
+        assert!(
+            after.body["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|item| item["total"] == "120.5")
+        );
+        let history = send(&app, get_request(&format!("{one}/history"), Some(&cookie))).await;
+        assert_eq!(
+            history.body.as_array().unwrap().len(),
+            2,
+            "the same body again records nothing"
+        );
+
+        // Listed, narrowed and paged like the other registers.
+        let second = send(
+            &app,
+            json_request(
+                "POST",
+                &uri,
+                Some(&cookie),
+                recurrence_body(&targets, "Seguro"),
+            ),
+        )
+        .await;
+        assert_eq!(second.status, StatusCode::CREATED);
+        let listed = send(&app, get_request(&uri, Some(&cookie))).await;
+        let names: Vec<&str> = listed.body["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["description"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["Aluguel", "Seguro"]);
+        let page = send(&app, get_request(&format!("{uri}?limit=1"), Some(&cookie))).await;
+        assert_eq!(page.body["items"].as_array().unwrap().len(), 1);
+        let cursor = page.body["next_cursor"].as_str().unwrap();
+        let rest = send(
+            &app,
+            get_request(&format!("{uri}?limit=1&after={cursor}"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(rest.body["items"][0]["description"], "Seguro");
+        let narrowed = send(
+            &app,
+            get_request(
+                &format!("{uri}?q=seg&kind=payable&active=true&sort=-description"),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(narrowed.body["items"].as_array().unwrap().len(), 1);
+        for query in ["kind=sale", "active=maybe", "sort=name", "after=garbage"] {
+            let reply = send(&app, get_request(&format!("{uri}?{query}"), Some(&cookie))).await;
+            assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{query}");
+            assert!(reply.body["error"].is_string(), "{query}");
+        }
+
+        // What is refused is JSON and makes no recurrence; a replacement has to say whether it is active.
+        let bad = |field: &str, value: Value| {
+            let mut body = recurrence_body(&targets, "X");
+            body[field] = value;
+            body
+        };
+        for body in [
+            bad("amount", json!("0")),
+            bad("amount", json!(10)),
+            bad("frequency", json!("daily")),
+            bad("kind", json!("sale")),
+            bad("starts_on", json!("2026-02-30")),
+            bad("ends_on", json!("2025-12-31")),
+            bad("category_id", json!(Uuid::new_v4())),
+        ] {
+            let reply = send(&app, json_request("POST", &uri, Some(&cookie), body)).await;
+            assert!(reply.status.is_client_error(), "{}", reply.body);
+            assert!(reply.body["error"].is_string());
+        }
+        let missing_active = send(
+            &app,
+            json_request(
+                "PUT",
+                &one,
+                Some(&cookie),
+                recurrence_body(&targets, "Aluguel"),
+            ),
+        )
+        .await;
+        assert_eq!(
+            missing_active.status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{}",
+            missing_active.body
+        );
+        assert_eq!(
+            send(&app, get_request(&uri, Some(&cookie))).await.body["items"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+
+        // Another company's member does not learn that it exists.
+        let (stranger, _) = sign_up(&app, "bia@example.com").await;
+        for request in [
+            get_request(&uri, Some(&stranger)),
+            json_request("PUT", &one, Some(&stranger), changed.clone()),
+            get_request(&format!("{one}/history"), Some(&stranger)),
+        ] {
+            assert_eq!(send(&app, request).await.status, StatusCode::NOT_FOUND);
+        }
+        assert_eq!(
+            send(
+                &app,
+                json_request("PUT", &format!("{uri}/not-an-id"), Some(&cookie), changed)
+            )
+            .await
+            .status,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            send(&app, get_request(&uri, None)).await.status,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn recurrences_follow_the_finance_role() {
+        use conta_verde_domain::Role;
+
+        let (app, identities, _) = app_with_mailbox();
+        let (_, company_id) = sign_up(&app, "dona@example.com").await;
+        let uri = recurrences_uri(company_id);
+        for (role, may_write) in [
+            (Role::Admin, true),
+            (Role::Financial, true),
+            (Role::Sales, false),
+            (Role::Stock, false),
+            (Role::Accountant, false),
+            (Role::Viewer, false),
+        ] {
+            let cookie = member_with_role(&app, &identities, company_id, role).await;
+            assert_eq!(
+                send(&app, get_request(&uri, Some(&cookie))).await.status,
+                StatusCode::OK,
+                "{role:?} reads"
+            );
+            let write = send(&app, json_request("POST", &uri, Some(&cookie), json!({}))).await;
+            let expected = if may_write {
+                StatusCode::UNPROCESSABLE_ENTITY
+            } else {
+                StatusCode::FORBIDDEN
+            };
+            assert_eq!(write.status, expected, "{role:?} writes");
+        }
     }
 }

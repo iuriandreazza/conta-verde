@@ -4,7 +4,7 @@ use conta_verde_api::{ApiConfig, Ports, Services, router};
 use conta_verde_application::{
     AuthService, BalanceService, BankAccountService, CategoryService, CostCenterService,
     FinancialEntryService, MemberService, PartyService, PaymentMethodService, PaymentTermService,
-    PostalCodeService, ProductService, TransferService,
+    PostalCodeService, ProductService, RecurrenceService, TransferService,
 };
 use conta_verde_application::{EmailError, EmailMessage, EmailSender};
 use conta_verde_infrastructure::{
@@ -13,7 +13,8 @@ use conta_verde_infrastructure::{
     PostgresCostCenterRepository, PostgresFinancialEntryRepository, PostgresIdentityRepository,
     PostgresInvitationRepository, PostgresOpeningRepository, PostgresPartyRepository,
     PostgresPaymentMethodRepository, PostgresPaymentTermRepository, PostgresProductRepository,
-    PostgresTransferRepository, RegisterReferences, SmtpEmailSender, connect_and_migrate,
+    PostgresRecurrenceRepository, PostgresTransferRepository, RegisterReferences, SmtpEmailSender,
+    connect_and_migrate,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -41,6 +42,7 @@ impl Ports for PostgresPorts {
     >;
     type Transfers = PostgresTransferRepository;
     type Openings = PostgresOpeningRepository;
+    type Recurrences = PostgresRecurrenceRepository;
     type PostalCodes = Option<BrasilApiPostalCodeDirectory>;
     type Invitations = PostgresInvitationRepository;
     type Emails = ConfiguredEmailSender;
@@ -48,6 +50,7 @@ impl Ports for PostgresPorts {
 
 const SESSION_LIFETIME: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 const INVITATION_LIFETIME: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+const RECURRENCE_JOB_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const CNPJ_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 
 #[tokio::main]
@@ -90,6 +93,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     );
     let transfers =
         TransferService::new(PostgresTransferRepository::new(pool.clone()), references());
+    let recurrence_service = || {
+        RecurrenceService::new(
+            PostgresRecurrenceRepository::new(pool.clone()),
+            FinancialEntryService::new(
+                PostgresFinancialEntryRepository::new(pool.clone()),
+                references(),
+            ),
+            references(),
+        )
+    };
+    let recurrences = recurrence_service();
+    tokio::spawn(generate_recurring_entries(recurrence_service()));
     let balances = BalanceService::new(
         PostgresBankAccountRepository::new(pool.clone()),
         PostgresFinancialEntryRepository::new(pool.clone()),
@@ -132,6 +147,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 payment_terms,
                 entries,
                 transfers,
+                recurrences,
                 balances,
                 postal_codes,
                 members,
@@ -143,6 +159,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     .with_graceful_shutdown(shutdown_signal())
     .await?;
     Ok(())
+}
+
+/// The scheduled job of ADR 0033: once an hour, generates the recurring entries that fall due in the
+/// next two months. It is safe to repeat and to run in several instances, so a failed pass only waits for
+/// the next one.
+async fn generate_recurring_entries<R, E, F>(service: RecurrenceService<R, E, F>)
+where
+    R: conta_verde_application::RecurrenceRepository,
+    E: conta_verde_application::FinancialEntryRepository,
+    F: conta_verde_application::EntryReferences,
+{
+    let mut tick = tokio::time::interval(RECURRENCE_JOB_INTERVAL);
+    loop {
+        tick.tick().await;
+        match service.generate_all_due(conta_verde_api::today()).await {
+            Ok(report) if report.made > 0 || report.failed > 0 => {
+                tracing::info!(
+                    made = report.made,
+                    failed = report.failed,
+                    "recurring entries generated"
+                );
+            }
+            Ok(_) => {}
+            Err(error) => tracing::error!(%error, "generating recurring entries failed"),
+        }
+    }
 }
 
 /// The mail sender the operator chose: an SMTP server when `SMTP_URL` is set, and otherwise the log.

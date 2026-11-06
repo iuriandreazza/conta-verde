@@ -133,6 +133,8 @@ pub(crate) struct EntryResponse {
     installments: Vec<InstallmentResponse>,
     /// The sum of the installments, a decimal string: it is not stored, it is added up.
     total: String,
+    /// The recurrence that generated it, if one did.
+    recurrence_id: Option<Uuid>,
 }
 
 impl EntryResponse {
@@ -157,6 +159,7 @@ impl EntryResponse {
                 })
                 .collect(),
             total: entry.total().to_string(),
+            recurrence_id: entry.origin().map(|origin| origin.recurrence_id.as_uuid()),
         }
     }
 }

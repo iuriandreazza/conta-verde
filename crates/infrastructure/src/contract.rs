@@ -6612,3 +6612,577 @@ pub async fn adds_the_cash_flow_up<A, E, T, O, F>(
     assert!(span("2026-01-15", "2031-01-14", Granularity::Month).is_err());
     assert!(span("2026-01-15", "2030-12-31", Granularity::Month).is_ok());
 }
+
+// ---------- recurring entries ----------
+
+use conta_verde_application::{RecurrenceQuery, RecurrenceRepository, RecurrenceService};
+use conta_verde_domain::{EntryOrigin, Frequency, RecurrenceDraft};
+
+fn recurrence_draft(
+    seed: &EntrySeed,
+    description: &str,
+    frequency: Frequency,
+    starts_on: &str,
+    ends_on: Option<&str>,
+    amount: &str,
+) -> RecurrenceDraft {
+    RecurrenceDraft {
+        kind: EntryKind::Payable,
+        description: description.into(),
+        party_id: None,
+        category_id: seed.category,
+        cost_center_id: None,
+        amount: amount.into(),
+        frequency,
+        starts_on: starts_on.into(),
+        ends_on: ends_on.map(Into::into),
+        active: true,
+    }
+}
+
+/// The entries of the company that came from the recurrence, by day, as `(day, amount)`.
+async fn generated_by<E: FinancialEntryRepository>(
+    entries: &E,
+    company: CompanyId,
+    recurrence: conta_verde_domain::RecurrenceId,
+) -> Vec<(String, String)> {
+    let mut found: Vec<(CalendarDate, String)> = entries
+        .list_by_company(company, &FinancialEntryQuery::default(), None, 500)
+        .await
+        .unwrap()
+        .iter()
+        .filter_map(|entry| {
+            let origin = entry
+                .origin()
+                .filter(|origin| origin.recurrence_id == recurrence)?;
+            // An occurrence is an entry with one installment that falls due on its day.
+            assert_eq!(entry.installments().len(), 1);
+            assert_eq!(entry.installments()[0].due_date(), origin.occurrence_on);
+            assert_eq!(entry.competence_date(), origin.occurrence_on);
+            Some((origin.occurrence_on, entry.total().to_string()))
+        })
+        .collect();
+    found.sort();
+    found
+        .into_iter()
+        .map(|(day, amount)| (day.to_string(), amount))
+        .collect()
+}
+
+fn pairs(items: &[(&str, &str)]) -> Vec<(String, String)> {
+    items
+        .iter()
+        .map(|(day, amount)| ((*day).to_owned(), (*amount).to_owned()))
+        .collect()
+}
+
+/// A recurrence is a register of its own and generates ordinary entries two months ahead, once per
+/// occurrence day however often the job runs, from whenever it starts to wherever it ends, never while
+/// paused, and in the name of whoever saved it. Changing it changes only what is generated from then
+/// on. What it points at has to be usable, and one that stops being usable is skipped by the job without
+/// stopping the others. Nothing of another company's shows, and what is refused leaves nothing behind.
+#[allow(clippy::too_many_arguments)]
+pub async fn generates_recurring_entries_ahead<R, E, F, C>(
+    service: &RecurrenceService<R, E, F>,
+    store: &R,
+    entries: &E,
+    categories: &C,
+    company: CompanyId,
+    other_company: CompanyId,
+    seed: &EntrySeed,
+) where
+    R: RecurrenceRepository,
+    E: FinancialEntryRepository,
+    F: EntryReferences,
+    C: CategoryRepository,
+{
+    let ana = actor();
+    let day = |text: &str| CalendarDate::parse(text).unwrap();
+    let today = day("2026-11-06");
+
+    // Registering generates what falls due up to 60 days ahead: this one starts a day before today.
+    let rent = service
+        .register(
+            company,
+            &ana,
+            recurrence_draft(
+                seed,
+                "Aluguel",
+                Frequency::Monthly,
+                "2026-11-05",
+                None,
+                "2500",
+            ),
+            today,
+        )
+        .await
+        .unwrap();
+    assert_eq!(rent.generated_through(), Some(day("2027-01-05")));
+    assert_eq!(
+        generated_by(entries, company, rent.id()).await,
+        pairs(&[
+            ("2026-11-05", "2500"),
+            ("2026-12-05", "2500"),
+            ("2027-01-05", "2500")
+        ])
+    );
+    let first = entries
+        .list_by_company(company, &FinancialEntryQuery::default(), None, 500)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.origin().is_some())
+        .unwrap();
+    assert_eq!(first.description(), "Aluguel");
+    assert_eq!(first.kind(), EntryKind::Payable);
+    assert_eq!(first.category_id(), seed.category);
+    // Made in the name of whoever saved the recurrence, and says so in its trail.
+    assert_eq!(entry_trail(entries, company, &first).await, 1);
+
+    // The job again, the same day, changes nothing; a later day adds only what became due.
+    let report = service.generate_all_due(today).await.unwrap();
+    assert_eq!((report.made, report.failed), (0, 0));
+    assert_eq!(generated_by(entries, company, rent.id()).await.len(), 3);
+    let report = service.generate_all_due(day("2026-12-10")).await.unwrap();
+    assert_eq!((report.made, report.failed), (1, 0));
+    assert_eq!(
+        generated_by(entries, company, rent.id())
+            .await
+            .last()
+            .unwrap(),
+        &("2027-02-05".to_owned(), "2500".to_owned())
+    );
+
+    // Changing the amount touches nothing already generated, and applies from the next occurrence.
+    let raised = service
+        .update(
+            company,
+            &ana,
+            rent.id(),
+            recurrence_draft(
+                seed,
+                "Aluguel",
+                Frequency::Monthly,
+                "2026-11-05",
+                None,
+                "3000",
+            ),
+            day("2026-12-10"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(raised.amount().to_string(), "3000");
+    service.generate_all_due(day("2027-01-10")).await.unwrap();
+    assert_eq!(
+        generated_by(entries, company, rent.id()).await,
+        pairs(&[
+            ("2026-11-05", "2500"),
+            ("2026-12-05", "2500"),
+            ("2027-01-05", "2500"),
+            ("2027-02-05", "2500"),
+            ("2027-03-05", "3000"),
+        ])
+    );
+    // The same body again changes nothing and records nothing.
+    service
+        .update(
+            company,
+            &ana,
+            rent.id(),
+            recurrence_draft(
+                seed,
+                "Aluguel",
+                Frequency::Monthly,
+                "2026-11-05",
+                None,
+                "3000",
+            ),
+            day("2027-01-10"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(store.history(company, rent.id()).await.unwrap().len(), 2);
+
+    // It ends where it says: four Mondays, and then the job leaves it alone.
+    let weekly = service
+        .register(
+            company,
+            &ana,
+            RecurrenceDraft {
+                kind: EntryKind::Receivable,
+                ..recurrence_draft(
+                    seed,
+                    "Mensalidade",
+                    Frequency::Weekly,
+                    "2026-11-02",
+                    Some("2026-11-23"),
+                    "150.5",
+                )
+            },
+            today,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        generated_by(entries, company, weekly.id()).await,
+        pairs(&[
+            ("2026-11-02", "150.5"),
+            ("2026-11-09", "150.5"),
+            ("2026-11-16", "150.5"),
+            ("2026-11-23", "150.5")
+        ])
+    );
+    assert_eq!(weekly.generated_through(), Some(day("2026-11-23")));
+    assert_eq!(
+        service
+            .generate_all_due(day("2027-06-01"))
+            .await
+            .unwrap()
+            .failed,
+        0
+    );
+    assert_eq!(generated_by(entries, company, weekly.id()).await.len(), 4);
+
+    // One that started in the past catches up with what fell due since.
+    let backfilled = service
+        .register(
+            company,
+            &ana,
+            recurrence_draft(
+                seed,
+                "Internet",
+                Frequency::Monthly,
+                "2026-09-30",
+                None,
+                "99.9",
+            ),
+            today,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        generated_by(entries, company, backfilled.id())
+            .await
+            .iter()
+            .map(|(day, _)| day.as_str())
+            .collect::<Vec<_>>(),
+        ["2026-09-30", "2026-10-30", "2026-11-30", "2026-12-30"]
+    );
+
+    // Paused, it generates nothing; brought back, it catches up.
+    let paused = service
+        .register(
+            company,
+            &ana,
+            RecurrenceDraft {
+                active: false,
+                ..recurrence_draft(
+                    seed,
+                    "Seguro",
+                    Frequency::Yearly,
+                    "2026-11-20",
+                    None,
+                    "1200",
+                )
+            },
+            today,
+        )
+        .await
+        .unwrap();
+    assert!(generated_by(entries, company, paused.id()).await.is_empty());
+    assert_eq!(
+        service
+            .generate_all_due(day("2026-11-07"))
+            .await
+            .unwrap()
+            .made,
+        0
+    );
+    service
+        .update(
+            company,
+            &ana,
+            paused.id(),
+            recurrence_draft(
+                seed,
+                "Seguro",
+                Frequency::Yearly,
+                "2026-11-20",
+                None,
+                "1200",
+            ),
+            today,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        generated_by(entries, company, paused.id()).await,
+        pairs(&[("2026-11-20", "1200")])
+    );
+
+    // The store itself refuses a second entry for the same occurrence, and leaves no trace of it.
+    let origin = EntryOrigin {
+        recurrence_id: paused.id(),
+        occurrence_on: day("2026-11-20"),
+    };
+    let twin = new_entry(
+        company,
+        entry_draft(seed, "Seguro", "2026-11-20", &[("2026-11-20", "1200")]),
+    )
+    .with_origin(origin);
+    let record = entry_record(&twin, AuditAction::Created, entry_creation_changes(&twin));
+    assert_eq!(
+        entries.save(&twin, &record).await.unwrap_err(),
+        RepositoryError::DuplicateOccurrence
+    );
+    assert_eq!(entry_trail(entries, company, &twin).await, 0);
+    let elsewhere = EntryOrigin {
+        occurrence_on: day("2026-11-21"),
+        ..origin
+    };
+    let fresh = new_entry(
+        company,
+        entry_draft(seed, "Seguro", "2026-11-21", &[("2026-11-21", "1200")]),
+    )
+    .with_origin(elsewhere);
+    let record = entry_record(&fresh, AuditAction::Created, entry_creation_changes(&fresh));
+    entries.save(&fresh, &record).await.unwrap();
+    assert_eq!(
+        entries
+            .find(company, fresh.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .origin(),
+        Some(elsewhere)
+    );
+
+    // What it points at has to be usable, and what is refused leaves nothing behind.
+    let before = service
+        .list(company, &RecurrenceQuery::default(), None, Some(100))
+        .await
+        .unwrap()
+        .items
+        .len();
+    for (draft, error) in [
+        (
+            RecurrenceDraft {
+                category_id: seed.inactive_category,
+                ..recurrence_draft(seed, "X", Frequency::Monthly, "2026-12-01", None, "1")
+            },
+            ApplicationError::UnusableReference("category"),
+        ),
+        (
+            RecurrenceDraft {
+                category_id: seed.transfer_category,
+                ..recurrence_draft(seed, "X", Frequency::Monthly, "2026-12-01", None, "1")
+            },
+            ApplicationError::UnusableReference("category"),
+        ),
+        (
+            RecurrenceDraft {
+                cost_center_id: Some(seed.inactive_cost_center),
+                ..recurrence_draft(seed, "X", Frequency::Monthly, "2026-12-01", None, "1")
+            },
+            ApplicationError::UnusableReference("cost center"),
+        ),
+        (
+            RecurrenceDraft {
+                party_id: Some(PartyId::generate()),
+                ..recurrence_draft(seed, "X", Frequency::Monthly, "2026-12-01", None, "1")
+            },
+            ApplicationError::UnusableReference("party"),
+        ),
+        (
+            recurrence_draft(seed, "X", Frequency::Monthly, "2026-12-01", None, "0"),
+            ApplicationError::Domain(DomainError::InvalidRecurrenceAmount),
+        ),
+        (
+            recurrence_draft(
+                seed,
+                "X",
+                Frequency::Monthly,
+                "2026-12-01",
+                Some("2026-11-30"),
+                "1",
+            ),
+            ApplicationError::Domain(DomainError::RecurrenceEndsBeforeItStarts),
+        ),
+    ] {
+        assert_eq!(
+            service
+                .register(company, &ana, draft, today)
+                .await
+                .unwrap_err(),
+            error
+        );
+    }
+    assert_eq!(
+        service
+            .list(company, &RecurrenceQuery::default(), None, Some(100))
+            .await
+            .unwrap()
+            .items
+            .len(),
+        before
+    );
+
+    // Nothing of another company's: it is not found, listed or read, and its entries are not made.
+    assert_eq!(
+        service.get(other_company, rent.id()).await.unwrap_err(),
+        ApplicationError::RecurrenceNotFound
+    );
+    assert_eq!(
+        service.history(other_company, rent.id()).await.unwrap_err(),
+        ApplicationError::RecurrenceNotFound
+    );
+    assert_eq!(
+        service
+            .update(
+                other_company,
+                &ana,
+                rent.id(),
+                recurrence_draft(seed, "Aluguel", Frequency::Monthly, "2026-11-05", None, "1"),
+                today
+            )
+            .await
+            .unwrap_err(),
+        ApplicationError::RecurrenceNotFound
+    );
+    assert!(
+        service
+            .list(other_company, &RecurrenceQuery::default(), None, Some(100))
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
+
+    // The list is narrowed by kind, state and text, in order of description.
+    let names = |page: conta_verde_application::RecurrencePage| {
+        page.items
+            .iter()
+            .map(|item| item.description().to_owned())
+            .collect::<Vec<_>>()
+    };
+    let all = service
+        .list(company, &RecurrenceQuery::default(), None, Some(100))
+        .await
+        .unwrap();
+    assert_eq!(names(all), ["Aluguel", "Internet", "Mensalidade", "Seguro"]);
+    let receivable = RecurrenceQuery::default().of_kind(EntryKind::Receivable);
+    assert_eq!(
+        names(
+            service
+                .list(company, &receivable, None, Some(100))
+                .await
+                .unwrap()
+        ),
+        ["Mensalidade"]
+    );
+    let searched = RecurrenceQuery::default().searching("NET");
+    assert_eq!(
+        names(
+            service
+                .list(company, &searched, None, Some(100))
+                .await
+                .unwrap()
+        ),
+        ["Internet"]
+    );
+    let page = service
+        .list(company, &RecurrenceQuery::default(), None, Some(2))
+        .await
+        .unwrap();
+    assert_eq!(names(page.clone()), ["Aluguel", "Internet"]);
+    let rest = service
+        .list(
+            company,
+            &RecurrenceQuery::default(),
+            page.next.as_ref(),
+            Some(2),
+        )
+        .await
+        .unwrap();
+    assert_eq!(names(rest), ["Mensalidade", "Seguro"]);
+
+    // A category that stops being usable stops that recurrence only; the job says so and goes on.
+    let stalled = service
+        .register(
+            company,
+            &ana,
+            RecurrenceDraft {
+                category_id: seed.other_category,
+                ..recurrence_draft(
+                    seed,
+                    "Contador",
+                    Frequency::Monthly,
+                    "2027-03-01",
+                    None,
+                    "800",
+                )
+            },
+            today,
+        )
+        .await
+        .unwrap();
+    // Nothing falls due yet, so only the horizon is noted.
+    assert_eq!(stalled.generated_through(), Some(day("2027-01-05")));
+    let current = categories
+        .find(company, seed.other_category)
+        .await
+        .unwrap()
+        .unwrap();
+    let closed = current.changed(current.name(), false).unwrap();
+    let record = category_entry(
+        &closed,
+        AuditAction::Updated,
+        category_changes(&current, &closed),
+    );
+    categories.update(&closed, &record).await.unwrap();
+    let report = service.generate_all_due(day("2027-02-15")).await.unwrap();
+    assert_eq!(report.failed, 1);
+    assert!(
+        generated_by(entries, company, stalled.id())
+            .await
+            .is_empty()
+    );
+    assert_eq!(
+        service
+            .get(company, stalled.id())
+            .await
+            .unwrap()
+            .generated_through(),
+        Some(day("2027-01-05"))
+    );
+    // A recurrence can still be paused after its category was closed.
+    service
+        .update(
+            company,
+            &ana,
+            stalled.id(),
+            RecurrenceDraft {
+                active: false,
+                category_id: seed.other_category,
+                ..recurrence_draft(
+                    seed,
+                    "Contador",
+                    Frequency::Monthly,
+                    "2027-03-01",
+                    None,
+                    "800",
+                )
+            },
+            day("2027-02-15"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .generate_all_due(day("2027-02-15"))
+            .await
+            .unwrap()
+            .failed,
+        0
+    );
+}

@@ -536,6 +536,56 @@ export interface CashFlow {
 
 export type EntryKind = "receivable" | "payable";
 
+export type RecurrenceFrequency = "weekly" | "monthly" | "yearly";
+
+/** An entry that comes back every week, month or year and is generated ahead (ADR 0033). */
+export interface Recurrence {
+  id: string;
+  company_id: string;
+  kind: EntryKind;
+  description: string;
+  party_id: string | null;
+  category_id: string;
+  cost_center_id: string | null;
+  /** A decimal string in cents: what every occurrence is worth. */
+  amount: string;
+  frequency: RecurrenceFrequency;
+  /** `YYYY-MM-DD`: the day of the first occurrence. */
+  starts_on: string;
+  ends_on: string | null;
+  active: boolean;
+  /** The day through which its entries were made. */
+  generated_through: string | null;
+}
+
+export interface RecurrencePage {
+  items: Recurrence[];
+  next_cursor: string | null;
+}
+
+/** Replaces the whole recurrence: a reference left out is removed. What was generated is not touched. */
+export interface RecurrenceInput {
+  kind: EntryKind;
+  description: string;
+  party_id?: string;
+  category_id: string;
+  cost_center_id?: string;
+  amount: string;
+  frequency: RecurrenceFrequency;
+  starts_on: string;
+  ends_on?: string;
+  active: boolean;
+}
+
+export interface RecurrenceFilters {
+  q: string;
+  kind: "" | EntryKind;
+  active: "" | "true" | "false";
+  sort: "description" | "-description";
+}
+
+export const NO_RECURRENCE_FILTERS: RecurrenceFilters = { q: "", kind: "", active: "", sort: "description" };
+
 export interface EntryInstallment {
   number: number;
   /** `YYYY-MM-DD`. */
@@ -560,6 +610,8 @@ export interface Entry {
   installments: EntryInstallment[];
   /** The sum of the installments, a decimal string. */
   total: string;
+  /** The recurrence that generated it, if one did (ADR 0033). */
+  recurrence_id: string | null;
 }
 
 export interface EntryPage {
@@ -842,6 +894,29 @@ export const api = {
     request<void>(`/companies/${companyId}/entries/${entryId}/settlements/${settlementId}`, {
       method: "DELETE",
     }),
+  listRecurrences: (
+    companyId: string,
+    filters: RecurrenceFilters = NO_RECURRENCE_FILTERS,
+    after?: string,
+  ) => {
+    const params = new URLSearchParams();
+    if (filters.q) params.set("q", filters.q);
+    if (filters.kind) params.set("kind", filters.kind);
+    if (filters.active) params.set("active", filters.active);
+    if (filters.sort !== NO_RECURRENCE_FILTERS.sort) params.set("sort", filters.sort);
+    if (after) params.set("after", after);
+    const query = params.size > 0 ? `?${params}` : "";
+    return request<RecurrencePage>(`/companies/${companyId}/recurrences${query}`);
+  },
+  createRecurrence: (companyId: string, input: RecurrenceInput) =>
+    post<Recurrence>(`/companies/${companyId}/recurrences`, input),
+  updateRecurrence: (companyId: string, id: string, input: RecurrenceInput) =>
+    request<Recurrence>(`/companies/${companyId}/recurrences/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  recurrenceHistory: (companyId: string, id: string) =>
+    request<HistoryEntry[]>(`/companies/${companyId}/recurrences/${id}/history`),
   /** Newest first; a cursor only continues the list of the same filters. */
   listTransfers: (companyId: string, filters: TransferFilters = NO_TRANSFER_FILTERS, after?: string) => {
     const params = new URLSearchParams();

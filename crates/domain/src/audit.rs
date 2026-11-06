@@ -2,7 +2,7 @@ use uuid::Uuid;
 
 use crate::{
     AccountOpening, BankAccount, Category, CompanyId, CostCenter, DocumentCheck, FinancialEntry,
-    Party, PaymentMethod, PaymentTerm, Product, Settlement, Tag, Transfer, UserId,
+    Party, PaymentMethod, PaymentTerm, Product, Recurrence, Settlement, Tag, Transfer, UserId,
 };
 
 /// Who made a change. The name is a snapshot: history must keep reading the same after the user is
@@ -27,6 +27,7 @@ pub enum AuditEntity {
     Transfer,
     /// One per bank account: the audit id is the account's.
     AccountOpening,
+    Recurrence,
 }
 
 impl AuditEntity {
@@ -40,6 +41,7 @@ impl AuditEntity {
             Self::PaymentMethod => "payment_method",
             Self::PaymentTerm => "payment_term",
             Self::FinancialEntry => "financial_entry",
+            Self::Recurrence => "recurrence",
             Self::Settlement => "settlement",
             Self::Transfer => "transfer",
             Self::AccountOpening => "account_opening",
@@ -184,6 +186,20 @@ impl Audited for PaymentTerm {
 impl Audited for FinancialEntry {
     fn audit_entity(&self) -> AuditEntity {
         AuditEntity::FinancialEntry
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.id().as_uuid()
+    }
+}
+
+impl Audited for Recurrence {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::Recurrence
     }
 
     fn audit_company(&self) -> CompanyId {
@@ -501,6 +517,44 @@ pub fn entry_creation_changes(entry: &FinancialEntry) -> Vec<FieldChange> {
 
 pub fn entry_changes(before: &FinancialEntry, after: &FinancialEntry) -> Vec<FieldChange> {
     changes_between(entry_fields(before), entry_fields(after))
+}
+
+fn recurrence_fields(recurrence: &Recurrence) -> Fields {
+    vec![
+        ("kind", Some(recurrence.kind().as_str().to_owned())),
+        ("description", Some(recurrence.description().to_owned())),
+        (
+            "party_id",
+            recurrence.party_id().map(|id| id.as_uuid().to_string()),
+        ),
+        (
+            "category_id",
+            Some(recurrence.category_id().as_uuid().to_string()),
+        ),
+        (
+            "cost_center_id",
+            recurrence
+                .cost_center_id()
+                .map(|id| id.as_uuid().to_string()),
+        ),
+        ("amount", Some(recurrence.amount().to_string())),
+        (
+            "frequency",
+            Some(recurrence.frequency().as_str().to_owned()),
+        ),
+        ("starts_on", Some(recurrence.starts_on().to_string())),
+        ("ends_on", recurrence.ends_on().map(|day| day.to_string())),
+        ("active", Some(recurrence.is_active().to_string())),
+    ]
+}
+
+/// Every field a new recurrence has set.
+pub fn recurrence_creation_changes(recurrence: &Recurrence) -> Vec<FieldChange> {
+    creation_from(recurrence_fields(recurrence))
+}
+
+pub fn recurrence_changes(before: &Recurrence, after: &Recurrence) -> Vec<FieldChange> {
+    changes_between(recurrence_fields(before), recurrence_fields(after))
 }
 
 fn settlement_fields(settlement: &Settlement) -> Fields {

@@ -38,6 +38,14 @@ impl FinancialEntryRepository for InMemoryFinancialEntryRepository {
     ) -> Result<(), RepositoryError> {
         ensure_audit_describes(audit, entry)?;
         let mut state = self.state.lock().expect("repository lock poisoned");
+        if entry.origin().is_some_and(|origin| {
+            state
+                .entries
+                .iter()
+                .any(|stored| stored.origin() == Some(origin))
+        }) {
+            return Err(RepositoryError::DuplicateOccurrence);
+        }
         state.entries.push(entry.clone());
         state.audit.record(audit);
         Ok(())
