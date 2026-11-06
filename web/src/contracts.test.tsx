@@ -102,6 +102,7 @@ describe("contracts", () => {
       ),
     );
     renderAt("/companies/c1/contracts");
+    await userEvent.click(await screen.findByRole("button", { name: "Novo contrato" }));
     const form = within((await screen.findByRole("heading", { name: "Novo contrato" })).closest("aside")!);
     await form.findByLabelText("Cliente");
 
@@ -187,7 +188,7 @@ describe("contracts", () => {
     );
     renderAt("/companies/c1/contracts");
     await screen.findByRole("row", { name: /Manutenção mensal/ });
-    expect(screen.queryByRole("heading", { name: "Novo contrato" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Novo contrato" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Reajustar|Encerrar/ })).not.toBeInTheDocument();
   });
 });

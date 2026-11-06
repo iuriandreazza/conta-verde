@@ -62,6 +62,7 @@ function creationItems(
     { key: "quote", label: "Novo orçamento", icon: FileTextIcon, to: `${base}/quotes`, area: "sales" },
     { key: "sale", label: "Nova venda", icon: HandCoinsIcon, to: `${base}/sales`, area: "sales" },
     { key: "party", label: "Novo cliente ou fornecedor", icon: UsersIcon, creates: "party", area: "parties" },
+    { key: "contract", label: "Novo contrato", icon: RotateCCWIcon, creates: "contract", area: "sales" },
     { key: "commissionRule", label: "Nova regra de comissão", icon: HandCoinsIcon, creates: "commissionRule", area: "sales" },
     { key: "priceList", label: "Nova tabela de preço", icon: LayersIcon, creates: "priceList", area: "sales" },
     { key: "category", label: "Nova categoria", icon: FolderTreeIcon, creates: "category", area: "finance" },
