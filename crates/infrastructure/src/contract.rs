@@ -8,6 +8,7 @@ use conta_verde_application::{
     PaymentMethodService, ProductQuery, ProductRepository, ProductService, RepositoryError,
     SecretService,
 };
+use conta_verde_application::{ChargeRepository, ChargeService, ProviderError};
 use conta_verde_application::{
     CommissionRuleQuery, CommissionRuleRepository, CommissionService, ContractRepository,
     ContractService, Conversion, Refund, SaleQuery, SaleRepository, SaleService,
@@ -34,6 +35,7 @@ use conta_verde_domain::{
     product_changes, product_creation_changes,
 };
 use conta_verde_domain::{BillingCycle, CommissionRuleDraft, ContractDraft, ContractStatus};
+use conta_verde_domain::{ChargeMethod, ChargeStatus};
 use conta_verde_domain::{
     EntryOrigin, ReturnItemDraft, SaleDraft, SaleReturn, SaleReturnDraft, SaleReturnId, SaleStatus,
     sale_return_creation_changes,
@@ -44,7 +46,7 @@ use conta_verde_domain::{PriceListDraft, PriceListItemDraft};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::{InMemoryCnpjRegistry, InMemoryEmailSender};
+use crate::{FakePaymentProvider, InMemoryCnpjRegistry, InMemoryEmailSender};
 
 pub const ACTIVE_CNPJ: &str = "11.222.333/0001-81";
 pub const CLOSED_ALPHANUMERIC_CNPJ: &str = "12.ABC.345/01DE-35";
@@ -10981,4 +10983,265 @@ pub async fn runs_the_price_list_lifecycle<R: PriceListRepository, F: SalesRefer
             .items
             .is_empty()
     );
+}
+
+/// Charges for the installments of receivables ([ADR 0045]): made at the provider for what is left of an
+/// installment, one open at a time, called off at the provider and here, and never of another company's.
+pub async fn issues_and_cancels_charges<C, E, P, F>(
+    service: &ChargeService<C, E, P, FakePaymentProvider>,
+    store: &C,
+    entries: &FinancialEntryService<E, F>,
+    provider: &FakePaymentProvider,
+    company: CompanyId,
+    other_company: CompanyId,
+    seed: &EntrySeed,
+) where
+    C: ChargeRepository,
+    E: FinancialEntryRepository,
+    P: PartyRepository,
+    F: EntryReferences,
+{
+    let ana = actor();
+    let register = |description: &str, party: Option<PartyId>, kind: EntryKind| {
+        let mut draft = entry_draft(
+            seed,
+            description,
+            "2026-11-10",
+            &[("2026-12-10", "100"), ("2027-01-10", "50.50")],
+        );
+        draft.party_id = party;
+        draft.kind = kind;
+        entries.register(company, &ana, draft)
+    };
+    let entry = register("Venda 12", Some(seed.party), EntryKind::Receivable)
+        .await
+        .unwrap();
+
+    // A Pix charge for what the installment is worth, as the provider made it, audited as it was created.
+    let pix = service
+        .issue(company, &ana, entry.id(), 1, ChargeMethod::Pix, None)
+        .await
+        .unwrap();
+    assert_eq!(pix.status(), ChargeStatus::Open);
+    assert_eq!(pix.amount().to_string(), "100");
+    assert_eq!(pix.due_on().to_string(), "2026-12-10");
+    assert_eq!(pix.provider(), "fake");
+    assert_eq!(pix.issued_by(), &ana);
+    assert!(pix.payment().pix_payload.is_some());
+    let asked = provider.created();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0].charge_id, pix.id());
+    assert_eq!(asked[0].description, "Venda 12 (1/2)");
+    assert_eq!(asked[0].payer.name, "Mercado Boa Compra");
+    assert_eq!(
+        service.get(company, entry.id(), pix.id()).await.unwrap(),
+        pix
+    );
+    let trail = service
+        .history(company, entry.id(), pix.id())
+        .await
+        .unwrap();
+    assert_eq!(trail.len(), 1);
+    assert_eq!(trail[0].entry.action, AuditAction::Created);
+    assert_eq!(trail[0].entry.entity, AuditEntity::Charge);
+
+    // One open charge per installment: the second is refused and the provider is told to drop it.
+    assert_eq!(
+        service
+            .issue(company, &ana, entry.id(), 1, ChargeMethod::Boleto, None)
+            .await
+            .unwrap_err(),
+        ApplicationError::Repository(RepositoryError::ChargeAlreadyOpen)
+    );
+    assert_eq!(provider.created().len(), 2);
+    assert_eq!(provider.cancelled().len(), 1);
+    assert_ne!(provider.cancelled()[0], pix.external_id());
+    assert_eq!(
+        service.list(company, entry.id()).await.unwrap(),
+        vec![pix.clone()]
+    );
+
+    // Another installment takes its own, on the day the person says.
+    let boleto = service
+        .issue(
+            company,
+            &ana,
+            entry.id(),
+            2,
+            ChargeMethod::Boleto,
+            CalendarDate::parse("2027-01-15"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(boleto.amount().to_string(), "50.5");
+    assert_eq!(boleto.due_on().to_string(), "2027-01-15");
+    assert!(boleto.payment().digitable_line.is_some());
+
+    // Calling off goes to the provider first, then is recorded; one that is off cannot be again.
+    let cancelled = service
+        .cancel(company, &ana, entry.id(), pix.id())
+        .await
+        .unwrap();
+    assert_eq!(cancelled.status(), ChargeStatus::Cancelled);
+    assert!(provider.cancelled().contains(&pix.external_id().to_owned()));
+    assert_eq!(
+        service.get(company, entry.id(), pix.id()).await.unwrap(),
+        cancelled
+    );
+    assert_eq!(
+        service
+            .cancel(company, &ana, entry.id(), pix.id())
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::ChargeIsNotOpen)
+    );
+    let trail = service
+        .history(company, entry.id(), pix.id())
+        .await
+        .unwrap();
+    assert_eq!(
+        trail
+            .iter()
+            .map(|record| record.entry.action)
+            .collect::<Vec<_>>(),
+        [AuditAction::Created, AuditAction::Updated]
+    );
+    assert_eq!(trail[1].entry.changes.len(), 1);
+    assert_eq!(trail[1].entry.changes[0].field, "status");
+
+    // The installment is charged again for what is left of it after a part was settled.
+    entries
+        .settle(company, &ana, entry.id(), settlement_draft(seed, 1, "40"))
+        .await
+        .unwrap();
+    let card = service
+        .issue(company, &ana, entry.id(), 1, ChargeMethod::CardLink, None)
+        .await
+        .unwrap();
+    assert_eq!(card.amount().to_string(), "60");
+    assert!(card.payment().payment_url.is_some());
+    assert_eq!(
+        service.list(company, entry.id()).await.unwrap(),
+        vec![cancelled, boleto, card.clone()],
+        "in the order they were issued"
+    );
+    service
+        .cancel(company, &ana, entry.id(), card.id())
+        .await
+        .unwrap();
+    entries
+        .settle(company, &ana, entry.id(), settlement_draft(seed, 1, "60"))
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .issue(company, &ana, entry.id(), 1, ChargeMethod::Pix, None)
+            .await
+            .unwrap_err(),
+        ApplicationError::NothingToCharge
+    );
+
+    // What cannot be charged: an installment the entry lacks, a payable, an entry without a customer, a
+    // cancelled entry. None of them reaches the provider.
+    let asked = provider.created().len();
+    let payable = register("Compra", Some(seed.party), EntryKind::Payable)
+        .await
+        .unwrap();
+    let nobody = register("Venda sem cliente", None, EntryKind::Receivable)
+        .await
+        .unwrap();
+    let voided = register("Venda cancelada", Some(seed.party), EntryKind::Receivable)
+        .await
+        .unwrap();
+    entries.void(company, &ana, voided.id()).await.unwrap();
+    for (entry_id, number, error) in [
+        (
+            entry.id(),
+            9,
+            ApplicationError::UnusableReference("installment"),
+        ),
+        (payable.id(), 1, ApplicationError::ChargeNeedsReceivable),
+        (nobody.id(), 1, ApplicationError::ChargeNeedsParty),
+        (voided.id(), 1, ApplicationError::EntryIsVoided),
+    ] {
+        assert_eq!(
+            service
+                .issue(company, &ana, entry_id, number, ChargeMethod::Pix, None)
+                .await
+                .unwrap_err(),
+            error
+        );
+    }
+    assert_eq!(provider.created().len(), asked);
+
+    // A provider that fails leaves nothing behind, and says why.
+    provider.failing_with(ProviderError::Unavailable("timeout".into()));
+    assert_eq!(
+        service
+            .issue(company, &ana, entry.id(), 2, ChargeMethod::Pix, None)
+            .await
+            .unwrap_err(),
+        ApplicationError::Provider(ProviderError::Unavailable("timeout".into()))
+    );
+    provider.works_again();
+    assert_eq!(service.list(company, entry.id()).await.unwrap().len(), 3);
+
+    // Nothing of another company's is seen, issued or called off.
+    for error in [
+        service.list(other_company, entry.id()).await.unwrap_err(),
+        service
+            .issue(other_company, &ana, entry.id(), 2, ChargeMethod::Pix, None)
+            .await
+            .unwrap_err(),
+    ] {
+        assert_eq!(error, ApplicationError::EntryNotFound);
+    }
+    for error in [
+        service
+            .get(
+                other_company,
+                entry.id(),
+                boleto_id(service, company, entry.id()).await,
+            )
+            .await
+            .unwrap_err(),
+        service
+            .cancel(
+                other_company,
+                &ana,
+                entry.id(),
+                boleto_id(service, company, entry.id()).await,
+            )
+            .await
+            .unwrap_err(),
+    ] {
+        assert_eq!(error, ApplicationError::ChargeNotFound);
+    }
+    assert!(
+        store
+            .list_by_entry(other_company, entry.id())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+async fn boleto_id<C, E, P>(
+    service: &ChargeService<C, E, P, FakePaymentProvider>,
+    company: CompanyId,
+    entry: conta_verde_domain::EntryId,
+) -> conta_verde_domain::ChargeId
+where
+    C: ChargeRepository,
+    E: FinancialEntryRepository,
+    P: PartyRepository,
+{
+    service
+        .list(company, entry)
+        .await
+        .unwrap()
+        .iter()
+        .find(|charge| charge.method() == ChargeMethod::Boleto)
+        .unwrap()
+        .id()
 }

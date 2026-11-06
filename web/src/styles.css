@@ -1836,3 +1836,15 @@ tbody tr:last-child td {
   justify-self: end;
   align-self: end;
 }
+
+/* A Pix text or a boleto line is one long word: it wraps anywhere instead of widening the table. */
+.charge-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.charge-details code {
+  overflow-wrap: anywhere;
+}

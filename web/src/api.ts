@@ -503,6 +503,39 @@ export interface Attachment {
   size: number;
 }
 
+/** How a customer is asked to pay (ADR 0045). */
+export type ChargeMethod = "boleto" | "pix" | "card_link";
+
+export type ChargeStatus = "open" | "paid" | "cancelled" | "expired";
+
+/** A request to be paid for one installment of a receivable, made at a payment provider (ADR 0045). */
+export interface Charge {
+  id: string;
+  entry_id: string;
+  installment: number;
+  method: ChargeMethod;
+  status: ChargeStatus;
+  /** What was left of the installment when it was made, a decimal string. */
+  amount: string;
+  /** `YYYY-MM-DD`. */
+  due_on: string;
+  provider: string;
+  /** The boleto's line, to type in an app. */
+  digitable_line: string | null;
+  /** The Pix copy-and-paste text. */
+  pix_payload: string | null;
+  /** The provider's page: the boleto's paper or the card checkout. */
+  payment_url: string | null;
+  issued_by: string;
+}
+
+export interface ChargeInput {
+  installment: number;
+  method: ChargeMethod;
+  /** `YYYY-MM-DD`, when it is not the installment's own. */
+  due_on?: string;
+}
+
 /** Money moved from one account of the company to another (ADR 0031). */
 export interface Transfer {
   id: string;
@@ -1402,6 +1435,20 @@ export const api = {
   removeAttachment: (companyId: string, entryId: string, attachmentId: string) =>
     request<void>(`/companies/${companyId}/entries/${entryId}/attachments/${attachmentId}`, {
       method: "DELETE",
+    }),
+  /** The provider charges are made at, or `null` when the operator configured none. */
+  getCollection: (companyId: string) =>
+    request<{ provider: string | null }>(`/companies/${companyId}/collection`),
+  listCharges: (companyId: string, entryId: string) =>
+    request<{ items: Charge[] }>(`/companies/${companyId}/entries/${entryId}/charges`),
+  issueCharge: (companyId: string, entryId: string, input: ChargeInput) =>
+    request<Charge>(`/companies/${companyId}/entries/${entryId}/charges`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  cancelCharge: (companyId: string, entryId: string, chargeId: string) =>
+    request<Charge>(`/companies/${companyId}/entries/${entryId}/charges/${chargeId}/cancel`, {
+      method: "POST",
     }),
   listRecurrences: (
     companyId: string,

@@ -2,7 +2,7 @@ use std::fmt;
 
 use conta_verde_domain::DomainError;
 
-use crate::SecretError;
+use crate::{ProviderError, SecretError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RepositoryError {
@@ -48,6 +48,8 @@ pub enum RepositoryError {
     SaleHasReturns,
     /// The quote is no longer in the status the write was made from.
     QuoteChanged,
+    /// The installment already has an open charge.
+    ChargeAlreadyOpen,
     Storage(String),
 }
 
@@ -89,6 +91,16 @@ pub enum ApplicationError {
     PaymentTermNotFound,
     /// No price list with this id in the company (another company's looks the same).
     PriceListNotFound,
+    /// No charge with this id in the entry (another company's looks the same).
+    ChargeNotFound,
+    /// Only a receivable is charged: a payable is what the company owes.
+    ChargeNeedsReceivable,
+    /// A charge is made out to someone: the entry has no customer.
+    ChargeNeedsParty,
+    /// The installment is settled: there is nothing left to charge.
+    NothingToCharge,
+    /// The payment provider could not make or call off the charge.
+    Provider(ProviderError),
     /// No financial entry with this id in the company (another company's looks the same).
     EntryNotFound,
     /// No attachment with this id in the entry (another company's looks the same), or it was removed
@@ -192,6 +204,12 @@ impl From<RepositoryError> for ApplicationError {
     }
 }
 
+impl From<ProviderError> for ApplicationError {
+    fn from(error: ProviderError) -> Self {
+        Self::Provider(error)
+    }
+}
+
 impl From<AuthError> for ApplicationError {
     fn from(error: AuthError) -> Self {
         Self::Auth(error)
@@ -234,6 +252,7 @@ impl fmt::Display for RepositoryError {
             Self::ReturnTooMuch => f.write_str("a return cannot be of more than was sold"),
             Self::SaleHasReturns => f.write_str("the sale has returns"),
             Self::QuoteChanged => f.write_str("the quote was changed meanwhile"),
+            Self::ChargeAlreadyOpen => f.write_str("the installment already has an open charge"),
             Self::Storage(message) => write!(f, "storage failure: {message}"),
         }
     }
@@ -265,6 +284,11 @@ impl fmt::Display for ApplicationError {
             Self::PaymentMethodNotFound => f.write_str("payment method not found"),
             Self::PaymentTermNotFound => f.write_str("payment term not found"),
             Self::PriceListNotFound => f.write_str("price list not found"),
+            Self::ChargeNotFound => f.write_str("charge not found"),
+            Self::ChargeNeedsReceivable => f.write_str("only a receivable can be charged"),
+            Self::ChargeNeedsParty => f.write_str("the entry has no customer to charge"),
+            Self::NothingToCharge => f.write_str("the installment has nothing left to charge"),
+            Self::Provider(error) => error.fmt(f),
             Self::EntryNotFound => f.write_str("entry not found"),
             Self::AttachmentNotFound => f.write_str("attachment not found"),
             Self::TooManyAttachments => {

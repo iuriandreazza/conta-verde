@@ -2,7 +2,7 @@ use uuid::Uuid;
 
 use crate::line::lines_text;
 use crate::{
-    AccountOpening, Attachment, BankAccount, Category, CommissionRule, CompanyId, Contract,
+    AccountOpening, Attachment, BankAccount, Category, Charge, CommissionRule, CompanyId, Contract,
     CostCenter, DocumentCheck, FinancialEntry, LineMatch, Party, PaymentMethod, PaymentTerm,
     PriceList, Product, Quote, Recurrence, Sale, SaleReturn, Settlement, StatementLine, Tag,
     Transfer, UserId,
@@ -34,6 +34,7 @@ pub enum AuditEntity {
     Recurrence,
     StatementLine,
     Attachment,
+    Charge,
     Quote,
     Sale,
     SaleReturn,
@@ -56,6 +57,7 @@ impl AuditEntity {
             Self::Recurrence => "recurrence",
             Self::StatementLine => "statement_line",
             Self::Attachment => "attachment",
+            Self::Charge => "charge",
             Self::Quote => "quote",
             Self::Sale => "sale",
             Self::SaleReturn => "sale_return",
@@ -345,6 +347,20 @@ impl Audited for CommissionRule {
 impl Audited for Attachment {
     fn audit_entity(&self) -> AuditEntity {
         AuditEntity::Attachment
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.id().as_uuid()
+    }
+}
+
+impl Audited for Charge {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::Charge
     }
 
     fn audit_company(&self) -> CompanyId {
@@ -940,6 +956,29 @@ pub fn attachment_creation_changes(attachment: &Attachment) -> Vec<FieldChange> 
 /// What a removal changes: only the `removed` flag.
 pub fn attachment_changes(before: &Attachment, after: &Attachment) -> Vec<FieldChange> {
     changes_between(attachment_fields(before), attachment_fields(after))
+}
+
+fn charge_fields(charge: &Charge) -> Fields {
+    vec![
+        ("entry_id", Some(charge.entry_id().as_uuid().to_string())),
+        ("installment", Some(charge.installment().to_string())),
+        ("method", Some(charge.method().as_str().to_owned())),
+        ("amount", Some(charge.amount().to_string())),
+        ("due_on", Some(charge.due_on().to_string())),
+        ("provider", Some(charge.provider().to_owned())),
+        ("external_id", Some(charge.external_id().to_owned())),
+        ("status", Some(charge.status().as_str().to_owned())),
+    ]
+}
+
+/// Every field a new charge has set.
+pub fn charge_creation_changes(charge: &Charge) -> Vec<FieldChange> {
+    creation_from(charge_fields(charge))
+}
+
+/// What a move of the charge changes: its status.
+pub fn charge_changes(before: &Charge, after: &Charge) -> Vec<FieldChange> {
+    changes_between(charge_fields(before), charge_fields(after))
 }
 
 fn transfer_fields(transfer: &Transfer) -> Fields {

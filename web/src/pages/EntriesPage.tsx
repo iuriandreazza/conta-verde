@@ -18,6 +18,7 @@ import { EntryForm } from "../components/EntryForm";
 import { EntryHistory } from "../components/EntryHistory";
 import { ListRow } from "../components/ListRow";
 import { AttachmentsPanel } from "../components/AttachmentsPanel";
+import { ChargesPanel } from "../components/ChargesPanel";
 import { SettlementPanel } from "../components/SettlementPanel";
 import { Notice } from "../components/Notice";
 import { PageHeader } from "../components/PageHeader";
@@ -25,6 +26,7 @@ import { Spinner } from "../components/Spinner";
 import { BriefcaseBusinessIcon } from "../components/icons/briefcase-business";
 import { HistoryIcon } from "../components/icons/history";
 import { CircleDollarSignIcon } from "../components/icons/circle-dollar-sign";
+import { CreditCardIcon } from "../components/icons/credit-card";
 import { FileTextIcon } from "../components/icons/file-text";
 import { SquarePenIcon } from "../components/icons/square-pen";
 import { treeRows } from "../lib/categoryTree";
@@ -66,6 +68,7 @@ export function EntriesPage() {
   const [historyOpenFor, setHistoryOpenFor] = useState<string | null>(null);
   const [settlementsOpenFor, setSettlementsOpenFor] = useState<string | null>(null);
   const [attachmentsOpenFor, setAttachmentsOpenFor] = useState<string | null>(null);
+  const [chargesOpenFor, setChargesOpenFor] = useState<string | null>(null);
   const { banks, methods, categories, costCenters, parties, names, error: targetsError, loaded: targetsLoaded } = useEntryTargets(companyId);
 
   const {
@@ -303,6 +306,22 @@ export function EntriesPage() {
                               Baixas
                             </Button>
                           )}
+                          {!entry.voided && entry.kind === "receivable" && (
+                            <Button
+                              iconOnly
+                              icon={CreditCardIcon}
+                              type="button"
+                              variant="ghost"
+                              aria-label={`Cobranças de ${entry.description}`}
+                              aria-expanded={chargesOpenFor === entry.id}
+                              aria-controls={`charges-${entry.id}`}
+                              onClick={() =>
+                                setChargesOpenFor(chargesOpenFor === entry.id ? null : entry.id)
+                              }
+                            >
+                              Cobranças
+                            </Button>
+                          )}
                           <Button
                             iconOnly
                             icon={FileTextIcon}
@@ -343,6 +362,19 @@ export function EntriesPage() {
                               methods={methods}
                               canWrite={canWrite}
                               onChanged={() => void refresh(entry.id)}
+                            />
+                          </td>
+                        </tr>
+                      )}
+                      {chargesOpenFor === entry.id && (
+                        <tr id={`charges-${entry.id}`}>
+                          <td colSpan={5} role="region" aria-label={`Cobranças de ${entry.description}`}>
+                            <ChargesPanel
+                              // Remounted when the entry changes (a settlement moves the balances).
+                              key={JSON.stringify(entry.installments)}
+                              companyId={companyId}
+                              entry={entry}
+                              canWrite={canWrite}
                             />
                           </td>
                         </tr>
