@@ -1,3 +1,5 @@
+import { isAmbiguousDecimal, toApiDecimal } from "./decimal";
+
 // Stock quantities are decimal strings with up to three decimals (a minimum may have more): compared as whole
 // numbers in millionths in a `bigint`, never as a `Number` (ADR 0003).
 const SCALE = 6;
@@ -31,4 +33,20 @@ export function trimCost(cost: string): string {
 /** A signed quantity with its sign shown: `+10`, `-5`. */
 export function signedQuantity(quantity: string): string {
   return quantity.startsWith("-") ? quantity : `+${quantity}`;
+}
+
+/**
+ * What a person typed as the API's decimal, with a leading minus kept (`-1,5` is `-1.5`; `toApiDecimal` alone
+ * leaves it as typed). `undefined` for a blank field.
+ */
+export function toSignedDecimal(typed: string): string | undefined {
+  const text = typed.trim();
+  const negative = text.startsWith("-");
+  const decimal = toApiDecimal(negative ? text.slice(1) : text);
+  return decimal === undefined ? undefined : negative ? `-${decimal}` : decimal;
+}
+
+/** `1.500` could be fifteen hundred or one and a half: the person says which, as in every amount field. */
+export function isAmbiguousSigned(typed: string): boolean {
+  return isAmbiguousDecimal(typed.trim().replace(/^-\s*/, ""));
 }

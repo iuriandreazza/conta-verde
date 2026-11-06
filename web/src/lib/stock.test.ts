@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isBelowMinimum, isNegative, signedQuantity, trimCost } from "./stock";
+import { isAmbiguousSigned, isBelowMinimum, isNegative, signedQuantity, toSignedDecimal, trimCost } from "./stock";
 
 describe("stock quantities", () => {
   it("compares decimals exactly", () => {
@@ -20,5 +20,22 @@ describe("stock quantities", () => {
   it("shows the sign of a movement", () => {
     expect(signedQuantity("10")).toBe("+10");
     expect(signedQuantity("-5")).toBe("-5");
+  });
+});
+
+describe("typed stock decimals", () => {
+  it("keeps the minus of a signed quantity, with a comma or a dot", () => {
+    expect(toSignedDecimal("-1,5")).toBe("-1.5");
+    expect(toSignedDecimal("- 1.5")).toBe("-1.5");
+    expect(toSignedDecimal("2,5")).toBe("2.5");
+    expect(toSignedDecimal("  ")).toBeUndefined();
+  });
+
+  it("refuses a dotted figure that could be thousands, signed or not", () => {
+    expect(isAmbiguousSigned("1.500")).toBe(true);
+    expect(isAmbiguousSigned("-1.500")).toBe(true);
+    expect(isAmbiguousSigned("1,500")).toBe(false);
+    expect(isAmbiguousSigned("0.500")).toBe(false);
+    expect(isAmbiguousSigned("")).toBe(false);
   });
 });

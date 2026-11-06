@@ -164,6 +164,40 @@ describe("new stock movement", () => {
     });
   });
 
+  it("refuses a quantity or a unit cost that could be thousands, and takes a negative adjustment with a comma", async () => {
+    const fetchMock = mockApi(
+      answer((url, init) => (url.endsWith("/stock/movements") && init?.method === "POST" ? { status: 201, body: movement({ kind: "adjustment", quantity: "-1.5", value: "-9" }) } : undefined)),
+    );
+    renderAt("/companies/c1/stock");
+    const sheet = await openSheet();
+    await userEvent.selectOptions(sheet.getByLabelText("Produto"), "pr1");
+    await userEvent.type(sheet.getByLabelText("Quantidade"), "1.500");
+    await userEvent.type(sheet.getByLabelText("Valor do custo total"), "50");
+    await userEvent.click(sheet.getByRole("button", { name: "Registrar movimento" }));
+    expect(await sheet.findByRole("alert")).toHaveTextContent("1.500 pode ser mil e quinhentos ou um e meio");
+
+    await userEvent.clear(sheet.getByLabelText("Quantidade"));
+    await userEvent.type(sheet.getByLabelText("Quantidade"), "2");
+    await userEvent.clear(sheet.getByLabelText("Valor do custo total"));
+    await userEvent.type(sheet.getByLabelText("Valor do custo total"), "1.234");
+    await userEvent.click(sheet.getByRole("button", { name: "Registrar movimento" }));
+    expect(await sheet.findByRole("alert")).toHaveTextContent("1.500 pode ser mil e quinhentos");
+    expect(calls(fetchMock, "POST")).toHaveLength(0);
+
+    await userEvent.click(sheet.getByRole("radio", { name: "Ajuste" }));
+    await userEvent.clear(sheet.getByLabelText("Quantidade"));
+    await userEvent.type(sheet.getByLabelText("Quantidade"), "-1,5");
+    fireEvent.change(sheet.getByLabelText("Data"), { target: { value: "2026-11-10" } });
+    await userEvent.click(sheet.getByRole("button", { name: "Registrar movimento" }));
+    await vi.waitFor(() => expect(calls(fetchMock, "POST")).toHaveLength(1));
+    expect(JSON.parse(String(calls(fetchMock, "POST")[0][1]?.body))).toEqual({
+      product_id: "pr1",
+      kind: "adjustment",
+      quantity: "-1.5",
+      occurred_on: "2026-11-10",
+    });
+  });
+
   it("refuses an entry with no cost before asking the API, and shows the API's refusal of an exit beyond the balance", async () => {
     const fetchMock = mockApi(
       answer((url, init) =>
