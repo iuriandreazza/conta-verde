@@ -496,6 +496,13 @@ export const api = {
       { method: "POST", headers: { "Content-Type": "text/csv" }, body: file },
     ),
   listMembers: (companyId: string) => request<Member[]>(`/companies/${companyId}/members`),
+  changeRole: (companyId: string, userId: string, role: Role) =>
+    request<void>(`/companies/${companyId}/members/${userId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ role }),
+    }),
+  removeMember: (companyId: string, userId: string) =>
+    request<void>(`/companies/${companyId}/members/${userId}`, { method: "DELETE" }),
   listInvitations: (companyId: string) =>
     request<Invitation[]>(`/companies/${companyId}/invitations`),
   invite: (companyId: string, email: string, role: Role) =>

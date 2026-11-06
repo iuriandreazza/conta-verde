@@ -2436,6 +2436,100 @@ describe("members and invitations", () => {
     expect(screen.getByLabelText("E-mail")).toHaveValue("");
   });
 
+  describe("changing and removing members", () => {
+    const bia = { user_id: "u2", name: "Bia", email: "bia@example.com", role: "sales" } as const;
+
+    it("offers no role or removal for the owner, and both for the others", async () => {
+      mockApi((url) => {
+        if (url === "/api/auth/me") return { status: 200, body: profile };
+        return { status: 200, body: url.endsWith("/members") ? [ana, bia] : [] };
+      });
+      renderAt("/companies/c1/members");
+
+      expect(await screen.findByRole("combobox", { name: "Papel de Bia" })).toHaveValue("sales");
+      expect(screen.getByRole("button", { name: "Remover Bia" })).toBeInTheDocument();
+      expect(screen.queryByRole("combobox", { name: "Papel de Ana" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Remover Ana" })).not.toBeInTheDocument();
+    });
+
+    it("does not offer an admin to change or remove themselves", async () => {
+      const admin: Profile = {
+        ...profile,
+        companies: [{ id: "c1", name: "Padaria", role: "admin", permissions: OWNER_PERMISSIONS }],
+      };
+      mockApi((url) => {
+        if (url === "/api/auth/me") return { status: 200, body: admin };
+        return { status: 200, body: url.endsWith("/members") ? [{ ...ana, role: "admin" }, bia] : [] };
+      });
+      renderAt("/companies/c1/members");
+
+      expect(await screen.findByRole("combobox", { name: "Papel de Bia" })).toBeInTheDocument();
+      expect(screen.queryByRole("combobox", { name: "Papel de Ana" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Remover Ana" })).not.toBeInTheDocument();
+      expect(screen.getByRole("row", { name: /ana@example.com/ })).toHaveTextContent("Administrador");
+    });
+
+    it("changes a role and shows the list again", async () => {
+      let role: string = "sales";
+      const fetchMock = mockApi((url, init) => {
+        if (url === "/api/auth/me") return { status: 200, body: profile };
+        if (init?.method === "PATCH") {
+          role = JSON.parse(String(init.body)).role;
+          return { status: 204 };
+        }
+        return { status: 200, body: url.endsWith("/members") ? [ana, { ...bia, role }] : [] };
+      });
+      renderAt("/companies/c1/members");
+
+      await userEvent.selectOptions(await screen.findByRole("combobox", { name: "Papel de Bia" }), "financial");
+
+      await waitFor(() => expect(screen.getByRole("combobox", { name: "Papel de Bia" })).toHaveValue("financial"));
+      expect(String(sent(fetchMock, "PATCH")[0][0])).toBe("/api/companies/c1/members/u2");
+    });
+
+    it("asks before removing, and removes only once confirmed", async () => {
+      let members = [ana, bia];
+      const fetchMock = mockApi((url, init) => {
+        if (url === "/api/auth/me") return { status: 200, body: profile };
+        if (init?.method === "DELETE") {
+          members = [ana];
+          return { status: 204 };
+        }
+        return { status: 200, body: url.endsWith("/members") ? members : [] };
+      });
+      renderAt("/companies/c1/members");
+
+      await userEvent.click(await screen.findByRole("button", { name: "Remover Bia" }));
+      expect(sent(fetchMock, "DELETE")).toHaveLength(0);
+      await userEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+      expect(screen.getByRole("button", { name: "Remover Bia" })).toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole("button", { name: "Remover Bia" }));
+      await userEvent.click(screen.getByRole("button", { name: "Confirmar a remoção de Bia" }));
+
+      await waitFor(() => expect(screen.queryByText("bia@example.com")).not.toBeInTheDocument());
+      expect(String(sent(fetchMock, "DELETE")[0][0])).toBe("/api/companies/c1/members/u2");
+    });
+
+    it("says why a change was refused and reads the list again", async () => {
+      let members = [ana, bia];
+      mockApi((url, init) => {
+        if (url === "/api/auth/me") return { status: 200, body: profile };
+        if (init?.method === "PATCH") {
+          members = [ana];
+          return { status: 404, body: { error: "member not found" } };
+        }
+        return { status: 200, body: url.endsWith("/members") ? members : [] };
+      });
+      renderAt("/companies/c1/members");
+
+      await userEvent.selectOptions(await screen.findByRole("combobox", { name: "Papel de Bia" }), "viewer");
+
+      expect(await screen.findByRole("alert")).toHaveTextContent("member not found");
+      expect(screen.queryByText("bia@example.com")).not.toBeInTheDocument();
+    });
+  });
+
   it("shows why an invitation was refused and keeps what was typed", async () => {
     mockApi((url, init) => {
       if (url === "/api/auth/me") return { status: 200, body: profile };

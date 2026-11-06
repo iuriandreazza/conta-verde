@@ -1449,6 +1449,86 @@ pub async fn memberships_carry_a_role<I: IdentityRepository>(identities: &I) {
         found,
         [("Oficina Bia", Role::Owner), ("Padaria Ana", Role::Sales)]
     );
+
+    // A role changes in one company only, and a stranger has none to change.
+    identities
+        .set_role(bia.user.id(), ana_company, Role::Financial)
+        .await
+        .unwrap();
+    assert_eq!(
+        identities
+            .role_in(bia.user.id(), ana_company)
+            .await
+            .unwrap(),
+        Some(Role::Financial)
+    );
+    assert_eq!(
+        identities
+            .role_in(bia.user.id(), bia_company)
+            .await
+            .unwrap(),
+        Some(Role::Owner)
+    );
+    assert_eq!(
+        identities
+            .set_role(ana.user.id(), bia_company, Role::Viewer)
+            .await
+            .unwrap_err(),
+        RepositoryError::NotFound
+    );
+    // The owner's membership is never touched, by either write, whatever the caller checked.
+    assert_eq!(
+        identities
+            .set_role(ana.user.id(), ana_company, Role::Viewer)
+            .await
+            .unwrap_err(),
+        RepositoryError::NotFound
+    );
+    assert_eq!(
+        identities
+            .remove_membership(ana.user.id(), ana_company)
+            .await
+            .unwrap_err(),
+        RepositoryError::NotFound
+    );
+    assert_eq!(
+        identities
+            .role_in(ana.user.id(), ana_company)
+            .await
+            .unwrap(),
+        Some(Role::Owner)
+    );
+
+    // Removing ends that membership only, and the person can be added again.
+    identities
+        .remove_membership(bia.user.id(), ana_company)
+        .await
+        .unwrap();
+    assert_eq!(
+        identities
+            .role_in(bia.user.id(), ana_company)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        identities
+            .role_in(bia.user.id(), bia_company)
+            .await
+            .unwrap(),
+        Some(Role::Owner)
+    );
+    assert_eq!(
+        identities
+            .remove_membership(bia.user.id(), ana_company)
+            .await
+            .unwrap_err(),
+        RepositoryError::NotFound
+    );
+    identities
+        .add_membership(bia.user.id(), ana_company, Role::Viewer)
+        .await
+        .unwrap();
 }
 
 /// Inviting, accepting and withdrawing: who may be invited, that a link works once, for the address it

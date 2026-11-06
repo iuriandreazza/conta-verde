@@ -5,8 +5,9 @@ import { Button } from "../components/Button";
 import { Notice } from "../components/Notice";
 import { PageHeader } from "../components/PageHeader";
 import { Spinner } from "../components/Spinner";
+import { useAuth } from "../auth";
 import { UserPlusIcon } from "../components/icons/user-plus";
-import { INVITABLE_ROLES, ROLE_HINTS, ROLE_LABELS } from "../lib/roles";
+import { ASSIGNABLE_ROLES, ROLE_HINTS, ROLE_LABELS } from "../lib/roles";
 
 const formatDate = (millis: number) => new Date(millis).toLocaleDateString("pt-BR");
 
@@ -14,6 +15,10 @@ const formatDate = (millis: number) => new Date(millis).toLocaleDateString("pt-B
 // instance.
 export function MembersPage() {
   const { companyId = "" } = useParams();
+  const { session } = useAuth();
+  // Someone who changes or removes themselves here would lose this page under their feet: the owner
+  // (or another admin) does it for them.
+  const ownId = session.status === "authenticated" ? session.profile.user.id : null;
   const [members, setMembers] = useState<Member[]>([]);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [loading, setLoading] = useState(true);
@@ -23,6 +28,9 @@ export function MembersPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [invited, setInvited] = useState<Invited | null>(null);
   const [revokingId, setRevokingId] = useState<string | null>(null);
+  // One member is changed at a time, and removing asks first.
+  const [changingId, setChangingId] = useState<string | null>(null);
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
   // Bumped after an invitation so the e-mail field starts over.
   const [formVersion, setFormVersion] = useState(0);
 
@@ -63,6 +71,26 @@ export function MembersPage() {
       setFormError(errorMessage(failure));
     } finally {
       setSending(false);
+    }
+  }
+
+  async function changeMember(member: Member, change: () => Promise<void>) {
+    if (changingId !== null) {
+      return;
+    }
+    setChangingId(member.user_id);
+    setConfirmingId(null);
+    setError(null);
+    try {
+      await change();
+      await load();
+    } catch (failure) {
+      // Read again even so: a refusal often means the list was out of date (the member was removed
+      // meanwhile). `load` clears the error, so it is set after.
+      await load();
+      setError(errorMessage(failure));
+    } finally {
+      setChangingId(null);
     }
   }
 
@@ -107,6 +135,9 @@ export function MembersPage() {
                       <th>Nome</th>
                       <th>E-mail</th>
                       <th>Papel</th>
+                      <th>
+                        <span className="visually-hidden">Ações</span>
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -114,7 +145,75 @@ export function MembersPage() {
                       <tr key={member.user_id}>
                         <td>{member.name}</td>
                         <td>{member.email}</td>
-                        <td>{ROLE_LABELS[member.role]}</td>
+                        {member.role === "owner" || member.user_id === ownId ? (
+                          // A company has one owner, who is not changed or removed.
+                          <>
+                            <td>{ROLE_LABELS[member.role]}</td>
+                            <td />
+                          </>
+                        ) : (
+                          <>
+                            <td>
+                              <select
+                                aria-label={`Papel de ${member.name}`}
+                                value={member.role}
+                                disabled={changingId !== null}
+                                onChange={(event) =>
+                                  void changeMember(member, () =>
+                                    api.changeRole(companyId, member.user_id, event.target.value as Role),
+                                  )
+                                }
+                              >
+                                {ASSIGNABLE_ROLES.map((option) => (
+                                  <option key={option} value={option}>
+                                    {ROLE_LABELS[option]}
+                                  </option>
+                                ))}
+                              </select>
+                            </td>
+                            <td>
+                              {confirmingId === member.user_id ? (
+                                <span className="form-actions">
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    className="btn-small"
+                                    aria-label={`Confirmar a remoção de ${member.name}`}
+                                    pending={changingId === member.user_id}
+                                    disabled={changingId !== null}
+                                    onClick={() =>
+                                      void changeMember(member, () =>
+                                        api.removeMember(companyId, member.user_id),
+                                      )
+                                    }
+                                  >
+                                    Confirmar
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    className="btn-small"
+                                    disabled={changingId !== null}
+                                    onClick={() => setConfirmingId(null)}
+                                  >
+                                    Cancelar
+                                  </Button>
+                                </span>
+                              ) : (
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  className="btn-small"
+                                  aria-label={`Remover ${member.name}`}
+                                  disabled={changingId !== null}
+                                  onClick={() => setConfirmingId(member.user_id)}
+                                >
+                                  Remover
+                                </Button>
+                              )}
+                            </td>
+                          </>
+                        )}
                       </tr>
                     ))}
                   </tbody>
@@ -193,7 +292,7 @@ export function MembersPage() {
             <label>
               Papel
               <select value={role} onChange={(event) => setRole(event.target.value as Role)}>
-                {INVITABLE_ROLES.map((option) => (
+                {ASSIGNABLE_ROLES.map((option) => (
                   <option key={option} value={option}>
                     {ROLE_LABELS[option]}
                   </option>

@@ -84,6 +84,23 @@ pub trait IdentityRepository: Send + Sync {
         role: Role,
     ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
 
+    /// Changes what the user is in the company. `NotFound` when they are not a member, and also
+    /// when they are the owner, whose membership this never touches.
+    fn set_role(
+        &self,
+        user_id: UserId,
+        company_id: CompanyId,
+        role: Role,
+    ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
+
+    /// Ends the user's membership of the company, with the same `NotFound` as [`Self::set_role`].
+    /// The user, their sessions and their other companies are left alone.
+    fn remove_membership(
+        &self,
+        user_id: UserId,
+        company_id: CompanyId,
+    ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
+
     fn create_session(
         &self,
         user_id: UserId,

@@ -4,7 +4,7 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use conta_verde_application::{InvitationPreview, Invited, Member};
-use conta_verde_domain::{Invitation, InvitationId, Role};
+use conta_verde_domain::{Invitation, InvitationId, Role, UserId};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -88,6 +88,48 @@ pub(crate) async fn list_members<X: Ports>(
 ) -> Result<Json<Vec<MemberResponse>>, ApiError> {
     let members = state.members.members(company_id).await?;
     Ok(Json(members.iter().map(MemberResponse::from).collect()))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ChangeRoleRequest {
+    role: String,
+}
+
+// A string, parsed here, for the same reason as the invitation's id.
+fn parse_user_id(raw: &str) -> Result<UserId, ApiError> {
+    Uuid::parse_str(raw)
+        .map(UserId::from_uuid)
+        .map_err(|_| conta_verde_application::ApplicationError::MemberNotFound.into())
+}
+
+pub(crate) async fn change_role<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, _): CompanyAccess,
+    Path((_, user_id)): Path<(Uuid, String)>,
+    ApiJson(request): ApiJson<ChangeRoleRequest>,
+) -> Result<StatusCode, ApiError> {
+    // `owner` is a role that exists, and is refused by the use case with the reason.
+    let role = Role::parse(&request.role).ok_or(ApiError::InvalidField(
+        "role must be admin, financial, sales, stock, accountant or viewer",
+    ))?;
+    state
+        .members
+        .change_role(company_id, parse_user_id(&user_id)?, role)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(crate) async fn remove_member<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, _): CompanyAccess,
+    Path((_, user_id)): Path<(Uuid, String)>,
+) -> Result<StatusCode, ApiError> {
+    state
+        .members
+        .remove(company_id, parse_user_id(&user_id)?)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub(crate) async fn list_invitations<X: Ports>(

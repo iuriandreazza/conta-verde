@@ -71,6 +71,51 @@ where
         Ok(self.identities.members_of(company_id).await?)
     }
 
+    /// Changes what a member is in the company. The owner is never changed, and nobody is made one.
+    pub async fn change_role(
+        &self,
+        company_id: CompanyId,
+        user_id: UserId,
+        role: Role,
+    ) -> Result<(), ApplicationError> {
+        if role == Role::Owner {
+            return Err(ApplicationError::OwnerIsFixed);
+        }
+        self.ensure_removable(company_id, user_id).await?;
+        self.identities
+            .set_role(user_id, company_id, role)
+            .await
+            .map_err(member_gone)
+    }
+
+    /// Takes a member out of the company: they lose access at their next request, and can be invited
+    /// again. The owner cannot be removed.
+    pub async fn remove(
+        &self,
+        company_id: CompanyId,
+        user_id: UserId,
+    ) -> Result<(), ApplicationError> {
+        self.ensure_removable(company_id, user_id).await?;
+        self.identities
+            .remove_membership(user_id, company_id)
+            .await
+            .map_err(member_gone)
+    }
+
+    /// The owner is told apart from a stranger so the answer says why. The adapters refuse the owner
+    /// as well, so a write that races this check still cannot reach it.
+    async fn ensure_removable(
+        &self,
+        company_id: CompanyId,
+        user_id: UserId,
+    ) -> Result<(), ApplicationError> {
+        match self.identities.role_in(user_id, company_id).await? {
+            None => Err(ApplicationError::MemberNotFound),
+            Some(Role::Owner) => Err(ApplicationError::OwnerIsFixed),
+            Some(_) => Ok(()),
+        }
+    }
+
     /// The company's open invitations, oldest first, expired ones included.
     pub async fn open_invitations(
         &self,
@@ -272,6 +317,14 @@ fn one_line(text: &str) -> String {
     text.chars()
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect()
+}
+
+/// A write that matched no membership means they were removed in the meantime.
+fn member_gone(error: RepositoryError) -> ApplicationError {
+    match error {
+        RepositoryError::NotFound => ApplicationError::MemberNotFound,
+        other => other.into(),
+    }
 }
 
 fn now_millis() -> i64 {
