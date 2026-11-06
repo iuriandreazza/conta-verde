@@ -111,7 +111,7 @@ export function InventoryCountForm({ products, count, pending, error, onSubmit, 
           </label>
           <label>
             Observações
-            <input name="notes" maxLength={500} autoComplete="off" defaultValue={count?.notes ?? ""} />
+            <input name="notes" maxLength={200} autoComplete="off" defaultValue={count?.notes ?? ""} />
           </label>
         </div>
       </section>

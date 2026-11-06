@@ -13974,4 +13974,43 @@ pub async fn runs_the_inventory_count<C, M, P, St>(
             .len(),
         3
     );
+
+    // The count says what was found on its day: goods that came in after it are not undone by it. 10 more come in on
+    // December 1st; a count of the 30th that found 1 agrees with what the stock held through the 30th.
+    let mut later = entered(coffee, "10", "5");
+    later.occurred_on = "2026-12-01".into();
+    stock.record(company, &ana, later).await.unwrap();
+    let fourth = counts
+        .register(company, &ana, count_draft(&[(coffee, "1")]))
+        .await
+        .unwrap();
+    assert_eq!(
+        figures(&counts.view(company, fourth.id()).await.unwrap()),
+        [("1".into(), "1".into(), "0".into())]
+    );
+    counts.apply(company, &ana, fourth.id()).await.unwrap();
+    assert_eq!(
+        stock
+            .list(
+                company,
+                &StockMovementQuery::default()
+                    .of_kind(conta_verde_domain::StockMovementKind::Adjustment),
+                None,
+                None
+            )
+            .await
+            .unwrap()
+            .items
+            .len(),
+        3
+    );
+    assert_eq!(
+        stock
+            .balance_of(company, coffee)
+            .await
+            .unwrap()
+            .quantity()
+            .to_string(),
+        "11"
+    );
 }
