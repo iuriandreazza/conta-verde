@@ -1,8 +1,8 @@
 use std::future::Future;
 
 use conta_verde_domain::{
-    AuditEntry, AuditRecord, CompanyId, ContractCycle, ContractId, PartyId, QuoteId, Sale, SaleId,
-    SaleReturn, SaleStatus,
+    AuditEntry, AuditRecord, CalendarDate, CompanyId, ContractCycle, ContractId, PartyId, QuoteId,
+    Sale, SaleId, SaleReturn, SaleStatus,
 };
 
 use crate::list_query::clean_search;
@@ -25,6 +25,7 @@ pub struct SaleQuery {
     customer: Option<PartyId>,
     seller: Option<PartyId>,
     contract: Option<ContractId>,
+    sold_between: Option<(CalendarDate, CalendarDate)>,
     sort: NumberSort,
 }
 
@@ -55,6 +56,12 @@ impl SaleQuery {
         self
     }
 
+    /// Sold from a day through a day, both included.
+    pub fn sold_between(mut self, from: CalendarDate, to: CalendarDate) -> Self {
+        self.sold_between = Some((from, to));
+        self
+    }
+
     pub fn sorted(mut self, sort: NumberSort) -> Self {
         self.sort = sort;
         self
@@ -80,6 +87,10 @@ impl SaleQuery {
         self.contract
     }
 
+    pub fn span(&self) -> Option<(CalendarDate, CalendarDate)> {
+        self.sold_between
+    }
+
     pub fn sort(&self) -> NumberSort {
         self.sort
     }
@@ -93,6 +104,9 @@ impl SaleQuery {
             && self
                 .seller
                 .is_none_or(|seller| sale.seller_id() == Some(seller))
+            && self
+                .sold_between
+                .is_none_or(|(from, to)| (from..=to).contains(&sale.sold_on()))
             && self.contract.is_none_or(|contract| {
                 sale.cycle()
                     .is_some_and(|cycle| cycle.contract_id == contract)
@@ -191,6 +205,13 @@ pub trait SaleRepository: Send + Sync {
         known_returns: usize,
         audit: &AuditEntry,
     ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
+
+    /// The returns of these sales of the company, oldest first.
+    fn returns_of_sales(
+        &self,
+        company_id: CompanyId,
+        sale_ids: &[SaleId],
+    ) -> impl Future<Output = Result<Vec<SaleReturn>, RepositoryError>> + Send;
 
     /// The returns of a sale of the company, oldest first.
     fn returns_of(

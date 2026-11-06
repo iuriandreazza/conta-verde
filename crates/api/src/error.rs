@@ -134,6 +134,7 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
         ApplicationError::QuoteNotFound
         | ApplicationError::SaleNotFound
         | ApplicationError::ContractNotFound
+        | ApplicationError::CommissionRuleNotFound
         | ApplicationError::EntryNotFound
         | ApplicationError::StatementLineNotFound
         | ApplicationError::RecurrenceNotFound

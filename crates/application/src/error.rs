@@ -113,6 +113,8 @@ pub enum ApplicationError {
     SaleNotFound,
     /// No contract with this id in the company (another company's looks the same).
     ContractNotFound,
+    /// No commission rule with this id in the company (another company's looks the same).
+    CommissionRuleNotFound,
     /// The contract was changed while this was being done.
     ContractChanged,
     /// The sale was changed while this was being done.
@@ -271,6 +273,7 @@ impl fmt::Display for ApplicationError {
             Self::QuoteNotFound => f.write_str("quote not found"),
             Self::SaleNotFound => f.write_str("sale not found"),
             Self::ContractNotFound => f.write_str("contract not found"),
+            Self::CommissionRuleNotFound => f.write_str("commission rule not found"),
             Self::ContractChanged => f.write_str("the contract was changed meanwhile: read it again"),
             Self::SaleChanged => f.write_str("the sale was changed meanwhile: read it again"),
             Self::EntryIsVoided => f.write_str("the entry was cancelled: it cannot change or be settled"),

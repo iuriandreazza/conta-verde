@@ -274,6 +274,13 @@ impl SaleRepository for PostgresSaleRepository {
             sql.push(" AND contract_id = ")
                 .push_bind(contract.as_uuid());
         }
+        if let Some((from, to)) = query.span() {
+            sql.push(" AND sold_on BETWEEN CAST(")
+                .push_bind(from.to_string())
+                .push(" AS DATE) AND CAST(")
+                .push_bind(to.to_string())
+                .push(" AS DATE)");
+        }
         if let Some(text) = query.search() {
             // `strpos` instead of `LIKE` so that `%` and `_` in the text mean themselves.
             sql.push(" AND (number::text = ")
@@ -399,19 +406,24 @@ impl SaleRepository for PostgresSaleRepository {
         tx.commit().await.map_err(storage_error)
     }
 
-    async fn returns_of(
+    async fn returns_of_sales(
         &self,
         company_id: CompanyId,
-        sale_id: SaleId,
+        sale_ids: &[SaleId],
     ) -> Result<Vec<SaleReturn>, RepositoryError> {
         let mut tx = snapshot(&self.pool).await?;
         let rows = sqlx::query(
-            "SELECT id, to_char(returned_on, 'YYYY-MM-DD') AS returned_on, reason, \
+            "SELECT id, sale_id, to_char(returned_on, 'YYYY-MM-DD') AS returned_on, reason, \
              refund::text AS refund FROM sale_returns \
-             WHERE company_id = $1 AND sale_id = $2 ORDER BY created_at, id",
+             WHERE company_id = $1 AND sale_id = ANY($2) ORDER BY created_at, id",
         )
         .bind(company_id.as_uuid())
-        .bind(sale_id.as_uuid())
+        .bind(
+            sale_ids
+                .iter()
+                .map(|id| id.as_uuid())
+                .collect::<Vec<Uuid>>(),
+        )
         .fetch_all(&mut *tx)
         .await
         .map_err(storage_error)?;
@@ -448,6 +460,7 @@ impl SaleRepository for PostgresSaleRepository {
         rows.iter()
             .map(|row| {
                 let raw: Uuid = row.try_get("id").map_err(storage_error)?;
+                let sale_id = SaleId::from_uuid(row.try_get("sale_id").map_err(storage_error)?);
                 let day: String = row.try_get("returned_on").map_err(storage_error)?;
                 let refund: String = row.try_get("refund").map_err(storage_error)?;
                 Ok(SaleReturn::restored(
@@ -465,6 +478,14 @@ impl SaleRepository for PostgresSaleRepository {
                 ))
             })
             .collect()
+    }
+
+    async fn returns_of(
+        &self,
+        company_id: CompanyId,
+        sale_id: SaleId,
+    ) -> Result<Vec<SaleReturn>, RepositoryError> {
+        self.returns_of_sales(company_id, &[sale_id]).await
     }
 }
 

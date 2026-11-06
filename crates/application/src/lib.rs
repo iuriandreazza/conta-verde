@@ -9,6 +9,8 @@ mod cash_flow;
 mod category_repository;
 mod category_service;
 mod cnpj_registry;
+mod commission_repository;
+mod commission_service;
 mod contract_repository;
 mod contract_service;
 mod cost_center_repository;
@@ -57,6 +59,10 @@ pub use cash_flow::{CashFlow, CashFlowPeriod, CashFlowQuery, Granularity, PastDu
 pub use category_repository::{CategoryRepository, MAX_CATEGORIES};
 pub use category_service::{CategoryService, NewCategory};
 pub use cnpj_registry::{CnpjLookupError, CnpjRegistry, RegistryEntry};
+pub use commission_repository::{CommissionRuleQuery, CommissionRuleRepository, RuleCursor};
+pub use commission_service::{
+    CommissionRulePage, CommissionService, CommissionStatement, SellerStatement, StatementSale,
+};
 pub use contract_repository::{ContractQuery, ContractRepository};
 pub use contract_service::{BillingReport, ContractPage, ContractService};
 pub use cost_center_repository::{CostCenterQuery, CostCenterRepository};
