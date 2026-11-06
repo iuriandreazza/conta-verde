@@ -2940,6 +2940,10 @@ describe("financial entries", () => {
 
   /** The panel with the form: the sidebar is an aside too, so it is found by its heading. */
   const formPanel = async (heading: string) => {
+    // A new entry is asked for with the button; a change opens the sheet by itself.
+    if (heading === "Novo lançamento") {
+      await userEvent.click(await screen.findByRole("button", { name: heading }));
+    }
     const panel = within((await screen.findByRole("heading", { name: heading })).closest("aside")!);
     // The form appears once what it points at has been read.
     await panel.findByLabelText("Descrição");

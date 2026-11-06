@@ -81,3 +81,25 @@ describe("how the bank accounts list presents itself", () => {
     expect(await screen.findByText("Mostrando 1 conta")).toBeInTheDocument();
   });
 });
+
+describe("asking for a new entry from the top bar", () => {
+  it("opens the sheet for a role that can write and clears the address", async () => {
+    serve([], null);
+    renderAt("/companies/c1/entries?novo=1");
+
+    expect(await screen.findByRole("heading", { name: "Novo lançamento" })).toBeInTheDocument();
+  });
+
+  it("only clears the address for a role that cannot write", async () => {
+    const reader = { ...profile, companies: [{ ...profile.companies[0], permissions: { finance: "read" as const } }] };
+    mockApi((url) => {
+      if (url === "/api/auth/me") return { status: 200, body: reader };
+      return { status: 200, body: { items: [], next_cursor: null } };
+    });
+    renderAt("/companies/c1/entries?novo=1");
+
+    await screen.findByRole("heading", { name: "Lançamentos" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Novo lançamento" })).not.toBeInTheDocument();
+  });
+});

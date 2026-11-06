@@ -25,7 +25,7 @@ interface AppTopbarProps {
 function creationItems(companyId: string, permissions: AppTopbarProps["permissions"]): MenuItem[] {
   const base = `/companies/${companyId}`;
   const items: (MenuItem & { area: Area })[] = [
-    { key: "entry", label: "Novo lançamento", icon: CircleDollarSignIcon, to: `${base}/entries`, area: "finance" },
+    { key: "entry", label: "Novo lançamento", icon: CircleDollarSignIcon, to: `${base}/entries?novo=1`, area: "finance" },
     { key: "transfer", label: "Nova transferência", icon: SendIcon, to: `${base}/transfers`, area: "finance" },
     { key: "quote", label: "Novo orçamento", icon: FileTextIcon, to: `${base}/quotes`, area: "sales" },
     { key: "sale", label: "Nova venda", icon: HandCoinsIcon, to: `${base}/sales`, area: "sales" },
