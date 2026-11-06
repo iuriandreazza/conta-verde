@@ -108,3 +108,22 @@ Slices of this review, each with web tests, `pnpm check`, a browser check and it
 
 Left to Phase 3, deliberately: S1, S2, S4 to S7 (they change the navigation or the dashboard's data), and S8
 (masking amounts) as a later proposal. Checked on 2026-11-06: no open pull request touched `web/`.
+
+## Second pass: parity with the reference's way of working
+
+Goal: someone who already uses a cloud ERP of this kind should know where things are and how to start a record
+without being taught. Described in our own words; no wording, logo or screen of the reference is used.
+
+| What a person expects | Where it is in conta-verde |
+|---|---|
+| A "new" button in the top bar that starts any record | `AppTopbar` New menu; each item opens a bottom sheet over the current page, never navigates |
+| Revenue and expense as separate starting points | "Nova receita" / "Nova despesa" (Alt+R / Alt+D), the entry sheet preset to the kind |
+| Receivables and payables as their own lists | "Contas a receber" / "Contas a pagar" in Financeiro: the entries list with `?tipo=` in the address |
+| Every list has search, filters, an order and "load more" | `usePagedList` pages; filters in one row above the table |
+| Creating on a list page opens the same sheet | `openCreate` from the page's button, `useOnCreated` reloads and flashes the new row |
+| Keyboard shortcuts for the common creations | Alt+letter hints in the New menu (`MenuItem.shortcut`); Alt+R and Alt+D replace the generic entry's Alt+L, and recurrence lost its Alt+R |
+| Closing a half-filled form asks first | `SheetGuard`: "Descartar edições?" |
+
+Not matched because they need the API first: a period (month) filter on entries, a strip with the totals by state
+above the list, numbered pages (the API is cursor-paginated), and bulk actions on selected rows. Export, print and
+a reports menu in the action row are the next front-end slice.
