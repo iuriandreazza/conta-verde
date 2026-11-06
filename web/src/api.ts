@@ -917,6 +917,67 @@ export interface ContractFilters {
 
 export const NO_CONTRACT_FILTERS: ContractFilters = { q: "", status: "", sort: "name" };
 
+/** What a seller earns on completed sales: the most specific rule in force on the sale's day wins (ADR 0041). */
+export interface CommissionRule {
+  id: string;
+  company_id: string;
+  seller_id: string | null;
+  product_id: string | null;
+  /** A percentage above 0 and at most 100, with at most two decimals. */
+  rate: string;
+  starts_on: string;
+  ends_on: string | null;
+  active: boolean;
+}
+
+export interface CommissionRulePage {
+  items: CommissionRule[];
+  next_cursor: string | null;
+}
+
+/** Replaces the whole rule. */
+export interface CommissionRuleInput {
+  seller_id?: string;
+  product_id?: string;
+  rate: string;
+  starts_on: string;
+  ends_on?: string;
+  active: boolean;
+}
+
+export interface CommissionRuleFilters {
+  seller: string;
+  product: string;
+  active: "" | "true" | "false";
+}
+
+export const NO_COMMISSION_RULE_FILTERS: CommissionRuleFilters = { seller: "", product: "", active: "" };
+
+export interface CommissionStatementSale {
+  sale_id: string;
+  number: number;
+  sold_on: string;
+  customer_id: string;
+  /** The net value of the lines, less what came back. */
+  base: string;
+  commission: string;
+}
+
+export interface SellerStatement {
+  seller_id: string;
+  base: string;
+  commission: string;
+  sales: CommissionStatementSale[];
+}
+
+export interface CommissionStatement {
+  from: string;
+  to: string;
+  base: string;
+  commission: string;
+  sellers: SellerStatement[];
+}
+
 export interface EntryInstallment {
   number: number;
   /** `YYYY-MM-DD`. */
@@ -1339,6 +1400,29 @@ export const api = {
     post<Contract>(`/companies/${companyId}/contracts/${id}/terminate`, { on }),
   contractHistory: (companyId: string, id: string) =>
     request<HistoryEntry[]>(`/companies/${companyId}/contracts/${id}/history`),
+  listCommissionRules: (companyId: string, filters: CommissionRuleFilters = NO_COMMISSION_RULE_FILTERS, after?: string) => {
+    const params = new URLSearchParams();
+    if (filters.seller) params.set("seller", filters.seller);
+    if (filters.product) params.set("product", filters.product);
+    if (filters.active) params.set("active", filters.active);
+    if (after) params.set("after", after);
+    const query = params.size > 0 ? `?${params}` : "";
+    return request<CommissionRulePage>(`/companies/${companyId}/commission-rules${query}`);
+  },
+  createCommissionRule: (companyId: string, input: CommissionRuleInput) =>
+    post<CommissionRule>(`/companies/${companyId}/commission-rules`, input),
+  updateCommissionRule: (companyId: string, id: string, input: CommissionRuleInput) =>
+    request<CommissionRule>(`/companies/${companyId}/commission-rules/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  commissionRuleHistory: (companyId: string, id: string) =>
+    request<HistoryEntry[]>(`/companies/${companyId}/commission-rules/${id}/history`),
+  commissionStatement: (companyId: string, from: string, to: string, seller: string) => {
+    const params = new URLSearchParams({ from, to });
+    if (seller) params.set("seller", seller);
+    return request<CommissionStatement>(`/companies/${companyId}/commissions?${params}`);
+  },
   convertQuote: (companyId: string, quoteId: string, input: ConversionInput) =>
     post<Sale>(`/companies/${companyId}/quotes/${quoteId}/convert`, input),
   listSales: (companyId: string, filters: SaleFilters = NO_SALE_FILTERS, after?: string) => {

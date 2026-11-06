@@ -2,9 +2,9 @@ use uuid::Uuid;
 
 use crate::line::lines_text;
 use crate::{
-    AccountOpening, Attachment, BankAccount, Category, CompanyId, Contract, CostCenter,
-    DocumentCheck, FinancialEntry, LineMatch, Party, PaymentMethod, PaymentTerm, Product, Quote,
-    Recurrence, Sale, SaleReturn, Settlement, StatementLine, Tag, Transfer, UserId,
+    AccountOpening, Attachment, BankAccount, Category, CommissionRule, CompanyId, Contract,
+    CostCenter, DocumentCheck, FinancialEntry, LineMatch, Party, PaymentMethod, PaymentTerm,
+    Product, Quote, Recurrence, Sale, SaleReturn, Settlement, StatementLine, Tag, Transfer, UserId,
 };
 
 /// Who made a change. The name is a snapshot: history must keep reading the same after the user is
@@ -36,6 +36,7 @@ pub enum AuditEntity {
     Sale,
     SaleReturn,
     Contract,
+    CommissionRule,
 }
 
 impl AuditEntity {
@@ -56,6 +57,7 @@ impl AuditEntity {
             Self::Sale => "sale",
             Self::SaleReturn => "sale_return",
             Self::Contract => "contract",
+            Self::CommissionRule => "commission_rule",
             Self::Settlement => "settlement",
             Self::Transfer => "transfer",
             Self::AccountOpening => "account_opening",
@@ -298,6 +300,20 @@ impl Audited for SaleReturn {
 impl Audited for Contract {
     fn audit_entity(&self) -> AuditEntity {
         AuditEntity::Contract
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.id().as_uuid()
+    }
+}
+
+impl Audited for CommissionRule {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::CommissionRule
     }
 
     fn audit_company(&self) -> CompanyId {
@@ -788,6 +804,38 @@ pub fn contract_creation_changes(contract: &Contract) -> Vec<FieldChange> {
 
 pub fn contract_changes(before: &Contract, after: &Contract) -> Vec<FieldChange> {
     changes_between(contract_fields(before), contract_fields(after))
+}
+
+fn commission_rule_fields(rule: &CommissionRule) -> Fields {
+    vec![
+        (
+            "seller_id",
+            rule.seller_id().map(|id| id.as_uuid().to_string()),
+        ),
+        (
+            "product_id",
+            rule.product_id().map(|id| id.as_uuid().to_string()),
+        ),
+        ("rate", Some(rule.rate().to_string())),
+        ("starts_on", Some(rule.starts_on().to_string())),
+        ("ends_on", rule.ends_on().map(|day| day.to_string())),
+        ("active", Some(rule.is_active().to_string())),
+    ]
+}
+
+/// Every field a new commission rule has set.
+pub fn commission_rule_creation_changes(rule: &CommissionRule) -> Vec<FieldChange> {
+    creation_from(commission_rule_fields(rule))
+}
+
+pub fn commission_rule_changes(
+    before: &CommissionRule,
+    after: &CommissionRule,
+) -> Vec<FieldChange> {
+    changes_between(
+        commission_rule_fields(before),
+        commission_rule_fields(after),
+    )
 }
 
 fn statement_line_fields(line: &StatementLine) -> Fields {

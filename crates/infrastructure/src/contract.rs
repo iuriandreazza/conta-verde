@@ -9,11 +9,12 @@ use conta_verde_application::{
     SecretService,
 };
 use conta_verde_application::{
-    ContractQuery, EmailSender, NumberSort, QuotePage, QuoteQuery, QuoteRepository, QuoteService,
-    SalesReferences,
+    CommissionRuleQuery, CommissionRuleRepository, CommissionService, ContractRepository,
+    ContractService, Conversion, Refund, SaleQuery, SaleRepository, SaleService,
 };
 use conta_verde_application::{
-    ContractRepository, ContractService, Conversion, Refund, SaleQuery, SaleRepository, SaleService,
+    ContractQuery, EmailSender, NumberSort, QuotePage, QuoteQuery, QuoteRepository, QuoteService,
+    SalesReferences,
 };
 use conta_verde_application::{
     ImportRow, InvitationRepository, InvitationState, Invited, MemberService, NewAccount,
@@ -31,7 +32,7 @@ use conta_verde_domain::{
     document_check_changes, payment_method_changes, payment_method_creation_changes,
     product_changes, product_creation_changes,
 };
-use conta_verde_domain::{BillingCycle, ContractDraft, ContractStatus};
+use conta_verde_domain::{BillingCycle, CommissionRuleDraft, ContractDraft, ContractStatus};
 use conta_verde_domain::{
     EntryOrigin, ReturnItemDraft, SaleDraft, SaleReturn, SaleReturnDraft, SaleReturnId, SaleStatus,
     sale_return_creation_changes,
@@ -10457,5 +10458,319 @@ pub async fn bills_contracts_every_cycle<C, S, Q, E, F, R>(
             .items
             .len(),
         4
+    );
+}
+
+fn rule_draft(
+    seller: Option<PartyId>,
+    product: Option<ProductId>,
+    rate: &str,
+    starts_on: &str,
+    ends_on: Option<&str>,
+) -> CommissionRuleDraft {
+    CommissionRuleDraft {
+        seller_id: seller,
+        product_id: product,
+        rate: rate.into(),
+        starts_on: starts_on.into(),
+        ends_on: ends_on.map(Into::into),
+        active: true,
+    }
+}
+
+/// Commission rules are a register of their own: a rate between two days for a seller and a product or for
+/// all, which has to name what is usable. The statement of a span adds up the completed sales of each seller
+/// line by line, net of what came back, by the narrowest rule in force on the day of each sale; a sale
+/// without a seller, an order and a cancelled sale earn nothing, and a rule that ends does not rewrite what it
+/// earned before. Nothing of another company's shows.
+pub async fn computes_commission_statements<CR, S2, R2, S, Q, E, F, R>(
+    commissions: &CommissionService<CR, S2, R2>,
+    sales: &SaleService<S, Q, E, F, R>,
+    company: CompanyId,
+    other_company: CompanyId,
+    entry_seed: &EntrySeed,
+    seed: &SalesSeed,
+) where
+    CR: CommissionRuleRepository,
+    S2: SaleRepository,
+    R2: SalesReferences,
+    S: SaleRepository,
+    Q: QuoteRepository,
+    E: FinancialEntryRepository,
+    F: EntryReferences,
+    R: SalesReferences,
+{
+    let ana = actor();
+    let day = |text: &str| CalendarDate::parse(text).unwrap();
+    let vera = seed.seller;
+
+    // What a rule is, and what it may name.
+    let general = commissions
+        .register(
+            company,
+            &ana,
+            rule_draft(None, None, "5", "2026-01-01", None),
+        )
+        .await
+        .unwrap();
+    let vera_coffee = commissions
+        .register(
+            company,
+            &ana,
+            rule_draft(Some(vera), Some(seed.product), "8", "2026-01-01", None),
+        )
+        .await
+        .unwrap();
+    assert_eq!(vera_coffee.rate().to_string(), "8");
+    assert_eq!(
+        commissions
+            .history(company, general.id())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    for (rate, error) in [
+        ("0", ApplicationError::Domain(DomainError::InvalidPercent)),
+        (
+            "100.5",
+            ApplicationError::Domain(DomainError::InvalidPercent),
+        ),
+    ] {
+        assert_eq!(
+            commissions
+                .register(
+                    company,
+                    &ana,
+                    rule_draft(None, None, rate, "2026-01-01", None)
+                )
+                .await
+                .unwrap_err(),
+            error
+        );
+    }
+    assert_eq!(
+        commissions
+            .register(
+                company,
+                &ana,
+                rule_draft(Some(seed.customer), None, "5", "2026-01-01", None)
+            )
+            .await
+            .unwrap_err(),
+        ApplicationError::UnusableReference("seller")
+    );
+    assert_eq!(
+        commissions
+            .register(
+                company,
+                &ana,
+                rule_draft(None, Some(seed.inactive_product), "5", "2026-01-01", None)
+            )
+            .await
+            .unwrap_err(),
+        ApplicationError::UnusableReference("product")
+    );
+    assert_eq!(
+        commissions
+            .get(other_company, general.id())
+            .await
+            .unwrap_err(),
+        ApplicationError::CommissionRuleNotFound
+    );
+    assert!(
+        commissions
+            .list(other_company, &CommissionRuleQuery::default(), None, None)
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
+    let listed = |query: CommissionRuleQuery| {
+        let commissions = &commissions;
+        async move {
+            commissions
+                .list(company, &query, None, None)
+                .await
+                .unwrap()
+                .items
+                .len()
+        }
+    };
+    assert_eq!(listed(CommissionRuleQuery::default()).await, 2);
+    assert_eq!(
+        listed(CommissionRuleQuery::default().with_seller(vera)).await,
+        1
+    );
+    assert_eq!(
+        listed(CommissionRuleQuery::default().with_product(seed.product)).await,
+        1
+    );
+    assert_eq!(
+        listed(CommissionRuleQuery::default().with_active(false)).await,
+        0
+    );
+    // A change records only what changed; the same body again records nothing.
+    commissions
+        .update(
+            company,
+            &ana,
+            general.id(),
+            rule_draft(None, None, "5", "2026-01-01", None),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        commissions
+            .history(company, general.id())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // Sales: one that earns, one that does not for want of a seller, an order, and a cancelled one.
+    let sold = |sold_on: &'static str| {
+        let mut draft = sale_draft(entry_seed, seed);
+        draft.sold_on = sold_on.into();
+        draft
+    };
+    let a = sales
+        .register(company, &ana, sold("2026-11-06"))
+        .await
+        .unwrap();
+    let b = sales
+        .register(company, &ana, sold("2026-12-15"))
+        .await
+        .unwrap();
+    let mut nobody = sold("2026-11-07");
+    nobody.seller_id = None;
+    let c = sales.register(company, &ana, nobody).await.unwrap();
+    let d = sales
+        .register(company, &ana, sold("2026-11-08"))
+        .await
+        .unwrap();
+    let _order = sales
+        .register(company, &ana, sold("2026-11-09"))
+        .await
+        .unwrap();
+    for sale in [&a, &b, &c, &d] {
+        sales.complete(company, &ana, sale.id()).await.unwrap();
+    }
+    sales.cancel(company, &ana, d.id()).await.unwrap();
+
+    let in_november = commissions
+        .statement(company, None, day("2026-11-01"), day("2026-11-30"))
+        .await
+        .unwrap();
+    assert_eq!(in_november.sellers.len(), 1);
+    let one = &in_november.sellers[0];
+    assert_eq!(one.seller_id, vera);
+    assert_eq!(one.sales.len(), 1);
+    assert_eq!(one.sales[0].sale.number(), a.number());
+    // 30 of coffee at 8% and 5 of bread at the general 5%: 2.4 and 0.25.
+    assert_eq!(
+        (one.base.to_string(), one.commission.to_string()),
+        ("35".to_owned(), "2.65".to_owned())
+    );
+    assert_eq!(
+        (
+            in_november.base.to_string(),
+            in_november.commission.to_string()
+        ),
+        ("35".to_owned(), "2.65".to_owned())
+    );
+
+    // What came back is taken off the base before the rate: one coffee of three refunds 10.
+    sales
+        .register_return(
+            company,
+            &ana,
+            a.id(),
+            return_draft(&[(1, "1")]),
+            Refund {
+                category_id: entry_seed.other_category,
+                due_on: "2026-11-20".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let returned = commissions
+        .statement(company, Some(vera), day("2026-11-01"), day("2026-11-30"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (returned.base.to_string(), returned.commission.to_string()),
+        ("25".to_owned(), "1.85".to_owned())
+    );
+    // The seller filter and the span narrow it; another company's has nothing; a backwards span is refused.
+    for (seller, from, to) in [
+        (Some(seed.customer), "2026-11-01", "2026-12-31"),
+        (None, "2026-10-01", "2026-10-31"),
+        (None, "2026-11-07", "2026-11-30"),
+    ] {
+        let none = commissions
+            .statement(company, seller, day(from), day(to))
+            .await
+            .unwrap();
+        assert!(none.sellers.is_empty(), "{seller:?} {from} {to}");
+        assert_eq!(none.commission.to_string(), "0");
+    }
+    assert!(
+        commissions
+            .statement(other_company, None, day("2026-01-01"), day("2026-12-31"))
+            .await
+            .unwrap()
+            .sellers
+            .is_empty()
+    );
+    assert!(matches!(
+        commissions
+            .statement(company, None, day("2026-12-01"), day("2026-11-01"))
+            .await
+            .unwrap_err(),
+        ApplicationError::InvalidSpan(_)
+    ));
+
+    // A rule that ends changes what comes after it, never what it earned before.
+    commissions
+        .update(
+            company,
+            &ana,
+            general.id(),
+            rule_draft(None, None, "5", "2026-01-01", Some("2026-11-30")),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        commissions
+            .history(company, general.id())
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+    let both = commissions
+        .statement(company, None, day("2026-11-01"), day("2026-12-31"))
+        .await
+        .unwrap();
+    assert_eq!(both.sellers.len(), 1);
+    assert_eq!(both.sellers[0].sales.len(), 2);
+    // November as before (1.6 and 0.25); December: coffee at 8% is 2.4 and bread has no rule left.
+    assert_eq!(
+        (both.base.to_string(), both.commission.to_string()),
+        ("60".to_owned(), "4.25".to_owned())
+    );
+    let rows: Vec<(i64, String)> = both.sellers[0]
+        .sales
+        .iter()
+        .map(|row| (row.sale.number(), row.commission.to_string()))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (a.number(), "1.85".to_owned()),
+            (b.number(), "2.4".to_owned())
+        ]
     );
 }

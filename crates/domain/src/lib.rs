@@ -6,6 +6,7 @@ mod audit;
 mod bank_account;
 mod calendar_date;
 mod category;
+mod commission;
 mod contact;
 mod contract;
 mod cost_center;
@@ -38,7 +39,8 @@ pub use attachment::{Attachment, AttachmentDraft, MAX_ATTACHMENT_BYTES, MAX_ENTR
 pub use audit::{
     Actor, AuditAction, AuditEntity, AuditEntry, AuditRecord, Audited, FieldChange,
     attachment_changes, attachment_creation_changes, bank_account_changes,
-    bank_account_creation_changes, category_changes, category_creation_changes, contract_changes,
+    bank_account_creation_changes, category_changes, category_creation_changes,
+    commission_rule_changes, commission_rule_creation_changes, contract_changes,
     contract_creation_changes, cost_center_changes, cost_center_creation_changes, creation_changes,
     document_check_changes, entry_changes, entry_creation_changes, opening_changes,
     opening_creation_changes, party_changes, payment_method_changes,
@@ -52,6 +54,9 @@ pub use audit::{
 pub use bank_account::{BankAccount, BankAccountDraft, BankAccountKind};
 pub use calendar_date::CalendarDate;
 pub use category::{CashFlowGroup, Category, DreGroup, MAX_CATEGORY_LEVELS, default_template};
+pub use commission::{
+    CommissionRule, CommissionRuleDraft, SaleCommission, applicable_rule, commission_of_sale,
+};
 pub use contact::{Contact, ContactDraft, MAX_CONTACTS};
 pub use contract::{BillingCycle, Contract, ContractCycle, ContractDraft, ContractStatus};
 pub use cost_center::{CostCenter, CostCenterDraft};
@@ -64,9 +69,9 @@ pub use financial_entry::{
     FinancialEntryDraft, MAX_ENTRY_INSTALLMENTS, RecurrenceOrigin,
 };
 pub use ids::{
-    AttachmentId, BankAccountId, CategoryId, CompanyId, ContractId, CostCenterId, EntryId,
-    InvitationId, PartyId, PaymentMethodId, PaymentTermId, ProductId, QuoteId, RecurrenceId,
-    SaleId, SaleReturnId, SettlementId, StatementLineId, TransferId, UserId,
+    AttachmentId, BankAccountId, CategoryId, CommissionRuleId, CompanyId, ContractId, CostCenterId,
+    EntryId, InvitationId, PartyId, PaymentMethodId, PaymentTermId, ProductId, QuoteId,
+    RecurrenceId, SaleId, SaleReturnId, SettlementId, StatementLineId, TransferId, UserId,
 };
 pub use invitation::Invitation;
 pub use line::{Line, LineDraft, MAX_LINES, lines_total};

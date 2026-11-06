@@ -1,8 +1,8 @@
 use std::future::Future;
 
 use conta_verde_domain::{
-    AuditEntry, AuditRecord, CompanyId, ContractCycle, ContractId, PartyId, QuoteId, Sale, SaleId,
-    SaleReturn, SaleStatus,
+    AuditEntry, AuditRecord, CalendarDate, CompanyId, ContractCycle, ContractId, PartyId, QuoteId,
+    Sale, SaleId, SaleReturn, SaleStatus,
 };
 
 use crate::list_query::clean_search;
@@ -24,7 +24,9 @@ pub struct SaleQuery {
     status: Option<SaleStatus>,
     customer: Option<PartyId>,
     seller: Option<PartyId>,
+    with_a_seller: bool,
     contract: Option<ContractId>,
+    sold_between: Option<(CalendarDate, CalendarDate)>,
     sort: NumberSort,
 }
 
@@ -50,8 +52,20 @@ impl SaleQuery {
         self
     }
 
+    /// Only the sales that name a seller.
+    pub fn with_a_seller(mut self) -> Self {
+        self.with_a_seller = true;
+        self
+    }
+
     pub fn of_contract(mut self, contract: ContractId) -> Self {
         self.contract = Some(contract);
+        self
+    }
+
+    /// Sold from a day through a day, both included.
+    pub fn sold_between(mut self, from: CalendarDate, to: CalendarDate) -> Self {
+        self.sold_between = Some((from, to));
         self
     }
 
@@ -76,8 +90,16 @@ impl SaleQuery {
         self.seller
     }
 
+    pub fn requires_a_seller(&self) -> bool {
+        self.with_a_seller
+    }
+
     pub fn contract(&self) -> Option<ContractId> {
         self.contract
+    }
+
+    pub fn span(&self) -> Option<(CalendarDate, CalendarDate)> {
+        self.sold_between
     }
 
     pub fn sort(&self) -> NumberSort {
@@ -93,6 +115,10 @@ impl SaleQuery {
             && self
                 .seller
                 .is_none_or(|seller| sale.seller_id() == Some(seller))
+            && (!self.with_a_seller || sale.seller_id().is_some())
+            && self
+                .sold_between
+                .is_none_or(|(from, to)| (from..=to).contains(&sale.sold_on()))
             && self.contract.is_none_or(|contract| {
                 sale.cycle()
                     .is_some_and(|cycle| cycle.contract_id == contract)
@@ -191,6 +217,13 @@ pub trait SaleRepository: Send + Sync {
         known_returns: usize,
         audit: &AuditEntry,
     ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
+
+    /// The returns of these sales of the company, oldest first.
+    fn returns_of_sales(
+        &self,
+        company_id: CompanyId,
+        sale_ids: &[SaleId],
+    ) -> impl Future<Output = Result<Vec<SaleReturn>, RepositoryError>> + Send;
 
     /// The returns of a sale of the company, oldest first.
     fn returns_of(

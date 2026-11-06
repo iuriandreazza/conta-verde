@@ -5,6 +5,7 @@ mod bank_accounts;
 mod cash_flow;
 mod categories;
 mod clock;
+mod commissions;
 mod contracts;
 mod cost_centers;
 mod csv_import;
@@ -38,14 +39,14 @@ use axum::{Json, Router};
 use conta_verde_application::{
     AttachmentRepository, AttachmentService, AuthService, BalanceService, BankAccountRepository,
     BankAccountService, BlobStore, CategoryRepository, CategoryService, CnpjRegistry,
-    ContractRepository, ContractService, CostCenterRepository, CostCenterService, EmailSender,
-    EntryReferences, FinancialEntryRepository, FinancialEntryService, IdentityRepository,
-    InvitationRepository, MemberService, OpeningRepository, PartyRepository, PartyService,
-    PaymentMethodRepository, PaymentMethodService, PaymentTermRepository, PaymentTermService,
-    PostalCodeDirectory, PostalCodeService, ProductRepository, ProductService, QuoteRepository,
-    QuoteService, ReconciliationService, RecurrenceRepository, RecurrenceService, SaleRepository,
-    SaleService, SalesReferences, SecretService, StatementLineRepository, TransferRepository,
-    TransferService,
+    CommissionRuleRepository, CommissionService, ContractRepository, ContractService,
+    CostCenterRepository, CostCenterService, EmailSender, EntryReferences,
+    FinancialEntryRepository, FinancialEntryService, IdentityRepository, InvitationRepository,
+    MemberService, OpeningRepository, PartyRepository, PartyService, PaymentMethodRepository,
+    PaymentMethodService, PaymentTermRepository, PaymentTermService, PostalCodeDirectory,
+    PostalCodeService, ProductRepository, ProductService, QuoteRepository, QuoteService,
+    ReconciliationService, RecurrenceRepository, RecurrenceService, SaleRepository, SaleService,
+    SalesReferences, SecretService, StatementLineRepository, TransferRepository, TransferService,
 };
 use serde::Serialize;
 
@@ -81,6 +82,7 @@ pub trait Ports: 'static {
     type Quotes: QuoteRepository + 'static;
     type Sales: SaleRepository + 'static;
     type Contracts: ContractRepository + 'static;
+    type CommissionRules: CommissionRuleRepository + 'static;
     type Statements: StatementLineRepository + 'static;
     type PostalCodes: PostalCodeDirectory + 'static;
     type Invitations: InvitationRepository + 'static;
@@ -106,6 +108,13 @@ type ContractsOf<X> = ContractService<
     <X as Ports>::SalesReferences,
 >;
 
+/// The commissions use case over the adapters of `X`.
+type CommissionsOf<X> = CommissionService<
+    <X as Ports>::CommissionRules,
+    <X as Ports>::Sales,
+    <X as Ports>::SalesReferences,
+>;
+
 /// The use cases the API serves.
 pub struct Services<X: Ports> {
     pub parties: PartyService<X::Parties, X::Registry>,
@@ -122,6 +131,7 @@ pub struct Services<X: Ports> {
     pub quotes: QuoteService<X::Quotes, X::SalesReferences, X::Emails, X::Secrets>,
     pub sales: SalesOf<X>,
     pub contracts: ContractsOf<X>,
+    pub commissions: CommissionsOf<X>,
     pub reconciliation:
         ReconciliationService<X::Statements, X::Entries, X::Transfers, X::EntryReferences>,
     pub balances: BalanceService<X::BankAccounts, X::Entries, X::Transfers, X::Openings>,
@@ -145,6 +155,7 @@ pub(crate) struct AppState<X: Ports> {
     quotes: QuoteService<X::Quotes, X::SalesReferences, X::Emails, X::Secrets>,
     sales: SalesOf<X>,
     contracts: ContractsOf<X>,
+    commissions: CommissionsOf<X>,
     reconciliation:
         ReconciliationService<X::Statements, X::Entries, X::Transfers, X::EntryReferences>,
     balances: BalanceService<X::BankAccounts, X::Entries, X::Transfers, X::Openings>,
@@ -173,6 +184,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         quotes: services.quotes,
         sales: services.sales,
         contracts: services.contracts,
+        commissions: services.commissions,
         reconciliation: services.reconciliation,
         balances: services.balances,
         postal_codes: services.postal_codes,
@@ -434,6 +446,22 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
             post(sales::convert_quote::<X>),
         )
         .route(
+            "/companies/{company_id}/commission-rules",
+            get(commissions::list_rules::<X>).post(commissions::register_rule::<X>),
+        )
+        .route(
+            "/companies/{company_id}/commission-rules/{rule_id}",
+            put(commissions::update_rule::<X>),
+        )
+        .route(
+            "/companies/{company_id}/commission-rules/{rule_id}/history",
+            get(commissions::rule_history::<X>),
+        )
+        .route(
+            "/companies/{company_id}/commissions",
+            get(commissions::commission_statement::<X>),
+        )
+        .route(
             "/companies/{company_id}/contracts",
             get(contracts::list_contracts::<X>).post(contracts::register_contract::<X>),
         )
@@ -528,13 +556,13 @@ mod tests {
     use conta_verde_infrastructure::{
         Argon2SecretService, InMemoryAttachmentRepository, InMemoryBankAccountRepository,
         InMemoryBlobStore, InMemoryCategoryRepository, InMemoryCnpjRegistry,
-        InMemoryContractRepository, InMemoryCostCenterRepository, InMemoryEmailSender,
-        InMemoryFinancialEntryRepository, InMemoryIdentityRepository, InMemoryInvitationRepository,
-        InMemoryOpeningRepository, InMemoryPartyRepository, InMemoryPaymentMethodRepository,
-        InMemoryPaymentTermRepository, InMemoryPostalCodeDirectory, InMemoryProductRepository,
-        InMemoryQuoteRepository, InMemoryRecurrenceRepository, InMemorySaleRepository,
-        InMemoryStatementLineRepository, InMemoryTransferRepository, RegisterReferences,
-        RegisterSalesReferences,
+        InMemoryCommissionRuleRepository, InMemoryContractRepository, InMemoryCostCenterRepository,
+        InMemoryEmailSender, InMemoryFinancialEntryRepository, InMemoryIdentityRepository,
+        InMemoryInvitationRepository, InMemoryOpeningRepository, InMemoryPartyRepository,
+        InMemoryPaymentMethodRepository, InMemoryPaymentTermRepository,
+        InMemoryPostalCodeDirectory, InMemoryProductRepository, InMemoryQuoteRepository,
+        InMemoryRecurrenceRepository, InMemorySaleRepository, InMemoryStatementLineRepository,
+        InMemoryTransferRepository, RegisterReferences, RegisterSalesReferences,
     };
     use http_body_util::BodyExt;
     use serde_json::{Value, json};
@@ -609,6 +637,7 @@ mod tests {
         type Quotes = InMemoryQuoteRepository;
         type Sales = InMemorySaleRepository;
         type Contracts = InMemoryContractRepository;
+        type CommissionRules = InMemoryCommissionRuleRepository;
         type Statements = InMemoryStatementLineRepository;
         type PostalCodes = InMemoryPostalCodeDirectory;
         type Invitations = InMemoryInvitationRepository;
@@ -640,6 +669,7 @@ mod tests {
         type Quotes = InMemoryQuoteRepository;
         type Sales = InMemorySaleRepository;
         type Contracts = InMemoryContractRepository;
+        type CommissionRules = InMemoryCommissionRuleRepository;
         type Statements = InMemoryStatementLineRepository;
         type PostalCodes = Option<InMemoryPostalCodeDirectory>;
         type Invitations = InMemoryInvitationRepository;
@@ -954,6 +984,36 @@ mod tests {
         )
     }
 
+    type TestCommissions = CommissionService<
+        InMemoryCommissionRuleRepository,
+        InMemorySaleRepository,
+        TestSalesReferences,
+    >;
+
+    /// Commissions over the sales store and the registers a test keeps a handle to.
+    fn commissions_over(
+        sales: InMemorySaleRepository,
+        parties: &InMemoryPartyRepository,
+        products: &InMemoryProductRepository,
+        payment_terms: &InMemoryPaymentTermRepository,
+    ) -> TestCommissions {
+        CommissionService::new(
+            InMemoryCommissionRuleRepository::default(),
+            sales,
+            RegisterSalesReferences::new(parties.clone(), products.clone(), payment_terms.clone()),
+        )
+    }
+
+    /// Commissions over a store that the app's own sales do not share.
+    fn standalone_commissions() -> TestCommissions {
+        commissions_over(
+            InMemorySaleRepository::default(),
+            &InMemoryPartyRepository::default(),
+            &InMemoryProductRepository::default(),
+            &InMemoryPaymentTermRepository::default(),
+        )
+    }
+
     type TestMembers = MemberService<
         InMemoryInvitationRepository,
         InMemoryIdentityRepository,
@@ -1033,6 +1093,7 @@ mod tests {
                     InMemoryContractRepository::default(),
                     standalone_sales(),
                 ),
+                commissions: standalone_commissions(),
                 reconciliation: standalone_reconciliation(),
                 balances: standalone_balances(),
                 postal_codes: PostalCodeService::new(postal_codes),
@@ -1676,6 +1737,7 @@ mod tests {
                     InMemoryContractRepository::default(),
                     standalone_sales(),
                 ),
+                commissions: standalone_commissions(),
                 reconciliation: standalone_reconciliation(),
                 balances: standalone_balances(),
                 postal_codes: PostalCodeService::new(None),
@@ -3161,6 +3223,7 @@ mod tests {
                     InMemoryContractRepository::default(),
                     standalone_sales(),
                 ),
+                commissions: standalone_commissions(),
                 reconciliation: standalone_reconciliation(),
                 balances: standalone_balances(),
                 postal_codes: PostalCodeService::new(None),
@@ -4722,6 +4785,12 @@ mod tests {
                 quotes: quotes_over(quote_store.clone(), &parties, &products, &payment_terms),
                 sales: sales(),
                 contracts: ContractService::new(InMemoryContractRepository::default(), sales()),
+                commissions: commissions_over(
+                    sale_store.clone(),
+                    &parties,
+                    &products,
+                    &payment_terms,
+                ),
                 balances: BalanceService::new(
                     bank_accounts.clone(),
                     entry_store,
@@ -7754,6 +7823,224 @@ mod tests {
                 "{role:?} reads"
             );
             let write = send(&app, json_request("POST", &uri, Some(&cookie), json!({}))).await;
+            let expected = if may_write {
+                StatusCode::UNPROCESSABLE_ENTITY
+            } else {
+                StatusCode::FORBIDDEN
+            };
+            assert_eq!(write.status, expected, "{role:?} writes");
+        }
+    }
+
+    fn commission_rules_uri(company_id: Uuid) -> String {
+        format!("/companies/{company_id}/commission-rules")
+    }
+
+    #[tokio::test]
+    async fn commission_rules_and_the_statement_of_what_a_seller_earned_through_the_api() {
+        let app = entry_app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let targets = sales_targets(&app, &cookie, company_id).await;
+        let category = revenue_category(&app, &cookie, company_id).await;
+        let seller = send(
+            &app,
+            json_request(
+                "POST",
+                &parties_uri(company_id),
+                Some(&cookie),
+                json!({ "name": "Vera Vendedora", "is_customer": false, "is_supplier": false, "is_seller": true }),
+            ),
+        )
+        .await;
+        assert_eq!(seller.status, StatusCode::CREATED, "{}", seller.body);
+        let seller = seller.body["id"].as_str().unwrap().to_owned();
+        let rules = commission_rules_uri(company_id);
+
+        // The rules: a general rate and a better one for this seller and this product.
+        let general = send(
+            &app,
+            json_request(
+                "POST",
+                &rules,
+                Some(&cookie),
+                json!({ "rate": "5", "starts_on": "2026-01-01" }),
+            ),
+        )
+        .await;
+        assert_eq!(general.status, StatusCode::CREATED, "{}", general.body);
+        assert_eq!(general.body["active"], true);
+        let special = send(
+            &app,
+            json_request(
+                "POST",
+                &rules,
+                Some(&cookie),
+                json!({ "seller_id": seller, "product_id": targets.product, "rate": "8", "starts_on": "2026-01-01" }),
+            ),
+        )
+        .await;
+        assert_eq!(special.status, StatusCode::CREATED, "{}", special.body);
+        for (body, status) in [
+            (
+                json!({ "rate": "0", "starts_on": "2026-01-01" }),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                json!({ "seller_id": targets.customer, "rate": "5", "starts_on": "2026-01-01" }),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                json!({ "rate": 5, "starts_on": "2026-01-01" }),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+        ] {
+            assert_eq!(
+                send(&app, json_request("POST", &rules, Some(&cookie), body))
+                    .await
+                    .status,
+                status
+            );
+        }
+        let listed = send(&app, get_request(&rules, Some(&cookie))).await;
+        assert_eq!(listed.body["items"].as_array().unwrap().len(), 2);
+        let mine = send(
+            &app,
+            get_request(
+                &format!("{rules}?seller={seller}&active=true"),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(mine.body["items"].as_array().unwrap().len(), 1);
+        let general_id = general.body["id"].as_str().unwrap();
+        let missing = send(
+            &app,
+            json_request(
+                "PUT",
+                &format!("{rules}/{general_id}"),
+                Some(&cookie),
+                json!({ "rate": "5", "starts_on": "2026-01-01" }),
+            ),
+        )
+        .await;
+        assert_eq!(missing.status, StatusCode::UNPROCESSABLE_ENTITY);
+        let history = send(
+            &app,
+            get_request(&format!("{rules}/{general_id}/history"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(history.body.as_array().unwrap().len(), 1);
+
+        // A sale by the seller, completed: 30 of coffee at 8% and 5 of bread at 5%.
+        let mut body = sale_body(&targets, &category);
+        body["seller_id"] = json!(seller);
+        let sale = send(
+            &app,
+            json_request("POST", &sales_uri(company_id), Some(&cookie), body),
+        )
+        .await;
+        let sale_id = sale.body["id"].as_str().unwrap().to_owned();
+        let order = send(
+            &app,
+            get_request(
+                &format!("/companies/{company_id}/commissions?from=2026-11-01&to=2026-11-30"),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(order.status, StatusCode::OK, "{}", order.body);
+        assert_eq!(
+            order.body["sellers"],
+            json!([]),
+            "an order earns nothing yet"
+        );
+        send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{}/{sale_id}/complete", sales_uri(company_id)),
+                Some(&cookie),
+                Value::Null,
+            ),
+        )
+        .await;
+        let statement_uri =
+            format!("/companies/{company_id}/commissions?from=2026-11-01&to=2026-11-30");
+        let statement = send(&app, get_request(&statement_uri, Some(&cookie))).await;
+        assert_eq!(statement.body["base"], "35");
+        assert_eq!(statement.body["commission"], "2.65");
+        assert_eq!(statement.body["sellers"][0]["seller_id"], seller);
+        assert_eq!(statement.body["sellers"][0]["sales"][0]["number"], 1);
+        assert_eq!(
+            statement.body["sellers"][0]["sales"][0]["commission"],
+            "2.65"
+        );
+        // A return comes off the base: one of three coffees refunds 10.
+        let returned = send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{}/{sale_id}/returns", sales_uri(company_id)),
+                Some(&cookie),
+                json!({
+                    "returned_on": "2026-11-10",
+                    "items": [{ "line": 1, "quantity": "1" }],
+                    "refund_category_id": category,
+                    "refund_due_on": "2026-11-20",
+                }),
+            ),
+        )
+        .await;
+        assert_eq!(returned.status, StatusCode::CREATED, "{}", returned.body);
+        let after = send(&app, get_request(&statement_uri, Some(&cookie))).await;
+        assert_eq!(after.body["base"], "25");
+        assert_eq!(after.body["commission"], "1.85");
+        for bad in [
+            "from=2026-11-01",
+            "from=x&to=2026-11-30",
+            "from=2026-12-01&to=2026-11-01",
+        ] {
+            let reply = send(
+                &app,
+                get_request(
+                    &format!("/companies/{company_id}/commissions?{bad}"),
+                    Some(&cookie),
+                ),
+            )
+            .await;
+            assert!(reply.status.is_client_error(), "{bad}: {}", reply.status);
+        }
+        let (other, other_company) = sign_up(&app, "bia@example.com").await;
+        let theirs = send(
+            &app,
+            get_request(
+                &format!("/companies/{other_company}/commissions?from=2026-01-01&to=2026-12-31"),
+                Some(&other),
+            ),
+        )
+        .await;
+        assert_eq!(theirs.body["sellers"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn commissions_follow_the_sales_role() {
+        use conta_verde_domain::Role;
+
+        let (app, identities, _) = app_with_mailbox();
+        let (_, company_id) = sign_up(&app, "dona@example.com").await;
+        let rules = commission_rules_uri(company_id);
+        for (role, may_write) in [
+            (Role::Sales, true),
+            (Role::Financial, false),
+            (Role::Viewer, false),
+        ] {
+            let cookie = member_with_role(&app, &identities, company_id, role).await;
+            assert_eq!(
+                send(&app, get_request(&rules, Some(&cookie))).await.status,
+                StatusCode::OK,
+                "{role:?} reads"
+            );
+            let write = send(&app, json_request("POST", &rules, Some(&cookie), json!({}))).await;
             let expected = if may_write {
                 StatusCode::UNPROCESSABLE_ENTITY
             } else {

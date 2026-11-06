@@ -65,7 +65,7 @@ rounding rule). No proposed ADR belongs to this phase. One slice per pull reques
 - [x] Quotes: items (products and services), discounts, validity, PDF, send by e-mail, public approval link ([ADR 0038](adr/0038-quotes.md)) — numbered quotes with discounted lines and a validity, a PDF, a link e-mailed to the customer (shown once, taken back when the quote changes or is sent again) where they approve or decline without an account, and the `sales` area; the quote becomes a sale in the next slice
 - [x] Sales orders and sales: status lifecycle, receivables generated according to payment terms, cancellation and returns; a quote becomes a sale ([ADR 0039](adr/0039-sales.md)) — an open order becomes a completed sale that makes its one receivable by the payment term (in the cash flow forecast), is cancelled with its receivable (entries gain a one-way cancelled mark), takes returns that refund with a payable, and is made from an approved quote
 - [x] Recurring contracts: billing cycle, automatic sale and receivable per period, adjustment and termination ([ADR 0040](adr/0040-contracts.md)) — a contract (monthly to yearly) bills each cycle on its day as a completed sale and its receivable, by an hourly job and when it is written, once per cycle day (a unique index), with a percentage adjustment and a termination; the tests move the clock through three cycles
-- [ ] Sellers and commissions: rules per seller or product, commission statement
+- [x] Sellers and commissions: rules per seller or product, commission statement
 - [ ] Price lists
 - [ ] Dashboard: balances, receivables and payables due, sales of the month, top products and customers (real figures replace the sample data)
 - [ ] Reports: sales by customer, product, seller and period; ABC curve

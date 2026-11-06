@@ -243,18 +243,26 @@ impl SaleRepository for InMemorySaleRepository {
         Ok(())
     }
 
-    async fn returns_of(
+    async fn returns_of_sales(
         &self,
         company_id: CompanyId,
-        sale_id: SaleId,
+        sale_ids: &[SaleId],
     ) -> Result<Vec<SaleReturn>, RepositoryError> {
         let state = self.state.lock().expect("repository lock poisoned");
         Ok(state
             .returns
             .iter()
-            .filter(|made| made.company_id() == company_id && made.sale_id() == sale_id)
+            .filter(|made| made.company_id() == company_id && sale_ids.contains(&made.sale_id()))
             .cloned()
             .collect())
+    }
+
+    async fn returns_of(
+        &self,
+        company_id: CompanyId,
+        sale_id: SaleId,
+    ) -> Result<Vec<SaleReturn>, RepositoryError> {
+        self.returns_of_sales(company_id, &[sale_id]).await
     }
 }
 

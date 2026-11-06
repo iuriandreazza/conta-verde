@@ -3,21 +3,21 @@ use std::time::Duration;
 use conta_verde_api::{ApiConfig, Ports, Services, router};
 use conta_verde_application::{
     AttachmentService, AuthService, BalanceService, BankAccountService, CategoryService,
-    ContractService, CostCenterService, FinancialEntryService, MemberService, PartyService,
-    PaymentMethodService, PaymentTermService, PostalCodeService, ProductService, QuoteService,
-    ReconciliationService, RecurrenceService, SaleService, TransferService,
+    CommissionService, ContractService, CostCenterService, FinancialEntryService, MemberService,
+    PartyService, PaymentMethodService, PaymentTermService, PostalCodeService, ProductService,
+    QuoteService, ReconciliationService, RecurrenceService, SaleService, TransferService,
 };
 use conta_verde_application::{EmailError, EmailMessage, EmailSender};
 use conta_verde_infrastructure::{
     Argon2SecretService, BrasilApiCnpjRegistry, BrasilApiPostalCodeDirectory, CachedCnpjRegistry,
     LocalBlobStore, LogEmailSender, PostgresAttachmentRepository, PostgresBankAccountRepository,
-    PostgresCategoryRepository, PostgresContractRepository, PostgresCostCenterRepository,
-    PostgresFinancialEntryRepository, PostgresIdentityRepository, PostgresInvitationRepository,
-    PostgresOpeningRepository, PostgresPartyRepository, PostgresPaymentMethodRepository,
-    PostgresPaymentTermRepository, PostgresProductRepository, PostgresQuoteRepository,
-    PostgresRecurrenceRepository, PostgresSaleRepository, PostgresStatementLineRepository,
-    PostgresTransferRepository, RegisterReferences, RegisterSalesReferences, SmtpEmailSender,
-    connect_and_migrate,
+    PostgresCategoryRepository, PostgresCommissionRuleRepository, PostgresContractRepository,
+    PostgresCostCenterRepository, PostgresFinancialEntryRepository, PostgresIdentityRepository,
+    PostgresInvitationRepository, PostgresOpeningRepository, PostgresPartyRepository,
+    PostgresPaymentMethodRepository, PostgresPaymentTermRepository, PostgresProductRepository,
+    PostgresQuoteRepository, PostgresRecurrenceRepository, PostgresSaleRepository,
+    PostgresStatementLineRepository, PostgresTransferRepository, RegisterReferences,
+    RegisterSalesReferences, SmtpEmailSender, connect_and_migrate,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -56,6 +56,7 @@ impl Ports for PostgresPorts {
     type Quotes = PostgresQuoteRepository;
     type Sales = PostgresSaleRepository;
     type Contracts = PostgresContractRepository;
+    type CommissionRules = PostgresCommissionRuleRepository;
     type Statements = PostgresStatementLineRepository;
     type PostalCodes = Option<BrasilApiPostalCodeDirectory>;
     type Invitations = PostgresInvitationRepository;
@@ -180,6 +181,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             sale_service(),
         )
     };
+    let commissions = CommissionService::new(
+        PostgresCommissionRuleRepository::new(pool.clone()),
+        PostgresSaleRepository::new(pool.clone()),
+        RegisterSalesReferences::new(
+            PostgresPartyRepository::new(pool.clone()),
+            PostgresProductRepository::new(pool.clone()),
+            PostgresPaymentTermRepository::new(pool.clone()),
+        ),
+    );
     let sales = sale_service();
     let contracts = contract_service();
     tokio::spawn(bill_contracts(contract_service()));
@@ -216,6 +226,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 quotes,
                 sales,
                 contracts,
+                commissions,
                 reconciliation,
                 balances,
                 postal_codes,
