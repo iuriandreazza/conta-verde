@@ -93,9 +93,9 @@ describe("creating from the top bar", () => {
     await screen.findByRole("heading", { name: "Clientes e fornecedores" });
 
     await userEvent.click(await screen.findByRole("button", { name: "Novo registro" }));
-    await userEvent.click(screen.getByRole("menuitem", { name: "Novo lançamento" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Nova receita" }));
 
-    expect(await screen.findByRole("dialog", { name: "Novo lançamento" })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "Nova receita" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Clientes e fornecedores" })).toBeInTheDocument();
   });
 
@@ -116,8 +116,8 @@ describe("creating from the top bar", () => {
     renderAt("/companies/c1/entries");
 
     await userEvent.click(await screen.findByRole("button", { name: "Novo registro" }));
-    await userEvent.click(screen.getByRole("menuitem", { name: "Novo lançamento" }));
-    const dialog = within(await screen.findByRole("dialog", { name: "Novo lançamento" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Nova receita" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Nova receita" }));
     await userEvent.type(await dialog.findByLabelText("Descrição"), "Aluguel de novembro");
     await userEvent.selectOptions(dialog.getByLabelText("Categoria"), "k1");
     fireEvent.change(dialog.getByLabelText("Competência"), { target: { value: "2999-01-01" } });
@@ -145,8 +145,8 @@ describe("creating from the top bar", () => {
     );
     renderAt("/companies/c1/entries");
     await userEvent.click(await screen.findByRole("button", { name: "Novo registro" }));
-    await userEvent.click(screen.getByRole("menuitem", { name: "Novo lançamento" }));
-    const dialog = within(await screen.findByRole("dialog", { name: "Novo lançamento" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Nova receita" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Nova receita" }));
     await userEvent.type(await dialog.findByLabelText("Descrição"), "Aluguel");
     await userEvent.selectOptions(dialog.getByLabelText("Categoria"), "k1");
     fireEvent.change(dialog.getByLabelText("Competência"), { target: { value: "2999-01-01" } });
@@ -158,7 +158,7 @@ describe("creating from the top bar", () => {
     await userEvent.keyboard("{Escape}");
     await userEvent.click(dialog.getByRole("button", { name: "Fechar" }));
 
-    expect(screen.getByRole("dialog", { name: "Novo lançamento" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Nova receita" })).toBeInTheDocument();
   });
 
   it("registers a cost center from the top bar over another page, and says so", async () => {
@@ -323,12 +323,12 @@ describe("creating from the top bar", () => {
     await screen.findByRole("heading", { name: "Clientes e fornecedores" });
     await screen.findByRole("button", { name: "Novo registro" });
 
-    await userEvent.keyboard("{Alt>}{l}{/Alt}");
-    expect(await screen.findByRole("dialog", { name: "Novo lançamento" })).toBeInTheDocument();
+    await userEvent.keyboard("{Alt>}{r}{/Alt}");
+    expect(await screen.findByRole("dialog", { name: "Nova receita" })).toBeInTheDocument();
 
     // A sheet is open: another shortcut does not swap it for another form, which would lose what was typed.
     fireEvent.keyDown(window, { key: "t", code: "KeyT", altKey: true });
-    expect(screen.getByRole("dialog", { name: "Novo lançamento" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Nova receita" })).toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: "Nova transferência" })).not.toBeInTheDocument();
   });
 
@@ -340,9 +340,9 @@ describe("creating from the top bar", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Novo registro" }));
 
-    const item = screen.getByRole("menuitem", { name: "Novo lançamento" });
-    expect(item).toHaveAttribute("aria-keyshortcuts", "Alt+L");
-    expect(item).toHaveTextContent("Alt+L");
+    const item = screen.getByRole("menuitem", { name: "Nova receita" });
+    expect(item).toHaveAttribute("aria-keyshortcuts", "Alt+R");
+    expect(item).toHaveTextContent("Alt+R");
   });
 
   it("closes the menu when a shortcut is used while it is open", async () => {
@@ -353,9 +353,9 @@ describe("creating from the top bar", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Novo registro" }));
     expect(screen.getByRole("menu")).toBeInTheDocument();
 
-    fireEvent.keyDown(window, { key: "l", code: "KeyL", altKey: true });
+    fireEvent.keyDown(window, { key: "r", code: "KeyR", altKey: true });
 
-    expect(await screen.findByRole("dialog", { name: "Novo lançamento" })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "Nova receita" })).toBeInTheDocument();
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
@@ -366,7 +366,7 @@ describe("creating from the top bar", () => {
     renderAt("/companies/c1/parties");
     await screen.findByRole("button", { name: "Novo registro" });
 
-    fireEvent.keyDown(window, { key: "l", code: "KeyL", altKey: true, repeat: true });
+    fireEvent.keyDown(window, { key: "r", code: "KeyR", altKey: true, repeat: true });
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
@@ -390,5 +390,108 @@ describe("creating from the top bar", () => {
     expect(await dialog.findByLabelText(field)).toBeInTheDocument();
     await userEvent.click(dialog.getByRole("button", { name: "Voltar" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("opens a new expense with Alt+D, then a revenue, each with its own title and kind", async () => {
+    mockApi((url) =>
+      url === "/api/auth/me" ? { status: 200, body: profile } : { status: 200, body: { items: [], next_cursor: null } },
+    );
+    renderAt("/companies/c1/parties");
+    await screen.findByRole("button", { name: "Novo registro" });
+
+    fireEvent.keyDown(window, { key: "d", code: "KeyD", altKey: true });
+    const expense = within(await screen.findByRole("dialog", { name: "Nova despesa" }));
+    expect(await expense.findByLabelText("Tipo")).toHaveValue("payable");
+    await userEvent.click(expense.getByRole("button", { name: "Voltar" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    fireEvent.keyDown(window, { key: "r", code: "KeyR", altKey: true });
+    const revenue = within(await screen.findByRole("dialog", { name: "Nova receita" }));
+    expect(await revenue.findByLabelText("Tipo")).toHaveValue("receivable");
+  });
+
+  it("starts an expense as a payable, and titles the sheet for it", async () => {
+    mockApi((url) =>
+      url === "/api/auth/me" ? { status: 200, body: profile } : { status: 200, body: { items: [], next_cursor: null } },
+    );
+    renderAt("/companies/c1/parties");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Novo registro" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Nova despesa" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Nova despesa" }));
+
+    expect(await dialog.findByLabelText("Tipo")).toHaveValue("payable");
+  });
+});
+
+describe("contas a receber and contas a pagar", () => {
+  it("are the entries list with the kind in the address: titled, filtered and offered as such", async () => {
+    const fetchMock = mockApi((url) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      return { status: 200, body: { items: [], next_cursor: null } };
+    });
+    renderAt("/companies/c1/entries?tipo=payable");
+
+    expect(await screen.findByRole("heading", { name: "Contas a pagar" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Nova despesa" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Contas a pagar" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Lançamentos" })).not.toHaveAttribute("aria-current");
+    const lists = fetchMock.mock.calls.map(([url]) => String(url)).filter((url) => url.includes("/entries"));
+    expect(lists.some((url) => url.includes("kind=payable"))).toBe(true);
+  });
+
+  it("move between each other from the menu without leaving the page", async () => {
+    mockApi((url) =>
+      url === "/api/auth/me" ? { status: 200, body: profile } : { status: 200, body: { items: [], next_cursor: null } },
+    );
+    renderAt("/companies/c1/entries");
+    expect(await screen.findByRole("heading", { name: "Lançamentos" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("link", { name: "Contas a receber" }));
+
+    expect(await screen.findByRole("heading", { name: "Contas a receber" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Contas a receber" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("asks for the list of its kind and nothing else, and its button starts that kind", async () => {
+    const fetchMock = mockApi((url) =>
+      url === "/api/auth/me" ? { status: 200, body: profile } : { status: 200, body: { items: [], next_cursor: null } },
+    );
+    renderAt("/companies/c1/entries?tipo=payable");
+    await userEvent.click(await screen.findByRole("button", { name: "Nova despesa" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Nova despesa" }));
+
+    expect(await dialog.findByLabelText("Tipo")).toHaveValue("payable");
+    const lists = fetchMock.mock.calls.map(([url]) => String(url)).filter((url) => /\/entries\?/.test(url));
+    expect(lists.length).toBeGreaterThan(0);
+    expect(lists.every((url) => url.includes("kind=payable"))).toBe(true);
+  });
+
+  it("writes the kind into the address when 'Mostrar' changes, and the menu follows", async () => {
+    const fetchMock = mockApi((url) =>
+      url === "/api/auth/me" ? { status: 200, body: profile } : { status: 200, body: { items: [], next_cursor: null } },
+    );
+    renderAt("/companies/c1/entries");
+    await screen.findByRole("heading", { name: "Lançamentos" });
+    expect(screen.getByRole("link", { name: "Lançamentos" })).toHaveAttribute("aria-current", "page");
+
+    await userEvent.selectOptions(screen.getByLabelText("Mostrar"), "receivable");
+
+    expect(await screen.findByRole("heading", { name: "Contas a receber" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Contas a receber" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Lançamentos" })).not.toHaveAttribute("aria-current");
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([url]) => /\/entries\?/.test(String(url)) && String(url).includes("kind=receivable"))).toBe(true),
+    );
+  });
+
+  it("reads an unknown kind in the address as every kind, in the title and in the menu", async () => {
+    mockApi((url) =>
+      url === "/api/auth/me" ? { status: 200, body: profile } : { status: 200, body: { items: [], next_cursor: null } },
+    );
+    renderAt("/companies/c1/entries?tipo=foo");
+
+    expect(await screen.findByRole("heading", { name: "Lançamentos" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Lançamentos" })).toHaveAttribute("aria-current", "page");
   });
 });

@@ -145,7 +145,7 @@ describe("dashboard", () => {
     expect(payable.getByText("Pagamentos em atraso").closest(".stat-tile")).toHaveTextContent("R$ 3.150,75");
     expect(payable.getByText("Vence hoje").closest(".stat-tile")).toHaveTextContent("R$ 200,00");
     // Each block starts an entry from where the person is.
-    expect(payable.getByRole("button", { name: "Novo lançamento" })).toBeInTheDocument();
+    expect(payable.getByRole("button", { name: "Nova despesa" })).toBeInTheDocument();
   });
 
   it("offers the due ranges as a table, with what is overdue named in words", async () => {
@@ -228,6 +228,6 @@ describe("dashboard", () => {
     renderAt("/companies/c1");
     await screen.findByRole("region", { name: "A receber" });
 
-    expect(screen.queryByRole("button", { name: "Novo lançamento" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Nova (receita|despesa)/ })).not.toBeInTheDocument();
   });
 });

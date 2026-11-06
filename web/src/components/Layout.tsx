@@ -16,7 +16,7 @@ export function Layout() {
   const location = useLocation();
   const mainRef = useRef<HTMLElement>(null);
   // The drawer on a phone covers the page: going somewhere closes it.
-  useEffect(() => setNavOpen(false), [location.pathname]);
+  useEffect(() => setNavOpen(false), [location.pathname, location.search]);
   // The drawer takes the focus when it opens, and gives it back to its button when it closes.
   useEffect(() => {
     if (navOpen) document.querySelector<HTMLElement>("#app-sidebar .side-nav a")?.focus();
