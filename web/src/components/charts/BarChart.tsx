@@ -56,7 +56,7 @@ export function BarChart({ groups, series, label }: { groups: BarGroup[]; series
           const dimmed = active !== null && active !== row;
           return (
             <g
-              key={group.label}
+              key={row}
               tabIndex={0}
               role="group"
               aria-label={`${group.label}: ${series.map((item, index) => `${item.name} ${formatMoney(group.values[index])}`).join(", ")}`}

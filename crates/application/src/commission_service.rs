@@ -8,13 +8,12 @@ use conta_verde_domain::{
 
 use crate::audit::audit_entry;
 use crate::list_query::{clamp_limit, split_page};
+use crate::sale_reading::read_sales;
 use crate::{
-    ApplicationError, CommissionRuleQuery, CommissionRuleRepository, NumberCursor, RepositoryError,
-    RuleCursor, SaleQuery, SaleRepository, SalesReferences,
+    ApplicationError, CommissionRuleQuery, CommissionRuleRepository, RepositoryError, RuleCursor,
+    SaleQuery, SaleRepository, SalesReferences,
 };
 
-/// The most sales one statement adds up: a statement is a page a person reads, and a longer span is cut.
-const MAX_STATEMENT_SALES: usize = 2000;
 const PAGE: usize = 200;
 
 #[derive(Debug, Clone)]
@@ -170,31 +169,11 @@ where
         let mut query = SaleQuery::default()
             .with_status(SaleStatus::Completed)
             .sold_between(from, to)
-            .with_a_seller()
-            .sorted(crate::NumberSort::NumberAsc);
+            .with_a_seller();
         if let Some(seller) = seller {
             query = query.with_seller(seller);
         }
-        let mut sales: Vec<Sale> = Vec::new();
-        let mut after: Option<NumberCursor> = None;
-        loop {
-            let page = self
-                .sales
-                .list_by_company(company_id, &query, after.as_ref(), PAGE + 1)
-                .await?;
-            let has_more = page.len() > PAGE;
-            let kept = page.into_iter().take(PAGE).collect::<Vec<_>>();
-            after = kept.last().map(NumberCursor::from);
-            sales.extend(kept);
-            if sales.len() > MAX_STATEMENT_SALES {
-                return Err(ApplicationError::InvalidSpan(
-                    "more than 2000 sales: narrow the period",
-                ));
-            }
-            if !has_more {
-                break;
-            }
-        }
+        let sales = read_sales(&self.sales, company_id, query).await?;
         let ids: Vec<_> = sales.iter().map(Sale::id).collect();
         let returns = self.sales.returns_of_sales(company_id, &ids).await?;
         let rules = self.all_rules(company_id).await?;

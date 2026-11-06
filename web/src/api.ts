@@ -437,6 +437,33 @@ export interface PriceListFilters {
 
 export const NO_PRICE_LIST_FILTERS: PriceListFilters = { q: "", active: "", sort: "name" };
 
+export type SalesGroup = "customer" | "product" | "seller";
+
+export interface SalesReportRow {
+  /** The customer, product or seller; null for the sales that name no seller. */
+  key: string | null;
+  /** How many completed sales it is in. */
+  sales: number;
+  /** The value sold net of returns, a decimal string. */
+  net: string;
+  /** Its part of the total in percent, at most two decimals. */
+  share: string;
+  /** The share of this row and the ones before it. */
+  cumulative: string;
+  /** Where the row starts on the ABC curve: A up to 80% of the total, B up to 95%, C after. */
+  class: "A" | "B" | "C";
+}
+
+/** What the completed sales of a span add up to, biggest first (ADR 0043). */
+export interface SalesReport {
+  from: string;
+  to: string;
+  by: SalesGroup;
+  sales: number;
+  total: string;
+  rows: SalesReportRow[];
+}
+
 /** A payment of an installment, in part or in full (ADR 0030). */
 export interface Settlement {
   id: string;
@@ -1557,6 +1584,8 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(input),
     }),
+  salesReport: (companyId: string, by: SalesGroup, from: string, to: string) =>
+    request<SalesReport>(`/companies/${companyId}/sales-reports?${new URLSearchParams({ by, from, to })}`),
   entriesReport: (companyId: string, filters: EntriesReportFilters) =>
     request<EntriesReport>(`/companies/${companyId}/reports/entries?${new URLSearchParams({ ...filters })}`),
   /** `on` is today where the person is: the server does not know their zone. */
