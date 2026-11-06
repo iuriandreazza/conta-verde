@@ -52,6 +52,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0034](0034-statement-import-and-reconciliation.md) | Statement import (OFX) and reconciliation | accepted | 2 |
 | [0035](0035-entry-reports.md) | Reports of the entries: by group and the overdue list | accepted | 2 |
 | [0036](0036-entry-attachments.md) | Files attached to entries, and where their bytes are kept | accepted | 2 |
+| [0037](0037-sales-module-plan.md) | The sales module: plan, shared rules and what it changes underneath | accepted | 3 |
 
 ## Template
 
