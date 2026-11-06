@@ -20,7 +20,7 @@ This is the spec the new pages (Phase 3 on) are built to, and the one the existi
 | Part | Rule |
 |------|------|
 | Top bar | Always visible. Left: logo and the **title of the page**. Right: a global **"Novo registro" menu** (new entry, new sale, new party…, only what the role may write), search when it exists, the user menu (company switch, sign out) |
-| Sidebar | Groups, never a flat list: **Início**, **Financeiro**, **Vendas** (Phase 3), **Cadastros**, **Relatórios**, **Configurações**. A group opens in place and the group of the current page stays open; the current link is marked. A control collapses the whole sidebar to icons |
+| Sidebar | Groups, never a flat list: **Início**, **Financeiro**, **Comercial** (Orçamentos, Vendas), **Cadastros**, **Relatórios**, **Configurações**. A group opens in place and the group of the current page stays open; the current link is marked. A control collapses the whole sidebar to icons |
 | Company | Named in the sidebar header, and in the user menu when there is more than one |
 | Mobile | The sidebar becomes a drawer opened from the top bar: the content starts under the bar, never under a block of navigation |
 
@@ -44,8 +44,8 @@ From top to bottom, in this order:
 4. **Table.** A checkbox column and a bar "N selecionados" with an **"Ações em lote"** menu where bulk actions exist.
    Sortable headers (`aria-sort`). The row says what a record is under its name (party, category, as chips) and keeps
    its columns for figures. A **status marker on the row's left edge** says "overdue" in the critical color and, as
-   always, also in words (the status pill). The last cell is one **"Ações" menu** per row (edit, settle, history,
-   attachments, delete or reverse…): no more than one icon button per row, and it only for the most frequent action.
+   always, also in words (the status pill). The last cell holds the row's actions: up to four **icon buttons with a tooltip** (edit, settle, history,
+   attachments), and an **"Ações" menu** (`MenuButton`) when there are more.
 5. **Footer.** "Mostrando N registros" and the pager. The API paginates by cursor ([ADR 0018](../adr/0018-list-endpoints-search-filter-sort.md)),
    so the pager is **"Carregar mais"** with the count; numbered pages would need a different API and are not planned.
 6. **Totals of the period**, collapsible, under the table, when the list has amounts.
@@ -65,17 +65,17 @@ that matter: **overdue** and **due today**. Charts follow the dataviz rules in t
 
 | Component | State | Notes |
 |-----------|-------|-------|
-| `MenuButton` | to build | One accessible menu button (`aria-haspopup`, arrows, Escape, focus back): powers the split button, "Mais filtros", "Ações em lote" and the row "Ações" |
-| `RowActions` | to build | The row's "Ações" menu over `MenuButton` |
+| `MenuButton` | built | One accessible menu button (`aria-haspopup`, arrows, Escape, focus back): powers the split button, "Mais filtros", "Ações em lote" and the row "Ações" |
+| `RowActions` | deferred | The row's "Ações" menu over `MenuButton`. Rows keep their one-click icon buttons (each toggles a panel under the row, with `aria-expanded`); a menu would make those two clicks and rewrite most page tests, so it comes with a page that has more than four actions per row |
 | `PeriodNavigator` | to build | Previous, period menu (month, quarter, year, custom range), next; replaces the free `De`/`Até` pair and the 3/6/12 months control |
 | `FilterBar`, `SummaryStrip` | to build | Layout of the filter row; the state tiles as a radio group |
 | `PageHeader` | exists | Moves its title into the top bar; keeps the description and, for now, the page-level actions |
-| `Layout`, `CompanyNav` | exists | Become the top bar and the grouped sidebar (Phase 3 owns the nav items; the shell is shared) |
+| `Layout`, `AppTopbar`, `CompanyNav` | built | The top bar (menu on a phone, "Novo registro", user, sign out) and the grouped sidebar. A new section is one entry in `SECTIONS` of `CompanyNav` |
 
 ## 5. Order of work
 
 1. Accessibility basics (done).
-2. `MenuButton`, `RowActions` and the action row on **Lançamentos** and **Contas bancárias** (also fixes the sideways scroll).
-3. Top bar and grouped sidebar (rebase on the sales pages that add links).
+2. Top bar, `MenuButton` and the grouped sidebar (done).
+3. The action row, the footer count and the status marker on **Lançamentos** and **Contas bancárias** (also fixes the sideways scroll).
 4. `PeriodNavigator` and `FilterBar` on **Fluxo de caixa** and **Relatórios**.
 5. `SummaryStrip` on Lançamentos once the server answers the totals by state.

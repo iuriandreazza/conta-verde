@@ -175,14 +175,65 @@ a {
   box-shadow: inset 3px 0 0 #8fd9b3;
 }
 
-.sidebar-user {
+.nav-group {
+  display: grid;
+  gap: 0.15rem;
+  margin-top: 0.6rem;
+}
+
+.nav-group-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.35rem 0.75rem;
+  border: 0;
+  background: transparent;
+  color: #a9c7b6;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.nav-group-toggle:hover {
+  color: #fff;
+}
+
+.nav-chevron-closed {
+  transform: rotate(-90deg);
+}
+
+.nav-group-items {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-height: 3.5rem;
+  padding: 0.5rem clamp(1rem, 2.5vw, 3rem);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.topbar-menu {
+  display: none;
+}
+
+.topbar-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.6rem;
-  margin-top: auto;
-  padding-top: 1rem;
-  border-top: 1px solid #ffffff1f;
+  margin-left: auto;
 }
 
 .avatar {
@@ -191,20 +242,74 @@ a {
   width: 2rem;
   height: 2rem;
   border-radius: 50%;
-  background: #ffffff26;
+  background: var(--green-soft);
+  color: var(--green-dark);
   font-weight: 600;
 }
 
 .user-name {
-  flex: 1;
   min-width: 0;
+  max-width: 12rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.sidebar-user .btn {
-  width: 100%;
+.menu-button {
+  position: relative;
+}
+
+.menu-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  white-space: nowrap;
+}
+
+.menu {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  z-index: 20;
+  display: grid;
+  min-width: 15rem;
+  padding: 0.3rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-lift);
+}
+
+.menu-start {
+  left: 0;
+}
+
+.menu-end {
+  right: 0;
+}
+
+.menu [role="menuitem"] {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.7rem;
+  border: 0;
+  border-radius: 0.4rem;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.menu [role="menuitem"]:hover,
+.menu [role="menuitem"]:focus-visible {
+  background: var(--green-soft);
+}
+
+.menu [aria-disabled="true"] {
+  color: var(--muted);
+  cursor: not-allowed;
 }
 
 .app-main {
@@ -631,15 +736,6 @@ legend {
 
 .btn-ghost:hover:not(:disabled) {
   background: var(--green-soft);
-}
-
-.sidebar .btn-ghost {
-  color: #e6f2ea;
-  border-color: #ffffff40;
-}
-
-.sidebar .btn-ghost:hover:not(:disabled) {
-  background: #ffffff1f;
 }
 
 .btn:disabled {
@@ -1247,33 +1343,48 @@ tbody tr:last-child td {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  /* A drawer over the page, so opening it from anywhere on a long page shows it. */
   .sidebar {
-    position: static;
-    height: auto;
-    overflow-y: visible;
-    gap: 0.9rem;
-    padding: 0.9rem 1rem;
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 30;
+    width: min(18rem, 85vw);
+    height: 100vh;
+    padding: 1.25rem 1rem;
   }
 
-  .side-nav {
-    display: flex;
-    gap: 0.25rem;
-    overflow-x: auto;
+  .sidebar:not([data-open]) {
+    display: none;
   }
 
-  .side-nav a {
-    flex: none;
-    white-space: nowrap;
+  .drawer-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 25;
+    border: 0;
+    background: rgb(15 42 30 / 0.5);
   }
 
-  .sidebar-user {
-    margin-top: 0;
-    padding-top: 0.75rem;
+  .topbar-menu {
+    display: inline-flex;
+    padding: 0.45rem 0.8rem;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--ink);
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .user-name,
+  .avatar {
+    display: none;
+  }
+
+  .topbar,
+  .topbar-actions {
     flex-wrap: nowrap;
-  }
-
-  .sidebar-user .btn {
-    width: auto;
+    gap: 0.4rem;
   }
 
   .app-main {
