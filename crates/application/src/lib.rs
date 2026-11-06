@@ -11,6 +11,8 @@ mod category_service;
 mod charge_repository;
 mod charge_service;
 mod cnpj_registry;
+mod collection_service;
+mod collection_settings_repository;
 mod commission_repository;
 mod commission_service;
 mod contract_repository;
@@ -29,11 +31,13 @@ mod member_service;
 mod name_cursor;
 mod party_repository;
 mod party_service;
+mod payment_event_repository;
 mod payment_method_repository;
 mod payment_method_service;
 mod payment_provider;
 mod payment_term_repository;
 mod payment_term_service;
+mod payment_webhook_service;
 mod postal_code_directory;
 mod postal_code_service;
 mod price_list_repository;
@@ -68,6 +72,8 @@ pub use category_service::{CategoryService, NewCategory};
 pub use charge_repository::ChargeRepository;
 pub use charge_service::ChargeService;
 pub use cnpj_registry::{CnpjLookupError, CnpjRegistry, RegistryEntry};
+pub use collection_service::CollectionService;
+pub use collection_settings_repository::CollectionSettingsRepository;
 pub use commission_repository::{CommissionRuleQuery, CommissionRuleRepository, RuleCursor};
 pub use commission_service::{
     CommissionRulePage, CommissionService, CommissionStatement, SellerStatement, StatementSale,
@@ -95,13 +101,16 @@ pub use member_service::{InvitationPreview, Invited, MemberService};
 pub use name_cursor::NameCursor;
 pub use party_repository::{PartyKind, PartyQuery, PartyRepository};
 pub use party_service::{PartyPage, PartyService};
+pub use payment_event_repository::{PaymentEventRepository, Recorded};
 pub use payment_method_repository::{PaymentMethodQuery, PaymentMethodRepository};
 pub use payment_method_service::{PaymentMethodPage, PaymentMethodService};
 pub use payment_provider::{
-    Payer, PaymentProvider, ProviderCharge, ProviderChargeRequest, ProviderError,
+    Payer, PaymentProvider, ProviderCharge, ProviderChargeRequest, ProviderError, ProviderEvent,
+    ProviderEventKind, WebhookError, WebhookHeaders,
 };
 pub use payment_term_repository::{PaymentTermQuery, PaymentTermRepository};
 pub use payment_term_service::{PaymentTermPage, PaymentTermService};
+pub use payment_webhook_service::PaymentWebhookService;
 pub use postal_code_directory::{PostalCodeDirectory, PostalCodeEntry, PostalCodeLookupError};
 pub use postal_code_service::PostalCodeService;
 pub use price_list_repository::{PriceListQuery, PriceListRepository};

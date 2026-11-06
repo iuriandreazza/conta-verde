@@ -1,8 +1,8 @@
 use rust_decimal::Decimal;
 
 use crate::{
-    Amount, BankAccountId, CalendarDate, CompanyId, DomainError, EntryId, PaymentMethodId,
-    SettlementId,
+    Amount, BankAccountId, CalendarDate, ChargeId, CompanyId, DomainError, EntryId,
+    PaymentMethodId, SettlementId,
 };
 
 /// A settlement pays an installment of the entry it names; there is at most 120 of them.
@@ -38,6 +38,8 @@ pub struct Settlement {
     discount: Amount,
     bank_account_id: BankAccountId,
     payment_method_id: Option<PaymentMethodId>,
+    /// The charge whose payment this settles, when a webhook made it: a charge settles at most once.
+    charge_id: Option<ChargeId>,
     reversed: bool,
 }
 
@@ -76,12 +78,23 @@ impl Settlement {
             discount: adjustment(&draft.discount, "discount")?,
             bank_account_id: draft.bank_account_id,
             payment_method_id: draft.payment_method_id,
+            charge_id: None,
             reversed: false,
         };
         if settlement.cash() <= Decimal::ZERO {
             return Err(DomainError::SettlementMovesNothing);
         }
         Ok(settlement)
+    }
+
+    /// The same settlement, said to be the payment of a charge ([ADR 0046]).
+    pub fn with_charge(mut self, charge_id: Option<ChargeId>) -> Self {
+        self.charge_id = charge_id;
+        self
+    }
+
+    pub fn charge_id(&self) -> Option<ChargeId> {
+        self.charge_id
     }
 
     /// The same settlement, reversed or not: what storage hands back, and what a reversal makes.

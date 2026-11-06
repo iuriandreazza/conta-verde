@@ -1,7 +1,7 @@
 use conta_verde_domain::{
-    Actor, AuditAction, AuditRecord, BankAccountId, CalendarDate, CompanyId, Decimal, EntryId,
-    EntryKind, EntryOrigin, FinancialEntry, FinancialEntryDraft, Settlement, SettlementDraft,
-    SettlementId, entry_changes, entry_creation_changes, settlement_changes,
+    Actor, AuditAction, AuditRecord, BankAccountId, CalendarDate, ChargeId, CompanyId, Decimal,
+    EntryId, EntryKind, EntryOrigin, FinancialEntry, FinancialEntryDraft, Settlement,
+    SettlementDraft, SettlementId, entry_changes, entry_creation_changes, settlement_changes,
     settlement_creation_changes,
 };
 
@@ -219,11 +219,38 @@ impl<R: FinancialEntryRepository, F: EntryReferences> FinancialEntryService<R, F
         entry_id: EntryId,
         draft: SettlementDraft,
     ) -> Result<Settlement, ApplicationError> {
+        self.settle_as(company_id, actor, entry_id, draft, None)
+            .await
+    }
+
+    /// Like `settle`, for the payment of a charge ([ADR 0046]): the settlement remembers the charge, and the
+    /// store refuses, with `DuplicateOrigin`, a second one for it, even if the first was reversed.
+    pub async fn settle_charge(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        entry_id: EntryId,
+        draft: SettlementDraft,
+        charge_id: ChargeId,
+    ) -> Result<Settlement, ApplicationError> {
+        self.settle_as(company_id, actor, entry_id, draft, Some(charge_id))
+            .await
+    }
+
+    async fn settle_as(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        entry_id: EntryId,
+        draft: SettlementDraft,
+        charge_id: Option<ChargeId>,
+    ) -> Result<Settlement, ApplicationError> {
         let entry = self.find(company_id, entry_id).await?;
         if entry.is_voided() {
             return Err(ApplicationError::EntryIsVoided);
         }
-        let settlement = Settlement::new(SettlementId::generate(), company_id, entry_id, draft)?;
+        let settlement = Settlement::new(SettlementId::generate(), company_id, entry_id, draft)?
+            .with_charge(charge_id);
         if entry.installment(settlement.installment()).is_none() {
             return Err(ApplicationError::UnusableReference("installment"));
         }

@@ -1,7 +1,9 @@
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use conta_verde_application::{ApplicationError, AuthError, ProviderError, RepositoryError};
+use conta_verde_application::{
+    ApplicationError, AuthError, ProviderError, RepositoryError, WebhookError,
+};
 use conta_verde_domain::DomainError;
 use serde::Serialize;
 
@@ -166,6 +168,14 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
         // It existed and cannot be used any more: the link was used, withdrawn or has expired.
         ApplicationError::InvitationNoLongerValid => (StatusCode::GONE, error.to_string()),
         ApplicationError::InvitationForAnotherEmail => (StatusCode::FORBIDDEN, error.to_string()),
+        ApplicationError::Webhook(WebhookError::InvalidSignature) => {
+            (StatusCode::UNAUTHORIZED, error.to_string())
+        }
+        ApplicationError::Webhook(WebhookError::Malformed(detail)) => {
+            tracing::warn!(%detail, "a signed webhook was not a notice");
+            (StatusCode::BAD_REQUEST, error.to_string())
+        }
+        ApplicationError::CollectionNotConfigured => (StatusCode::CONFLICT, error.to_string()),
         ApplicationError::ChargeNeedsReceivable
         | ApplicationError::ChargeNeedsParty
         | ApplicationError::NothingToCharge => {

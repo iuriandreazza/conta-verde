@@ -56,6 +56,61 @@ impl ChargeRepository for InMemoryChargeRepository {
         Ok(())
     }
 
+    async fn mark_paid(&self, paid: &Charge, audit: &AuditEntry) -> Result<(), RepositoryError> {
+        ensure_audit_describes(audit, paid)?;
+        let mut state = self.state.lock().expect("repository lock poisoned");
+        let stored = state
+            .charges
+            .iter_mut()
+            .find(|stored| {
+                stored.company_id() == paid.company_id()
+                    && stored.id() == paid.id()
+                    && stored.status() != ChargeStatus::Paid
+            })
+            .ok_or(RepositoryError::NotFound)?;
+        *stored = stored
+            .clone()
+            .with_status(ChargeStatus::Paid)
+            .with_receipt(paid.receipt().cloned());
+        state.audit.record(audit);
+        Ok(())
+    }
+
+    async fn expire(&self, expired: &Charge, audit: &AuditEntry) -> Result<(), RepositoryError> {
+        ensure_audit_describes(audit, expired)?;
+        let mut state = self.state.lock().expect("repository lock poisoned");
+        let stored = state
+            .charges
+            .iter_mut()
+            .find(|stored| {
+                stored.company_id() == expired.company_id()
+                    && stored.id() == expired.id()
+                    && stored.status() == ChargeStatus::Open
+            })
+            .ok_or(RepositoryError::NotFound)?;
+        *stored = stored.clone().with_status(ChargeStatus::Expired);
+        state.audit.record(audit);
+        Ok(())
+    }
+
+    async fn find_by_external(
+        &self,
+        company_id: CompanyId,
+        provider: &str,
+        external_id: &str,
+    ) -> Result<Option<Charge>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        Ok(state
+            .charges
+            .iter()
+            .find(|stored| {
+                stored.company_id() == company_id
+                    && stored.provider() == provider
+                    && stored.external_id() == external_id
+            })
+            .cloned())
+    }
+
     async fn find(
         &self,
         company_id: CompanyId,
@@ -102,11 +157,16 @@ impl ChargeRepository for InMemoryChargeRepository {
 
 #[cfg(test)]
 mod tests {
-    use conta_verde_application::{ChargeService, FinancialEntryService};
+    use conta_verde_application::{
+        ChargeService, CollectionService, FinancialEntryService, PaymentWebhookService,
+    };
 
     use super::*;
     use crate::memory_entries::tests::Registers;
-    use crate::{FakePaymentProvider, InMemoryFinancialEntryRepository, contract};
+    use crate::{
+        FakePaymentProvider, InMemoryCollectionSettingsRepository,
+        InMemoryFinancialEntryRepository, InMemoryPaymentEventRepository, contract,
+    };
 
     #[tokio::test]
     async fn issues_and_cancels_charges() {
@@ -115,19 +175,74 @@ mod tests {
         let seed = registers.seed(company).await;
         let entry_store = InMemoryFinancialEntryRepository::default();
         let store = InMemoryChargeRepository::default();
+        let settings_store = InMemoryCollectionSettingsRepository::default();
         let provider = FakePaymentProvider::default();
         let service = ChargeService::new(
             store.clone(),
             entry_store.clone(),
             registers.parties.clone(),
             provider.clone(),
+            settings_store.clone(),
         );
         let entries = FinancialEntryService::new(entry_store, registers.references());
+        let settings = CollectionService::new(settings_store, registers.references());
         contract::issues_and_cancels_charges(
             &service,
             &store,
             &entries,
+            &settings,
             &provider,
+            company,
+            other_company,
+            &seed,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn configures_collection() {
+        let registers = Registers::new();
+        let (company, other_company) = (CompanyId::generate(), CompanyId::generate());
+        let seed = registers.seed(company).await;
+        let settings = CollectionService::new(
+            InMemoryCollectionSettingsRepository::default(),
+            registers.references(),
+        );
+        contract::configures_collection(&settings, company, other_company, &seed).await;
+    }
+
+    #[tokio::test]
+    async fn settles_charges_from_webhooks() {
+        let registers = Registers::new();
+        let (company, other_company) = (CompanyId::generate(), CompanyId::generate());
+        let seed = registers.seed(company).await;
+        let entry_store = InMemoryFinancialEntryRepository::default();
+        let store = InMemoryChargeRepository::default();
+        let settings_store = InMemoryCollectionSettingsRepository::default();
+        let events = InMemoryPaymentEventRepository::default();
+        let provider = FakePaymentProvider::default();
+        let charges = ChargeService::new(
+            store.clone(),
+            entry_store.clone(),
+            registers.parties.clone(),
+            provider.clone(),
+            settings_store.clone(),
+        );
+        let webhooks = PaymentWebhookService::new(
+            provider,
+            store,
+            events.clone(),
+            settings_store.clone(),
+            FinancialEntryService::new(entry_store.clone(), registers.references()),
+        );
+        let entries = FinancialEntryService::new(entry_store, registers.references());
+        let settings = CollectionService::new(settings_store, registers.references());
+        contract::settles_charges_from_webhooks(
+            &webhooks,
+            &charges,
+            &entries,
+            &settings,
+            &events,
             company,
             other_company,
             &seed,

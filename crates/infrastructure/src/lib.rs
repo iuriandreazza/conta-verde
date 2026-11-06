@@ -13,6 +13,7 @@ mod memory_audit;
 mod memory_bank_accounts;
 mod memory_categories;
 mod memory_charges;
+mod memory_collection;
 mod memory_commission_rules;
 mod memory_contracts;
 mod memory_cost_centers;
@@ -36,6 +37,7 @@ mod postgres_audit;
 mod postgres_bank_accounts;
 mod postgres_categories;
 mod postgres_charges;
+mod postgres_collection;
 mod postgres_commission_rules;
 mod postgres_contracts;
 mod postgres_cost_centers;
@@ -54,12 +56,15 @@ mod postgres_transfers;
 mod sales_references;
 mod secrets;
 mod smtp_email_sender;
+mod webhook_signature;
 
 pub use brasil_api::BrasilApiCnpjRegistry;
 pub use brasil_api_postal_code::BrasilApiPostalCodeDirectory;
 pub use cached_registry::CachedCnpjRegistry;
 pub use entry_references::RegisterReferences;
-pub use fake_payment_provider::{FakePaymentProvider, NoPaymentProvider};
+pub use fake_payment_provider::{
+    FAKE_SIGNATURE_HEADER, FAKE_WEBHOOK_SECRET, FakePaymentProvider, NoPaymentProvider,
+};
 pub use local_blob_store::LocalBlobStore;
 pub use log_email_sender::LogEmailSender;
 pub use memory::{InMemoryCnpjRegistry, InMemoryIdentityRepository, InMemoryPartyRepository};
@@ -67,6 +72,7 @@ pub use memory_attachments::{InMemoryAttachmentRepository, InMemoryBlobStore};
 pub use memory_bank_accounts::InMemoryBankAccountRepository;
 pub use memory_categories::InMemoryCategoryRepository;
 pub use memory_charges::InMemoryChargeRepository;
+pub use memory_collection::{InMemoryCollectionSettingsRepository, InMemoryPaymentEventRepository};
 pub use memory_commission_rules::InMemoryCommissionRuleRepository;
 pub use memory_contracts::InMemoryContractRepository;
 pub use memory_cost_centers::InMemoryCostCenterRepository;
@@ -88,6 +94,9 @@ pub use postgres_attachments::PostgresAttachmentRepository;
 pub use postgres_bank_accounts::PostgresBankAccountRepository;
 pub use postgres_categories::PostgresCategoryRepository;
 pub use postgres_charges::PostgresChargeRepository;
+pub use postgres_collection::{
+    PostgresCollectionSettingsRepository, PostgresPaymentEventRepository,
+};
 pub use postgres_commission_rules::PostgresCommissionRuleRepository;
 pub use postgres_contracts::PostgresContractRepository;
 pub use postgres_cost_centers::PostgresCostCenterRepository;
@@ -106,3 +115,4 @@ pub use postgres_transfers::{PostgresOpeningRepository, PostgresTransferReposito
 pub use sales_references::RegisterSalesReferences;
 pub use secrets::Argon2SecretService;
 pub use smtp_email_sender::SmtpEmailSender;
+pub use webhook_signature::{hmac_sha256_hex, is_valid_signature};

@@ -3,6 +3,62 @@ use std::future::Future;
 
 use conta_verde_domain::{Amount, CalendarDate, ChargeId, ChargeMethod, ChargePayment};
 
+/// The headers of a webhook request, with their names in lower case: what a signature may be in.
+#[derive(Debug, Clone, Default)]
+pub struct WebhookHeaders(Vec<(String, String)>);
+
+impl WebhookHeaders {
+    pub fn new(headers: impl IntoIterator<Item = (String, String)>) -> Self {
+        Self(
+            headers
+                .into_iter()
+                .map(|(name, value)| (name.to_ascii_lowercase(), value))
+                .collect(),
+        )
+    }
+
+    /// The header with this name, whatever its case.
+    pub fn get(&self, name: &str) -> Option<&str> {
+        let name = name.to_ascii_lowercase();
+        self.0
+            .iter()
+            .find(|(candidate, _)| *candidate == name)
+            .map(|(_, value)| value.as_str())
+    }
+}
+
+/// What a provider's notice says happened to a charge ([ADR 0046]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderEventKind {
+    /// The customer paid: what, the day, and the fee the provider kept.
+    Paid {
+        paid_amount: Amount,
+        paid_on: CalendarDate,
+        fee: Amount,
+    },
+    Cancelled,
+    Expired,
+}
+
+/// One thing a provider said, once its signature was checked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderEvent {
+    /// The provider's own id for this notice: the same notice twice has the same id.
+    pub event_id: String,
+    /// The provider's id of the charge it is about.
+    pub external_id: String,
+    pub kind: ProviderEventKind,
+}
+
+/// Why a webhook request was not taken.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WebhookError {
+    /// The signature is missing or is not the provider's: nothing of the body is believed.
+    InvalidSignature,
+    /// Signed, but not a notice this adapter understands.
+    Malformed(String),
+}
+
 /// Who is asked to pay, as the provider needs to know them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Payer {
@@ -73,4 +129,12 @@ pub trait PaymentProvider: Send + Sync {
         &self,
         external_id: &str,
     ) -> impl Future<Output = Result<(), ProviderError>> + Send;
+
+    /// Checks the signature of a webhook over the body **as it came**, before anything of it is parsed, and
+    /// reads the notices in it. Never calls the provider: what the body says is what the signature vouches for.
+    fn verify_webhook(
+        &self,
+        headers: &WebhookHeaders,
+        body: &[u8],
+    ) -> Result<Vec<ProviderEvent>, WebhookError>;
 }

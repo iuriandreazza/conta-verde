@@ -53,6 +53,9 @@ use conta_verde_application::{
     SalesReportService, SecretService, StatementLineRepository, TransferRepository,
     TransferService,
 };
+use conta_verde_application::{
+    CollectionService, CollectionSettingsRepository, PaymentEventRepository, PaymentWebhookService,
+};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -82,6 +85,8 @@ pub trait Ports: 'static {
     type Attachments: AttachmentRepository + 'static;
     type Blobs: BlobStore + 'static;
     type Charges: ChargeRepository + 'static;
+    type CollectionSettings: CollectionSettingsRepository + 'static;
+    type PaymentEvents: PaymentEventRepository + 'static;
     type Provider: PaymentProvider + 'static;
     type Transfers: TransferRepository + 'static;
     type Openings: OpeningRepository + 'static;
@@ -103,6 +108,17 @@ type ChargesOf<X> = ChargeService<
     <X as Ports>::Entries,
     <X as Ports>::Parties,
     <X as Ports>::Provider,
+    <X as Ports>::CollectionSettings,
+>;
+
+/// The webhooks use case over the adapters of `X`.
+type WebhooksOf<X> = PaymentWebhookService<
+    <X as Ports>::Provider,
+    <X as Ports>::Charges,
+    <X as Ports>::PaymentEvents,
+    <X as Ports>::CollectionSettings,
+    <X as Ports>::Entries,
+    <X as Ports>::EntryReferences,
 >;
 
 /// The sales use case over the adapters of `X`.
@@ -151,6 +167,8 @@ pub struct Services<X: Ports> {
     pub entries: FinancialEntryService<X::Entries, X::EntryReferences>,
     pub attachments: AttachmentService<X::Attachments, X::Blobs, X::Entries>,
     pub charges: ChargesOf<X>,
+    pub webhooks: WebhooksOf<X>,
+    pub collection: CollectionService<X::CollectionSettings, X::EntryReferences>,
     pub transfers: TransferService<X::Transfers, X::EntryReferences>,
     pub recurrences: RecurrenceService<X::Recurrences, X::Entries, X::EntryReferences>,
     pub quotes: QuoteService<X::Quotes, X::SalesReferences, X::Emails, X::Secrets>,
@@ -178,6 +196,8 @@ pub(crate) struct AppState<X: Ports> {
     entries: FinancialEntryService<X::Entries, X::EntryReferences>,
     attachments: AttachmentService<X::Attachments, X::Blobs, X::Entries>,
     charges: ChargesOf<X>,
+    webhooks: WebhooksOf<X>,
+    collection: CollectionService<X::CollectionSettings, X::EntryReferences>,
     transfers: TransferService<X::Transfers, X::EntryReferences>,
     recurrences: RecurrenceService<X::Recurrences, X::Entries, X::EntryReferences>,
     quotes: QuoteService<X::Quotes, X::SalesReferences, X::Emails, X::Secrets>,
@@ -210,6 +230,8 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         entries: services.entries,
         attachments: services.attachments,
         charges: services.charges,
+        webhooks: services.webhooks,
+        collection: services.collection,
         transfers: services.transfers,
         recurrences: services.recurrences,
         quotes: services.quotes,
@@ -433,6 +455,19 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
             get(charges::collection::<X>),
         )
         .route(
+            "/companies/{company_id}/collection/settings",
+            get(charges::get_collection_settings::<X>)
+                .put(charges::replace_collection_settings::<X>),
+        )
+        .route(
+            "/companies/{company_id}/collection/settings/history",
+            get(charges::collection_settings_history::<X>),
+        )
+        .route(
+            "/public/payments/{company_id}/webhooks/{provider}",
+            post(charges::receive_payment_webhook::<X>),
+        )
+        .route(
             "/companies/{company_id}/recurrences",
             get(recurrences::list_recurrences::<X>).post(recurrences::register_recurrence::<X>),
         )
@@ -619,10 +654,11 @@ mod tests {
     use conta_verde_infrastructure::{
         Argon2SecretService, FakePaymentProvider, InMemoryAttachmentRepository,
         InMemoryBankAccountRepository, InMemoryBlobStore, InMemoryCategoryRepository,
-        InMemoryChargeRepository, InMemoryCnpjRegistry, InMemoryCommissionRuleRepository,
-        InMemoryContractRepository, InMemoryCostCenterRepository, InMemoryEmailSender,
-        InMemoryFinancialEntryRepository, InMemoryIdentityRepository, InMemoryInvitationRepository,
-        InMemoryOpeningRepository, InMemoryPartyRepository, InMemoryPaymentMethodRepository,
+        InMemoryChargeRepository, InMemoryCnpjRegistry, InMemoryCollectionSettingsRepository,
+        InMemoryCommissionRuleRepository, InMemoryContractRepository, InMemoryCostCenterRepository,
+        InMemoryEmailSender, InMemoryFinancialEntryRepository, InMemoryIdentityRepository,
+        InMemoryInvitationRepository, InMemoryOpeningRepository, InMemoryPartyRepository,
+        InMemoryPaymentEventRepository, InMemoryPaymentMethodRepository,
         InMemoryPaymentTermRepository, InMemoryPostalCodeDirectory, InMemoryPriceListRepository,
         InMemoryProductRepository, InMemoryQuoteRepository, InMemoryRecurrenceRepository,
         InMemorySaleRepository, InMemoryStatementLineRepository, InMemoryTransferRepository,
@@ -697,6 +733,8 @@ mod tests {
         type Blobs = InMemoryBlobStore;
         type Charges = InMemoryChargeRepository;
         type Provider = FakePaymentProvider;
+        type CollectionSettings = InMemoryCollectionSettingsRepository;
+        type PaymentEvents = InMemoryPaymentEventRepository;
         type Transfers = InMemoryTransferRepository;
         type Openings = InMemoryOpeningRepository;
         type Recurrences = InMemoryRecurrenceRepository;
@@ -732,6 +770,8 @@ mod tests {
         type Blobs = InMemoryBlobStore;
         type Charges = InMemoryChargeRepository;
         type Provider = FakePaymentProvider;
+        type CollectionSettings = InMemoryCollectionSettingsRepository;
+        type PaymentEvents = InMemoryPaymentEventRepository;
         type Transfers = InMemoryTransferRepository;
         type Openings = InMemoryOpeningRepository;
         type Recurrences = InMemoryRecurrenceRepository;
@@ -832,6 +872,46 @@ mod tests {
             InMemoryFinancialEntryRepository::default(),
             InMemoryPartyRepository::default(),
             FakePaymentProvider::default(),
+            InMemoryCollectionSettingsRepository::default(),
+        )
+    }
+
+    fn standalone_webhooks() -> WebhooksOf<MemoryPorts> {
+        webhooks_over(
+            InMemoryChargeRepository::default(),
+            InMemoryCollectionSettingsRepository::default(),
+            InMemoryPaymentEventRepository::default(),
+            standalone_entries(),
+        )
+    }
+
+    fn webhooks_over(
+        charges: InMemoryChargeRepository,
+        settings: InMemoryCollectionSettingsRepository,
+        events: InMemoryPaymentEventRepository,
+        entries: TestEntries,
+    ) -> WebhooksOf<MemoryPorts> {
+        PaymentWebhookService::new(
+            FakePaymentProvider::default(),
+            charges,
+            events,
+            settings,
+            entries,
+        )
+    }
+
+    type TestCollection = CollectionService<InMemoryCollectionSettingsRepository, TestReferences>;
+
+    fn standalone_collection() -> TestCollection {
+        CollectionService::new(
+            InMemoryCollectionSettingsRepository::default(),
+            references_over(
+                &InMemoryCategoryRepository::default(),
+                &InMemoryCostCenterRepository::default(),
+                &InMemoryPartyRepository::default(),
+                &InMemoryBankAccountRepository::default(),
+                &InMemoryPaymentMethodRepository::default(),
+            ),
         )
     }
 
@@ -1191,6 +1271,8 @@ mod tests {
                 entries: standalone_entries(),
                 attachments: standalone_attachments(),
                 charges: standalone_charges(),
+                webhooks: standalone_webhooks(),
+                collection: standalone_collection(),
                 transfers: standalone_transfers(),
                 recurrences: standalone_recurrences(),
                 quotes: standalone_quotes(),
@@ -1838,6 +1920,8 @@ mod tests {
                 entries: standalone_entries(),
                 attachments: standalone_attachments(),
                 charges: standalone_charges(),
+                webhooks: standalone_webhooks(),
+                collection: standalone_collection(),
                 transfers: standalone_transfers(),
                 recurrences: standalone_recurrences(),
                 quotes: standalone_quotes(),
@@ -3327,6 +3411,8 @@ mod tests {
                 entries: standalone_entries(),
                 attachments: standalone_attachments(),
                 charges: standalone_charges(),
+                webhooks: standalone_webhooks(),
+                collection: standalone_collection(),
                 transfers: standalone_transfers(),
                 recurrences: standalone_recurrences(),
                 quotes: standalone_quotes(),
@@ -4829,6 +4915,8 @@ mod tests {
         let products = InMemoryProductRepository::default();
         let payment_terms = InMemoryPaymentTermRepository::default();
         let entry_store = InMemoryFinancialEntryRepository::default();
+        let charge_store = InMemoryChargeRepository::default();
+        let settings_store = InMemoryCollectionSettingsRepository::default();
         let transfer_store = InMemoryTransferRepository::default();
         let quote_store = InMemoryQuoteRepository::default();
         let sale_store = InMemorySaleRepository::default();
@@ -4870,10 +4958,34 @@ mod tests {
                     entry_store.clone(),
                 ),
                 charges: ChargeService::new(
-                    InMemoryChargeRepository::default(),
+                    charge_store.clone(),
                     entry_store.clone(),
                     parties.clone(),
                     FakePaymentProvider::default(),
+                    settings_store.clone(),
+                ),
+                webhooks: webhooks_over(
+                    charge_store.clone(),
+                    settings_store.clone(),
+                    InMemoryPaymentEventRepository::default(),
+                    entries_over(
+                        entry_store.clone(),
+                        &categories,
+                        &cost_centers,
+                        &parties,
+                        &bank_accounts,
+                        &payment_methods,
+                    ),
+                ),
+                collection: CollectionService::new(
+                    settings_store.clone(),
+                    references_over(
+                        &categories,
+                        &cost_centers,
+                        &parties,
+                        &bank_accounts,
+                        &payment_methods,
+                    ),
                 ),
                 transfers: TransferService::new(
                     transfer_store.clone(),
@@ -5636,6 +5748,29 @@ mod tests {
         );
     }
 
+    /// Chooses the account charges are paid into (and the category of the provider's fee), which a
+    /// charge needs before it can be issued. Answers the account's id.
+    async fn configure_collection(
+        app: &Router,
+        cookie: &str,
+        company_id: Uuid,
+        fee_category: Option<&str>,
+    ) -> String {
+        let account = registered_account(app, cookie, company_id, "Conta da cobrança").await;
+        let settings = send(
+            app,
+            json_request(
+                "PUT",
+                &format!("/companies/{company_id}/collection/settings"),
+                Some(cookie),
+                json!({ "bank_account_id": account, "fee_category_id": fee_category }),
+            ),
+        )
+        .await;
+        assert_eq!(settings.status, StatusCode::OK, "{}", settings.body);
+        account
+    }
+
     #[tokio::test]
     async fn issues_lists_and_cancels_charges_for_an_installment() {
         let app = entry_app();
@@ -5657,6 +5792,20 @@ mod tests {
         .await;
         let entry_id = created.body["id"].as_str().unwrap().to_owned();
         let uri = format!("/companies/{company_id}/entries/{entry_id}/charges");
+
+        // Without the account the money lands in, nothing is asked of the provider.
+        let refused = send(
+            &app,
+            json_request(
+                "POST",
+                &uri,
+                Some(&cookie),
+                json!({ "installment": 1, "method": "pix" }),
+            ),
+        )
+        .await;
+        assert_eq!(refused.status, StatusCode::CONFLICT, "{}", refused.body);
+        configure_collection(&app, &cookie, company_id, None).await;
 
         let collection = send(
             &app,
@@ -5794,6 +5943,7 @@ mod tests {
             "/companies/{company_id}/entries/{}/charges",
             created.body["id"].as_str().unwrap()
         );
+        configure_collection(&app, &cookie, company_id, None).await;
         let body = json!({ "installment": 1, "method": "pix" });
         let issued = send(
             &app,
@@ -5817,6 +5967,16 @@ mod tests {
                 &format!("/companies/{company_id}/collection"),
                 Some(&stranger),
             ),
+            get_request(
+                &format!("/companies/{company_id}/collection/settings"),
+                Some(&stranger),
+            ),
+            json_request(
+                "PUT",
+                &format!("/companies/{company_id}/collection/settings"),
+                Some(&stranger),
+                json!({ "bank_account_id": Uuid::new_v4(), "fee_category_id": null }),
+            ),
         ] {
             assert_eq!(send(&app, request).await.status, StatusCode::NOT_FOUND);
         }
@@ -5824,6 +5984,152 @@ mod tests {
             send(&app, get_request(&uri, None)).await.status,
             StatusCode::UNAUTHORIZED
         );
+    }
+
+    fn signed_notice(
+        event: &str,
+        external_id: &str,
+        kind: &str,
+        paid: Option<(&str, &str, &str)>,
+    ) -> (String, Vec<u8>) {
+        let (headers, body) = FakePaymentProvider::notice(event, external_id, kind, paid);
+        let signature = headers
+            .get(conta_verde_infrastructure::FAKE_SIGNATURE_HEADER)
+            .unwrap()
+            .to_owned();
+        (signature, body)
+    }
+
+    fn webhook_request(uri: &str, signature: Option<&str>, body: Vec<u8>) -> Request<Body> {
+        let mut builder = Request::builder().method("POST").uri(uri);
+        if let Some(signature) = signature {
+            builder = builder.header(conta_verde_infrastructure::FAKE_SIGNATURE_HEADER, signature);
+        }
+        builder.body(Body::from(body)).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_signed_webhook_settles_the_installment_and_enters_the_fee() {
+        let app = entry_app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let targets = entry_targets(&app, &cookie, company_id).await;
+        let account =
+            configure_collection(&app, &cookie, company_id, Some(&targets.other_category)).await;
+        let created = send(
+            &app,
+            json_request(
+                "POST",
+                &entries_uri(company_id),
+                Some(&cookie),
+                entry_body(&targets, "Venda", &[("2026-12-10", "100")]),
+            ),
+        )
+        .await;
+        let entry_id = created.body["id"].as_str().unwrap().to_owned();
+        let issued = send(
+            &app,
+            json_request(
+                "POST",
+                &format!("/companies/{company_id}/entries/{entry_id}/charges"),
+                Some(&cookie),
+                json!({ "installment": 1, "method": "pix" }),
+            ),
+        )
+        .await;
+        let external = format!(
+            "fake_{}",
+            issued.body["id"].as_str().unwrap().replace('-', "")
+        );
+        let hook = format!("/public/payments/{company_id}/webhooks/fake");
+
+        // No session is needed, but the signature is: unsigned, forged and for another company all fail.
+        let (signature, body) = signed_notice(
+            "evt_1",
+            &external,
+            "paid",
+            Some(("100", "2026-12-09", "1.99")),
+        );
+        for request in [
+            webhook_request(&hook, None, body.clone()),
+            webhook_request(&hook, Some(&"0".repeat(64)), body.clone()),
+            webhook_request(&hook, Some(&signature), b"{}".to_vec()),
+        ] {
+            assert_eq!(send(&app, request).await.status, StatusCode::UNAUTHORIZED);
+        }
+        for uri in [
+            format!("/public/payments/{}/webhooks/fake", Uuid::new_v4()),
+            format!("/public/payments/{company_id}/webhooks/other"),
+            "/public/payments/not-an-id/webhooks/fake".to_owned(),
+        ] {
+            assert_eq!(
+                send(&app, webhook_request(&uri, Some(&signature), body.clone()))
+                    .await
+                    .status,
+                StatusCode::NOT_FOUND,
+                "{uri}"
+            );
+        }
+
+        // Signed, it settles the installment; the same notice again says so and settles nothing more.
+        for _ in 0..2 {
+            let reply = send(&app, webhook_request(&hook, Some(&signature), body.clone())).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+            assert_eq!(reply.body["received"], 1);
+        }
+        let settlements = send(
+            &app,
+            get_request(
+                &format!("{}/{entry_id}/settlements", entries_uri(company_id)),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        let settlements = settlements.body.as_array().unwrap();
+        assert_eq!(settlements.len(), 1);
+        assert_eq!(settlements[0]["applied"], "100");
+        assert_eq!(settlements[0]["bank_account_id"], account);
+        let charges = send(
+            &app,
+            get_request(
+                &format!("/companies/{company_id}/entries/{entry_id}/charges"),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        let charge = &charges.body["items"][0];
+        assert_eq!(charge["status"], "paid");
+        assert_eq!(charge["paid_on"], "2026-12-09");
+        assert_eq!(charge["paid_amount"], "100");
+        assert_eq!(charge["fee"], "1.99");
+        assert!(charge["note"].is_null());
+        // The fee is an expense settled from the same account.
+        let entries = send(&app, get_request(&entries_uri(company_id), Some(&cookie))).await;
+        let fee = entries.body["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| {
+                entry["description"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("Taxa de cobrança")
+            })
+            .expect("the fee is an entry");
+        assert_eq!(fee["kind"], "payable");
+        assert_eq!(fee["total"], "1.99");
+        assert_eq!(fee["installments"][0]["settled"], "1.99");
+
+        // Settings are readable and are the company's alone.
+        let settings = send(
+            &app,
+            get_request(
+                &format!("/companies/{company_id}/collection/settings"),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(settings.body["bank_account_id"], account);
+        assert_eq!(settings.body["fee_category_id"], targets.other_category);
     }
 
     fn attachments_uri(company_id: Uuid, entry_id: &str) -> String {

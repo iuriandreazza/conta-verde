@@ -119,6 +119,15 @@ impl FinancialEntryRepository for InMemoryFinancialEntryRepository {
         let installment = stored
             .installment(settlement.installment())
             .ok_or(RepositoryError::NotFound)?;
+        // A charge settles once, even if that settlement was reversed since.
+        if settlement.charge_id().is_some()
+            && state
+                .settlements
+                .iter()
+                .any(|other| other.charge_id() == settlement.charge_id())
+        {
+            return Err(RepositoryError::DuplicateOrigin);
+        }
         let settled = settled_of(
             &state
                 .settlements

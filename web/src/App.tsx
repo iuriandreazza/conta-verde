@@ -7,6 +7,7 @@ import { BankAccountsPage } from "./pages/BankAccountsPage";
 import { CashFlowPage } from "./pages/CashFlowPage";
 import { CategoriesPage } from "./pages/CategoriesPage";
 import { CompaniesPage } from "./pages/CompaniesPage";
+import { CollectionPage } from "./pages/CollectionPage";
 import { CommissionsPage } from "./pages/CommissionsPage";
 import { PriceListsPage } from "./pages/PriceListsPage";
 import { ContractsPage } from "./pages/ContractsPage";
@@ -46,6 +47,7 @@ export function App() {
           <Route path="/companies/:companyId/commissions" element={<CommissionsPage />} />
           <Route path="/companies/:companyId/price-lists" element={<PriceListsPage />} />
           <Route path="/companies/:companyId/entries" element={<EntriesPage />} />
+          <Route path="/companies/:companyId/collection" element={<CollectionPage />} />
           <Route path="/companies/:companyId/reports" element={<ReportsPage />} />
           <Route path="/companies/:companyId/reconciliation" element={<ReconciliationPage />} />
           <Route path="/companies/:companyId/recurrences" element={<RecurrencesPage />} />

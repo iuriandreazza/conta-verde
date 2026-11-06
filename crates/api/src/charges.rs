@@ -1,8 +1,12 @@
 use axum::Json;
+use axum::body::Bytes;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
-use conta_verde_application::ApplicationError;
-use conta_verde_domain::{Actor, CalendarDate, Charge, ChargeId, ChargeMethod, EntryId};
+use axum::http::{HeaderMap, StatusCode};
+use conta_verde_application::{ApplicationError, WebhookHeaders};
+use conta_verde_domain::{
+    Actor, BankAccountId, CalendarDate, CategoryId, Charge, ChargeId, ChargeMethod,
+    CollectionSettings, CompanyId, EntryId, MAX_EVENT_BYTES,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -32,6 +36,12 @@ pub(crate) struct ChargeResponse {
     /// The provider's page: the boleto's paper or the card checkout.
     payment_url: Option<String>,
     issued_by: String,
+    /// What the provider said was paid, once it was: the day, the amount (which can differ from the
+    /// charge's), the fee it kept, and why the installment was not settled when it was not.
+    paid_on: Option<String>,
+    paid_amount: Option<String>,
+    fee: Option<String>,
+    note: Option<String>,
 }
 
 impl From<&Charge> for ChargeResponse {
@@ -50,6 +60,12 @@ impl From<&Charge> for ChargeResponse {
             pix_payload: charge.payment().pix_payload.clone(),
             payment_url: charge.payment().payment_url.clone(),
             issued_by: name.clone(),
+            paid_on: charge.receipt().map(|receipt| receipt.paid_on.to_string()),
+            paid_amount: charge
+                .receipt()
+                .map(|receipt| receipt.paid_amount.to_string()),
+            fee: charge.receipt().map(|receipt| receipt.fee.to_string()),
+            note: charge.receipt().and_then(|receipt| receipt.note.clone()),
         }
     }
 }
@@ -175,4 +191,101 @@ pub(crate) async fn charge_history<X: Ports>(
     Ok(Json(
         history.iter().map(HistoryEntryResponse::from).collect(),
     ))
+}
+
+#[derive(Serialize)]
+pub(crate) struct CollectionSettingsResponse {
+    /// Where the money of a paid charge lands; `null` while the company has not chosen one, and then no
+    /// charge can be issued.
+    bank_account_id: Option<Uuid>,
+    /// What the provider's fee is entered under, when the company wants it entered.
+    fee_category_id: Option<Uuid>,
+}
+
+impl From<Option<&CollectionSettings>> for CollectionSettingsResponse {
+    fn from(settings: Option<&CollectionSettings>) -> Self {
+        Self {
+            bank_account_id: settings.map(|settings| settings.bank_account_id().as_uuid()),
+            fee_category_id: settings
+                .and_then(|settings| settings.fee_category_id())
+                .map(|id| id.as_uuid()),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CollectionSettingsRequest {
+    bank_account_id: Uuid,
+    /// Left out or `null` to leave the fee only on the charge. It must be said when replacing.
+    fee_category_id: Option<Uuid>,
+}
+
+pub(crate) async fn get_collection_settings<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, _): CompanyAccess,
+) -> Result<Json<CollectionSettingsResponse>, ApiError> {
+    let settings = state.collection.get(company_id).await?;
+    Ok(Json(CollectionSettingsResponse::from(settings.as_ref())))
+}
+
+pub(crate) async fn replace_collection_settings<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, actor): CompanyAccess,
+    ApiJson(request): ApiJson<CollectionSettingsRequest>,
+) -> Result<Json<CollectionSettingsResponse>, ApiError> {
+    let settings = state
+        .collection
+        .replace(
+            company_id,
+            &actor,
+            BankAccountId::from_uuid(request.bank_account_id),
+            request.fee_category_id.map(CategoryId::from_uuid),
+        )
+        .await?;
+    Ok(Json(CollectionSettingsResponse::from(Some(&settings))))
+}
+
+/// What was recorded about the company's collection settings, oldest first.
+pub(crate) async fn collection_settings_history<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, _): CompanyAccess,
+) -> Result<Json<Vec<HistoryEntryResponse>>, ApiError> {
+    let history = state.collection.history(company_id).await?;
+    Ok(Json(
+        history.iter().map(HistoryEntryResponse::from).collect(),
+    ))
+}
+
+#[derive(Serialize)]
+pub(crate) struct WebhookResponse {
+    received: usize,
+}
+
+/// Where a payment provider is told to call ([ADR 0046]). It needs no session: it is authenticated by the
+/// provider's signature over the body, checked before anything is read from it. A provider that is not the
+/// configured one and a charge that is not the company's are both `404`, so nothing tells them apart.
+pub(crate) async fn receive_payment_webhook<X: Ports>(
+    State(state): State<SharedState<X>>,
+    Path((company_id, provider)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<WebhookResponse>, ApiError> {
+    let company_id = Uuid::parse_str(&company_id)
+        .map(CompanyId::from_uuid)
+        .map_err(|_| ApplicationError::ChargeNotFound)?;
+    if body.len() > MAX_EVENT_BYTES {
+        return Err(ApiError::FileTooLarge("the notice is too large"));
+    }
+    let headers = WebhookHeaders::new(headers.iter().filter_map(|(name, value)| {
+        value
+            .to_str()
+            .ok()
+            .map(|value| (name.as_str().to_owned(), value.to_owned()))
+    }));
+    let received = state
+        .webhooks
+        .receive(company_id, &provider, &headers, &body)
+        .await?;
+    Ok(Json(WebhookResponse { received }))
 }

@@ -6,32 +6,35 @@ use conta_verde_domain::{
 
 use crate::audit::audit_entry;
 use crate::{
-    ApplicationError, ChargeRepository, FinancialEntryRepository, PartyRepository, Payer,
-    PaymentProvider, ProviderChargeRequest, ProviderError, RepositoryError,
+    ApplicationError, ChargeRepository, CollectionSettingsRepository, FinancialEntryRepository,
+    PartyRepository, Payer, PaymentProvider, ProviderChargeRequest, ProviderError, RepositoryError,
 };
 
 /// Charges for the installments of the receivables of a company ([ADR 0045]): the provider makes
 /// them and keeps the money, this keeps what was asked and what the customer needs to pay.
-pub struct ChargeService<C, E, P, V> {
+pub struct ChargeService<C, E, P, V, S> {
     charges: C,
     entries: E,
     parties: P,
     provider: V,
+    settings: S,
 }
 
-impl<C, E, P, V> ChargeService<C, E, P, V>
+impl<C, E, P, V, S> ChargeService<C, E, P, V, S>
 where
     C: ChargeRepository,
     E: FinancialEntryRepository,
     P: PartyRepository,
     V: PaymentProvider,
+    S: CollectionSettingsRepository,
 {
-    pub fn new(charges: C, entries: E, parties: P, provider: V) -> Self {
+    pub fn new(charges: C, entries: E, parties: P, provider: V, settings: S) -> Self {
         Self {
             charges,
             entries,
             parties,
             provider,
+            settings,
         }
     }
 
@@ -57,6 +60,10 @@ where
             return Err(ProviderError::Disabled.into());
         }
         let entry = self.find_entry(company_id, entry_id).await?;
+        // Without an account to land in, a payment could not be settled: nothing is asked of the provider.
+        if self.settings.find(company_id).await?.is_none() {
+            return Err(ApplicationError::CollectionNotConfigured);
+        }
         if entry.kind() != EntryKind::Receivable {
             return Err(ApplicationError::ChargeNeedsReceivable);
         }

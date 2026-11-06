@@ -2,10 +2,10 @@ use uuid::Uuid;
 
 use crate::line::lines_text;
 use crate::{
-    AccountOpening, Attachment, BankAccount, Category, Charge, CommissionRule, CompanyId, Contract,
-    CostCenter, DocumentCheck, FinancialEntry, LineMatch, Party, PaymentMethod, PaymentTerm,
-    PriceList, Product, Quote, Recurrence, Sale, SaleReturn, Settlement, StatementLine, Tag,
-    Transfer, UserId,
+    AccountOpening, Attachment, BankAccount, Category, Charge, CollectionSettings, CommissionRule,
+    CompanyId, Contract, CostCenter, DocumentCheck, FinancialEntry, LineMatch, Party,
+    PaymentMethod, PaymentTerm, PriceList, Product, Quote, Recurrence, Sale, SaleReturn,
+    Settlement, StatementLine, Tag, Transfer, UserId,
 };
 
 /// Who made a change. The name is a snapshot: history must keep reading the same after the user is
@@ -35,6 +35,8 @@ pub enum AuditEntity {
     StatementLine,
     Attachment,
     Charge,
+    /// One per company: the audit id is the company's.
+    CollectionSettings,
     Quote,
     Sale,
     SaleReturn,
@@ -58,6 +60,7 @@ impl AuditEntity {
             Self::StatementLine => "statement_line",
             Self::Attachment => "attachment",
             Self::Charge => "charge",
+            Self::CollectionSettings => "collection_settings",
             Self::Quote => "quote",
             Self::Sale => "sale",
             Self::SaleReturn => "sale_return",
@@ -369,6 +372,20 @@ impl Audited for Charge {
 
     fn audit_id(&self) -> Uuid {
         self.id().as_uuid()
+    }
+}
+
+impl Audited for CollectionSettings {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::CollectionSettings
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.company_id().as_uuid()
     }
 }
 
@@ -968,6 +985,24 @@ fn charge_fields(charge: &Charge) -> Fields {
         ("provider", Some(charge.provider().to_owned())),
         ("external_id", Some(charge.external_id().to_owned())),
         ("status", Some(charge.status().as_str().to_owned())),
+        (
+            "paid_on",
+            charge.receipt().map(|receipt| receipt.paid_on.to_string()),
+        ),
+        (
+            "paid_amount",
+            charge
+                .receipt()
+                .map(|receipt| receipt.paid_amount.to_string()),
+        ),
+        (
+            "fee",
+            charge.receipt().map(|receipt| receipt.fee.to_string()),
+        ),
+        (
+            "note",
+            charge.receipt().and_then(|receipt| receipt.note.clone()),
+        ),
     ]
 }
 
@@ -979,6 +1014,36 @@ pub fn charge_creation_changes(charge: &Charge) -> Vec<FieldChange> {
 /// What a move of the charge changes: its status.
 pub fn charge_changes(before: &Charge, after: &Charge) -> Vec<FieldChange> {
     changes_between(charge_fields(before), charge_fields(after))
+}
+
+fn collection_settings_fields(settings: &CollectionSettings) -> Fields {
+    vec![
+        (
+            "bank_account_id",
+            Some(settings.bank_account_id().as_uuid().to_string()),
+        ),
+        (
+            "fee_category_id",
+            settings
+                .fee_category_id()
+                .map(|id| id.as_uuid().to_string()),
+        ),
+    ]
+}
+
+/// Every field settings that were just made have set.
+pub fn collection_settings_creation_changes(settings: &CollectionSettings) -> Vec<FieldChange> {
+    creation_from(collection_settings_fields(settings))
+}
+
+pub fn collection_settings_changes(
+    before: &CollectionSettings,
+    after: &CollectionSettings,
+) -> Vec<FieldChange> {
+    changes_between(
+        collection_settings_fields(before),
+        collection_settings_fields(after),
+    )
 }
 
 fn transfer_fields(transfer: &Transfer) -> Fields {

@@ -2,7 +2,7 @@ use std::fmt;
 
 use conta_verde_domain::DomainError;
 
-use crate::{ProviderError, SecretError};
+use crate::{ProviderError, SecretError, WebhookError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RepositoryError {
@@ -99,6 +99,10 @@ pub enum ApplicationError {
     ChargeNeedsParty,
     /// The installment is settled: there is nothing left to charge.
     NothingToCharge,
+    /// Charges land in an account the company has not chosen yet (the collection settings).
+    CollectionNotConfigured,
+    /// The provider's webhook was refused: the signature is not its, or the body is not a notice.
+    Webhook(WebhookError),
     /// The charge was made at another provider than the one configured now, which cannot call it off.
     ChargeFromAnotherProvider,
     /// The payment provider could not make or call off the charge.
@@ -212,6 +216,12 @@ impl From<ProviderError> for ApplicationError {
     }
 }
 
+impl From<WebhookError> for ApplicationError {
+    fn from(error: WebhookError) -> Self {
+        Self::Webhook(error)
+    }
+}
+
 impl From<AuthError> for ApplicationError {
     fn from(error: AuthError) -> Self {
         Self::Auth(error)
@@ -290,6 +300,13 @@ impl fmt::Display for ApplicationError {
             Self::ChargeNeedsReceivable => f.write_str("only a receivable can be charged"),
             Self::ChargeNeedsParty => f.write_str("the entry has no customer to charge"),
             Self::NothingToCharge => f.write_str("the installment has nothing left to charge"),
+            Self::CollectionNotConfigured => {
+                f.write_str("choose the account charges are paid into before issuing one")
+            }
+            Self::Webhook(error) => match error {
+                WebhookError::InvalidSignature => f.write_str("invalid signature"),
+                WebhookError::Malformed(_) => f.write_str("the notice is not valid"),
+            },
             Self::ChargeFromAnotherProvider => {
                 f.write_str("the charge was made at another payment provider than the configured one")
             }

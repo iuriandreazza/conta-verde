@@ -8,7 +8,10 @@ use conta_verde_application::{
     PaymentMethodService, ProductQuery, ProductRepository, ProductService, RepositoryError,
     SecretService,
 };
-use conta_verde_application::{ChargeRepository, ChargeService, ProviderError};
+use conta_verde_application::{
+    ChargeRepository, ChargeService, CollectionService, CollectionSettingsRepository,
+    PaymentEventRepository, PaymentWebhookService, ProviderError, Recorded, WebhookError,
+};
 use conta_verde_application::{
     CommissionRuleQuery, CommissionRuleRepository, CommissionService, ContractRepository,
     ContractService, Conversion, Refund, SaleQuery, SaleRepository, SaleService,
@@ -42,6 +45,7 @@ use conta_verde_domain::{
 };
 use conta_verde_domain::{InstallmentDraft, payment_term_changes, payment_term_creation_changes};
 use conta_verde_domain::{LineDraft, QuoteDraft, QuoteStatus};
+use conta_verde_domain::{PaymentEvent, PaymentEventId, PaymentEventKind, PaymentEventOutcome};
 use conta_verde_domain::{PriceListDraft, PriceListItemDraft};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -10987,10 +10991,12 @@ pub async fn runs_the_price_list_lifecycle<R: PriceListRepository, F: SalesRefer
 
 /// Charges for the installments of receivables ([ADR 0045]): made at the provider for what is left of an
 /// installment, one open at a time, called off at the provider and here, and never of another company's.
-pub async fn issues_and_cancels_charges<C, E, P, F>(
-    service: &ChargeService<C, E, P, FakePaymentProvider>,
+#[allow(clippy::too_many_arguments)]
+pub async fn issues_and_cancels_charges<C, E, P, F, S>(
+    service: &ChargeService<C, E, P, FakePaymentProvider, S>,
     store: &C,
     entries: &FinancialEntryService<E, F>,
+    settings: &CollectionService<S, F>,
     provider: &FakePaymentProvider,
     company: CompanyId,
     other_company: CompanyId,
@@ -11000,6 +11006,7 @@ pub async fn issues_and_cancels_charges<C, E, P, F>(
     E: FinancialEntryRepository,
     P: PartyRepository,
     F: EntryReferences,
+    S: CollectionSettingsRepository,
 {
     let ana = actor();
     let register = |description: &str, party: Option<PartyId>, kind: EntryKind| {
@@ -11014,6 +11021,20 @@ pub async fn issues_and_cancels_charges<C, E, P, F>(
         entries.register(company, &ana, draft)
     };
     let entry = register("Venda 12", Some(seed.party), EntryKind::Receivable)
+        .await
+        .unwrap();
+
+    // Without an account to land in, nothing is asked of the provider.
+    assert_eq!(
+        service
+            .issue(company, &ana, entry.id(), 1, ChargeMethod::Pix, None)
+            .await
+            .unwrap_err(),
+        ApplicationError::CollectionNotConfigured
+    );
+    assert!(provider.created().is_empty());
+    settings
+        .replace(company, &ana, seed.bank_account, None)
         .await
         .unwrap();
 
@@ -11229,8 +11250,8 @@ pub async fn issues_and_cancels_charges<C, E, P, F>(
     );
 }
 
-async fn boleto_id<C, E, P>(
-    service: &ChargeService<C, E, P, FakePaymentProvider>,
+async fn boleto_id<C, E, P, S>(
+    service: &ChargeService<C, E, P, FakePaymentProvider, S>,
     company: CompanyId,
     entry: conta_verde_domain::EntryId,
 ) -> conta_verde_domain::ChargeId
@@ -11238,6 +11259,7 @@ where
     C: ChargeRepository,
     E: FinancialEntryRepository,
     P: PartyRepository,
+    S: CollectionSettingsRepository,
 {
     service
         .list(company, entry)
@@ -11247,4 +11269,446 @@ where
         .find(|charge| charge.method() == ChargeMethod::Boleto)
         .unwrap()
         .id()
+}
+
+/// The collection settings ([ADR 0046]): one per company, replaced as a whole, pointing at a usable account
+/// and category of the company, audited, and nothing of another company's.
+pub async fn configures_collection<S, F>(
+    service: &CollectionService<S, F>,
+    company: CompanyId,
+    other_company: CompanyId,
+    seed: &EntrySeed,
+) where
+    S: CollectionSettingsRepository,
+    F: EntryReferences,
+{
+    let ana = actor();
+    assert_eq!(service.get(company).await.unwrap(), None);
+
+    // Usable references only: an inactive account, the transfers category, another company's records.
+    for (account, category, what) in [
+        (seed.inactive_bank_account, None, "bank account"),
+        (seed.bank_account, Some(seed.inactive_category), "category"),
+        (seed.bank_account, Some(seed.transfer_category), "category"),
+    ] {
+        assert_eq!(
+            service
+                .replace(company, &ana, account, category)
+                .await
+                .unwrap_err(),
+            ApplicationError::UnusableReference(what)
+        );
+    }
+    assert_eq!(
+        service
+            .replace(other_company, &ana, seed.bank_account, None)
+            .await
+            .unwrap_err(),
+        ApplicationError::UnusableReference("bank account")
+    );
+    assert_eq!(service.get(company).await.unwrap(), None);
+    assert!(service.history(company).await.unwrap().is_empty());
+
+    let first = service
+        .replace(company, &ana, seed.bank_account, None)
+        .await
+        .unwrap();
+    assert_eq!(first.bank_account_id(), seed.bank_account);
+    assert_eq!(first.fee_category_id(), None);
+    assert_eq!(service.get(company).await.unwrap(), Some(first));
+
+    // Replaced as a whole; the same settings again write nothing.
+    let second = service
+        .replace(
+            company,
+            &ana,
+            seed.other_bank_account,
+            Some(seed.other_category),
+        )
+        .await
+        .unwrap();
+    assert_eq!(service.get(company).await.unwrap(), Some(second.clone()));
+    service
+        .replace(
+            company,
+            &ana,
+            seed.other_bank_account,
+            Some(seed.other_category),
+        )
+        .await
+        .unwrap();
+    let trail = service.history(company).await.unwrap();
+    assert_eq!(
+        trail
+            .iter()
+            .map(|record| record.entry.action)
+            .collect::<Vec<_>>(),
+        [AuditAction::Created, AuditAction::Updated]
+    );
+    assert_eq!(trail[1].entry.changes.len(), 2);
+
+    // Another company has its own, and none.
+    assert_eq!(service.get(other_company).await.unwrap(), None);
+    assert!(service.history(other_company).await.unwrap().is_empty());
+}
+
+/// What a webhook does ([ADR 0046]): a signed payment settles the installment through the settlement path and
+/// enters the fee, once however many times it arrives or is interrupted; what is not signed, not known or
+/// another company's is refused and leaves nothing; what no longer fits is kept and flagged.
+#[allow(clippy::too_many_arguments)]
+pub async fn settles_charges_from_webhooks<C, Ev, S, E, F, P>(
+    webhooks: &PaymentWebhookService<FakePaymentProvider, C, Ev, S, E, F>,
+    charges: &ChargeService<C, E, P, FakePaymentProvider, S>,
+    entries: &FinancialEntryService<E, F>,
+    settings: &CollectionService<S, F>,
+    events: &Ev,
+    company: CompanyId,
+    other_company: CompanyId,
+    seed: &EntrySeed,
+) where
+    C: ChargeRepository,
+    Ev: PaymentEventRepository,
+    S: CollectionSettingsRepository,
+    E: FinancialEntryRepository,
+    F: EntryReferences,
+    P: PartyRepository,
+{
+    use conta_verde_domain::{Charge, FinancialEntry};
+
+    let ana = actor();
+    settings
+        .replace(company, &ana, seed.bank_account, Some(seed.other_category))
+        .await
+        .unwrap();
+    let new_entry = |description: &'static str, amounts: &'static [&'static str]| {
+        let parts: Vec<(&str, &str)> = amounts.iter().map(|a| ("2026-12-10", *a)).collect();
+        let mut draft = entry_draft(seed, description, "2026-11-10", &parts);
+        draft.party_id = Some(seed.party);
+        entries.register(company, &ana, draft)
+    };
+    let charge_for = |entry: &FinancialEntry, number: u16| {
+        charges.issue(company, &ana, entry.id(), number, ChargeMethod::Pix, None)
+    };
+    let pay = |charge: &Charge, event: &str, paid: &str, fee: &str| {
+        let (headers, body) = FakePaymentProvider::notice(
+            event,
+            charge.external_id(),
+            "paid",
+            Some((paid, "2026-12-09", fee)),
+        );
+        async move { webhooks.receive(company, "fake", &headers, &body).await }
+    };
+    let settlements_of = |entry: &FinancialEntry| entries.settlements(company, entry.id());
+    let status_of = |charge: &Charge| {
+        let id = charge.id();
+        let entry_id = charge.entry_id();
+        async move { charges.get(company, entry_id, id).await.unwrap() }
+    };
+
+    // A payment of exactly the charge settles the installment, from the account, in the issuer's name,
+    // and enters the fee as a payable settled the same day.
+    let sale = new_entry("Venda 12", &["100", "50.50"]).await.unwrap();
+    let first = charge_for(&sale, 1).await.unwrap();
+    assert_eq!(pay(&first, "evt_1", "100", "1.99").await, Ok(1));
+    let made = settlements_of(&sale).await.unwrap();
+    assert_eq!(made.len(), 1);
+    assert_eq!(made[0].installment(), 1);
+    assert_eq!(made[0].applied().to_string(), "100");
+    assert_eq!(made[0].cash().to_string(), "100");
+    assert_eq!(made[0].settled_on().to_string(), "2026-12-09");
+    assert_eq!(made[0].bank_account_id(), seed.bank_account);
+    assert_eq!(made[0].charge_id(), Some(first.id()));
+    let paid = status_of(&first).await;
+    assert_eq!(paid.status(), ChargeStatus::Paid);
+    let receipt = paid.receipt().unwrap();
+    assert_eq!(receipt.paid_amount.to_string(), "100");
+    assert_eq!(receipt.fee.to_string(), "1.99");
+    assert_eq!(receipt.paid_on.to_string(), "2026-12-09");
+    assert_eq!(receipt.note, None);
+    let fee = entries
+        .made_by(company, EntryOrigin::ChargeFee(first.id()))
+        .await
+        .unwrap()
+        .expect("the fee is an entry");
+    assert_eq!(fee.kind(), EntryKind::Payable);
+    assert_eq!(fee.description(), "Taxa de cobrança: Venda 12 (1/2)");
+    assert_eq!(fee.category_id(), seed.other_category);
+    assert_eq!(fee.total().to_string(), "1.99");
+    let fee_settlements = settlements_of(&fee).await.unwrap();
+    assert_eq!(fee_settlements.len(), 1);
+    assert_eq!(fee_settlements[0].cash().to_string(), "1.99");
+    assert_eq!(fee_settlements[0].bank_account_id(), seed.bank_account);
+    assert_eq!(
+        outcome_of(events, company, &first, "evt_1").await,
+        (PaymentEventOutcome::Applied, None)
+    );
+
+    // The same notice again settles nothing more, and neither is another call of it.
+    assert_eq!(pay(&first, "evt_1", "100", "1.99").await, Ok(1));
+    assert_eq!(settlements_of(&sale).await.unwrap().len(), 1);
+    assert_eq!(settlements_of(&fee).await.unwrap().len(), 1);
+
+    // Another notice that says it was paid again is kept and flagged, never settled again.
+    assert_eq!(pay(&first, "evt_dup", "100", "1.99").await, Ok(1));
+    assert_eq!(settlements_of(&sale).await.unwrap().len(), 1);
+    assert_eq!(
+        outcome_of(events, company, &first, "evt_dup").await,
+        (
+            PaymentEventOutcome::NotApplied,
+            Some("the charge was already paid".to_owned())
+        )
+    );
+
+    // Not signed, not a notice, a charge nobody knows, a provider that is not the one, and another
+    // company's address: all refused, and nothing is stored.
+    let second = charge_for(&sale, 2).await.unwrap();
+    let (headers, body) = FakePaymentProvider::notice(
+        "evt_forged",
+        second.external_id(),
+        "paid",
+        Some(("50.5", "2026-12-09", "0")),
+    );
+    let mut forged = body.clone();
+    forged.push(b' ');
+    assert_eq!(
+        webhooks.receive(company, "fake", &headers, &forged).await,
+        Err(ApplicationError::Webhook(WebhookError::InvalidSignature))
+    );
+    let (unknown_headers, unknown_body) = FakePaymentProvider::notice(
+        "evt_unknown",
+        "fake_nobody",
+        "paid",
+        Some(("1", "2026-12-09", "0")),
+    );
+    for (who, provider_key, headers, body) in [
+        (company, "fake", &unknown_headers, &unknown_body),
+        (company, "other", &headers, &body),
+        (other_company, "fake", &headers, &body),
+    ] {
+        assert_eq!(
+            webhooks.receive(who, provider_key, headers, body).await,
+            Err(ApplicationError::ChargeNotFound)
+        );
+    }
+    assert_eq!(status_of(&second).await.status(), ChargeStatus::Open);
+    for event in ["evt_forged", "evt_unknown"] {
+        let probe = PaymentEvent::new(
+            PaymentEventId::generate(),
+            company,
+            second.id(),
+            "fake",
+            event,
+            PaymentEventKind::Paid,
+            Vec::new(),
+        )
+        .unwrap();
+        assert!(matches!(
+            events.record(&probe).await.unwrap(),
+            Recorded::New(_)
+        ));
+    }
+
+    // Paid over the charge, the difference is interest, and with no fee there is no fee entry.
+    assert_eq!(pay(&second, "evt_2", "52", "0").await, Ok(1));
+    let over = settlements_of(&sale).await.unwrap();
+    let over = over.iter().find(|s| s.installment() == 2).unwrap();
+    assert_eq!(over.applied().to_string(), "50.5");
+    assert_eq!(over.interest().to_string(), "1.5");
+    assert_eq!(over.cash().to_string(), "52");
+    assert!(
+        entries
+            .made_by(company, EntryOrigin::ChargeFee(second.id()))
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // Paid under it, the difference is a discount: the cash is what was paid.
+    let cheap = new_entry("Venda com desconto", &["100"]).await.unwrap();
+    let discounted = charge_for(&cheap, 1).await.unwrap();
+    assert_eq!(pay(&discounted, "evt_3", "95", "1").await, Ok(1));
+    let under = settlements_of(&cheap).await.unwrap();
+    assert_eq!(under[0].applied().to_string(), "100");
+    assert_eq!(under[0].discount().to_string(), "5");
+    assert_eq!(under[0].cash().to_string(), "95");
+
+    // Settled by hand while the charge was open: the payment is kept, flagged, and not settled twice.
+    let by_hand = new_entry("Venda quitada na mão", &["100"]).await.unwrap();
+    let late = charge_for(&by_hand, 1).await.unwrap();
+    entries
+        .settle(
+            company,
+            &ana,
+            by_hand.id(),
+            settlement_draft(seed, 1, "100"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(pay(&late, "evt_4", "100", "2").await, Ok(1));
+    assert_eq!(settlements_of(&by_hand).await.unwrap().len(), 1);
+    let flagged = status_of(&late).await;
+    assert_eq!(flagged.status(), ChargeStatus::Paid);
+    assert_eq!(
+        flagged.receipt().unwrap().note.as_deref(),
+        Some("the installment was already settled")
+    );
+    assert_eq!(
+        outcome_of(events, company, &late, "evt_4").await,
+        (
+            PaymentEventOutcome::NotApplied,
+            Some("the installment was already settled".to_owned())
+        )
+    );
+    assert!(
+        entries
+            .made_by(company, EntryOrigin::ChargeFee(late.id()))
+            .await
+            .unwrap()
+            .is_some(),
+        "the provider kept its fee all the same"
+    );
+
+    // Part of the installment was settled by hand: only what is left is settled, and the cash is what was paid.
+    let partly = new_entry("Venda parcial", &["100"]).await.unwrap();
+    let rest = charge_for(&partly, 1).await.unwrap();
+    entries
+        .settle(company, &ana, partly.id(), settlement_draft(seed, 1, "40"))
+        .await
+        .unwrap();
+    assert_eq!(pay(&rest, "evt_5", "100", "0").await, Ok(1));
+    let parts = settlements_of(&partly).await.unwrap();
+    assert_eq!(parts.len(), 2);
+    let settled_by_charge = parts.iter().find(|s| s.charge_id().is_some()).unwrap();
+    assert_eq!(settled_by_charge.applied().to_string(), "60");
+    assert_eq!(settled_by_charge.cash().to_string(), "100");
+
+    // A cancelled entry takes no settlement: the payment is kept and flagged.
+    let gone = new_entry("Venda cancelada", &["100"]).await.unwrap();
+    let orphan = charge_for(&gone, 1).await.unwrap();
+    entries.void(company, &ana, gone.id()).await.unwrap();
+    assert_eq!(pay(&orphan, "evt_6", "100", "0").await, Ok(1));
+    assert_eq!(
+        status_of(&orphan).await.receipt().unwrap().note.as_deref(),
+        Some("the entry was cancelled")
+    );
+
+    // Expired and cancelled at the provider; a payment that still arrives on a charge called off is a payment.
+    let slow = new_entry("Venda vencida", &["100"]).await.unwrap();
+    let expiring = charge_for(&slow, 1).await.unwrap();
+    let (headers, body) =
+        FakePaymentProvider::notice("evt_7", expiring.external_id(), "expired", None);
+    assert_eq!(
+        webhooks.receive(company, "fake", &headers, &body).await,
+        Ok(1)
+    );
+    assert_eq!(status_of(&expiring).await.status(), ChargeStatus::Expired);
+    let called_off = charge_for(&slow, 1).await.unwrap();
+    let (headers, body) =
+        FakePaymentProvider::notice("evt_8", called_off.external_id(), "cancelled", None);
+    assert_eq!(
+        webhooks.receive(company, "fake", &headers, &body).await,
+        Ok(1)
+    );
+    assert_eq!(
+        status_of(&called_off).await.status(),
+        ChargeStatus::Cancelled
+    );
+    assert_eq!(pay(&called_off, "evt_9", "100", "0").await, Ok(1));
+    assert_eq!(status_of(&called_off).await.status(), ChargeStatus::Paid);
+    assert_eq!(settlements_of(&slow).await.unwrap().len(), 1);
+
+    // A notice interrupted after the settlement is made is finished, not repeated: the charge settled
+    // already, and the fee, the receipt and the outcome that were missing are made.
+    let crashed = new_entry("Venda interrompida", &["100"]).await.unwrap();
+    let half = charge_for(&crashed, 1).await.unwrap();
+    entries
+        .settle_charge(
+            company,
+            &ana,
+            crashed.id(),
+            SettlementDraft {
+                settled_on: "2026-12-09".into(),
+                ..settlement_draft(seed, 1, "100")
+            },
+            half.id(),
+        )
+        .await
+        .unwrap();
+    let (_, body) = FakePaymentProvider::notice(
+        "evt_crash",
+        half.external_id(),
+        "paid",
+        Some(("100", "2026-12-09", "3")),
+    );
+    let pending = PaymentEvent::new(
+        PaymentEventId::generate(),
+        company,
+        half.id(),
+        "fake",
+        "evt_crash",
+        PaymentEventKind::Paid,
+        body,
+    )
+    .unwrap();
+    assert!(matches!(
+        events.record(&pending).await.unwrap(),
+        Recorded::New(_)
+    ));
+    assert_eq!(pay(&half, "evt_crash", "100", "3").await, Ok(1));
+    assert_eq!(settlements_of(&crashed).await.unwrap().len(), 1);
+    assert_eq!(status_of(&half).await.status(), ChargeStatus::Paid);
+    assert!(
+        entries
+            .made_by(company, EntryOrigin::ChargeFee(half.id()))
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(
+        outcome_of(events, company, &half, "evt_crash").await,
+        (PaymentEventOutcome::Applied, None)
+    );
+
+    // A charge settles once, even after its settlement is reversed: the payment is not applied again.
+    let to_reverse = settlements_of(&sale)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|s| s.charge_id() == Some(first.id()))
+        .unwrap();
+    entries
+        .reverse(company, &ana, sale.id(), to_reverse.id())
+        .await
+        .unwrap();
+    assert_eq!(pay(&first, "evt_again", "100", "1.99").await, Ok(1));
+    assert!(
+        settlements_of(&sale)
+            .await
+            .unwrap()
+            .iter()
+            .all(|s| s.charge_id() != Some(first.id()) || s.is_reversed())
+    );
+}
+
+/// What came of the notice the provider sent under this id: its outcome and note.
+async fn outcome_of<Ev: PaymentEventRepository>(
+    events: &Ev,
+    company: CompanyId,
+    charge: &conta_verde_domain::Charge,
+    event: &str,
+) -> (PaymentEventOutcome, Option<String>) {
+    let probe = PaymentEvent::new(
+        PaymentEventId::generate(),
+        company,
+        charge.id(),
+        "fake",
+        event,
+        PaymentEventKind::Paid,
+        Vec::new(),
+    )
+    .unwrap();
+    match events.record(&probe).await.unwrap() {
+        Recorded::Existing(stored) => (stored.outcome(), stored.note().map(str::to_owned)),
+        Recorded::New(_) => panic!("the event {event} was not stored"),
+    }
 }

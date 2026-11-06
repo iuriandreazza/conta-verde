@@ -2,8 +2,8 @@ use rust_decimal::Decimal;
 
 use crate::name::required_text;
 use crate::{
-    Amount, CalendarDate, CategoryId, CompanyId, CostCenterId, DomainError, EntryId, PartyId,
-    RecurrenceId, SaleId, SaleReturnId,
+    Amount, CalendarDate, CategoryId, ChargeId, CompanyId, CostCenterId, DomainError, EntryId,
+    PartyId, RecurrenceId, SaleId, SaleReturnId,
 };
 
 /// How many installments an entry can have: ten years of monthly ones, a bound and not a rule.
@@ -81,6 +81,8 @@ pub enum EntryOrigin {
     Sale(SaleId),
     /// The refund of a return of goods.
     SaleReturn(SaleReturnId),
+    /// The fee a payment provider kept when a charge was paid ([ADR 0046]).
+    ChargeFee(ChargeId),
 }
 
 /// Unvalidated input for registering or changing an entry.
