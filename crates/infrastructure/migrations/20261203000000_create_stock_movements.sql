@@ -59,6 +59,9 @@ CREATE UNIQUE INDEX stock_movements_origin_key
 -- A movement is undone once.
 CREATE UNIQUE INDEX stock_movements_reverses_key
     ON stock_movements (company_id, reverses) WHERE reverses IS NOT NULL;
+-- What an event made, reversals included.
+CREATE INDEX stock_movements_origin_idx
+    ON stock_movements (company_id, origin_kind, origin_id) WHERE origin_kind IS NOT NULL;
 CREATE INDEX stock_movements_product_idx
     ON stock_movements (company_id, product_id, occurred_on);
 CREATE INDEX stock_movements_day_idx

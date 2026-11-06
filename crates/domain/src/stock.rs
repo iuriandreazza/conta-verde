@@ -124,9 +124,10 @@ impl StockBalance {
         )
     }
 
-    /// What one unit is worth on average, with six decimals; there is none without something on hand.
+    /// What one unit is worth on average, with six decimals; there is none without something on hand, nor when the
+    /// value is below zero.
     pub fn average_cost(&self) -> Option<Decimal> {
-        (self.quantity > Decimal::ZERO)
+        (self.quantity > Decimal::ZERO && self.value >= Decimal::ZERO)
             .then(|| (self.value / self.quantity).round_dp(6).normalize())
     }
 
@@ -134,7 +135,9 @@ impl StockBalance {
     /// exit that takes the whole balance takes all of the value, so a product sold down to zero holds no cents.
     /// From a balance that is zero or negative there is no value to take.
     pub fn exit_value(&self, quantity: Decimal) -> Decimal {
-        if self.quantity <= Decimal::ZERO {
+        // Undoing an entry whose goods were sold can leave the value at or below zero with something on hand: the
+        // ledger stays exact, and what leaves then takes none, so a movement never has a value of the other sign.
+        if self.quantity <= Decimal::ZERO || self.value <= Decimal::ZERO {
             Decimal::ZERO
         } else if quantity >= self.quantity {
             self.value
@@ -145,7 +148,7 @@ impl StockBalance {
 
     /// The value of `quantity` more of what is on hand, at its average cost; nothing on hand, nothing to value.
     fn average_value(&self, quantity: Decimal) -> Decimal {
-        if self.quantity <= Decimal::ZERO {
+        if self.quantity <= Decimal::ZERO || self.value <= Decimal::ZERO {
             Decimal::ZERO
         } else {
             round_to_cents(self.value * quantity / self.quantity)
@@ -483,6 +486,31 @@ mod tests {
         let book = ledger(&[(In, "2", Some("10")), (Out, "5", None), (Out, "1", None)]);
         assert_eq!(values(&book), ["10", "-10", "0"]);
         assert_eq!(state(&book), ("-4".into(), "0".into(), None));
+    }
+
+    #[test]
+    fn what_leaves_a_balance_whose_value_is_not_above_zero_takes_no_value() {
+        // 10 for 100 and 10 for 10; 10 sold take 55; undoing the first entry leaves 0 / -45, then 5 more for 25
+        // leave 5 / -20: an exit takes nothing, never a value of the other sign.
+        let mut book = ledger(&[
+            (In, "10", Some("100")),
+            (In, "10", Some("10")),
+            (Out, "10", None),
+        ]);
+        let undo = StockMovement::reversing(
+            StockMovementId::generate(),
+            &book[0],
+            CalendarDate::parse("2026-11-07").unwrap(),
+            None,
+        )
+        .unwrap();
+        book.push(undo);
+        book.extend(ledger_after(
+            &book,
+            &[(In, "5", Some("25")), (Out, "1", None)],
+        ));
+        assert_eq!(values(&book), ["100", "10", "-55", "-100", "25", "0"]);
+        assert_eq!(state(&book), ("4".into(), "-20".into(), None));
     }
 
     #[test]
