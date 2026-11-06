@@ -27,9 +27,22 @@ const category = (id: string, name: string, dre_group = "operating_expenses", ac
   active,
 });
 
-function serve(options: { provider?: string | null; account?: string | null; onSave?: (body: unknown) => Reply }) {
+function serve(options: {
+  provider?: string | null;
+  account?: string | null;
+  onSave?: (body: unknown) => Reply;
+  plan?: { enabled: boolean; rules: { days: number; channel: string }[]; whatsapp_available?: boolean };
+  onPlan?: (body: unknown) => Reply;
+}) {
   return mockApi((url, init) => {
     if (url === "/api/auth/me") return { status: 200, body: profile };
+    if (url.endsWith("/collection/dunning") && init?.method === "PUT") {
+      const body = JSON.parse(String(init.body));
+      return options.onPlan?.(body) ?? { status: 200, body: { ...body, whatsapp_available: true } };
+    }
+    if (url.endsWith("/collection/dunning")) {
+      return { status: 200, body: { whatsapp_available: true, ...(options.plan ?? { enabled: false, rules: [] }) } };
+    }
     if (url.endsWith("/collection/settings") && init?.method === "PUT") {
       const body = JSON.parse(String(init.body));
       return options.onSave?.(body) ?? { status: 200, body };
@@ -102,4 +115,52 @@ it("shows what the API refused", async () => {
   await userEvent.selectOptions(await screen.findByLabelText("Conta de recebimento"), "b1");
   await userEvent.click(screen.getByRole("button", { name: "Salvar" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("unusable bank account");
+});
+
+it("saves the reminder plan as a whole: when, how many days and the channel", async () => {
+  const plans: unknown[] = [];
+  serve({
+    plan: { enabled: false, rules: [{ days: -3, channel: "email" }] },
+    onPlan: (body) => {
+      plans.push(body);
+      return { status: 200, body: { ...(body as object), whatsapp_available: true } };
+    },
+  });
+  renderAt("/companies/c1/collection");
+
+  await userEvent.click(await screen.findByRole("checkbox", { name: /Enviar lembretes/ }));
+  await userEvent.click(screen.getByRole("button", { name: "Adicionar lembrete" }));
+  await userEvent.selectOptions(screen.getByLabelText("Quando, lembrete 2"), "after");
+  await userEvent.clear(screen.getByLabelText("Dias, lembrete 2"));
+  await userEvent.type(screen.getByLabelText("Dias, lembrete 2"), "7");
+  await userEvent.selectOptions(screen.getByLabelText("Canal, lembrete 2"), "whatsapp");
+  await userEvent.click(screen.getByRole("button", { name: "Salvar lembretes" }));
+
+  expect(await screen.findByText("Lembretes salvos.")).toBeInTheDocument();
+  expect(plans).toEqual([
+    {
+      enabled: true,
+      rules: [
+        { days: -3, channel: "email" },
+        { days: 7, channel: "whatsapp" },
+      ],
+    },
+  ]);
+});
+
+it("refuses a rule without a number of days, offers no WhatsApp without a provider, and removes a rule", async () => {
+  serve({ plan: { enabled: true, rules: [{ days: 0, channel: "email" }], whatsapp_available: false } });
+  renderAt("/companies/c1/collection");
+
+  expect(await screen.findByText(/WhatsApp não está configurado/)).toBeInTheDocument();
+  const channel = screen.getByLabelText("Canal, lembrete 1") as HTMLSelectElement;
+  expect(Array.from(channel.options).map((option) => option.textContent)).toEqual(["E-mail"]);
+
+  await userEvent.click(screen.getByRole("button", { name: "Adicionar lembrete" }));
+  await userEvent.clear(screen.getByLabelText("Dias, lembrete 2"));
+  await userEvent.click(screen.getByRole("button", { name: "Salvar lembretes" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Informe quantos dias");
+
+  await userEvent.click(screen.getByRole("button", { name: "Remover o lembrete 2" }));
+  expect(screen.queryByLabelText("Dias, lembrete 2")).not.toBeInTheDocument();
 });

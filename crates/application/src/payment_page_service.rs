@@ -29,6 +29,18 @@ pub struct PaymentPage {
     pub state: PageState,
 }
 
+/// What the reminders need of the payment pages: a link to the open charge of an installment, if it has one.
+pub trait InstallmentLinks: Send + Sync {
+    /// Makes a link to the page of the open charge of this installment of the company's entry; `None` when
+    /// it has no open charge. Every call makes a new link: each reminder has its own.
+    fn link_for_installment(
+        &self,
+        company_id: CompanyId,
+        entry_id: EntryId,
+        installment: u16,
+    ) -> impl std::future::Future<Output = Result<Option<String>, ApplicationError>> + Send;
+}
+
 /// The payment page of a charge, behind a link that carries an unguessable token ([ADR 0047]).
 pub struct PaymentPageService<L, C, E, S> {
     links: L,
@@ -135,5 +147,35 @@ where
             charge,
             state,
         })
+    }
+}
+
+impl<L, C, E, S> InstallmentLinks for PaymentPageService<L, C, E, S>
+where
+    L: PaymentLinkRepository,
+    C: ChargeRepository,
+    E: FinancialEntryRepository,
+    S: SecretService,
+{
+    async fn link_for_installment(
+        &self,
+        company_id: CompanyId,
+        entry_id: EntryId,
+        installment: u16,
+    ) -> Result<Option<String>, ApplicationError> {
+        let open = self
+            .charges
+            .list_by_entry(company_id, entry_id)
+            .await?
+            .into_iter()
+            .find(|charge| {
+                charge.installment() == installment && charge.status() == ChargeStatus::Open
+            });
+        match open {
+            Some(charge) => Ok(Some(
+                self.new_link(company_id, entry_id, charge.id()).await?,
+            )),
+            None => Ok(None),
+        }
     }
 }

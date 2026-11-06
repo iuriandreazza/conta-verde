@@ -303,6 +303,16 @@ pub trait FinancialEntryRepository: Send + Sync {
         limit: usize,
     ) -> impl Future<Output = Result<OverdueReport, RepositoryError>> + Send;
 
+    /// The installments of **receivables that are not cancelled** that fall due from `since` through `until`
+    /// and still have something left, oldest due day first (then entry id, then number): who a reminder is
+    /// for ([ADR 0048]).
+    fn receivable_installments_due(
+        &self,
+        company_id: CompanyId,
+        since: CalendarDate,
+        until: CalendarDate,
+    ) -> impl Future<Output = Result<Vec<OverdueItem>, RepositoryError>> + Send;
+
     /// Cancels a stored entry, with its audit entry, atomically ([ADR 0037]). `NotFound` when the company has
     /// no such entry or it is cancelled already, and `EntrySettled` when it has settlements that are not
     /// reversed: the rule is the adapter's, inside the write, so a settlement that races it cannot slip past.

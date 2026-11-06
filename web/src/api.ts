@@ -558,6 +558,33 @@ export interface CollectionSettings {
   fee_category_id: string | null;
 }
 
+export type DunningChannel = "email" | "whatsapp";
+
+/** One reminder: on the due date moved by `days` (negative before it, 0 on it, positive after it) (ADR 0048). */
+export interface DunningRule {
+  days: number;
+  channel: DunningChannel;
+}
+
+/** When customers are reminded of what they owe, a plan per company (ADR 0048). */
+export interface DunningPlan {
+  enabled: boolean;
+  rules: DunningRule[];
+  /** Whether the operator configured a WhatsApp provider: without one a rule for it is never tried. */
+  whatsapp_available: boolean;
+}
+
+/** A reminder sent (or tried) to a customer about an installment. */
+export interface Reminder {
+  installment: number;
+  days: number;
+  channel: DunningChannel;
+  recipient: string;
+  status: "pending" | "sent" | "failed";
+  attempts: number;
+  note: string | null;
+}
+
 export interface ChargeInput {
   installment: number;
   method: ChargeMethod;
@@ -1485,6 +1512,15 @@ export const api = {
       { method: "POST" },
     ),
   publicCharge: (token: string) => request<PublicCharge>(`/public/charges/${token}`),
+  getDunningPlan: (companyId: string) =>
+    request<DunningPlan>(`/companies/${companyId}/collection/dunning`),
+  replaceDunningPlan: (companyId: string, plan: { enabled: boolean; rules: DunningRule[] }) =>
+    request<DunningPlan>(`/companies/${companyId}/collection/dunning`, {
+      method: "PUT",
+      body: JSON.stringify(plan),
+    }),
+  listReminders: (companyId: string, entryId: string) =>
+    request<{ items: Reminder[] }>(`/companies/${companyId}/entries/${entryId}/notifications`),
   listCharges: (companyId: string, entryId: string) =>
     request<{ items: Charge[] }>(`/companies/${companyId}/entries/${entryId}/charges`),
   issueCharge: (companyId: string, entryId: string, input: ChargeInput) =>

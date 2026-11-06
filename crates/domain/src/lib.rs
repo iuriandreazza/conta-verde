@@ -14,6 +14,7 @@ mod contract;
 mod cost_center;
 mod document;
 mod document_check;
+mod dunning;
 mod email;
 mod error;
 mod financial_entry;
@@ -21,6 +22,7 @@ mod ids;
 mod invitation;
 mod line;
 mod name;
+mod notification;
 mod party;
 mod payment_event;
 mod payment_method;
@@ -48,14 +50,15 @@ pub use audit::{
     charge_creation_changes, collection_settings_changes, collection_settings_creation_changes,
     commission_rule_changes, commission_rule_creation_changes, contract_changes,
     contract_creation_changes, cost_center_changes, cost_center_creation_changes, creation_changes,
-    document_check_changes, entry_changes, entry_creation_changes, opening_changes,
-    opening_creation_changes, party_changes, payment_method_changes,
-    payment_method_creation_changes, payment_term_changes, payment_term_creation_changes,
-    price_list_changes, price_list_creation_changes, product_changes, product_creation_changes,
-    quote_changes, quote_creation_changes, recurrence_changes, recurrence_creation_changes,
-    sale_changes, sale_creation_changes, sale_return_creation_changes, settlement_changes,
-    settlement_creation_changes, statement_line_changes, statement_line_creation_changes,
-    transfer_changes, transfer_creation_changes,
+    document_check_changes, dunning_plan_changes, dunning_plan_creation_changes, entry_changes,
+    entry_creation_changes, opening_changes, opening_creation_changes, party_changes,
+    payment_method_changes, payment_method_creation_changes, payment_term_changes,
+    payment_term_creation_changes, price_list_changes, price_list_creation_changes,
+    product_changes, product_creation_changes, quote_changes, quote_creation_changes,
+    recurrence_changes, recurrence_creation_changes, sale_changes, sale_creation_changes,
+    sale_return_creation_changes, settlement_changes, settlement_creation_changes,
+    statement_line_changes, statement_line_creation_changes, transfer_changes,
+    transfer_creation_changes,
 };
 pub use bank_account::{BankAccount, BankAccountDraft, BankAccountKind};
 pub use calendar_date::CalendarDate;
@@ -70,6 +73,9 @@ pub use contract::{BillingCycle, Contract, ContractCycle, ContractDraft, Contrac
 pub use cost_center::{CostCenter, CostCenterDraft};
 pub use document::{Cnpj, Document};
 pub use document_check::DocumentCheck;
+pub use dunning::{
+    DunningChannel, DunningPlan, DunningRule, MAX_DAYS_AFTER, MAX_DAYS_BEFORE, MAX_DUNNING_RULES,
+};
 pub use email::Email;
 pub use error::DomainError;
 pub use financial_entry::{
@@ -78,12 +84,13 @@ pub use financial_entry::{
 };
 pub use ids::{
     AttachmentId, BankAccountId, CategoryId, ChargeId, CommissionRuleId, CompanyId, ContractId,
-    CostCenterId, EntryId, InvitationId, PartyId, PaymentEventId, PaymentMethodId, PaymentTermId,
-    PriceListId, ProductId, QuoteId, RecurrenceId, SaleId, SaleReturnId, SettlementId,
-    StatementLineId, TransferId, UserId,
+    CostCenterId, EntryId, InvitationId, NotificationId, PartyId, PaymentEventId, PaymentMethodId,
+    PaymentTermId, PriceListId, ProductId, QuoteId, RecurrenceId, SaleId, SaleReturnId,
+    SettlementId, StatementLineId, TransferId, UserId,
 };
 pub use invitation::Invitation;
 pub use line::{Line, LineDraft, MAX_LINES, lines_total};
+pub use notification::{MAX_NOTIFICATION_ATTEMPTS, Notification, NotificationStatus};
 pub use party::{Party, PartyDraft};
 pub use payment_event::{
     MAX_EVENT_BYTES, PaymentEvent, PaymentEventKind, PaymentEventOutcome, event_note,

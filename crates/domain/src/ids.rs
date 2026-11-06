@@ -31,6 +31,7 @@ uuid_id!(ContractId);
 uuid_id!(CostCenterId);
 uuid_id!(EntryId);
 uuid_id!(InvitationId);
+uuid_id!(NotificationId);
 uuid_id!(PartyId);
 uuid_id!(PaymentEventId);
 uuid_id!(PaymentMethodId);

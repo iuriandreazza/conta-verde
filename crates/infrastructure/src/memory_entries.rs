@@ -328,6 +328,49 @@ impl FinancialEntryRepository for InMemoryFinancialEntryRepository {
         Ok(rows)
     }
 
+    async fn receivable_installments_due(
+        &self,
+        company_id: CompanyId,
+        since: CalendarDate,
+        until: CalendarDate,
+    ) -> Result<Vec<OverdueItem>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        let mut found: Vec<OverdueItem> = Vec::new();
+        for entry in state.entries.iter().filter(|entry| {
+            entry.company_id() == company_id
+                && !entry.is_voided()
+                && entry.kind() == EntryKind::Receivable
+        }) {
+            let settlements: Vec<Settlement> = state
+                .settlements
+                .iter()
+                .filter(|settlement| settlement.entry_id() == entry.id())
+                .cloned()
+                .collect();
+            for installment in entry.installments() {
+                let settled = settled_of(&settlements, installment.number());
+                if installment.due_date() >= since
+                    && installment.due_date() <= until
+                    && installment.amount().as_decimal() > settled
+                {
+                    found.push(OverdueItem {
+                        entry_id: entry.id(),
+                        kind: entry.kind(),
+                        description: entry.description().to_owned(),
+                        party_id: entry.party_id(),
+                        category_id: entry.category_id(),
+                        installment: installment.number(),
+                        due_date: installment.due_date(),
+                        amount: installment.amount().as_decimal().normalize(),
+                        settled: settled.normalize(),
+                    });
+                }
+            }
+        }
+        found.sort_by_key(|item| (item.due_date, item.entry_id.as_uuid(), item.installment));
+        Ok(found)
+    }
+
     async fn overdue_installments(
         &self,
         company_id: CompanyId,

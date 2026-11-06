@@ -7,8 +7,10 @@ import {
   type ChargeMethod,
   type ChargeStatus,
   type Entry,
+  type Reminder,
 } from "../api";
 import { formatMoney } from "../lib/decimal";
+import { describeRule } from "./DunningPlanForm";
 import { formatDate, isIsoDate } from "../lib/entryInstallments";
 import { balance, balanceCents } from "../lib/settlement";
 import { Button } from "./Button";
@@ -63,6 +65,7 @@ interface ChargesPanelProps {
  */
 export function ChargesPanel({ companyId, entry, canWrite }: ChargesPanelProps) {
   const [charges, setCharges] = useState<Charge[] | null>(null);
+  const [reminders, setReminders] = useState<Reminder[]>([]);
   const [provider, setProvider] = useState<string | null | undefined>(undefined);
   const [providerError, setProviderError] = useState<string | null>(null);
   // Whether the account charges are paid into is chosen: until it is, none can be issued.
@@ -80,6 +83,7 @@ export function ChargesPanel({ companyId, entry, canWrite }: ChargesPanelProps) 
   const load = useCallback(async () => {
     try {
       setCharges((await api.listCharges(companyId, entry.id)).items);
+      setReminders((await api.listReminders(companyId, entry.id)).items);
       setError(null);
     } catch (failure) {
       setError(errorMessage(failure));
@@ -267,6 +271,24 @@ export function ChargesPanel({ companyId, entry, canWrite }: ChargesPanelProps) 
                 </li>
               ))}
             </ul>
+          )}
+          {reminders.length > 0 && (
+            <>
+              <h3>Lembretes enviados</h3>
+              <ul className="history">
+                {reminders.map((reminder, index) => (
+                  <li key={index} className={reminder.status === "sent" ? undefined : "muted"}>
+                    Parcela {reminder.installment} · {reminder.channel === "email" ? "E-mail" : "WhatsApp"} ·{" "}
+                    {describeRule(reminder.days)} · para {reminder.recipient} ·{" "}
+                    {reminder.status === "sent"
+                      ? "enviado"
+                      : reminder.status === "failed"
+                        ? `não enviado (tentativa ${reminder.attempts})`
+                        : "enviando"}
+                  </li>
+                ))}
+              </ul>
+            </>
           )}
           {provider === null && (
             <p className="muted">
