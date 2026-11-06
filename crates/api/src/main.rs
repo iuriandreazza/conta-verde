@@ -4,7 +4,7 @@ use conta_verde_api::{ApiConfig, Ports, Services, router};
 use conta_verde_application::{
     AttachmentService, AuthService, BalanceService, BankAccountService, CategoryService,
     CostCenterService, FinancialEntryService, MemberService, PartyService, PaymentMethodService,
-    PaymentTermService, PostalCodeService, ProductService, ReconciliationService,
+    PaymentTermService, PostalCodeService, ProductService, QuoteService, ReconciliationService,
     RecurrenceService, TransferService,
 };
 use conta_verde_application::{EmailError, EmailMessage, EmailSender};
@@ -14,8 +14,9 @@ use conta_verde_infrastructure::{
     PostgresCategoryRepository, PostgresCostCenterRepository, PostgresFinancialEntryRepository,
     PostgresIdentityRepository, PostgresInvitationRepository, PostgresOpeningRepository,
     PostgresPartyRepository, PostgresPaymentMethodRepository, PostgresPaymentTermRepository,
-    PostgresProductRepository, PostgresRecurrenceRepository, PostgresStatementLineRepository,
-    PostgresTransferRepository, RegisterReferences, SmtpEmailSender, connect_and_migrate,
+    PostgresProductRepository, PostgresQuoteRepository, PostgresRecurrenceRepository,
+    PostgresStatementLineRepository, PostgresTransferRepository, RegisterReferences,
+    RegisterSalesReferences, SmtpEmailSender, connect_and_migrate,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -46,6 +47,12 @@ impl Ports for PostgresPorts {
     type Transfers = PostgresTransferRepository;
     type Openings = PostgresOpeningRepository;
     type Recurrences = PostgresRecurrenceRepository;
+    type SalesReferences = RegisterSalesReferences<
+        PostgresPartyRepository,
+        PostgresProductRepository,
+        PostgresPaymentTermRepository,
+    >;
+    type Quotes = PostgresQuoteRepository;
     type Statements = PostgresStatementLineRepository;
     type PostalCodes = Option<BrasilApiPostalCodeDirectory>;
     type Invitations = PostgresInvitationRepository;
@@ -130,13 +137,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         PostgresOpeningRepository::new(pool.clone()),
     );
     let postal_codes = PostalCodeService::new(postal_code_directory_from_env()?);
-    // Invitation links lead to the web app, which is where the person accepts.
+    // Links in e-mails (an invitation, a quote) lead to the web app, which is where the person answers.
     let public_url = std::env::var("PUBLIC_URL").unwrap_or_else(|_| {
         tracing::warn!(
             "PUBLIC_URL is not set: invitation links will lead to http://localhost:5173"
         );
         "http://localhost:5173".to_owned()
     });
+    let quotes = QuoteService::new(
+        PostgresQuoteRepository::new(pool.clone()),
+        RegisterSalesReferences::new(
+            PostgresPartyRepository::new(pool.clone()),
+            PostgresProductRepository::new(pool.clone()),
+            PostgresPaymentTermRepository::new(pool.clone()),
+        ),
+        email_sender_from_env()?,
+        Argon2SecretService::new()?,
+        &public_url,
+    );
     let members = MemberService::new(
         PostgresInvitationRepository::new(pool.clone()),
         PostgresIdentityRepository::new(pool.clone()),
@@ -167,6 +185,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 attachments,
                 transfers,
                 recurrences,
+                quotes,
                 reconciliation,
                 balances,
                 postal_codes,

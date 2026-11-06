@@ -1496,3 +1496,32 @@ tbody tr:last-child td {
   background: var(--green-soft);
   color: var(--ink);
 }
+
+/* The lines of a quote, a sale or a contract: product and description take the width, the figures share a row. */
+.lines {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.line-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.line-row > .span-all {
+  grid-column: 1 / -1;
+}
+
+.line-row > .line-total {
+  display: grid;
+  gap: 0.15rem;
+  align-content: center;
+}
+
+.line-row > .btn {
+  justify-self: end;
+  align-self: end;
+}

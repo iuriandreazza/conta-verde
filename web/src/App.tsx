@@ -16,6 +16,8 @@ import { PartiesPage } from "./pages/PartiesPage";
 import { PaymentMethodsPage } from "./pages/PaymentMethodsPage";
 import { PaymentTermsPage } from "./pages/PaymentTermsPage";
 import { ProductsPage } from "./pages/ProductsPage";
+import { QuoteAnswerPage } from "./pages/QuoteAnswerPage";
+import { QuotesPage } from "./pages/QuotesPage";
 import { ReportsPage } from "./pages/ReportsPage";
 import { ReconciliationPage } from "./pages/ReconciliationPage";
 import { RecurrencesPage } from "./pages/RecurrencesPage";
@@ -28,11 +30,13 @@ export function App() {
         <Route path="/login" element={<AuthPage mode="login" />} />
         <Route path="/register" element={<AuthPage mode="register" />} />
         <Route path="/invitations/:token" element={<AcceptInvitationPage />} />
+        <Route path="/quote/:token" element={<QuoteAnswerPage />} />
         <Route element={<RequireAuth />}>
           <Route path="/" element={<CompaniesPage />} />
           <Route path="/companies/:companyId" element={<DashboardPage />} />
           <Route path="/companies/:companyId/parties" element={<PartiesPage />} />
           <Route path="/companies/:companyId/products" element={<ProductsPage />} />
+          <Route path="/companies/:companyId/quotes" element={<QuotesPage />} />
           <Route path="/companies/:companyId/entries" element={<EntriesPage />} />
           <Route path="/companies/:companyId/reports" element={<ReportsPage />} />
           <Route path="/companies/:companyId/reconciliation" element={<ReconciliationPage />} />

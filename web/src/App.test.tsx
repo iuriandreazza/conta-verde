@@ -1,25 +1,11 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, vi } from "vitest";
-import { App } from "./App";
 import type { AccountBalance, CashFlow, CashFlowPeriod, EntriesReport, OverdueReport, Recurrence, StatementLine, Entry, Transfer, PaymentTerm, BankAccount, Category, CostCenter, PaymentMethod, DocumentCheck, HistoryEntry, Party, Product, Profile } from "./api";
-import { AuthProvider } from "./auth";
 import { SOURCE_URL } from "./components/Footer";
 import { defaultSpan } from "./lib/cashFlow";
 import { todayIso } from "./lib/settlement";
-
-const OWNER_PERMISSIONS = {
-  parties: "write",
-  products: "write",
-  finance: "write",
-  members: "write",
-} as const;
-
-const profile: Profile = {
-  user: { id: "u1", name: "Ana", email: "ana@example.com" },
-  companies: [{ id: "c1", name: "Padaria", role: "owner", permissions: OWNER_PERMISSIONS }],
-};
+import { OWNER_PERMISSIONS, mockApi, profile, renderAt, type Handler, type Reply } from "./testSupport";
 
 function party(name: string): Party {
   return {
@@ -43,34 +29,12 @@ function partyWithCheck(check: DocumentCheck): Party {
   return { ...party("Padaria Central"), document: "12ABC34501DE35", document_check: check };
 }
 
-type Reply = { status: number; body?: unknown; text?: string };
-type Handler = (url: string, init?: RequestInit) => Reply;
-
-function mockApi(handler: Handler) {
-  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const { status, body, text } = handler(String(input), init);
-    return new Response(text ?? (body === undefined ? null : JSON.stringify(body)), { status });
-  });
-  vi.stubGlobal("fetch", fetchMock);
-  return fetchMock;
-}
-
 const noBalances = { on: "2026-11-05", accounts: [], total: "0" };
 
 /** The API, with the balances the bank accounts page reads answered by `balances`. */
 function mockBankAccounts(handler: Handler, balances: unknown = noBalances) {
   return mockApi((url, init) =>
     url.includes("/balances") ? { status: 200, body: balances } : handler(url, init),
-  );
-}
-
-function renderAt(path: string) {
-  return render(
-    <MemoryRouter initialEntries={[path]}>
-      <AuthProvider>
-        <App />
-      </AuthProvider>
-    </MemoryRouter>,
   );
 }
 

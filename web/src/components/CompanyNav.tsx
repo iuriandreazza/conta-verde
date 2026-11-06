@@ -5,6 +5,7 @@ import { CheckIcon } from "./icons/check";
 import { CircleDollarSignIcon } from "./icons/circle-dollar-sign";
 import { ChartLineIcon } from "./icons/chart-line";
 import { CreditCardIcon } from "./icons/credit-card";
+import { FileTextIcon } from "./icons/file-text";
 import { FolderTreeIcon } from "./icons/folder-tree";
 import { LayersIcon } from "./icons/layers";
 import { RotateCCWIcon } from "./icons/rotate-ccw";
@@ -29,6 +30,10 @@ export function CompanyNav({
       <NavLink to={base} end>
         <ChartLineIcon size={18} aria-hidden />
         Painel
+      </NavLink>
+      <NavLink to={`${base}/quotes`}>
+        <FileTextIcon size={18} aria-hidden />
+        Orçamentos
       </NavLink>
       <NavLink to={`${base}/entries`}>
         <CircleDollarSignIcon size={18} aria-hidden />

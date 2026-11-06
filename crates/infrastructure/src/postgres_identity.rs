@@ -124,6 +124,14 @@ impl IdentityRepository for PostgresIdentityRepository {
             .collect()
     }
 
+    async fn company_name(&self, company_id: CompanyId) -> Result<Option<String>, RepositoryError> {
+        sqlx::query_scalar("SELECT name FROM companies WHERE id = $1")
+            .bind(company_id.as_uuid())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(storage_error)
+    }
+
     async fn members_of(&self, company_id: CompanyId) -> Result<Vec<Member>, RepositoryError> {
         let rows = sqlx::query(
             "SELECT u.id, u.name, u.email, m.role FROM memberships m \

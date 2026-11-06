@@ -1,9 +1,10 @@
 use uuid::Uuid;
 
+use crate::line::lines_text;
 use crate::{
     AccountOpening, Attachment, BankAccount, Category, CompanyId, CostCenter, DocumentCheck,
-    FinancialEntry, LineMatch, Party, PaymentMethod, PaymentTerm, Product, Recurrence, Settlement,
-    StatementLine, Tag, Transfer, UserId,
+    FinancialEntry, LineMatch, Party, PaymentMethod, PaymentTerm, Product, Quote, Recurrence,
+    Settlement, StatementLine, Tag, Transfer, UserId,
 };
 
 /// Who made a change. The name is a snapshot: history must keep reading the same after the user is
@@ -31,6 +32,7 @@ pub enum AuditEntity {
     Recurrence,
     StatementLine,
     Attachment,
+    Quote,
 }
 
 impl AuditEntity {
@@ -47,6 +49,7 @@ impl AuditEntity {
             Self::Recurrence => "recurrence",
             Self::StatementLine => "statement_line",
             Self::Attachment => "attachment",
+            Self::Quote => "quote",
             Self::Settlement => "settlement",
             Self::Transfer => "transfer",
             Self::AccountOpening => "account_opening",
@@ -233,6 +236,20 @@ impl Audited for StatementLine {
 impl Audited for Settlement {
     fn audit_entity(&self) -> AuditEntity {
         AuditEntity::Settlement
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.id().as_uuid()
+    }
+}
+
+impl Audited for Quote {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::Quote
     }
 
     fn audit_company(&self) -> CompanyId {
@@ -588,6 +605,33 @@ pub fn recurrence_creation_changes(recurrence: &Recurrence) -> Vec<FieldChange> 
 
 pub fn recurrence_changes(before: &Recurrence, after: &Recurrence) -> Vec<FieldChange> {
     changes_between(recurrence_fields(before), recurrence_fields(after))
+}
+
+fn quote_fields(quote: &Quote) -> Fields {
+    vec![
+        (
+            "customer_id",
+            Some(quote.customer_id().as_uuid().to_string()),
+        ),
+        ("issued_on", Some(quote.issued_on().to_string())),
+        ("valid_until", Some(quote.valid_until().to_string())),
+        (
+            "payment_term_id",
+            quote.payment_term_id().map(|id| id.as_uuid().to_string()),
+        ),
+        ("notes", quote.notes().map(str::to_owned)),
+        ("lines", Some(lines_text(quote.lines()))),
+        ("status", Some(quote.status().as_str().to_owned())),
+    ]
+}
+
+/// Every field a new quote has set.
+pub fn quote_creation_changes(quote: &Quote) -> Vec<FieldChange> {
+    creation_from(quote_fields(quote))
+}
+
+pub fn quote_changes(before: &Quote, after: &Quote) -> Vec<FieldChange> {
+    changes_between(quote_fields(before), quote_fields(after))
 }
 
 fn statement_line_fields(line: &StatementLine) -> Fields {

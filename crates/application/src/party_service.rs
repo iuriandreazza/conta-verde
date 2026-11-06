@@ -254,6 +254,18 @@ impl<R: PartyRepository, C: CnpjRegistry> PartyService<R, C> {
         Ok(party)
     }
 
+    /// The party, only if it belongs to the company.
+    pub async fn get(
+        &self,
+        company_id: CompanyId,
+        party_id: PartyId,
+    ) -> Result<Party, ApplicationError> {
+        self.repository
+            .find(company_id, party_id)
+            .await?
+            .ok_or(ApplicationError::PartyNotFound)
+    }
+
     /// What was recorded about the party, oldest first.
     pub async fn history(
         &self,
