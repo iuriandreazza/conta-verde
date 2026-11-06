@@ -41,7 +41,7 @@ artboard in the same PR; the canvas needs the Claude Design runtime (`support.js
 | Feedback | `--danger`/`--danger-soft`, `--warning`/`--warning-soft` |
 | Chart | `--series-1` #2a78d6 (inflow, receivable), `--series-2` #eb6834 (outflow, payable), `--status-critical` #d03b3b, `--chart-muted` #898781 |
 | Shape | `--radius` 0.75rem cards, `--radius-sm` 0.5rem controls, pill badges; `--shadow`, `--shadow-lift` |
-| Layout | `--sidebar-width` 16rem, content up to 76rem, side form 22rem |
+| Layout | `--sidebar-width` 16rem, content up to 120rem, side form 22rem |
 
 The two series colors are slots 1 and 2 of the dataviz palette and passed `validate_palette.js` in light mode
 (CVD ΔE 24.7, normal-vision ΔE 33.6, contrast over 3:1). Adding a third series means re-running it.
@@ -51,6 +51,11 @@ The two series colors are slots 1 and 2 of the dataviz palette and passed `valid
 `PageHeader`, `Button` (primary, ghost, small, and `iconOnly` for the actions that repeat on every row: the label becomes the tooltip and the accessible name), `StatusBadge` (a dot and a word), `Notice` (error, warning, success), badges (`ok`, `warning`, `critical`,
 `muted`), tables (`.num` right-aligns money), `StatTile`, `Sparkline`, `ChartCard` (title, legend, table twin),
 `LineChart`, `BarChart`, segmented period filter, `CompanyNav`.
+
+## Review
+
+[`screens-review-2026-11.md`](screens-review-2026-11.md) compares the screens with the structure of a reference
+overview page and checks charts and accessibility; it lists what each phase should pick up.
 
 ## Not yet designed
 
