@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useState } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
+import { entryKindOf } from "../lib/entryKind";
 import type { AnimatedIcon } from "./Button";
 import { BoxIcon } from "./icons/box";
 import { BadgeAlertIcon } from "./icons/badge-alert";
@@ -41,7 +42,7 @@ function NavItemLink({ base, item }: { base: string; item: NavItem }) {
   if (item.path === "/entries") {
     // Three links to one page: the one that is current is told by the kind in the address.
     const to = `${base}${item.path}${item.kind ? `?tipo=${item.kind}` : ""}`;
-    const current = location.pathname === `${base}${item.path}` && new URLSearchParams(location.search).get("tipo") === (item.kind ?? null);
+    const current = location.pathname.replace(/\/$/, "") === `${base}${item.path}` && entryKindOf(location.search) === (item.kind ?? "");
     return (
       <Link to={to} aria-current={current ? "page" : undefined}>
         <Icon size={18} aria-hidden />

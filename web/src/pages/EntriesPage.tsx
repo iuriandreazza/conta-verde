@@ -6,9 +6,9 @@ import {
   errorMessage,
   type Entry,
   type EntryFilters,
-  type EntryKind,
   type EntryInput,
 } from "../api";
+import { entryKindOf } from "../lib/entryKind";
 import { PlusIcon } from "../components/icons/plus";
 import { Sheet } from "../components/Sheet";
 import { useCreation, useOnCreated } from "../creation/CreationProvider";
@@ -79,8 +79,7 @@ export function EntriesPage() {
   const canWrite = useCanWrite("finance");
   // "Contas a receber" and "Contas a pagar" are this list with the kind in the address, as people expect to find them.
   const [params, setParams] = useSearchParams();
-  const tipo = params.get("tipo");
-  const pageKind: EntryKind | "" = tipo === "receivable" || tipo === "payable" ? tipo : "";
+  const pageKind = entryKindOf(params.toString());
   const [typedFilters, setFilters] = useState<EntryFilters>(NO_ENTRY_FILTERS);
   const filters: EntryFilters = { ...typedFilters, kind: pageKind };
   const [editing, setEditing] = useState<Entry | null>(null);
@@ -92,6 +91,17 @@ export function EntriesPage() {
   const [settlementsOpenFor, setSettlementsOpenFor] = useState<string | null>(null);
   const [attachmentsOpenFor, setAttachmentsOpenFor] = useState<string | null>(null);
   const [chargesOpenFor, setChargesOpenFor] = useState<string | null>(null);
+  // Layout keeps this page mounted when only `?tipo=` changes, so what belongs to the other list is dropped here.
+  const [shownKind, setShownKind] = useState(pageKind);
+  if (shownKind !== pageKind) {
+    setShownKind(pageKind);
+    setSaved(null);
+    setHighlightedId(null);
+    setHistoryOpenFor(null);
+    setSettlementsOpenFor(null);
+    setAttachmentsOpenFor(null);
+    setChargesOpenFor(null);
+  }
   const { banks, methods, categories, costCenters, parties, names, error: targetsError, loaded: targetsLoaded } = useEntryTargets(companyId);
 
   const {
