@@ -73,7 +73,7 @@ rounding rule). No proposed ADR belongs to this phase. One slice per pull reques
 Exit criteria: a quote becomes a sale and its receivables appear in cash flow; a recurring
 contract bills itself for three cycles in a test clock.
 
-## Phase 4 — Collection and notifications (v0.5)
+## Phase 4 — Collection and notifications (v0.5, done)
 
 Planned in [ADR 0044](adr/0044-collection-module-plan.md), which also accepts [ADR 0010](adr/0010-payment-providers.md)
 and settles what the phase changes underneath (installation-wide provider credentials, a charge that settles once
@@ -86,10 +86,13 @@ per pull request, in this order:
 - [x] Notification ports: e-mail (SMTP) first, WhatsApp through a provider ([ADR 0014](adr/0014-notifications.md)); dunning rules with reminders before and after the due date, cadence per company, sent by the hourly job ([ADR 0048](adr/0048-notifications-and-dunning.md)) — a plan per company (when and by which channel), an hourly pass that reminds of the receivables' installments that still owe, once per rule however often it runs (a claimed row per installment, rule and channel), with the payment page link; a `MessageSender` port with the WhatsApp Cloud API adapter; the reminders are listed under the entry
 - [x] First real provider adapter ([ADR 0049](adr/0049-asaas-provider.md)) — Asaas (`PAYMENT_PROVIDER=asaas`, `ASAAS_API_KEY`, `ASAAS_WEBHOOK_TOKEN`): boleto, Pix and card page, the customer found or made by CPF/CNPJ, the exact amount, webhooks authenticated by Asaas's token header with the fee read as `value - netValue`; tested against a local stand-in, with an ignored sandbox test for homologation
 - [x] Second real provider adapter ([ADR 0050](adr/0050-stripe-provider.md)) — Stripe (`PAYMENT_PROVIDER=stripe`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`): a boleto and a Pix by PaymentIntents (the payer's address now travels with the charge), a card page by a Checkout Session, signed webhooks with replay protection; no fee in Stripe's notice and a boleto that cannot be cancelled are documented limits
-- [ ] Delinquency report
+- [x] Delinquency report ([ADR 0051](adr/0051-delinquency-report.md)) — `GET /delinquency?on=`: what is late on a day by customer and by 1–30, 31–60, 61–90 and over 90 days, biggest debt first, with an Inadimplência page
 
 Exit criteria: an installment issued as boleto or Pix settles itself when the provider's
-webhook arrives, and the customer received the reminder sequence.
+webhook arrives, and the customer received the reminder sequence. Both hold in the tests: a Pix charge settles its
+installment through a signed webhook, once however many times it arrives (`settles_charges_from_webhooks`, on both
+adapters and through the API), and the hourly pass, on a moved clock, sends each rule's reminder once with the
+payment link (`sends_reminders_on_schedule`).
 
 ## Phase 5 — Purchases and inventory (v0.6)
 

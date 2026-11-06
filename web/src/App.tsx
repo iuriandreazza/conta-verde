@@ -13,6 +13,7 @@ import { PriceListsPage } from "./pages/PriceListsPage";
 import { ContractsPage } from "./pages/ContractsPage";
 import { CostCentersPage } from "./pages/CostCentersPage";
 import { DashboardPage } from "./pages/DashboardPage";
+import { DelinquencyPage } from "./pages/DelinquencyPage";
 import { EntriesPage } from "./pages/EntriesPage";
 import { MembersPage } from "./pages/MembersPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
@@ -50,6 +51,7 @@ export function App() {
           <Route path="/companies/:companyId/price-lists" element={<PriceListsPage />} />
           <Route path="/companies/:companyId/entries" element={<EntriesPage />} />
           <Route path="/companies/:companyId/collection" element={<CollectionPage />} />
+          <Route path="/companies/:companyId/delinquency" element={<DelinquencyPage />} />
           <Route path="/companies/:companyId/reports" element={<ReportsPage />} />
           <Route path="/companies/:companyId/reconciliation" element={<ReconciliationPage />} />
           <Route path="/companies/:companyId/recurrences" element={<RecurrencesPage />} />

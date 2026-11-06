@@ -66,6 +66,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0048](0048-notifications-and-dunning.md) | Reminders to customers: the dunning plan and its hourly pass | accepted | 4 |
 | [0049](0049-asaas-provider.md) | Asaas, the first real payment provider | accepted | 4 |
 | [0050](0050-stripe-provider.md) | Stripe, the second real payment provider | accepted | 4 |
+| [0051](0051-delinquency-report.md) | The delinquency report | accepted | 4 |
 
 ## Template
 
