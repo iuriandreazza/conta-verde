@@ -1,11 +1,9 @@
-const two = (value: number) => String(value).padStart(2, "0");
+import { monthsSpan } from "./period";
 
 /** This month, from its first day to its last, as `YYYY-MM-DD`: the span the entries report opens with. */
 export function monthSpan(today: string): { from: string; to: string } {
   const [year, month] = today.split("-").map(Number);
-  // Day 0 of the next month is the last day of this one.
-  const last = new Date(Date.UTC(year, month, 0)).getUTCDate();
-  return { from: `${year}-${two(month)}-01`, to: `${year}-${two(month)}-${two(last)}` };
+  return monthsSpan(year, month, 1);
 }
 
 /** A name cut to fit beside a bar, with an ellipsis. */
