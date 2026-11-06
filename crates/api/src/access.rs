@@ -34,7 +34,7 @@ fn area_of(pattern: &str) -> Option<Area> {
         "parties" | "postal-codes" => Some(Area::Parties),
         "products" => Some(Area::Products),
         "categories" | "cost-centers" | "bank-accounts" | "payment-methods" | "payment-terms"
-        | "entries" | "transfers" | "balances" => Some(Area::Finance),
+        | "entries" | "transfers" | "balances" | "cash-flow" => Some(Area::Finance),
         "members" | "invitations" => Some(Area::Members),
         _ => None,
     }
@@ -121,6 +121,7 @@ mod tests {
             "entries",
             "transfers",
             "balances",
+            "cash-flow",
         ] {
             assert_eq!(
                 area_of(&format!("/companies/{{company_id}}/{finance}")),

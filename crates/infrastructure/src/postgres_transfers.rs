@@ -1,5 +1,5 @@
 use conta_verde_application::{
-    AccountMovement, DateCursor, OpeningRepository, RepositoryError, TransferQuery,
+    AccountMovement, DateCursor, DayMovement, OpeningRepository, RepositoryError, TransferQuery,
     TransferRepository, ensure_audit_describes,
 };
 use conta_verde_domain::{
@@ -153,6 +153,47 @@ impl TransferRepository for PostgresTransferRepository {
         id: TransferId,
     ) -> Result<Vec<AuditRecord>, RepositoryError> {
         postgres_audit::history(&self.pool, company_id, AuditEntity::Transfer, id.as_uuid()).await
+    }
+
+    async fn movement_by_day(
+        &self,
+        company_id: CompanyId,
+        account: BankAccountId,
+        since: CalendarDate,
+        until: CalendarDate,
+    ) -> Result<Vec<DayMovement>, RepositoryError> {
+        let rows = sqlx::query(
+            "SELECT to_char(occurred_on, 'YYYY-MM-DD') AS day, \
+               COALESCE(SUM(amount) FILTER (WHERE to_account_id = $2), 0)::text AS received, \
+               COALESCE(SUM(amount) FILTER (WHERE from_account_id = $2), 0)::text AS paid \
+             FROM account_transfers \
+             WHERE company_id = $1 AND NOT reversed \
+               AND (from_account_id = $2 OR to_account_id = $2) \
+               AND occurred_on BETWEEN CAST($3 AS DATE) AND CAST($4 AS DATE) \
+             GROUP BY occurred_on ORDER BY occurred_on",
+        )
+        .bind(company_id.as_uuid())
+        .bind(account.as_uuid())
+        .bind(since.to_string())
+        .bind(until.to_string())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        rows.iter()
+            .map(|row| {
+                let day: String = row.try_get("day").map_err(storage_error)?;
+                Ok(DayMovement {
+                    date: CalendarDate::parse(&day).ok_or_else(|| {
+                        RepositoryError::Storage(format!("stored day {day} is invalid"))
+                    })?,
+                    received: decimal(
+                        &row.try_get::<String, _>("received")
+                            .map_err(storage_error)?,
+                    )?,
+                    paid: decimal(&row.try_get::<String, _>("paid").map_err(storage_error)?)?,
+                })
+            })
+            .collect()
     }
 
     async fn movement_of_account(
@@ -373,6 +414,38 @@ mod tests {
             &entries,
             &transfers,
             &openings,
+            company,
+            other_company,
+            &seed,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn adds_the_cash_flow_up() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let other_company = contract::create_company(&pool).await;
+        let seed = seed(&pool, company).await;
+        let balances = BalanceService::new(
+            PostgresBankAccountRepository::new(pool.clone()),
+            PostgresFinancialEntryRepository::new(pool.clone()),
+            PostgresTransferRepository::new(pool.clone()),
+            PostgresOpeningRepository::new(pool.clone()),
+        );
+        let entries = FinancialEntryService::new(
+            PostgresFinancialEntryRepository::new(pool.clone()),
+            references(&pool),
+        );
+        let transfers = TransferService::new(
+            PostgresTransferRepository::new(pool.clone()),
+            references(&pool),
+        );
+        contract::adds_the_cash_flow_up(
+            &balances,
+            &entries,
+            &transfers,
             company,
             other_company,
             &seed,

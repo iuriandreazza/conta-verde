@@ -1,7 +1,8 @@
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use conta_verde_application::{
-    AccountMovement, DateCursor, OpeningRepository, RepositoryError, TransferQuery,
+    AccountMovement, DateCursor, DayMovement, OpeningRepository, RepositoryError, TransferQuery,
     TransferRepository, ensure_audit_describes,
 };
 use conta_verde_domain::{
@@ -98,6 +99,39 @@ impl TransferRepository for InMemoryTransferRepository {
         Ok(state
             .audit
             .history(company_id, AuditEntity::Transfer, id.as_uuid()))
+    }
+
+    async fn movement_by_day(
+        &self,
+        company_id: CompanyId,
+        account: BankAccountId,
+        since: CalendarDate,
+        until: CalendarDate,
+    ) -> Result<Vec<DayMovement>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        let mut days: BTreeMap<CalendarDate, AccountMovement> = BTreeMap::new();
+        for transfer in state.transfers.iter().filter(|stored| {
+            stored.company_id() == company_id
+                && !stored.is_reversed()
+                && (since..=until).contains(&stored.occurred_on())
+        }) {
+            let day = days.entry(transfer.occurred_on()).or_default();
+            if transfer.to() == account {
+                day.received += transfer.amount().as_decimal();
+            }
+            if transfer.from() == account {
+                day.paid += transfer.amount().as_decimal();
+            }
+        }
+        Ok(days
+            .into_iter()
+            .filter(|(_, moved)| !moved.received.is_zero() || !moved.paid.is_zero())
+            .map(|(date, moved)| DayMovement {
+                date,
+                received: moved.received.normalize(),
+                paid: moved.paid.normalize(),
+            })
+            .collect())
     }
 
     async fn movement_of_account(
@@ -238,6 +272,32 @@ mod tests {
             &entries,
             &transfers,
             &openings,
+            company,
+            other_company,
+            &seed,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn adds_the_cash_flow_up() {
+        let registers = Registers::new();
+        let (company, other_company) = (CompanyId::generate(), CompanyId::generate());
+        let seed = registers.seed(company).await;
+        let entry_store = InMemoryFinancialEntryRepository::default();
+        let transfer_store = InMemoryTransferRepository::default();
+        let balances = BalanceService::new(
+            registers.bank_accounts.clone(),
+            entry_store.clone(),
+            transfer_store.clone(),
+            InMemoryOpeningRepository::default(),
+        );
+        let entries = FinancialEntryService::new(entry_store, registers.references());
+        let transfers = TransferService::new(transfer_store, registers.references());
+        contract::adds_the_cash_flow_up(
+            &balances,
+            &entries,
+            &transfers,
             company,
             other_company,
             &seed,

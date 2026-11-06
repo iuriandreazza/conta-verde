@@ -10,6 +10,7 @@ import { SendIcon } from "./icons/send";
 import { UserPlusIcon } from "./icons/user-plus";
 import { UsersIcon } from "./icons/users";
 import { WalletIcon } from "./icons/wallet";
+import { WavesIcon } from "./icons/waves";
 
 /** The sections of a company; the link of the page being shown is marked as current. */
 export function CompanyNav({
@@ -30,6 +31,10 @@ export function CompanyNav({
       <NavLink to={`${base}/entries`}>
         <CircleDollarSignIcon size={18} aria-hidden />
         Lançamentos
+      </NavLink>
+      <NavLink to={`${base}/cash-flow`}>
+        <WavesIcon size={18} aria-hidden />
+        Fluxo de caixa
       </NavLink>
       <NavLink to={`${base}/transfers`}>
         <SendIcon size={18} aria-hidden />

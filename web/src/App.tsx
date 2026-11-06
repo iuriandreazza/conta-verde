@@ -4,6 +4,7 @@ import { RequireAuth } from "./components/RequireAuth";
 import { AcceptInvitationPage } from "./pages/AcceptInvitationPage";
 import { AuthPage } from "./pages/AuthPage";
 import { BankAccountsPage } from "./pages/BankAccountsPage";
+import { CashFlowPage } from "./pages/CashFlowPage";
 import { CategoriesPage } from "./pages/CategoriesPage";
 import { CompaniesPage } from "./pages/CompaniesPage";
 import { CostCentersPage } from "./pages/CostCentersPage";
@@ -29,6 +30,7 @@ export function App() {
           <Route path="/companies/:companyId/parties" element={<PartiesPage />} />
           <Route path="/companies/:companyId/products" element={<ProductsPage />} />
           <Route path="/companies/:companyId/entries" element={<EntriesPage />} />
+          <Route path="/companies/:companyId/cash-flow" element={<CashFlowPage />} />
           <Route path="/companies/:companyId/transfers" element={<TransfersPage />} />
           <Route path="/companies/:companyId/categories" element={<CategoriesPage />} />
           <Route path="/companies/:companyId/cost-centers" element={<CostCentersPage />} />

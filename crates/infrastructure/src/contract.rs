@@ -6258,3 +6258,357 @@ pub async fn adds_balances_up<A, E, T, O, F>(
     let earlier = balances.balances(company, day("2026-06-30")).await.unwrap();
     assert_eq!(balance_of(&earlier, reserve).balance.to_string(), "-20.5");
 }
+
+// ---------- cash flow ----------
+
+use conta_verde_application::{CashFlow, CashFlowQuery, Granularity};
+
+fn cash_flow_query(
+    from: &str,
+    to: &str,
+    granularity: Granularity,
+    account: Option<BankAccountId>,
+) -> CashFlowQuery {
+    CashFlowQuery::new(
+        CalendarDate::parse(from).unwrap(),
+        CalendarDate::parse(to).unwrap(),
+        granularity,
+        account,
+    )
+    .unwrap()
+}
+
+/// One period as text: start, end, received, paid, transfers in, transfers out, net, new opening
+/// balances, closing balance.
+fn realized(flow: &CashFlow, index: usize) -> [String; 9] {
+    let period = &flow.periods[index];
+    [
+        period.start.to_string(),
+        period.end.to_string(),
+        period.received.to_string(),
+        period.paid.to_string(),
+        period.transfers_in.to_string(),
+        period.transfers_out.to_string(),
+        period.net.to_string(),
+        period.new_opening_balances.to_string(),
+        period.closing_balance.to_string(),
+    ]
+}
+
+/// What is still to come in a period, as text: to receive, to pay, projected balance.
+fn forecast(flow: &CashFlow, index: usize) -> [Option<String>; 3] {
+    let period = &flow.periods[index];
+    [
+        period.to_receive.map(|amount| amount.to_string()),
+        period.to_pay.map(|amount| amount.to_string()),
+        period.projected_balance.map(|amount| amount.to_string()),
+    ]
+}
+
+fn forecast_of(parts: [&str; 3]) -> [Option<String>; 3] {
+    parts.map(|amount| Some(amount.to_owned()))
+}
+
+/// The cash flow cuts a span into days or calendar months, adds up what settlements and transfers
+/// moved by the day they happened (reversed ones left out, and what is dated before an account's
+/// opening day too), runs the balance on from the one before the span, and forecasts what is still
+/// open by due date, for every account together but not for one. A span that is not one, or is too
+/// long, and an account that is not the company's are refused.
+pub async fn adds_the_cash_flow_up<A, E, T, O, F>(
+    balances: &BalanceService<A, E, T, O>,
+    entries: &FinancialEntryService<E, F>,
+    transfers: &TransferService<T, F>,
+    company: CompanyId,
+    other_company: CompanyId,
+    seed: &EntrySeed,
+) where
+    A: BankAccountRepository,
+    E: FinancialEntryRepository,
+    T: TransferRepository,
+    O: OpeningRepository,
+    F: EntryReferences,
+{
+    let ana = actor();
+    let (main, reserve, closed) = (
+        seed.bank_account,
+        seed.other_bank_account,
+        seed.inactive_bank_account,
+    );
+
+    balances
+        .set_opening(company, &ana, main, "1000", "2026-12-01")
+        .await
+        .unwrap();
+    let payable = |description: &str, due: &str, amount: &str| FinancialEntryDraft {
+        kind: EntryKind::Payable,
+        ..entry_draft(seed, description, "2026-11-01", &[(due, amount)])
+    };
+    let settle = |entry: EntryId, day: &str, applied: &str| {
+        let draft = SettlementDraft {
+            settled_on: day.into(),
+            ..settlement_draft(seed, 1, applied)
+        };
+        entries.settle(company, &ana, entry, draft)
+    };
+    let receivable = |description: &str, due: &str, amount: &str| {
+        entry_draft(seed, description, "2026-11-01", &[(due, amount)])
+    };
+
+    // Settled: a sale with interest and discount, a bill, a bill paid in part, and a sale settled
+    // before the opening day of the account it went into.
+    let sale = entries
+        .register(company, &ana, receivable("Venda", "2026-12-10", "100"))
+        .await
+        .unwrap();
+    entries
+        .settle(
+            company,
+            &ana,
+            sale.id(),
+            SettlementDraft {
+                interest: Some("5".into()),
+                discount: Some("2".into()),
+                ..settlement_draft(seed, 1, "100")
+            },
+        )
+        .await
+        .unwrap();
+    let rent = entries
+        .register(company, &ana, payable("Aluguel", "2026-12-12", "30"))
+        .await
+        .unwrap();
+    let paid_rent = settle(rent.id(), "2026-12-12", "30").await.unwrap();
+    let supplier = entries
+        .register(company, &ana, payable("Fornecedor", "2027-01-05", "80"))
+        .await
+        .unwrap();
+    settle(supplier.id(), "2026-12-18", "30").await.unwrap();
+    let old = entries
+        .register(
+            company,
+            &ana,
+            receivable("Venda antiga", "2026-11-30", "10"),
+        )
+        .await
+        .unwrap();
+    settle(old.id(), "2026-11-30", "10").await.unwrap();
+    // Open: a receivable due in December, and one that fell due in November and is still open.
+    entries
+        .register(company, &ana, receivable("A receber", "2026-12-20", "200"))
+        .await
+        .unwrap();
+    entries
+        .register(company, &ana, receivable("Atrasada", "2026-11-15", "40"))
+        .await
+        .unwrap();
+    // Transfers both ways, and one that is reversed.
+    transfers
+        .register(
+            company,
+            &ana,
+            transfer_draft(main, reserve, "200", "2026-12-15"),
+        )
+        .await
+        .unwrap();
+    transfers
+        .register(
+            company,
+            &ana,
+            transfer_draft(reserve, main, "50.25", "2026-12-16"),
+        )
+        .await
+        .unwrap();
+    let undone = transfers
+        .register(
+            company,
+            &ana,
+            transfer_draft(main, reserve, "25", "2026-12-14"),
+        )
+        .await
+        .unwrap();
+    transfers.reverse(company, &ana, undone.id()).await.unwrap();
+
+    // Every account, by month: the transfers cancel out, the opening balance comes in on its day,
+    // the forecast is what is open by due date, and the projected balance adds it to the realized one.
+    let december_to_january = cash_flow_query("2026-12-01", "2027-01-31", Granularity::Month, None);
+    let all = balances
+        .cash_flow(company, &december_to_january)
+        .await
+        .unwrap();
+    assert_eq!(all.opening_balance.to_string(), "0");
+    assert_eq!(all.periods.len(), 2);
+    assert_eq!(
+        realized(&all, 0),
+        [
+            "2026-12-01",
+            "2026-12-31",
+            "103",
+            "60",
+            "250.25",
+            "250.25",
+            "43",
+            "1000",
+            "1043"
+        ]
+    );
+    assert_eq!(
+        realized(&all, 1),
+        [
+            "2027-01-01",
+            "2027-01-31",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "1043"
+        ]
+    );
+    assert_eq!(forecast(&all, 0), forecast_of(["200", "0", "1283"]));
+    assert_eq!(forecast(&all, 1), forecast_of(["0", "50", "1233"]));
+    // What fell due before the span and is still open is told apart, and the projection counts it.
+    let late = all.past_due.expect("every account asked for");
+    assert_eq!(
+        (late.receivable.to_string(), late.payable.to_string()),
+        ("40".into(), "0".into())
+    );
+
+    // What fell due before the span is not in it, and a span before the opening day of the account
+    // that has one leaves out what was settled then, but still forecasts.
+    let november = balances
+        .cash_flow(
+            company,
+            &cash_flow_query("2026-11-01", "2026-11-30", Granularity::Month, None),
+        )
+        .await
+        .unwrap();
+    assert_eq!(realized(&november, 0)[2..], ["0"; 7]);
+    assert_eq!(forecast(&november, 0), forecast_of(["40", "0", "40"]));
+    let none_late = november.past_due.expect("every account asked for");
+    assert_eq!(
+        (
+            none_late.receivable.to_string(),
+            none_late.payable.to_string()
+        ),
+        ("0".into(), "0".into())
+    );
+
+    // Days: the day itself counts, every day of the span is a period, and the balance runs on from
+    // the day before. One account has no forecast, because an installment has no account.
+    let days = balances
+        .cash_flow(
+            company,
+            &cash_flow_query("2026-12-10", "2026-12-12", Granularity::Day, Some(main)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(days.opening_balance.to_string(), "1000");
+    assert_eq!(days.periods.len(), 3);
+    assert_eq!(
+        realized(&days, 0)[2..],
+        ["103", "0", "0", "0", "103", "0", "1103"]
+    );
+    assert_eq!(
+        realized(&days, 1)[2..],
+        ["0", "0", "0", "0", "0", "0", "1103"]
+    );
+    assert_eq!(
+        realized(&days, 2)[2..],
+        ["0", "30", "0", "0", "-30", "0", "1073"]
+    );
+    assert_eq!(forecast(&days, 0), [None, None, None]);
+    assert_eq!(days.past_due, None);
+
+    // The other account has no opening balance: it counts from the start of the span, and what came
+    // into it and went out of it is told apart. The opening account counts from its opening day.
+    let december = |account| {
+        cash_flow_query(
+            "2026-12-01",
+            "2026-12-31",
+            Granularity::Month,
+            Some(account),
+        )
+    };
+    let reserve_flow = balances
+        .cash_flow(company, &december(reserve))
+        .await
+        .unwrap();
+    assert_eq!(reserve_flow.opening_balance.to_string(), "0");
+    assert_eq!(
+        realized(&reserve_flow, 0)[2..],
+        ["0", "0", "200", "50.25", "149.75", "0", "149.75"]
+    );
+    let main_flow = balances.cash_flow(company, &december(main)).await.unwrap();
+    assert_eq!(
+        realized(&main_flow, 0)[2..],
+        ["103", "60", "50.25", "200", "-106.75", "1000", "893.25"]
+    );
+    let closed_flow = balances
+        .cash_flow(company, &december(closed))
+        .await
+        .unwrap();
+    assert_eq!(realized(&closed_flow, 0)[2..], ["0"; 7]);
+
+    // A span that starts after the opening day starts from the balance of the day before it, and
+    // that balance is the one the balances give.
+    let late = balances
+        .cash_flow(
+            company,
+            &cash_flow_query("2026-12-17", "2026-12-17", Granularity::Day, None),
+        )
+        .await
+        .unwrap();
+    let before = balances
+        .balances(company, CalendarDate::parse("2026-12-16").unwrap())
+        .await
+        .unwrap();
+    assert_eq!(late.opening_balance, before.total);
+    assert_eq!(late.opening_balance.to_string(), "1073");
+
+    // Reversing a settlement takes it out of what was realized and gives it back to the forecast.
+    entries
+        .reverse(company, &ana, rent.id(), paid_rent.id())
+        .await
+        .unwrap();
+    let after = balances
+        .cash_flow(company, &december_to_january)
+        .await
+        .unwrap();
+    assert_eq!(
+        realized(&after, 0)[2..],
+        ["103", "30", "250.25", "250.25", "73", "1000", "1073"]
+    );
+    assert_eq!(forecast(&after, 0), forecast_of(["200", "30", "1283"]));
+    assert_eq!(forecast(&after, 1), forecast_of(["0", "50", "1233"]));
+
+    // Nothing of another company's, and what is not a span or an account is refused.
+    let alien = balances
+        .cash_flow(
+            other_company,
+            &cash_flow_query("2026-12-01", "2026-12-31", Granularity::Month, None),
+        )
+        .await
+        .unwrap();
+    assert_eq!(realized(&alien, 0)[2..], ["0"; 7]);
+    assert_eq!(forecast(&alien, 0), forecast_of(["0", "0", "0"]));
+    assert_eq!(
+        balances
+            .cash_flow(other_company, &december(main))
+            .await
+            .unwrap_err(),
+        ApplicationError::BankAccountNotFound
+    );
+    let day = |text: &str| CalendarDate::parse(text).unwrap();
+    let span = |from: &str, to: &str, granularity| {
+        CashFlowQuery::new(day(from), day(to), granularity, None)
+    };
+    assert!(matches!(
+        span("2026-12-02", "2026-12-01", Granularity::Day),
+        Err(ApplicationError::InvalidSpan(_))
+    ));
+    assert!(span("2026-01-01", "2027-02-05", Granularity::Day).is_err());
+    assert!(span("2026-01-01", "2027-02-04", Granularity::Day).is_ok());
+    assert!(span("2026-01-15", "2031-01-14", Granularity::Month).is_err());
+    assert!(span("2026-01-15", "2030-12-31", Granularity::Month).is_ok());
+}

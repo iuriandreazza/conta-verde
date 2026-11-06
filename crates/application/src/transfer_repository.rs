@@ -23,6 +23,14 @@ pub struct AccountMovement {
     pub paid: Decimal,
 }
 
+/// What moved on one day, in an account: both are 0 or more, exact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DayMovement {
+    pub date: CalendarDate,
+    pub received: Decimal,
+    pub paid: Decimal,
+}
+
 /// How a list of transfers is narrowed, following ADR 0018: by an account on either side. They are
 /// listed newest first, then by id; reversed ones are listed too, so that they can be seen.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -88,6 +96,16 @@ pub trait TransferRepository: Send + Sync {
         company_id: CompanyId,
         id: TransferId,
     ) -> impl Future<Output = Result<Vec<AuditRecord>, RepositoryError>> + Send;
+
+    /// What the transfers that are not reversed moved in the account on each day from `since` through
+    /// `until` that had any, oldest day first: `received` what came into it, `paid` what went out.
+    fn movement_by_day(
+        &self,
+        company_id: CompanyId,
+        account: BankAccountId,
+        since: CalendarDate,
+        until: CalendarDate,
+    ) -> impl Future<Output = Result<Vec<DayMovement>, RepositoryError>> + Send;
 
     /// What the transfers that are not reversed moved in the account, on the days from `since`
     /// (every day when `None`) up to and including `until`: `received` what came into it, `paid` what

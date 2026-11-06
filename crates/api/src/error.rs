@@ -107,6 +107,7 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
         ApplicationError::SettlementExceedsBalance | ApplicationError::EntryIsSettled => {
             (StatusCode::CONFLICT, error.to_string())
         }
+        ApplicationError::InvalidSpan(_) => (StatusCode::BAD_REQUEST, error.to_string()),
         ApplicationError::UnusableReference(_) => {
             (StatusCode::UNPROCESSABLE_ENTITY, error.to_string())
         }

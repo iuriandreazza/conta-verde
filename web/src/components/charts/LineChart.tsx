@@ -1,5 +1,5 @@
 import { useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
-import { niceScale, tickLabel, ticksOf, toDrawing, useElementWidth } from "../../lib/chart";
+import { niceRange, rangeTicks, tickLabel, toDrawing, useElementWidth } from "../../lib/chart";
 import { formatMoney } from "../../lib/decimal";
 import type { LegendItem } from "./Legend";
 
@@ -13,8 +13,21 @@ const HEIGHT = 260;
 const MARGIN = { top: 12, bottom: 28, left: 72 };
 const END_LABEL_ROOM = 76;
 
-/** Two or more series on one axis, with a crosshair that snaps to the nearest month. */
-export function LineChart({ points, series, label }: { points: FlowPoint[]; series: LegendItem[]; label: string }) {
+/**
+ * Lines on one axis that may go below zero, with a crosshair that snaps to the nearest point. `unit`
+ * names what a point is, for the keyboard hint ("mês", "dia").
+ */
+export function LineChart({
+  points,
+  series,
+  label,
+  unit = "mês",
+}: {
+  points: FlowPoint[];
+  series: LegendItem[];
+  label: string;
+  unit?: string;
+}) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const width = useElementWidth(bodyRef);
   const [active, setActive] = useState<number | null>(null);
@@ -23,9 +36,9 @@ export function LineChart({ points, series, label }: { points: FlowPoint[]; seri
   const plotWidth = Math.max(width - MARGIN.left - right, 1);
   const plotHeight = HEIGHT - MARGIN.top - MARGIN.bottom;
   const numbers = points.map((point) => point.values.map(toDrawing));
-  const scale = niceScale(Math.max(...numbers.flat()));
+  const scale = niceRange(Math.min(...numbers.flat()), Math.max(...numbers.flat()));
   const x = (index: number) => MARGIN.left + (points.length > 1 ? (index / (points.length - 1)) * plotWidth : plotWidth / 2);
-  const y = (value: number) => MARGIN.top + plotHeight * (1 - value / scale.top);
+  const y = (value: number) => MARGIN.top + plotHeight * (1 - (value - scale.bottom) / (scale.top - scale.bottom));
   const labelEvery = plotWidth / points.length < 44 ? 2 : 1;
 
   function nearest(event: PointerEvent<SVGRectElement>) {
@@ -50,13 +63,13 @@ export function LineChart({ points, series, label }: { points: FlowPoint[]; seri
         width={width}
         height={HEIGHT}
         role="group"
-        aria-label={`${label}. Use as setas para ver cada mês.`}
+        aria-label={`${label}. Use as setas para ver cada ${unit}.`}
         tabIndex={0}
         onKeyDown={move}
         onFocus={() => setActive((current) => current ?? points.length - 1)}
         onBlur={() => setActive(null)}
       >
-        {ticksOf(scale).map((tick) => (
+        {rangeTicks(scale).map((tick) => (
           <g key={tick}>
             <line className={tick === 0 ? "chart-axis" : "chart-grid"} x1={MARGIN.left} x2={MARGIN.left + plotWidth} y1={y(tick)} y2={y(tick)} />
             <text className="chart-tick" x={MARGIN.left - 8} y={y(tick) + 4} textAnchor="end">

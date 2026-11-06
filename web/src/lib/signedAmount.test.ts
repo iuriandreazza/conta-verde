@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { toSignedApi } from "./signedAmount";
+import { difference, toSignedApi } from "./signedAmount";
 
 describe("toSignedApi", () => {
   it("reads amounts the way every other amount is read", () => {
@@ -18,5 +18,14 @@ describe("toSignedApi", () => {
     for (const typed of ["", "abc", "1,005", "--1", "-", "+5", "1e3"]) {
       expect(toSignedApi(typed), typed).toBeNull();
     }
+  });
+});
+
+describe("difference", () => {
+  it("subtracts to the cent and keeps the sign", () => {
+    expect(difference("200.25", "50.25")).toBe("150");
+    expect(difference("50.25", "200.25")).toBe("-150");
+    expect(difference("0.3", "0.1")).toBe("0.2");
+    expect(difference("5", "5")).toBe("0");
   });
 });

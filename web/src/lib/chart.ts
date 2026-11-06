@@ -23,9 +23,29 @@ export function ticksOf({ top, step }: { top: number; step: number }): number[] 
   return Array.from({ length: Math.round(top / step) + 1 }, (_, index) => index * step);
 }
 
+/**
+ * The axis bottom, top and step for values that may go below zero: round numbers, at most `maxTicks`
+ * intervals, the axis always reaching zero and never cutting a value off.
+ */
+export function niceRange(min: number, max: number, maxTicks = 4): { bottom: number; top: number; step: number } {
+  const low = Math.min(min, 0);
+  const high = Math.max(max, 0);
+  if (high - low <= 0) return { bottom: 0, top: 1, step: 1 };
+  const rough = (high - low) / maxTicks;
+  const magnitude = 10 ** Math.floor(Math.log10(rough));
+  const step = [1, 2, 2.5, 5, 10].map((factor) => factor * magnitude).find((candidate) => candidate >= rough)!;
+  return { bottom: Math.floor(low / step) * step, top: Math.ceil(high / step) * step, step };
+}
+
+export function rangeTicks({ bottom, top, step }: { bottom: number; top: number; step: number }): number[] {
+  return Array.from({ length: Math.round((top - bottom) / step) + 1 }, (_, index) => bottom + index * step);
+}
+
 /** An axis tick such as `R$ 12,5 mil`; ticks are round numbers picked by `niceScale`, not data. */
 export function tickLabel(value: number): string {
-  return value >= 1000 ? `R$ ${formatDecimal(String(value / 1000))} mil` : `R$ ${value}`;
+  const sign = value < 0 ? "-" : "";
+  const size = Math.abs(value);
+  return size >= 1000 ? `R$ ${sign}${formatDecimal(String(size / 1000))} mil` : `R$ ${sign}${size}`;
 }
 
 /** Follows the width of an element, so a chart redraws instead of shrinking its text. */

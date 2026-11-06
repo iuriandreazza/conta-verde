@@ -47,6 +47,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0029](0029-financial-entries.md) | Financial entries and installments | accepted | 2 |
 | [0030](0030-settlements.md) | Settlements of entry installments | accepted | 2 |
 | [0031](0031-transfers-and-balances.md) | Transfers, opening balances and balance per account | accepted | 2 |
+| [0032](0032-cash-flow.md) | Cash flow, realized and forecast | accepted | 2 |
 
 ## Template
 

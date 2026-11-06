@@ -3,9 +3,11 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, vi } from "vitest";
 import { App } from "./App";
-import type { AccountBalance, Entry, Transfer, PaymentTerm, BankAccount, Category, CostCenter, PaymentMethod, DocumentCheck, HistoryEntry, Party, Product, Profile } from "./api";
+import type { AccountBalance, CashFlow, CashFlowPeriod, Entry, Transfer, PaymentTerm, BankAccount, Category, CostCenter, PaymentMethod, DocumentCheck, HistoryEntry, Party, Product, Profile } from "./api";
 import { AuthProvider } from "./auth";
 import { SOURCE_URL } from "./components/Footer";
+import { defaultSpan } from "./lib/cashFlow";
+import { todayIso } from "./lib/settlement";
 
 const OWNER_PERMISSIONS = {
   parties: "write",
@@ -3766,5 +3768,175 @@ describe("the balance of the bank accounts", () => {
 
     expect(await screen.findByRole("row", { name: /Caixa/ })).toHaveTextContent("R$ 10,00");
     expect(screen.queryByRole("button", { name: /Saldo inicial de/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("cash flow", () => {
+  // The projected balance depends on today, so the clock stands still on a day before the periods.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 10, 6, 12));
+  });
+  afterEach(() => vi.useRealTimers());
+
+  const caixa: BankAccount = { id: "b1", company_id: "c1", kind: "cash", name: "Caixa", bank_code: null, branch: null, number: null, active: true };
+  const banco: BankAccount = { ...caixa, id: "b2", kind: "checking", name: "Banco" };
+  const period = (overrides: Partial<CashFlowPeriod> = {}): CashFlowPeriod => ({
+    start: "2026-12-01",
+    end: "2026-12-31",
+    received: "103",
+    paid: "60",
+    transfers_in: "250.25",
+    transfers_out: "250.25",
+    net: "43",
+    new_opening_balances: "1000",
+    closing_balance: "1043",
+    to_receive: "200",
+    to_pay: "0",
+    projected_balance: "1243",
+    ...overrides,
+  });
+  const flow = (periods: CashFlowPeriod[], overrides: Partial<CashFlow> = {}): CashFlow => ({
+    from: "2026-12-01",
+    to: "2027-01-31",
+    granularity: "month",
+    account_id: null,
+    opening_balance: "0",
+    past_due: { to_receive: "0", to_pay: "0" },
+    periods,
+    ...overrides,
+  });
+  const consolidated = flow([
+    period(),
+    period({ start: "2027-01-01", end: "2027-01-31", received: "0", paid: "0", transfers_in: "0", transfers_out: "0", net: "0", new_opening_balances: "0", to_receive: "0", to_pay: "50", projected_balance: "1193" }),
+  ]);
+
+  const answer =
+    (reply: (url: string) => Reply) =>
+    (url: string): Reply => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (url.includes("/bank-accounts")) return { status: 200, body: { items: [caixa, banco], next_cursor: null } };
+      return reply(url);
+    };
+  const flowUrls = (fetchMock: ReturnType<typeof mockApi>) =>
+    fetchMock.mock.calls.map(([url]) => String(url)).filter((url) => url.includes("/cash-flow"));
+
+  it("asks for this month and the two after it by month, and shows the totals, the balance and what is open", async () => {
+    const fetchMock = mockApi(answer(() => ({ status: 200, body: consolidated })));
+    renderAt("/companies/c1/cash-flow");
+
+    const row = await screen.findByRole("row", { name: /dez\/2026/ });
+    expect(row).toHaveTextContent("R$ 103,00");
+    expect(row).toHaveTextContent("R$ 60,00");
+    expect(row).toHaveTextContent("R$ 1.043,00");
+    expect(row).toHaveTextContent("R$ 200,00");
+    expect(row).toHaveTextContent("R$ 1.243,00");
+    expect(screen.getByRole("row", { name: /jan\/2027/ })).toHaveTextContent("R$ 50,00");
+    expect(screen.getByText("Saldo em 01/12/2026")).toBeInTheDocument();
+    expect(screen.getByText("Entradas realizadas").closest(".stat-tile")).toHaveTextContent("R$ 103,00");
+    expect(screen.getByText("Saldo em 31/01/2027").closest(".stat-tile")).toHaveTextContent("Previsto: R$ 1.193,00");
+
+    const { from, to } = defaultSpan(todayIso());
+    expect(flowUrls(fetchMock)).toContain(`/api/companies/c1/cash-flow?from=${from}&to=${to}&granularity=month`);
+  });
+
+  it("asks again for another grouping or account, and shows no forecast for one account", async () => {
+    const fetchMock = mockApi(
+      answer((url) =>
+        url.includes("account=b2")
+          ? {
+              status: 200,
+              body: flow([period({ to_receive: null, to_pay: null, projected_balance: null })], {
+                account_id: "b2",
+                past_due: null,
+              }),
+            }
+          : { status: 200, body: consolidated },
+      ),
+    );
+    renderAt("/companies/c1/cash-flow");
+    await screen.findByRole("row", { name: /dez\/2026/ });
+    expect(screen.getByRole("columnheader", { name: "Saldo previsto" })).toBeInTheDocument();
+
+    await userEvent.selectOptions(screen.getByLabelText("Conta"), "b2");
+    await waitFor(() => expect(screen.queryByRole("columnheader", { name: "Saldo previsto" })).not.toBeInTheDocument());
+    expect(flowUrls(fetchMock).some((url) => url.includes("account=b2"))).toBe(true);
+    // What came into the account less what went out of it, told as one figure.
+    expect(screen.getByRole("row", { name: /dez\/2026/ })).toHaveTextContent("R$ 0,00");
+    expect(screen.getByText(/A previsão vale para todas as contas juntas/)).toBeInTheDocument();
+
+    await userEvent.selectOptions(screen.getByLabelText("Agrupar por"), "day");
+    await waitFor(() => expect(flowUrls(fetchMock).some((url) => url.includes("granularity=day"))).toBe(true));
+  });
+
+  it("marks a balance below zero and refuses a span that is not one without asking the API", async () => {
+    const fetchMock = mockApi(
+      answer(() => ({
+        status: 200,
+        body: flow([period({ closing_balance: "-125.5", projected_balance: "-100", net: "-125.5" })]),
+      })),
+    );
+    renderAt("/companies/c1/cash-flow");
+
+    const row = await screen.findByRole("row", { name: /dez\/2026/ });
+    expect(within(row).getByText("R$ -125,50")).toHaveClass("negative");
+
+    const before = flowUrls(fetchMock).length;
+    fireEvent.change(screen.getByLabelText("De"), { target: { value: "2099-01-01" } });
+    expect(await screen.findByText("O primeiro dia não pode ser depois do último.")).toBeInTheDocument();
+    expect(flowUrls(fetchMock)).toHaveLength(before);
+  });
+
+  it("says what is late from before the span, because the projected balance counts it", async () => {
+    mockApi(
+      answer(() => ({ status: 200, body: { ...consolidated, past_due: { to_receive: "600", to_pay: "1250.5" } } })),
+    );
+    renderAt("/companies/c1/cash-flow");
+
+    expect(
+      await screen.findByText(/vencido antes de 01\/12\/2026: R\$ 600,00 a receber e R\$ 1\.250,50 a pagar/),
+    ).toBeInTheDocument();
+  });
+
+  it("says nothing of what is late when nothing is", async () => {
+    mockApi(answer(() => ({ status: 200, body: consolidated })));
+    renderAt("/companies/c1/cash-flow");
+    await screen.findByRole("row", { name: /dez\/2026/ });
+    expect(screen.queryByText(/vencido antes de/)).not.toBeInTheDocument();
+  });
+
+  it("shows what the API refused, and stops saying it is loading", async () => {
+    mockApi(answer(() => ({ status: 400, body: { error: "invalid span: the span may cut into at most 400 days" } })));
+    renderAt("/companies/c1/cash-flow");
+    expect(await screen.findByRole("alert")).toHaveTextContent("at most 400 days");
+    expect(screen.queryByText("Carregando…")).not.toBeInTheDocument();
+  });
+
+  it("shows the projected balance only from the period that has not ended, because it counts what is open now", async () => {
+    vi.setSystemTime(new Date(2027, 0, 15, 12));
+    mockApi(answer(() => ({ status: 200, body: consolidated })));
+    renderAt("/companies/c1/cash-flow");
+
+    const december = await screen.findByRole("row", { name: /dez\/2026/ });
+    expect(december).not.toHaveTextContent("R$ 1.243,00");
+    expect(december).toHaveTextContent("R$ 200,00");
+    expect(screen.getByRole("row", { name: /jan\/2027/ })).toHaveTextContent("R$ 1.193,00");
+  });
+
+  it("keeps the periods on screen in the grouping they were asked in when a new request is refused", async () => {
+    mockApi(
+      answer((url) =>
+        url.includes("granularity=day")
+          ? { status: 400, body: { error: "invalid span: the span may cut into at most 400 days" } }
+          : { status: 200, body: consolidated },
+      ),
+    );
+    renderAt("/companies/c1/cash-flow");
+    await screen.findByRole("row", { name: /dez\/2026/ });
+
+    await userEvent.selectOptions(screen.getByLabelText("Agrupar por"), "day");
+    expect(await screen.findByRole("alert")).toHaveTextContent("at most 400 days");
+    // Still labelled as the months they are, not as days.
+    expect(screen.getByRole("row", { name: /dez\/2026/ })).toBeInTheDocument();
   });
 });

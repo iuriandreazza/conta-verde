@@ -1,6 +1,7 @@
 mod access;
 mod auth;
 mod bank_accounts;
+mod cash_flow;
 mod categories;
 mod cost_centers;
 mod csv_import;
@@ -258,6 +259,10 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         .route(
             "/companies/{company_id}/bank-accounts/{bank_account_id}/opening-balance",
             put(transfers::set_opening_balance::<X>),
+        )
+        .route(
+            "/companies/{company_id}/cash-flow",
+            get(cash_flow::cash_flow::<X>),
         )
         .route(
             "/companies/{company_id}/balances",
@@ -5511,5 +5516,206 @@ mod tests {
                 .status,
             StatusCode::UNAUTHORIZED
         );
+    }
+
+    fn cash_flow_uri(company_id: Uuid, query: &str) -> String {
+        format!("/companies/{company_id}/cash-flow?{query}")
+    }
+
+    #[tokio::test]
+    async fn gives_the_cash_flow_by_period_with_the_forecast_through_the_api() {
+        let app = entry_app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let targets = entry_targets(&app, &cookie, company_id).await;
+        let caixa = registered_account(&app, &cookie, company_id, "Caixa").await;
+        let banco = registered_account(&app, &cookie, company_id, "Banco").await;
+        let put_opening = send(
+            &app,
+            json_request(
+                "PUT",
+                &format!("/companies/{company_id}/bank-accounts/{caixa}/opening-balance"),
+                Some(&cookie),
+                json!({ "balance": "1000", "on": "2026-12-01" }),
+            ),
+        )
+        .await;
+        assert_eq!(put_opening.status, StatusCode::OK);
+        let sale = send(
+            &app,
+            json_request(
+                "POST",
+                &entries_uri(company_id),
+                Some(&cookie),
+                entry_body(
+                    &targets,
+                    "Venda",
+                    &[("2026-12-10", "100"), ("2027-01-10", "50.5")],
+                ),
+            ),
+        )
+        .await;
+        let settle = send(
+            &app,
+            json_request(
+                "POST",
+                &format!(
+                    "{}/{}/settlements",
+                    entries_uri(company_id),
+                    sale.body["id"].as_str().unwrap()
+                ),
+                Some(&cookie),
+                json!({ "installment": 1, "settled_on": "2026-12-10", "applied": "100", "interest": "5", "bank_account_id": caixa }),
+            ),
+        )
+        .await;
+        assert_eq!(settle.status, StatusCode::CREATED, "{}", settle.body);
+        let moved = send(
+            &app,
+            json_request(
+                "POST",
+                &transfers_uri(company_id),
+                Some(&cookie),
+                json!({ "from_account_id": caixa, "to_account_id": banco, "amount": "200.25", "occurred_on": "2026-12-15" }),
+            ),
+        )
+        .await;
+        assert_eq!(moved.status, StatusCode::CREATED);
+
+        // By month (the default), for every account: the forecast is what is still open.
+        let months = send(
+            &app,
+            get_request(
+                &cash_flow_uri(company_id, "from=2026-12-01&to=2027-01-31"),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(months.status, StatusCode::OK, "{}", months.body);
+        assert_eq!(months.body["granularity"], "month");
+        assert_eq!(months.body["account_id"], Value::Null);
+        assert_eq!(months.body["opening_balance"], "0");
+        assert_eq!(
+            months.body["periods"][0],
+            json!({
+                "start": "2026-12-01", "end": "2026-12-31",
+                "received": "105", "paid": "0",
+                "transfers_in": "200.25", "transfers_out": "200.25",
+                "net": "105", "new_opening_balances": "1000", "closing_balance": "1105",
+                "to_receive": "0", "to_pay": "0", "projected_balance": "1105",
+            })
+        );
+        assert_eq!(months.body["periods"][1]["to_receive"], "50.5");
+        assert_eq!(months.body["periods"][1]["projected_balance"], "1155.5");
+        assert_eq!(
+            months.body["past_due"],
+            json!({ "to_receive": "0", "to_pay": "0" })
+        );
+
+        // What fell due before the span and is still open is told apart and counted by the projection.
+        let later = send(
+            &app,
+            get_request(
+                &cash_flow_uri(company_id, "from=2027-02-01&to=2027-02-28"),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(
+            later.body["past_due"],
+            json!({ "to_receive": "50.5", "to_pay": "0" })
+        );
+        assert_eq!(later.body["periods"][0]["to_receive"], "0");
+        assert_eq!(later.body["periods"][0]["projected_balance"], "1155.5");
+
+        // By day, for one account: no forecast, and the transfer is told in and out.
+        let days = send(
+            &app,
+            get_request(
+                &cash_flow_uri(
+                    company_id,
+                    &format!("from=2026-12-14&to=2026-12-16&granularity=day&account={banco}"),
+                ),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(days.status, StatusCode::OK, "{}", days.body);
+        assert_eq!(days.body["account_id"], banco);
+        assert_eq!(days.body["periods"].as_array().unwrap().len(), 3);
+        assert_eq!(days.body["periods"][1]["transfers_in"], "200.25");
+        assert_eq!(days.body["periods"][1]["closing_balance"], "200.25");
+        assert_eq!(days.body["periods"][1]["to_receive"], Value::Null);
+        assert_eq!(days.body["periods"][1]["projected_balance"], Value::Null);
+
+        // What is not understood is a 400 in JSON, never ignored; an account of nobody is a 404.
+        for query in [
+            "to=2026-12-31",
+            "from=2026-12-01",
+            "from=tomorrow&to=2026-12-31",
+            "from=2026-12-01&to=2026-02-30",
+            "from=2026-12-31&to=2026-12-01",
+            "from=2026-01-01&to=2027-12-31&granularity=day",
+            "from=2026-01-01&to=2026-12-31&granularity=week",
+            "from=2026-01-01&to=2026-12-31&account=abc",
+        ] {
+            let reply = send(
+                &app,
+                get_request(&cash_flow_uri(company_id, query), Some(&cookie)),
+            )
+            .await;
+            assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{query}");
+            assert!(reply.body["error"].is_string(), "{query}");
+        }
+        let unknown = send(
+            &app,
+            get_request(
+                &cash_flow_uri(
+                    company_id,
+                    &format!("from=2026-12-01&to=2026-12-31&account={}", Uuid::new_v4()),
+                ),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(unknown.status, StatusCode::NOT_FOUND);
+
+        // Another company's member does not learn that it exists, and without a session it is a 401.
+        let (stranger, _) = sign_up(&app, "bia@example.com").await;
+        let uri = cash_flow_uri(company_id, "from=2026-12-01&to=2026-12-31");
+        assert_eq!(
+            send(&app, get_request(&uri, Some(&stranger))).await.status,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            send(&app, get_request(&uri, None)).await.status,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn every_role_reads_the_cash_flow_and_none_can_write_it() {
+        use conta_verde_domain::Role;
+
+        let (app, identities, _) = app_with_mailbox();
+        let (_, company_id) = sign_up(&app, "dona@example.com").await;
+        let uri = cash_flow_uri(company_id, "from=2026-12-01&to=2026-12-31");
+        for role in [
+            Role::Admin,
+            Role::Financial,
+            Role::Sales,
+            Role::Stock,
+            Role::Accountant,
+            Role::Viewer,
+        ] {
+            let cookie = member_with_role(&app, &identities, company_id, role).await;
+            assert_eq!(
+                send(&app, get_request(&uri, Some(&cookie))).await.status,
+                StatusCode::OK,
+                "{role:?} reads"
+            );
+        }
+        let viewer = member_with_role(&app, &identities, company_id, Role::Viewer).await;
+        let write = send(&app, json_request("POST", &uri, Some(&viewer), json!({}))).await;
+        assert!(write.status.is_client_error(), "{:?}", write.status);
     }
 }

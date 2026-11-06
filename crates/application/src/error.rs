@@ -65,6 +65,8 @@ pub enum ApplicationError {
     PaymentTermNotFound,
     /// No financial entry with this id in the company (another company's looks the same).
     EntryNotFound,
+    /// A cash flow was asked for a span that is not one or is too long to cut.
+    InvalidSpan(&'static str),
     /// No transfer with this id in the company, or it was reversed already.
     TransferNotFound,
     /// No settlement with this id in the entry (another company's looks the same), or it was
@@ -185,6 +187,7 @@ impl fmt::Display for ApplicationError {
             Self::EntryNotFound => f.write_str("entry not found"),
             Self::SettlementNotFound => f.write_str("settlement not found"),
             Self::TransferNotFound => f.write_str("transfer not found"),
+            Self::InvalidSpan(reason) => write!(f, "invalid span: {reason}"),
             Self::SettlementExceedsBalance => {
                 f.write_str("this settles more of the installment than is left of it")
             }
