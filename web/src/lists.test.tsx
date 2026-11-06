@@ -130,4 +130,34 @@ describe("creating from the top bar", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(await screen.findByText("Aluguel de novembro", { selector: ".cell-title" })).toBeInTheDocument();
   });
+
+  it("does not close the sheet under a save that is still on its way", async () => {
+    const category = { id: "k1", company_id: "c1", parent_id: null, name: "Aluguel", dre_group: "operating_expenses", cash_flow_group: "operating", level: 1, active: true };
+    const fetchMock = mockApi((url) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (url.endsWith("/categories")) return { status: 200, body: { items: [category] } };
+      return { status: 200, body: { items: [], next_cursor: null } };
+    });
+    const answer = fetchMock.getMockImplementation()!;
+    // The save never answers: it stays in flight.
+    fetchMock.mockImplementation((input, init) =>
+      String(input).endsWith("/entries") && init?.method === "POST" ? new Promise<Response>(() => undefined) : answer(input, init),
+    );
+    renderAt("/companies/c1/entries");
+    await userEvent.click(await screen.findByRole("button", { name: "Novo registro" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Novo lançamento" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Novo lançamento" }));
+    await userEvent.type(await dialog.findByLabelText("Descrição"), "Aluguel");
+    await userEvent.selectOptions(dialog.getByLabelText("Categoria"), "k1");
+    fireEvent.change(dialog.getByLabelText("Competência"), { target: { value: "2999-01-01" } });
+    await userEvent.type(dialog.getByLabelText("Valor total"), "100");
+    fireEvent.change(dialog.getByLabelText("Primeiro vencimento"), { target: { value: "2999-01-10" } });
+    await userEvent.click(dialog.getByRole("button", { name: "Gerar parcelas" }));
+    await userEvent.click(dialog.getByRole("button", { name: /^Adicionar$/ }));
+
+    await userEvent.keyboard("{Escape}");
+    await userEvent.click(dialog.getByRole("button", { name: "Fechar" }));
+
+    expect(screen.getByRole("dialog", { name: "Novo lançamento" })).toBeInTheDocument();
+  });
 });

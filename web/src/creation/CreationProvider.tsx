@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from "motion/react";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Notice } from "../components/Notice";
+import { CheckIcon } from "../components/icons/check";
 import { Sheet } from "../components/Sheet";
 import { EntryCreator } from "./EntryCreator";
 
@@ -14,6 +14,8 @@ export interface Created {
 
 export interface CreatorProps {
   companyId: string;
+  /** Tells the host a save is in flight: the sheet must not close under it. */
+  onBusyChange: (busy: boolean) => void;
   onCreated: (created: Created) => void;
   onCancel: () => void;
 }
@@ -39,10 +41,22 @@ const CONFIRMATION_MS = 6000;
  */
 export function CreationProvider({ companyId, children }: { companyId: string | undefined; children: ReactNode }) {
   const [kind, setKind] = useState<CreateKind | null>(null);
-  const [confirmation, setConfirmation] = useState<string | null>(null);
+  // An object, so the same words twice in a row are a new confirmation with a new timer.
+  const [confirmation, setConfirmation] = useState<{ text: string; id: number } | null>(null);
+  const busy = useRef(false);
+  const confirmations = useRef(0);
   const listeners = useRef(new Map<CreateKind, Set<(created: Created) => void>>());
 
   const openCreate = useCallback((wanted: CreateKind) => setKind(wanted), []);
+  const closeUnlessSaving = useCallback(() => {
+    if (!busy.current) setKind(null);
+  }, []);
+
+  // Another company, or a path outside any: what was open belongs to the one that was left.
+  useEffect(() => {
+    busy.current = false;
+    setKind(null);
+  }, [companyId]);
 
   const subscribe = useCallback((wanted: CreateKind, listener: (created: Created) => void) => {
     const set = listeners.current.get(wanted) ?? new Set();
@@ -64,25 +78,38 @@ export function CreationProvider({ companyId, children }: { companyId: string | 
     <CreationContext.Provider value={value}>
       {children}
       {companyId !== undefined && (
-        <Sheet open={kind !== null} title={current?.title ?? ""} onClose={() => setKind(null)}>
+        <Sheet open={kind !== null} title={current?.title ?? ""} onClose={closeUnlessSaving}>
           {kind !== null && current !== null && (
             <current.Creator
+              key={companyId}
               companyId={companyId}
-              onCancel={() => setKind(null)}
+              onBusyChange={(value) => {
+                busy.current = value;
+              }}
+              onCancel={closeUnlessSaving}
               onCreated={(created) => {
+                busy.current = false;
                 setKind(null);
-                setConfirmation(created.message);
+                setConfirmation({ text: created.message, id: ++confirmations.current });
                 listeners.current.get(kind)?.forEach((listener) => listener(created));
               }}
             />
           )}
         </Sheet>
       )}
-      <div className="toast">
+      {/* The live region stays in the page and the words arrive in it: that is what gets announced. */}
+      <div className="toast" aria-live="polite" aria-atomic="true">
         <AnimatePresence>
           {confirmation !== null && (
-            <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 12 }}>
-              <Notice message={confirmation} tone="success" />
+            <motion.div
+              key={confirmation.id}
+              className="notice notice-success"
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 12 }}
+            >
+              <CheckIcon size={18} aria-hidden />
+              <span>{confirmation.text}</span>
             </motion.div>
           )}
         </AnimatePresence>

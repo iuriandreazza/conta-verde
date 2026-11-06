@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, errorMessage, type EntryInput } from "../api";
 import { EntryForm } from "../components/EntryForm";
 import { Spinner } from "../components/Spinner";
@@ -6,10 +6,14 @@ import { useEntryTargets } from "../lib/useEntryTargets";
 import type { CreatorProps } from "./CreationProvider";
 
 /** The form of a new entry, with what it points at read for the company, and the call that saves it. */
-export function EntryCreator({ companyId, onCreated, onCancel }: CreatorProps) {
+export function EntryCreator({ companyId, onBusyChange, onCreated, onCancel }: CreatorProps) {
   const targets = useEntryTargets(companyId);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    onBusyChange(saving);
+  }, [saving, onBusyChange]);
 
   async function save(input: EntryInput) {
     setSaving(true);
