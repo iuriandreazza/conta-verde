@@ -10,6 +10,9 @@ import {
 } from "../api";
 import { Button } from "../components/Button";
 import { CsvImport } from "../components/CsvImport";
+import { PlusIcon } from "../components/icons/plus";
+import { Sheet } from "../components/Sheet";
+import { useCreation, useOnCreated } from "../creation/CreationProvider";
 import { PageHeader } from "../components/PageHeader";
 import { ListRow } from "../components/ListRow";
 import { Notice } from "../components/Notice";
@@ -57,32 +60,36 @@ export function ProductsPage() {
   );
   const isFiltered = applied.q !== "" || applied.kind !== "" || applied.active !== "";
 
+  const { openCreate } = useCreation();
+  // A product created from the top bar or from here: read the list again and flash the new row.
+  useOnCreated("product", (created) => {
+    setHighlightedId(created.id);
+    void reload();
+  });
+
   async function handleSubmit(input: ProductInput) {
+    if (editing === null) return;
     setSaving(true);
     setFormError(null);
     setSaved(null);
     try {
-      if (editing === null) {
-        const created = await api.createProduct(companyId, input);
-        setHighlightedId(created.id);
-        setFormVersion((version) => version + 1);
-        setSaved(`${created.name} cadastrado.`);
-      } else {
-        const updated = await api.updateProduct(companyId, editing.id, input);
-        // In place: the list stays on the page it was on, and the row stays where it is until the
-        // filters are applied again.
-        setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)));
-        setEditing(null);
-        setSaved(`${updated.name} atualizado.`);
-        setFormVersion((version) => version + 1);
-        return;
-      }
-      await reload();
+      const updated = await api.updateProduct(companyId, editing.id, input);
+      // In place: the list stays on the page it was on, and the row stays where it is until the
+      // filters are applied again.
+      setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      setEditing(null);
+      setSaved(`${updated.name} atualizado.`);
+      setFormVersion((version) => version + 1);
     } catch (failure) {
       setFormError(errorMessage(failure));
     } finally {
       setSaving(false);
     }
+  }
+
+  function closeSheet() {
+    setEditing(null);
+    setFormError(null);
   }
 
   function startEditing(product: Product) {
@@ -94,7 +101,15 @@ export function ProductsPage() {
   return (
     <>
       <PageHeader title="Produtos e serviços" description="O que você vende e o que custa para vender." />
-      <div className={canWrite ? "split" : "split split-single"}>
+      {canWrite && (
+        <div className="list-actions">
+          <Button type="button" icon={PlusIcon} onClick={() => openCreate("product")}>
+            Novo produto ou serviço
+          </Button>
+        </div>
+      )}
+      <Notice message={saved} tone="success" />
+      <div>
         <section className="card list-card">
         <h2>Cadastrados</h2>
         <div className="filters" role="search">
@@ -272,24 +287,19 @@ export function ProductsPage() {
         )}
       </section>
         {canWrite && (
-          <aside className="card form-card">
-          <h2>{editing === null ? "Novo produto ou serviço" : `Alterar ${editing.name}`}</h2>
-          <ProductForm
-            // A new key starts the form over for another product, or an empty one after a save.
-            key={`${editing?.id ?? "new"}-${formVersion}`}
-            product={editing}
-            // After a save or when editing, the person is in the form: put the cursor back in it.
-            focusName={editing !== null || formVersion > 0}
-            pending={saving}
-            error={formError}
-            onSubmit={(input) => void handleSubmit(input)}
-            onCancel={() => {
-              setEditing(null);
-              setFormError(null);
-            }}
-          />
-          <Notice message={saved} tone="success" />
-        </aside>
+          <Sheet open={editing !== null} title={`Alterar ${editing?.name ?? ""}`} onClose={closeSheet}>
+            {editing !== null && (
+              <ProductForm
+                key={`${editing.id}-${formVersion}`}
+                product={editing}
+                focusName={false}
+                pending={saving}
+                error={formError}
+                onSubmit={(input) => void handleSubmit(input)}
+                onCancel={closeSheet}
+              />
+            )}
+          </Sheet>
         )}
       </div>
       {canWrite && (

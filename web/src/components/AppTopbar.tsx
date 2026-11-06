@@ -31,11 +31,11 @@ function creationItems(
   const base = `/companies/${companyId}`;
   const items: (MenuItem & { area: Area; creates?: CreateKind })[] = [
     { key: "entry", label: "Novo lançamento", icon: CircleDollarSignIcon, creates: "entry", area: "finance" },
-    { key: "transfer", label: "Nova transferência", icon: SendIcon, to: `${base}/transfers`, area: "finance" },
+    { key: "transfer", label: "Nova transferência", icon: SendIcon, creates: "transfer", area: "finance" },
     { key: "quote", label: "Novo orçamento", icon: FileTextIcon, to: `${base}/quotes`, area: "sales" },
     { key: "sale", label: "Nova venda", icon: HandCoinsIcon, to: `${base}/sales`, area: "sales" },
     { key: "party", label: "Novo cliente ou fornecedor", icon: UsersIcon, to: `${base}/parties`, area: "parties" },
-    { key: "product", label: "Novo produto ou serviço", icon: BoxIcon, to: `${base}/products`, area: "products" },
+    { key: "product", label: "Novo produto ou serviço", icon: BoxIcon, creates: "product", area: "products" },
   ];
   return items
     .filter((item) => permissions?.[item.area] === "write")

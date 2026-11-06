@@ -747,6 +747,7 @@ describe("products and services", () => {
     });
     renderAt("/companies/c1/products");
 
+    await userEvent.click(await screen.findByRole("button", { name: "Novo produto ou serviço" }));
     await userEvent.type(await screen.findByLabelText("Nome"), "Bolo");
     await userEvent.type(screen.getByLabelText("SKU"), "bolo-1");
     await userEvent.type(screen.getByLabelText("NCM"), "1905.90.90");
@@ -777,6 +778,7 @@ describe("products and services", () => {
     });
     renderAt("/companies/c1/products");
 
+    await userEvent.click(await screen.findByRole("button", { name: "Novo produto ou serviço" }));
     await userEvent.selectOptions(await screen.findByLabelText("Tipo"), "service");
     expect(screen.getByLabelText("NCM")).toBeDisabled();
     expect(screen.getByLabelText("Estoque mínimo")).toBeDisabled();
@@ -861,6 +863,7 @@ describe("products and services", () => {
     });
     renderAt("/companies/c1/products");
 
+    await userEvent.click(await screen.findByRole("button", { name: "Novo produto ou serviço" }));
     await userEvent.type(await screen.findByLabelText("Nome"), "Bolo");
     await userEvent.type(screen.getByLabelText("Preço de venda (R$)"), "1,234.56");
     await userEvent.click(screen.getByRole("button", { name: "Adicionar" }));
@@ -875,6 +878,7 @@ describe("products and services", () => {
     );
     renderAt("/companies/c1/products");
 
+    await userEvent.click(await screen.findByRole("button", { name: "Novo produto ou serviço" }));
     await userEvent.type(await screen.findByLabelText("Nome"), "Bolo");
     await userEvent.type(screen.getByLabelText("Preço de venda (R$)"), "1.234");
     await userEvent.click(screen.getByRole("button", { name: "Adicionar" }));
@@ -900,6 +904,7 @@ describe("products and services", () => {
     });
     renderAt("/companies/c1/products");
 
+    await userEvent.click(await screen.findByRole("button", { name: "Novo produto ou serviço" }));
     await userEvent.type(await screen.findByLabelText("Nome"), "Bolo");
     await userEvent.type(screen.getByLabelText("Preço de venda (R$)"), "abc");
     await userEvent.click(screen.getByRole("button", { name: "Adicionar" }));
@@ -935,8 +940,8 @@ describe("products and services", () => {
       minimum_stock: "3",
       sku: "PAO-1",
     });
-    // Back to registering.
-    expect(screen.getByRole("heading", { name: "Novo produto ou serviço" })).toBeInTheDocument();
+    // The sheet closes once the change is saved.
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("asks for the active ones of a kind, matching a text, in the order chosen", async () => {
@@ -3626,6 +3631,7 @@ describe("transfers", () => {
     };
 
   const formPanel = async () => {
+    await userEvent.click(await screen.findByRole("button", { name: "Nova transferência" }));
     const panel = within((await screen.findByRole("heading", { name: "Nova transferência" })).closest("aside")!);
     // The form offers the accounts once they have been read.
     await waitFor(() => expect(panel.getByLabelText("De").querySelectorAll("option").length).toBeGreaterThan(1));
