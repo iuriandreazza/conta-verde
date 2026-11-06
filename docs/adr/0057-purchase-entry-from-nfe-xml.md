@@ -79,6 +79,14 @@ where the code finds none, separated by commas): it makes the purchase and recei
 
 ## Known limits
 
+An order entered from an invoice is **not edited**, and cannot be received on its own (`409`): it is received by entering
+the invoice. Cancelling one that was never received frees its key (the unique index leaves cancelled orders out), so the
+invoice can be entered again. The access key's issuer field may hold letters (an alphanumeric CNPJ). A purchase has at
+most 100 items, fewer than an NF-e may have (990). Nothing checks that the invoice is authorized (its protocol and signature
+are not read) or that it is a purchase and not a sale the company issued itself (`tpNF`), so a company's own invoice can be
+entered if the company is registered as a supplier of itself; a false file that occupies a real key is undone by cancelling
+its order.
+
 The unit of the invoice is not converted to the product's; the quantity is taken as it is. A supplier's invoice is not
 matched to an order made earlier. The invoice's own XML is not kept (the access key, the issuer and the notes are); an
 accountant who needs the file keeps it, until the attachments of Phase 6 take it. An item whose code is not a SKU is

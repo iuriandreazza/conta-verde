@@ -200,7 +200,11 @@ where
         let mut order = self.get(company_id, id).await?;
         if order.status() == PurchaseStatus::Draft {
             match self.approve(company_id, actor, id).await {
-                Ok(_) | Err(ApplicationError::PurchaseChanged) => {}
+                Ok(_)
+                | Err(
+                    ApplicationError::PurchaseChanged
+                    | ApplicationError::Domain(DomainError::PurchaseIsLocked),
+                ) => {}
                 Err(error) => return Err(error),
             }
             order = self.get(company_id, id).await?;

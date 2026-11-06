@@ -134,6 +134,7 @@ pub enum DomainError {
     InvoiceQuantityTooPrecise,
     InvoiceInstallmentsMismatch,
     ScheduleDoesNotMatchReceipt,
+    OrderFollowsAnInvoice,
 }
 
 impl fmt::Display for DomainError {
@@ -403,6 +404,9 @@ impl fmt::Display for DomainError {
             ),
             Self::ScheduleDoesNotMatchReceipt => f.write_str(
                 "when a receipt is paid on given days, the parts must add up to its value, each above 0, in days that never go back",
+            ),
+            Self::OrderFollowsAnInvoice => f.write_str(
+                "an order entered from an NF-e is received by entering the invoice, not on its own",
             ),
             Self::NoCountLines => f.write_str("a count needs at least one product"),
             Self::TooManyCountLines => f.write_str("a count has at most 500 products"),

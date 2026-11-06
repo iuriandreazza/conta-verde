@@ -63,6 +63,7 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
             | DomainError::SaleIsLocked
             | DomainError::SaleIsNotCompleted
             | DomainError::PurchaseIsLocked
+            | DomainError::OrderFollowsAnInvoice
             | DomainError::CountIsLocked
             | DomainError::StockMovementIsAReversal
             | DomainError::PurchaseIsNotReceivable

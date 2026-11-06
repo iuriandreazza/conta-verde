@@ -14007,6 +14007,45 @@ pub async fn runs_the_inventory_count<C, M, P, St>(
             .len(),
         3
     );
+
+    // The count says what was found on its day: goods that came in after it are not undone by it. 10 more come in on
+    // December 1st; a count of the 30th that found 1 agrees with what the stock held through the 30th.
+    let mut later = entered(coffee, "10", "5");
+    later.occurred_on = "2026-12-01".into();
+    stock.record(company, &ana, later).await.unwrap();
+    let fourth = counts
+        .register(company, &ana, count_draft(&[(coffee, "1")]))
+        .await
+        .unwrap();
+    assert_eq!(
+        figures(&counts.view(company, fourth.id()).await.unwrap()),
+        [("1".into(), "1".into(), "0".into())]
+    );
+    counts.apply(company, &ana, fourth.id()).await.unwrap();
+    assert_eq!(
+        stock
+            .list(
+                company,
+                &StockMovementQuery::default()
+                    .of_kind(conta_verde_domain::StockMovementKind::Adjustment),
+                None,
+                None
+            )
+            .await
+            .unwrap()
+            .items
+            .len(),
+        3
+    );
+    assert_eq!(
+        stock
+            .balance_of(company, coffee)
+            .await
+            .unwrap()
+            .quantity()
+            .to_string(),
+        "11"
+    );
 }
 
 /// A supplier's NF-e entered as a purchase ([ADR 0057]): payables on the installments the invoice gives, stock at
@@ -14097,6 +14136,20 @@ pub async fn enters_a_supplier_invoice_once<P, E, F, R, T, M, Pr, St>(
             .entered
             .map(|order| order.id()),
         Some(outcome.order.id())
+    );
+
+    // An order made from an invoice is received by entering the invoice, never on its own.
+    assert_eq!(
+        purchases
+            .receive(
+                company,
+                &ana,
+                outcome.order.id(),
+                receipt_draft("2026-11-12", &[(1, "1")])
+            )
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::OrderFollowsAnInvoice)
     );
 
     // The same file again, in sequence and at the same moment, adds nothing.

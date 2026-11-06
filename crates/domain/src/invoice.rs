@@ -6,19 +6,35 @@ use crate::{Amount, CalendarDate, Document, DomainError, LineDraft, ProductId, r
 
 const KEY_LEN: usize = 44;
 
-/// The 44 digits that name an NF-e: where it was issued, when, by whom, its number, and a check digit
+/// The 44 characters that name an NF-e: where it was issued, when, by whom, its number, and a check digit
 /// ([ADR 0057]). Only a key whose check digit is right is built.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccessKey(String);
 
 impl AccessKey {
     pub fn parse(raw: &str) -> Result<Self, DomainError> {
-        let text: String = raw.chars().filter(|c| !c.is_whitespace()).collect();
-        let digits: Vec<u32> = text.chars().filter_map(|c| c.to_digit(10)).collect();
-        if text.len() != KEY_LEN || digits.len() != KEY_LEN {
+        let text: String = raw
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .map(|c| c.to_ascii_uppercase())
+            .collect();
+        if text.len() != KEY_LEN {
             return Err(DomainError::InvalidAccessKey);
         }
-        if check_digit(&digits[..KEY_LEN - 1]) != digits[KEY_LEN - 1] {
+        // The issuer's registry number, in positions 6 to 20, may hold letters (an alphanumeric CNPJ); the rest
+        // is digits. Every character counts as its ASCII code less 48, like the CNPJ's own check digits.
+        let values: Vec<u32> = text
+            .chars()
+            .enumerate()
+            .map(|(index, c)| {
+                let allowed =
+                    c.is_ascii_digit() || ((6..20).contains(&index) && c.is_ascii_uppercase());
+                allowed
+                    .then(|| u32::from(c) - u32::from('0'))
+                    .ok_or(DomainError::InvalidAccessKey)
+            })
+            .collect::<Result<_, _>>()?;
+        if check_digit(&values[..KEY_LEN - 1]) != values[KEY_LEN - 1] {
             return Err(DomainError::InvalidAccessKey);
         }
         Ok(Self(text))
@@ -42,7 +58,7 @@ impl AccessKey {
     }
 }
 
-/// The check digit of the first 43 digits of a key: modulo 11, with weights 2 to 9 from the right.
+/// The check digit of the first 43 characters of a key: modulo 11, with weights 2 to 9 from the right.
 fn check_digit(digits: &[u32]) -> u32 {
     let sum: u32 = digits
         .iter()
@@ -473,8 +489,11 @@ pub(crate) mod tests {
     /// A key whose check digit is right, for the issuer, series and number given.
     pub(crate) fn key_for(cnpj: &str, series: u32, number: u32) -> String {
         let body = format!("352611{cnpj:0>14}55{series:03}{number:09}1{:08}", 12345678);
-        let digits: Vec<u32> = body.chars().filter_map(|c| c.to_digit(10)).collect();
-        format!("{body}{}", check_digit(&digits))
+        let values: Vec<u32> = body
+            .chars()
+            .map(|c| u32::from(c) - u32::from('0'))
+            .collect();
+        format!("{body}{}", check_digit(&values))
     }
 
     const CNPJ: &str = "11222333000181";
@@ -541,6 +560,30 @@ pub(crate) mod tests {
             .map(|chunk| String::from_utf8_lossy(chunk).into_owned())
             .collect();
         assert_eq!(AccessKey::parse(&grouped.join(" ")).unwrap().as_str(), key);
+    }
+
+    #[test]
+    fn an_alphanumeric_cnpj_may_issue_an_invoice() {
+        // 12.ABC.345/01DE-35 is a CNPJ with letters, issued since July 2026.
+        let mut lettered = draft();
+        lettered.issuer_document = "12ABC34501DE35".into();
+        lettered.access_key = key_for("12ABC34501DE35", 1, 4321);
+        assert_eq!(
+            Invoice::new(lettered.clone()).unwrap().issuer().as_str(),
+            "12ABC34501DE35"
+        );
+        // Letters are only where the issuer's number is: anywhere else, or a wrong digit, is not a key.
+        let mut elsewhere = lettered.access_key.clone();
+        elsewhere.replace_range(30..31, "A");
+        assert_eq!(
+            AccessKey::parse(&elsewhere).unwrap_err(),
+            DomainError::InvalidAccessKey
+        );
+        lettered.access_key.replace_range(7..8, "Z");
+        assert_eq!(
+            Invoice::new(lettered).unwrap_err(),
+            DomainError::InvalidAccessKey
+        );
     }
 
     #[test]

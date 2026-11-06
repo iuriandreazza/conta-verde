@@ -36,7 +36,9 @@ impl PurchaseOrderRepository for InMemoryPurchaseOrderRepository {
         let mut state = self.state.lock().expect("repository lock poisoned");
         if order.invoice_key().is_some_and(|key| {
             state.orders.iter().any(|stored| {
-                stored.company_id() == order.company_id() && stored.invoice_key() == Some(key)
+                stored.company_id() == order.company_id()
+                    && stored.invoice_key() == Some(key)
+                    && stored.status() != PurchaseStatus::Cancelled
             })
         }) {
             return Err(RepositoryError::DuplicateInvoice);
@@ -76,7 +78,11 @@ impl PurchaseOrderRepository for InMemoryPurchaseOrderRepository {
         Ok(state
             .orders
             .iter()
-            .find(|stored| stored.company_id() == company_id && stored.invoice_key() == Some(key))
+            .find(|stored| {
+                stored.company_id() == company_id
+                    && stored.invoice_key() == Some(key)
+                    && stored.status() != PurchaseStatus::Cancelled
+            })
             .cloned())
     }
 

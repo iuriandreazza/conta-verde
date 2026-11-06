@@ -1,8 +1,11 @@
 use conta_verde_application::{
-    DocumentReferences, PartyQuery, PartyRepository, PaymentTermRepository, ProductQuery,
-    ProductRepository, RepositoryError,
+    DocumentReferences, NameCursor, PartyQuery, PartyRepository, PaymentTermRepository,
+    ProductQuery, ProductRepository, RepositoryError,
 };
 use conta_verde_domain::{CompanyId, Document, PartyId, PaymentTerm, PaymentTermId, ProductId};
+
+/// How many registers a lookup reads at a time.
+const PAGE: usize = 200;
 
 /// Answers what a quote, a sale, a contract or a purchase order may point at by asking the registers themselves, so one
 /// implementation serves every adapter, like `RegisterReferences` does for entries. A record of
@@ -79,14 +82,24 @@ where
         document: &Document,
     ) -> Result<Option<PartyId>, RepositoryError> {
         let query = PartyQuery::default().searching(document.as_str());
-        let found = self
-            .parties
-            .list_by_company(company_id, &query, None, 20)
-            .await?;
-        Ok(found
-            .iter()
-            .find(|party| party.document() == Some(document))
-            .map(|party| party.id()))
+        let mut after: Option<NameCursor> = None;
+        loop {
+            let page = self
+                .parties
+                .list_by_company(company_id, &query, after.as_ref(), PAGE + 1)
+                .await?;
+            if let Some(party) = page
+                .iter()
+                .take(PAGE)
+                .find(|party| party.document() == Some(document))
+            {
+                return Ok(Some(party.id()));
+            }
+            match (page.len() > PAGE).then(|| page.get(PAGE - 1)).flatten() {
+                Some(last) => after = Some(NameCursor::from(last)),
+                None => return Ok(None),
+            }
+        }
     }
 
     async fn product_with_code(
@@ -95,18 +108,25 @@ where
         code: &str,
     ) -> Result<Option<ProductId>, RepositoryError> {
         let query = ProductQuery::default().searching(code);
-        let found = self
-            .products
-            .list_by_company(company_id, &query, None, 50)
-            .await?;
-        Ok(found
-            .iter()
-            .find(|product| {
+        let wanted = code.trim();
+        let mut after: Option<NameCursor> = None;
+        loop {
+            let page = self
+                .products
+                .list_by_company(company_id, &query, after.as_ref(), PAGE + 1)
+                .await?;
+            if let Some(product) = page.iter().take(PAGE).find(|product| {
                 product
                     .sku()
-                    .is_some_and(|sku| sku.eq_ignore_ascii_case(code.trim()))
-            })
-            .map(|product| product.id()))
+                    .is_some_and(|sku| sku.eq_ignore_ascii_case(wanted))
+            }) {
+                return Ok(Some(product.id()));
+            }
+            match (page.len() > PAGE).then(|| page.get(PAGE - 1)).flatten() {
+                Some(last) => after = Some(NameCursor::from(last)),
+                None => return Ok(None),
+            }
+        }
     }
 
     async fn seller_is_usable(

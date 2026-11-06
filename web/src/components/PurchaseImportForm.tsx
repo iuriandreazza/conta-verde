@@ -92,7 +92,8 @@ function EnterInvoice({ companyId, targets, preview, pending, error, onEnter, on
   const products = targets.products.filter((product) => product.active || chosen.includes(product.id));
   const withoutProduct = chosen.filter((id) => id === "").length;
   const unregistered = preview.supplier_id === null;
-  const alreadyEntered = preview.entered !== null;
+  const alreadyEntered = preview.entered?.status === "received";
+  const unfinished = preview.entered !== null && !alreadyEntered;
   const blocked = unregistered || alreadyEntered || withoutProduct > 0;
 
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -205,6 +206,11 @@ function EnterInvoice({ companyId, targets, preview, pending, error, onEnter, on
             </tbody>
           </table>
         </div>
+        {unfinished && (
+          <p className="muted" role="status">
+            A entrada desta nota ficou incompleta (compra nº {preview.entered?.number}): entrar de novo conclui o que faltou.
+          </p>
+        )}
         {withoutProduct > 0 && !alreadyEntered && (
           <p className="muted">
             {withoutProduct === 1 ? "Um item está sem produto" : `${withoutProduct} itens estão sem produto`}: o código da nota não é o código de nenhum produto.

@@ -146,7 +146,7 @@ impl PurchaseOrderRepository for PostgresPurchaseOrderRepository {
     ) -> Result<Option<PurchaseOrder>, RepositoryError> {
         let mut tx = snapshot(&self.pool).await?;
         let row = sqlx::query(&format!(
-            "{SELECT_ORDERS} WHERE company_id = $1 AND invoice_key = $2"
+            "{SELECT_ORDERS} WHERE company_id = $1 AND invoice_key = $2 AND status <> 'cancelled'"
         ))
         .bind(company_id.as_uuid())
         .bind(key.as_str())
