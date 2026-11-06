@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
@@ -32,6 +33,28 @@ describe("page shell", () => {
 
     unmount();
     expect(document.title).toBe("conta-verde");
+  });
+
+  it("follows the person from one page to the next", async () => {
+    function Pages() {
+      const [page, setPage] = useState("Lançamentos");
+      return (
+        <>
+          <button onClick={() => setPage("Relatórios")}>Next</button>
+          <PageHeader key={page} title={page} />
+        </>
+      );
+    }
+    render(
+      <MemoryRouter>
+        <Pages />
+      </MemoryRouter>,
+    );
+    expect(document.title).toBe("Lançamentos · conta-verde");
+
+    await userEvent.click(screen.getByRole("button", { name: "Next" }));
+
+    expect(document.title).toBe("Relatórios · conta-verde");
   });
 
   it("lets a keyboard user skip the sections and land on the content", async () => {

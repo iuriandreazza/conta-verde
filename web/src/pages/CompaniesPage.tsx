@@ -2,9 +2,11 @@ import { motion } from "motion/react";
 import { Link, Navigate } from "react-router-dom";
 import { useAuth } from "../auth";
 import { BriefcaseBusinessIcon } from "../components/icons/briefcase-business";
+import { usePageTitle } from "../lib/usePageTitle";
 
 export function CompaniesPage() {
   const { session } = useAuth();
+  usePageTitle("Escolha uma empresa");
   if (session.status !== "authenticated") {
     return null;
   }
