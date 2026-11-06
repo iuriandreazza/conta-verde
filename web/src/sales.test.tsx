@@ -93,6 +93,10 @@ const answer =
   };
 
 const formPanel = async (heading: string) => {
+  // A new order is asked for with the button; a change opens the sheet by itself.
+  if (heading === "Novo pedido") {
+    await userEvent.click(await screen.findByRole("button", { name: heading }));
+  }
   const panel = within((await screen.findByRole("heading", { name: heading })).closest("aside")!);
   await panel.findByLabelText("Cliente");
   return panel;
@@ -259,7 +263,7 @@ describe("sales", () => {
     );
     renderAt("/companies/c1/sales");
     await screen.findByRole("row", { name: /Mercado Boa Compra/ });
-    expect(screen.queryByRole("heading", { name: "Novo pedido" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Novo pedido" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Concluir a venda/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Cancelar a venda/ })).not.toBeInTheDocument();
   });
