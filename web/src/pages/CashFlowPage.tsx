@@ -6,6 +6,7 @@ import { Legend, type LegendItem } from "../components/charts/Legend";
 import { LineChart } from "../components/charts/LineChart";
 import { StatTile } from "../components/charts/StatTile";
 import { Notice } from "../components/Notice";
+import { PeriodFilter } from "../components/PeriodFilter";
 import { PageHeader } from "../components/PageHeader";
 import { Spinner } from "../components/Spinner";
 import { defaultSpan, periodLabel, totalsOf } from "../lib/cashFlow";
@@ -105,23 +106,8 @@ export function CashFlowPage() {
         description="O que entrou e saiu das contas, pelo dia em que aconteceu, e o que ainda está em aberto, pelo vencimento."
       />
       <section className="card filters-card">
+        <PeriodFilter value={filters} onChange={(span) => setFilters({ ...filters, ...span })} today={today} />
         <div className="filters" role="search">
-          <label>
-            De
-            <input
-              type="date"
-              value={filters.from}
-              onChange={(event) => setFilters({ ...filters, from: event.target.value })}
-            />
-          </label>
-          <label>
-            Até
-            <input
-              type="date"
-              value={filters.to}
-              onChange={(event) => setFilters({ ...filters, to: event.target.value })}
-            />
-          </label>
           <label>
             Agrupar por
             <select
