@@ -23,6 +23,8 @@ export function DelinquencyPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    // What is shown is always for the day in the field: another day, or none, drops the old report.
+    setReport(null);
     if (!isIsoDate(on)) {
       return;
     }
@@ -35,13 +37,22 @@ export function DelinquencyPage() {
           setError(null);
         }
       })
-      .catch((failure: unknown) => current && setError(errorMessage(failure)));
+      .catch((failure: unknown) => {
+        if (current) {
+          setReport(null);
+          setError(errorMessage(failure));
+        }
+      });
     return () => {
       current = false;
     };
   }, [companyId, on]);
 
+  // The names are read a page at a time (up to 200), so a customer may not be among them: it is then called by
+  // what it is, never by a guess.
   const names = new Map(targets.parties.map((party) => [party.id, party.name]));
+  const nameOf = (id: string) =>
+    names.get(id) ?? (targets.loaded ? `Cliente ${id.slice(0, 8)}` : "…");
 
   return (
     <>
@@ -56,7 +67,7 @@ export function DelinquencyPage() {
           <input type="date" value={on} onChange={(event) => setOn(event.target.value)} />
         </label>
       </section>
-      {report === null && error === null ? (
+      {report === null && error === null && isIsoDate(on) ? (
         <p role="status" className="status">
           <Spinner /> Carregando…
         </p>
@@ -106,7 +117,7 @@ export function DelinquencyPage() {
                           <td>
                             {customer.party_id === null
                               ? "Sem cliente"
-                              : (names.get(customer.party_id) ?? "Cliente removido")}
+                              : nameOf(customer.party_id)}
                           </td>
                           <td className="num">{formatMoney(customer.owed)}</td>
                           <td className="num">{customer.installments}</td>
