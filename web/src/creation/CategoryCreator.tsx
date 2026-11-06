@@ -51,7 +51,8 @@ export function CategoryCreator({ companyId, options, onBusyChange, onCreated, o
     <CategoryForm
       categories={categories}
       editing={null}
-      initialParentId={options.parentId ?? null}
+      // The parent was chosen from the page's list: another tab may have changed the plan since.
+      initialParentId={categories.some((category) => category.id === options.parentId) ? (options.parentId ?? null) : null}
       pending={saving}
       error={error}
       onCreate={(input) => void save(input)}
