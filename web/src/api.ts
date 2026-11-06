@@ -405,6 +405,58 @@ export interface PaymentTermFilters {
 
 export const NO_PAYMENT_TERM_FILTERS: PaymentTermFilters = { q: "", active: "", sort: "name" };
 
+export type EntryKind = "receivable" | "payable";
+
+export interface EntryInstallment {
+  number: number;
+  /** `YYYY-MM-DD`. */
+  due_date: string;
+  /** A decimal string without trailing zeros, in cents at most. */
+  amount: string;
+}
+
+/** Money owed to the company (`receivable`) or by it (`payable`), split into installments (ADR 0029). */
+export interface Entry {
+  id: string;
+  company_id: string;
+  kind: EntryKind;
+  description: string;
+  party_id: string | null;
+  category_id: string;
+  cost_center_id: string | null;
+  /** `YYYY-MM-DD`: the day the entry belongs to for the managerial income statement. */
+  competence_date: string;
+  installments: EntryInstallment[];
+  /** The sum of the installments, a decimal string. */
+  total: string;
+}
+
+export interface EntryPage {
+  items: Entry[];
+  next_cursor: string | null;
+}
+
+/** Replaces the whole entry: a reference left out is removed. */
+export interface EntryInput {
+  kind: EntryKind;
+  description: string;
+  party_id?: string;
+  category_id: string;
+  cost_center_id?: string;
+  competence_date: string;
+  installments: { due_date: string; amount: string }[];
+}
+
+export interface EntryFilters {
+  q: string;
+  kind: "" | EntryKind;
+  /** The id of a category, or empty for all of them. */
+  category: string;
+  sort: "-competence_date" | "competence_date";
+}
+
+export const NO_ENTRY_FILTERS: EntryFilters = { q: "", kind: "", category: "", sort: "-competence_date" };
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -629,6 +681,25 @@ export const api = {
     }),
   paymentTermHistory: (companyId: string, id: string) =>
     request<HistoryEntry[]>(`/companies/${companyId}/payment-terms/${id}/history`),
+  listEntries: (companyId: string, filters: EntryFilters = NO_ENTRY_FILTERS, after?: string) => {
+    const params = new URLSearchParams();
+    if (filters.q) params.set("q", filters.q);
+    if (filters.kind) params.set("kind", filters.kind);
+    if (filters.category) params.set("category", filters.category);
+    if (filters.sort !== NO_ENTRY_FILTERS.sort) params.set("sort", filters.sort);
+    if (after) params.set("after", after);
+    const query = params.size > 0 ? `?${params}` : "";
+    return request<EntryPage>(`/companies/${companyId}/entries${query}`);
+  },
+  createEntry: (companyId: string, input: EntryInput) =>
+    post<Entry>(`/companies/${companyId}/entries`, input),
+  updateEntry: (companyId: string, id: string, input: EntryInput) =>
+    request<Entry>(`/companies/${companyId}/entries/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  entryHistory: (companyId: string, id: string) =>
+    request<HistoryEntry[]>(`/companies/${companyId}/entries/${id}/history`),
   /** The whole tree, flat and unpaged. */
   listCategories: (companyId: string) =>
     request<{ items: Category[] }>(`/companies/${companyId}/categories`),

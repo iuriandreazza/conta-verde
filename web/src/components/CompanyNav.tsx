@@ -1,6 +1,7 @@
 import { NavLink } from "react-router-dom";
 import { BoxIcon } from "./icons/box";
 import { CalendarDaysIcon } from "./icons/calendar-days";
+import { CircleDollarSignIcon } from "./icons/circle-dollar-sign";
 import { ChartLineIcon } from "./icons/chart-line";
 import { CreditCardIcon } from "./icons/credit-card";
 import { FolderTreeIcon } from "./icons/folder-tree";
@@ -24,6 +25,10 @@ export function CompanyNav({
       <NavLink to={base} end>
         <ChartLineIcon size={18} aria-hidden />
         Painel
+      </NavLink>
+      <NavLink to={`${base}/entries`}>
+        <CircleDollarSignIcon size={18} aria-hidden />
+        Lançamentos
       </NavLink>
       <NavLink to={`${base}/parties`}>
         <UsersIcon size={18} aria-hidden />

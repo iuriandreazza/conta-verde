@@ -1,9 +1,9 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, vi } from "vitest";
 import { App } from "./App";
-import type { PaymentTerm, BankAccount, Category, CostCenter, PaymentMethod, DocumentCheck, HistoryEntry, Party, Product, Profile } from "./api";
+import type { Entry, PaymentTerm, BankAccount, Category, CostCenter, PaymentMethod, DocumentCheck, HistoryEntry, Party, Product, Profile } from "./api";
 import { AuthProvider } from "./auth";
 import { SOURCE_URL } from "./components/Footer";
 
@@ -2778,6 +2778,7 @@ describe("what a role that cannot write is offered", () => {
     ["bank-accounts", "Contas bancárias", "Nova conta"],
     ["payment-methods", "Formas de pagamento", "Nova forma de pagamento"],
     ["payment-terms", "Prazos de pagamento", "Novo prazo de pagamento"],
+    ["entries", "Lançamentos", "Novo lançamento"],
   ])("%s: a role that only reads gets the list and no form", async (path, title, formHeading) => {
     mockApi((url) => (url === "/api/auth/me" ? { status: 200, body: as(readOnly) } : lists(url)));
     renderAt(`/companies/c1/${path}`);
@@ -2876,5 +2877,269 @@ describe("how a list presents its rows", () => {
     const row = await screen.findByRole("row", { name: /Maria/ });
     expect(row).toHaveTextContent("Cliente · Fornecedor");
     expect(screen.queryByRole("columnheader", { name: "Tipo" })).not.toBeInTheDocument();
+  });
+});
+
+describe("financial entries", () => {
+  const vendas = {
+    id: "cat1",
+    company_id: "c1",
+    parent_id: null,
+    name: "Vendas",
+    dre_group: "gross_revenue",
+    cash_flow_group: "operating",
+    level: 1,
+    active: true,
+  };
+  const transfers = { ...vendas, id: "cat2", name: "Transferências", dre_group: "transfers", cash_flow_group: "transfer" };
+  const inactive = { ...vendas, id: "cat3", name: "Antiga", active: false };
+  const matriz = { id: "cc1", company_id: "c1", name: "Matriz", active: true };
+  const entry: Entry = {
+    id: "e1",
+    company_id: "c1",
+    kind: "receivable",
+    description: "Venda parcelada",
+    party_id: null,
+    category_id: "cat1",
+    cost_center_id: null,
+    competence_date: "2026-11-05",
+    installments: [
+      { number: 1, due_date: "2026-12-10", amount: "100.5" },
+      { number: 2, due_date: "2027-01-10", amount: "100.5" },
+    ],
+    total: "201",
+  };
+  const rent: Entry = {
+    ...entry,
+    id: "e2",
+    kind: "payable",
+    description: "Aluguel",
+    competence_date: "2026-11-01",
+    installments: [{ number: 1, due_date: "2026-11-10", amount: "2500" }],
+    total: "2500",
+  };
+
+  const sent = (fetchMock: ReturnType<typeof mockApi>, method: string) =>
+    fetchMock.mock.calls.filter(([, init]) => init?.method === method);
+
+  /** The panel with the form: the sidebar is an aside too, so it is found by its heading. */
+  const formPanel = async (heading: string) => {
+    const panel = within((await screen.findByRole("heading", { name: heading })).closest("aside")!);
+    // The form appears once what it points at has been read.
+    await panel.findByLabelText("Descrição");
+    return panel;
+  };
+
+  /** The registers an entry points at, and the entries given. */
+  const answer =
+    (entries: Entry[], extra: (url: string, init?: RequestInit) => Reply | undefined = () => undefined) =>
+    (url: string, init?: RequestInit): Reply => {
+      const special = extra(url, init);
+      if (special) return special;
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (url.endsWith("/categories")) return { status: 200, body: { items: [vendas, transfers, inactive] } };
+      if (url.includes("/cost-centers")) return { status: 200, body: { items: [matriz], next_cursor: null } };
+      if (url.includes("/parties")) return { status: 200, body: { items: [], next_cursor: null } };
+      if (url.includes("/entries")) return { status: 200, body: { items: entries, next_cursor: null } };
+      return { status: 404, body: { error: "not found" } };
+    };
+
+  it("lists the entries with their kind, category, due dates and total", async () => {
+    mockApi(answer([entry, rent]));
+    renderAt("/companies/c1/entries");
+
+    const row = await screen.findByRole("row", { name: /Venda parcelada/ });
+    expect(row).toHaveTextContent("A receber");
+    expect(row).toHaveTextContent("Vendas");
+    expect(row).toHaveTextContent("05/11/2026");
+    expect(row).toHaveTextContent("2 parcelas, de 10/12/2026 a 10/01/2027");
+    expect(row).toHaveTextContent("R$ 201,00");
+    const payable = screen.getByRole("row", { name: /Aluguel/ });
+    expect(payable).toHaveTextContent("A pagar");
+    expect(payable).toHaveTextContent("10/11/2026");
+    expect(payable).toHaveTextContent("R$ 2.500,00");
+  });
+
+  it("registers an entry whose installments are generated from a total, the remainder on the last", async () => {
+    const fetchMock = mockApi(
+      answer([], (url, init) =>
+        url.endsWith("/entries") && init?.method === "POST"
+          ? { status: 201, body: { ...entry, id: "e9", description: "Aluguel" } }
+          : undefined,
+      ),
+    );
+    renderAt("/companies/c1/entries");
+    const form = await formPanel("Novo lançamento");
+
+    // Only what can be used is offered: the transfers category and an inactive one are not.
+    const category = form.getByLabelText("Categoria");
+    expect(within(category).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Escolha uma categoria",
+      "Vendas",
+    ]);
+
+    await userEvent.type(form.getByLabelText("Descrição"), "Aluguel");
+    await userEvent.selectOptions(category, "cat1");
+    fireEvent.change(form.getByLabelText("Competência"), { target: { value: "2026-11-01" } });
+    await userEvent.type(form.getByLabelText("Valor total"), "100");
+    await userEvent.clear(form.getByLabelText("Parcelas"));
+    await userEvent.type(form.getByLabelText("Parcelas"), "3");
+    fireEvent.change(form.getByLabelText("Primeiro vencimento"), { target: { value: "2026-12-31" } });
+    await userEvent.click(form.getByRole("button", { name: "Gerar parcelas" }));
+
+    expect(form.getByLabelText("Valor da parcela 1")).toHaveValue("33,33");
+    expect(form.getByLabelText("Valor da parcela 3")).toHaveValue("33,34");
+    expect(form.getByLabelText("Vencimento da parcela 2")).toHaveValue("2027-01-31");
+    expect(form.getByLabelText("Vencimento da parcela 3")).toHaveValue("2027-02-28");
+    expect(form.getByText("Total: R$ 100,00")).toBeInTheDocument();
+
+    await userEvent.click(form.getByRole("button", { name: "Adicionar" }));
+
+    await waitFor(() => expect(sent(fetchMock, "POST")).toHaveLength(1));
+    expect(JSON.parse(String(sent(fetchMock, "POST")[0][1]?.body))).toEqual({
+      kind: "receivable",
+      description: "Aluguel",
+      category_id: "cat1",
+      competence_date: "2026-11-01",
+      installments: [
+        { due_date: "2026-12-31", amount: "33.33" },
+        { due_date: "2027-01-31", amount: "33.33" },
+        { due_date: "2027-02-28", amount: "33.34" },
+      ],
+    });
+    expect(await screen.findByText("Aluguel adicionado.")).toBeInTheDocument();
+  });
+
+  it("changes an entry as a whole, with its installments", async () => {
+    const fetchMock = mockApi(
+      answer([entry], (url, init) =>
+        url.endsWith("/entries/e1") && init?.method === "PUT"
+          ? { status: 200, body: { ...entry, description: "Venda à vista", installments: [{ number: 1, due_date: "2026-12-10", amount: "201" }], total: "201" } }
+          : undefined,
+      ),
+    );
+    renderAt("/companies/c1/entries");
+    await userEvent.click(await screen.findByRole("button", { name: "Alterar Venda parcelada" }));
+
+    const form = await formPanel("Alterar Venda parcelada");
+    expect(form.getByLabelText("Descrição")).toHaveValue("Venda parcelada");
+    expect(form.getByLabelText("Valor da parcela 1")).toHaveValue("100,5");
+    expect(form.getByLabelText("Vencimento da parcela 2")).toHaveValue("2027-01-10");
+    await userEvent.clear(form.getByLabelText("Descrição"));
+    await userEvent.type(form.getByLabelText("Descrição"), "Venda à vista");
+    await userEvent.click(form.getByRole("button", { name: "Remover parcela 2" }));
+    await userEvent.clear(form.getByLabelText("Valor da parcela 1"));
+    await userEvent.type(form.getByLabelText("Valor da parcela 1"), "201");
+    await userEvent.click(form.getByRole("button", { name: "Salvar alterações" }));
+
+    await waitFor(() => expect(sent(fetchMock, "PUT")).toHaveLength(1));
+    const call = sent(fetchMock, "PUT")[0];
+    expect(String(call[0])).toBe("/api/companies/c1/entries/e1");
+    expect(JSON.parse(String(call[1]?.body))).toEqual({
+      kind: "receivable",
+      description: "Venda à vista",
+      category_id: "cat1",
+      competence_date: "2026-11-05",
+      installments: [{ due_date: "2026-12-10", amount: "201" }],
+    });
+    expect(await screen.findByText("Venda à vista atualizado.")).toBeInTheDocument();
+  });
+
+  it("will not send an installment that is not a date or an amount in cents, and says which", async () => {
+    const fetchMock = mockApi(answer([]));
+    renderAt("/companies/c1/entries");
+    const form = await formPanel("Novo lançamento");
+    await userEvent.type(form.getByLabelText("Descrição"), "Conta de luz");
+    await userEvent.selectOptions(form.getByLabelText("Categoria"), "cat1");
+    fireEvent.change(form.getByLabelText("Competência"), { target: { value: "2026-11-01" } });
+
+    await userEvent.click(form.getByRole("button", { name: "Adicionar" }));
+    expect(await form.findByRole("alert")).toHaveTextContent("vencimento da parcela 1");
+
+    fireEvent.change(form.getByLabelText("Vencimento da parcela 1"), { target: { value: "2026-12-10" } });
+    for (const typed of ["", "1,005", "abc"]) {
+      await userEvent.clear(form.getByLabelText("Valor da parcela 1"));
+      if (typed) await userEvent.type(form.getByLabelText("Valor da parcela 1"), typed);
+      await userEvent.click(form.getByRole("button", { name: "Adicionar" }));
+      expect(await form.findByRole("alert")).toHaveTextContent("valor da parcela 1");
+    }
+    // `1.234` could be a thousand or a little over one: the person says which.
+    await userEvent.clear(form.getByLabelText("Valor da parcela 1"));
+    await userEvent.type(form.getByLabelText("Valor da parcela 1"), "1.234");
+    await userEvent.click(form.getByRole("button", { name: "Adicionar" }));
+    expect(await form.findByRole("alert")).toHaveTextContent("valor da parcela 1");
+    expect(sent(fetchMock, "POST")).toHaveLength(0);
+  });
+
+  it("shows why the API refused an entry and keeps what was typed", async () => {
+    mockApi(
+      answer([], (url, init) =>
+        url.endsWith("/entries") && init?.method === "POST"
+          ? { status: 422, body: { error: "the category does not exist in the company, or cannot be used here" } }
+          : undefined,
+      ),
+    );
+    renderAt("/companies/c1/entries");
+    const form = await formPanel("Novo lançamento");
+    await userEvent.type(form.getByLabelText("Descrição"), "Conta de luz");
+    await userEvent.selectOptions(form.getByLabelText("Categoria"), "cat1");
+    fireEvent.change(form.getByLabelText("Competência"), { target: { value: "2026-11-01" } });
+    fireEvent.change(form.getByLabelText("Vencimento da parcela 1"), { target: { value: "2026-12-10" } });
+    await userEvent.type(form.getByLabelText("Valor da parcela 1"), "89,90");
+    await userEvent.click(form.getByRole("button", { name: "Adicionar" }));
+
+    expect(await form.findByRole("alert")).toHaveTextContent("cannot be used here");
+    expect(form.getByLabelText("Descrição")).toHaveValue("Conta de luz");
+    expect(form.getByLabelText("Valor da parcela 1")).toHaveValue("89,90");
+  });
+
+  it("narrows the list by what is typed and chosen, and starts over from the first page", async () => {
+    const fetchMock = mockApi(answer([entry]));
+    renderAt("/companies/c1/entries");
+    await screen.findByRole("row", { name: /Venda parcelada/ });
+
+    await userEvent.selectOptions(screen.getByLabelText("Mostrar"), "payable");
+    await userEvent.selectOptions(within(screen.getByRole("search")).getByLabelText("Categoria"), "cat1");
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.map(([url]) => String(url))).toContain(
+        "/api/companies/c1/entries?kind=payable&category=cat1",
+      ),
+    );
+  });
+
+  it("reads the history with names, not ids", async () => {
+    mockApi(
+      answer([entry], (url) =>
+        url.endsWith("/entries/e1/history")
+          ? {
+              status: 200,
+              body: [
+                {
+                  at: Date.UTC(2026, 10, 5, 12),
+                  actor: { kind: "user", id: "u1", name: "Ana" },
+                  action: "created",
+                  changes: [
+                    { field: "category_id", from: null, to: "cat1" },
+                    { field: "installments", from: null, to: "1:2026-12-10:100.5" },
+                  ],
+                },
+              ],
+            }
+          : undefined,
+      ),
+    );
+    renderAt("/companies/c1/entries");
+    await userEvent.click(await screen.findByRole("button", { name: "Histórico de Venda parcelada" }));
+
+    const history = await screen.findByRole("region", { name: "Histórico de Venda parcelada" });
+    await waitFor(() => expect(history).toHaveTextContent("Categoria: Vendas"));
+    expect(history).toHaveTextContent("Parcelas: 10/12/2026 R$ 100,50");
+    expect(history).not.toHaveTextContent("cat1");
+  });
+
+  it("shows the entries link and keeps a role that only reads out of the form", async () => {
+    mockApi(answer([entry]));
+    renderAt("/companies/c1/entries");
+    expect(await screen.findByRole("link", { name: "Lançamentos" })).toHaveAttribute("href", "/companies/c1/entries");
   });
 });
