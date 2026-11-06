@@ -1,17 +1,21 @@
 import { AnimatePresence, motion } from "motion/react";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { BadgeAlertIcon } from "../components/icons/badge-alert";
 import { CheckIcon } from "../components/icons/check";
 import { Sheet } from "../components/Sheet";
 import { EntryCreator } from "./EntryCreator";
+import { PartyCreator } from "./PartyCreator";
 import { ProductCreator } from "./ProductCreator";
 import { TransferCreator } from "./TransferCreator";
 
-export type CreateKind = "entry" | "product" | "transfer";
+export type CreateKind = "entry" | "party" | "product" | "transfer";
 
 /** What a creator tells the host when the record exists: the words for the confirmation, and the new id. */
 export interface Created {
   message: string;
   id: string;
+  /** A warning from what was saved (the registry could not confirm a CNPJ) is not a plain success. */
+  tone?: "success" | "warning";
 }
 
 export interface CreatorProps {
@@ -24,6 +28,7 @@ export interface CreatorProps {
 
 const CREATORS: Record<CreateKind, { title: string; Creator: (props: CreatorProps) => ReactNode }> = {
   entry: { title: "Novo lançamento", Creator: EntryCreator },
+  party: { title: "Novo cliente ou fornecedor", Creator: PartyCreator },
   product: { title: "Novo produto ou serviço", Creator: ProductCreator },
   transfer: { title: "Nova transferência", Creator: TransferCreator },
 };
@@ -46,7 +51,7 @@ const CONFIRMATION_MS = 6000;
 export function CreationProvider({ companyId, children }: { companyId: string | undefined; children: ReactNode }) {
   const [kind, setKind] = useState<CreateKind | null>(null);
   // An object, so the same words twice in a row are a new confirmation with a new timer.
-  const [confirmation, setConfirmation] = useState<{ text: string; id: number } | null>(null);
+  const [confirmation, setConfirmation] = useState<{ text: string; id: number; tone: "success" | "warning" } | null>(null);
   const busy = useRef(false);
   const confirmations = useRef(0);
   const listeners = useRef(new Map<CreateKind, Set<(created: Created) => void>>());
@@ -94,7 +99,7 @@ export function CreationProvider({ companyId, children }: { companyId: string | 
               onCreated={(created) => {
                 busy.current = false;
                 setKind(null);
-                setConfirmation({ text: created.message, id: ++confirmations.current });
+                setConfirmation({ text: created.message, id: ++confirmations.current, tone: created.tone ?? "success" });
                 listeners.current.get(kind)?.forEach((listener) => listener(created));
               }}
             />
@@ -107,12 +112,12 @@ export function CreationProvider({ companyId, children }: { companyId: string | 
           {confirmation !== null && (
             <motion.div
               key={confirmation.id}
-              className="notice notice-success"
+              className={`notice notice-${confirmation.tone}`}
               initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 12 }}
             >
-              <CheckIcon size={18} aria-hidden />
+              {confirmation.tone === "warning" ? <BadgeAlertIcon size={18} aria-hidden /> : <CheckIcon size={18} aria-hidden />}
               <span>{confirmation.text}</span>
             </motion.div>
           )}

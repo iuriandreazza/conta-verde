@@ -125,7 +125,7 @@ describe("page shell", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Novo registro" }));
 
-    expect(screen.getByRole("menuitem", { name: "Novo cliente ou fornecedor" })).toHaveAttribute("href", "/companies/c1/parties");
+    expect(screen.getByRole("menuitem", { name: "Novo cliente ou fornecedor" })).toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: "Novo lançamento" })).not.toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: "Novo produto ou serviço" })).not.toBeInTheDocument();
   });

@@ -34,7 +34,7 @@ function creationItems(
     { key: "transfer", label: "Nova transferência", icon: SendIcon, creates: "transfer", area: "finance" },
     { key: "quote", label: "Novo orçamento", icon: FileTextIcon, to: `${base}/quotes`, area: "sales" },
     { key: "sale", label: "Nova venda", icon: HandCoinsIcon, to: `${base}/sales`, area: "sales" },
-    { key: "party", label: "Novo cliente ou fornecedor", icon: UsersIcon, to: `${base}/parties`, area: "parties" },
+    { key: "party", label: "Novo cliente ou fornecedor", icon: UsersIcon, creates: "party", area: "parties" },
     { key: "product", label: "Novo produto ou serviço", icon: BoxIcon, creates: "product", area: "products" },
   ];
   return items
