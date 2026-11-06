@@ -218,6 +218,10 @@ impl Charge {
         if self.status == ChargeStatus::Paid {
             return Err(DomainError::ChargeIsPaid);
         }
+        // The database says the same: a charge that was paid was paid for something.
+        if receipt.paid_amount.as_decimal().is_zero() {
+            return Err(DomainError::InvalidChargeAmount);
+        }
         receipt.note = optional_text(
             receipt.note.as_deref(),
             MAX_NOTE_CHARS,

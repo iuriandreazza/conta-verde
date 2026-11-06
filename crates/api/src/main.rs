@@ -419,8 +419,18 @@ fn payment_provider_from_env()
         }
         Some("fake") => {
             tracing::warn!("PAYMENT_PROVIDER=fake: charges are made up and cannot be paid");
+            // Its webhooks are signed with a secret of the operator's, or with a random one nobody knows.
+            let secret = std::env::var("FAKE_PAYMENT_WEBHOOK_SECRET")
+                .ok()
+                .filter(|secret| !secret.trim().is_empty())
+                .unwrap_or_else(|| {
+                    tracing::warn!(
+                        "FAKE_PAYMENT_WEBHOOK_SECRET is not set: no webhook can be signed"
+                    );
+                    uuid::Uuid::new_v4().to_string()
+                });
             Ok(ConfiguredPaymentProvider::Fake(
-                FakePaymentProvider::default(),
+                FakePaymentProvider::with_webhook_secret(secret),
             ))
         }
         Some(other) => Err(format!("PAYMENT_PROVIDER={other} is not a known provider").into()),

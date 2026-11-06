@@ -61,9 +61,20 @@ struct FakeState {
     created: Vec<ProviderChargeRequest>,
     cancelled: Vec<String>,
     failure: Option<ProviderError>,
+    /// What webhooks are signed with: the public one unless the operator chose another.
+    secret: Option<String>,
 }
 
 impl FakePaymentProvider {
+    /// A fake whose webhooks must be signed with this secret and not the public one: what a running server
+    /// uses, so that `PAYMENT_PROVIDER=fake` left on by mistake does not let anyone who read the source mark
+    /// charges as paid.
+    pub fn with_webhook_secret(secret: String) -> Self {
+        let fake = Self::default();
+        fake.lock().secret = Some(secret);
+        fake
+    }
+
     /// What it was asked to make, in order.
     pub fn created(&self) -> Vec<ProviderChargeRequest> {
         self.lock().created.clone()
@@ -181,9 +192,14 @@ impl PaymentProvider for FakePaymentProvider {
         headers: &WebhookHeaders,
         body: &[u8],
     ) -> Result<Vec<ProviderEvent>, WebhookError> {
-        let signed = headers.get(FAKE_SIGNATURE_HEADER).is_some_and(|signature| {
-            is_valid_signature(FAKE_WEBHOOK_SECRET.as_bytes(), body, signature)
-        });
+        let secret = self
+            .lock()
+            .secret
+            .clone()
+            .unwrap_or_else(|| FAKE_WEBHOOK_SECRET.to_owned());
+        let signed = headers
+            .get(FAKE_SIGNATURE_HEADER)
+            .is_some_and(|signature| is_valid_signature(secret.as_bytes(), body, signature));
         if !signed {
             return Err(WebhookError::InvalidSignature);
         }
@@ -225,6 +241,19 @@ mod tests {
 
     fn verified(headers: &WebhookHeaders, body: &[u8]) -> Result<Vec<ProviderEvent>, WebhookError> {
         FakePaymentProvider::default().verify_webhook(headers, body)
+    }
+
+    #[test]
+    fn a_fake_with_its_own_secret_refuses_what_the_public_one_signed() {
+        let (headers, body) = FakePaymentProvider::notice("evt_1", "fake_abc", "expired", None);
+        let own = FakePaymentProvider::with_webhook_secret("operator-secret".to_owned());
+        assert_eq!(
+            own.verify_webhook(&headers, &body),
+            Err(WebhookError::InvalidSignature)
+        );
+        let signature = hmac_sha256_hex(b"operator-secret", &body);
+        let signed = WebhookHeaders::new([(FAKE_SIGNATURE_HEADER.to_owned(), signature)]);
+        assert!(own.verify_webhook(&signed, &body).is_ok());
     }
 
     #[test]

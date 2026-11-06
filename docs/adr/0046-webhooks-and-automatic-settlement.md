@@ -30,7 +30,9 @@ The port gains `verify_webhook(headers, body)`: it checks the signature **over t
 anything of it is parsed** (HMAC-SHA256 with the installation's secret, compared in constant time by the `hmac`
 crate; each real adapter says which header and secret) and reads the notices in it: an id of the notice, the
 provider's id of the charge, and `Paid {amount, day, fee}`, `Cancelled` or `Expired`. The fake signs with a
-public secret (`x-fake-signature`), so a test or a demo can play the provider.
+secret (`x-fake-signature`): public in the tests, and in a running server the operator's
+`FAKE_PAYMENT_WEBHOOK_SECRET` (a random one nobody knows when unset), so that `fake` left on by mistake does not
+let anyone who read the source mark a charge as paid. A notice of a payment of nothing is kept and flagged.
 
 ### Notices are kept, once
 

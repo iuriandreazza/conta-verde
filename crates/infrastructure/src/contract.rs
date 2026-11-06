@@ -11669,6 +11669,20 @@ pub async fn settles_charges_from_webhooks<C, Ev, S, E, F, P>(
         (PaymentEventOutcome::Applied, None)
     );
 
+    // A notice of a payment of nothing is kept and flagged, and the charge stays open.
+    let nothing = new_entry("Venda sem valor", &["100"]).await.unwrap();
+    let zero = charge_for(&nothing, 1).await.unwrap();
+    assert_eq!(pay(&zero, "evt_zero", "0", "0").await, Ok(1));
+    assert_eq!(status_of(&zero).await.status(), ChargeStatus::Open);
+    assert!(settlements_of(&nothing).await.unwrap().is_empty());
+    assert_eq!(
+        outcome_of(events, company, &zero, "evt_zero").await,
+        (
+            PaymentEventOutcome::NotApplied,
+            Some("the notice says nothing was paid".to_owned())
+        )
+    );
+
     // A charge settles once, even after its settlement is reversed: the payment is not applied again.
     let to_reverse = settlements_of(&sale)
         .await

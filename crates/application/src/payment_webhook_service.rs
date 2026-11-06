@@ -137,6 +137,13 @@ where
             } => {
                 // A second payment of a charge that was paid is kept and flagged, never settled again:
                 // the money is the provider's to give back. The same notice interrupted is not that.
+                // A notice of a payment of nothing is no payment: it is kept and flagged.
+                if paid_amount.as_decimal().is_zero() {
+                    return Ok((
+                        PaymentEventOutcome::NotApplied,
+                        Some("the notice says nothing was paid".to_owned()),
+                    ));
+                }
                 if charge.status() == ChargeStatus::Paid && !retry {
                     return Ok((
                         PaymentEventOutcome::NotApplied,
