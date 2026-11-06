@@ -13,8 +13,8 @@ import {
 } from "../api";
 import { readUpTo } from "./readUpTo";
 
-/** What a contract points at, read once for a company; the list page and the "new contract" sheet both need it. */
-export function useContractTargets(companyId: string) {
+/** What a contract or a quote points at, read once for a company; the list pages and the "new" sheets need it. */
+export function useSalesTargets(companyId: string) {
   const [parties, setParties] = useState<Party[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [terms, setTerms] = useState<PaymentTerm[]>([]);
