@@ -159,10 +159,12 @@ pub use sale_service::{Conversion, Refund, ReturnRecord, SalePage, SaleService};
 pub use sales_report_service::{SalesReport, SalesReportService};
 pub use secret_service::{SecretError, SecretService};
 pub use statement_line_repository::{MatchedTargets, StatementLineQuery, StatementLineRepository};
-pub use stock_repository::{StockFloor, StockMovementQuery, StockMovementRepository};
+pub use stock_repository::{
+    MovementTotals, StockFloor, StockMovementQuery, StockMovementRepository,
+};
 pub use stock_service::{
-    CountStock, DocumentStock, StockAlert, StockMovementPage, StockPosition, StockPositionPage,
-    StockService,
+    CountStock, DocumentStock, MovementSummary, StockAlert, StockMovementPage, StockPosition,
+    StockPositionPage, StockService, StockValuation, ValuationRow,
 };
 pub use stock_settings_repository::StockSettingsRepository;
 pub use transfer_repository::{

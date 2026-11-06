@@ -39,6 +39,7 @@ mod sales_reports;
 mod session;
 mod statements;
 mod stock;
+mod stock_reports;
 mod transfers;
 
 use std::sync::Arc;
@@ -721,6 +722,14 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         .route(
             "/companies/{company_id}/stock/settings/history",
             get(stock::settings_history::<X>),
+        )
+        .route(
+            "/companies/{company_id}/stock-reports/valuation",
+            get(stock_reports::valuation::<X>),
+        )
+        .route(
+            "/companies/{company_id}/stock-reports/movements",
+            get(stock_reports::movements::<X>),
         )
         .route(
             "/companies/{company_id}/inventory-counts",
@@ -9655,6 +9664,101 @@ mod tests {
             .find(|item| item["product_id"] == targets.other_product)
             .unwrap();
         assert_eq!(bread["quantity"], "-0.5");
+    }
+
+    #[tokio::test]
+    async fn stock_reports_value_the_stock_on_a_day_and_summarize_its_movements() {
+        let app = entry_app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let targets = sales_targets(&app, &cookie, company_id).await;
+        let movements = format!("{}/movements", stock_uri(company_id));
+        for body in [
+            json!({ "product_id": targets.product, "kind": "in", "quantity": "10",
+                    "unit_cost": "5", "occurred_on": "2026-11-01" }),
+            json!({ "product_id": targets.product, "kind": "out", "quantity": "4",
+                    "occurred_on": "2026-11-06" }),
+            json!({ "product_id": targets.other_product, "kind": "in", "quantity": "3",
+                    "value": "9.99", "occurred_on": "2026-11-10" }),
+        ] {
+            let made = send(&app, json_request("POST", &movements, Some(&cookie), body)).await;
+            assert_eq!(made.status, StatusCode::CREATED, "{}", made.body);
+        }
+        let reports = format!("/companies/{company_id}/stock-reports");
+
+        // 10 at 5 less 4 at the average (20): 6 worth 30; the bread joins on the 10th.
+        let on_6th = send(
+            &app,
+            get_request(&format!("{reports}/valuation?on=2026-11-06"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(on_6th.status, StatusCode::OK, "{}", on_6th.body);
+        assert_eq!(on_6th.body["total"], "30");
+        assert_eq!(on_6th.body["rows"].as_array().unwrap().len(), 1);
+        assert_eq!(on_6th.body["rows"][0]["average_cost"], "5");
+        assert_eq!(on_6th.body["rows"][0]["share"], "100");
+        let on_10th = send(
+            &app,
+            get_request(&format!("{reports}/valuation?on=2026-11-10"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(on_10th.body["total"], "39.99");
+        assert_eq!(on_10th.body["rows"][0]["name"], "Café");
+        assert_eq!(on_10th.body["rows"][0]["share"], "75.02");
+        assert_eq!(on_10th.body["rows"][1]["share"], "24.98");
+
+        let summary = send(
+            &app,
+            get_request(
+                &format!("{reports}/movements?from=2026-11-05&to=2026-11-30"),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(summary.status, StatusCode::OK, "{}", summary.body);
+        let coffee = &summary.body["items"][0];
+        assert_eq!(coffee["name"], "Café");
+        assert_eq!(
+            (
+                &coffee["opening_quantity"],
+                &coffee["exited_quantity"],
+                &coffee["exited_value"],
+                &coffee["closing_value"]
+            ),
+            (&json!("10"), &json!("4"), &json!("20"), &json!("30"))
+        );
+        assert_eq!(summary.body["items"][1]["entered_value"], "9.99");
+
+        // The day is required and a span is bounded; both are the client's to say.
+        for (uri, status) in [
+            (format!("{reports}/valuation"), StatusCode::BAD_REQUEST),
+            (
+                format!("{reports}/valuation?on=soon"),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                format!("{reports}/movements?from=2026-11-30&to=2026-11-05"),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                format!("{reports}/movements?from=2024-01-01&to=2026-11-05"),
+                StatusCode::BAD_REQUEST,
+            ),
+        ] {
+            assert_eq!(
+                send(&app, get_request(&uri, Some(&cookie))).await.status,
+                status,
+                "{uri}"
+            );
+        }
+        assert_eq!(
+            send(
+                &app,
+                get_request(&format!("{reports}/valuation?on=2026-11-06"), None)
+            )
+            .await
+            .status,
+            StatusCode::UNAUTHORIZED
+        );
     }
 
     #[tokio::test]

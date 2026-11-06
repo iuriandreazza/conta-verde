@@ -1,8 +1,8 @@
 use std::future::Future;
 
 use conta_verde_domain::{
-    AuditEntry, CalendarDate, CompanyId, ProductId, StockBalance, StockMovement, StockMovementId,
-    StockMovementKind, StockOriginKind,
+    AuditEntry, CalendarDate, CompanyId, Decimal, ProductId, StockBalance, StockMovement,
+    StockMovementId, StockMovementKind, StockOriginKind,
 };
 use uuid::Uuid;
 
@@ -15,6 +15,18 @@ pub enum StockFloor {
     Open,
     /// The balance of every product stays at zero or more, or the write is refused.
     Zero,
+}
+
+/// What moved of a product over a span, by kind: signed like the ledger, so what left is below zero. A movement that
+/// undoes another has the opposite kind and counts under it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MovementTotals {
+    pub entered_quantity: Decimal,
+    pub entered_value: Decimal,
+    pub exited_quantity: Decimal,
+    pub exited_value: Decimal,
+    pub adjusted_quantity: Decimal,
+    pub adjusted_value: Decimal,
 }
 
 /// How the ledger is narrowed, following ADR 0018. It is listed newest day first.
@@ -113,6 +125,15 @@ pub trait StockMovementRepository: Send + Sync {
         products: &[ProductId],
         on: Option<CalendarDate>,
     ) -> impl Future<Output = Result<Vec<(ProductId, StockBalance)>, RepositoryError>> + Send;
+
+    /// What moved of each product from a day through a day, both included, by kind. Only products with a movement in
+    /// the span are listed, in no particular order.
+    fn totals_by_product(
+        &self,
+        company_id: CompanyId,
+        from: CalendarDate,
+        to: CalendarDate,
+    ) -> impl Future<Output = Result<Vec<(ProductId, MovementTotals)>, RepositoryError>> + Send;
 
     /// The movement, only if it belongs to the company.
     fn find(

@@ -2,12 +2,13 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use conta_verde_application::{
-    DateCursor, RepositoryError, StockFloor, StockMovementQuery, StockMovementRepository,
-    StockSettingsRepository, ensure_audit_describes,
+    DateCursor, MovementTotals, RepositoryError, StockFloor, StockMovementQuery,
+    StockMovementRepository, StockSettingsRepository, ensure_audit_describes,
 };
 use conta_verde_domain::{
     AuditEntity, AuditEntry, AuditRecord, CalendarDate, CompanyId, Decimal, ProductId,
-    StockBalance, StockMovement, StockMovementId, StockOriginKind, StockSettings,
+    StockBalance, StockMovement, StockMovementId, StockMovementKind, StockOriginKind,
+    StockSettings,
 };
 use uuid::Uuid;
 
@@ -130,6 +131,33 @@ impl StockMovementRepository for InMemoryStockMovementRepository {
             .iter()
             .map(|product| (*product, state.balance_of(company_id, *product, on)))
             .collect())
+    }
+
+    async fn totals_by_product(
+        &self,
+        company_id: CompanyId,
+        from: CalendarDate,
+        to: CalendarDate,
+    ) -> Result<Vec<(ProductId, MovementTotals)>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        let mut totals: HashMap<ProductId, MovementTotals> = HashMap::new();
+        for movement in state.movements.iter().filter(|stored| {
+            stored.company_id() == company_id
+                && stored.occurred_on() >= from
+                && stored.occurred_on() <= to
+        }) {
+            let sums = totals.entry(movement.product_id()).or_default();
+            let (quantity, value) = match movement.kind() {
+                StockMovementKind::In => (&mut sums.entered_quantity, &mut sums.entered_value),
+                StockMovementKind::Out => (&mut sums.exited_quantity, &mut sums.exited_value),
+                StockMovementKind::Adjustment => {
+                    (&mut sums.adjusted_quantity, &mut sums.adjusted_value)
+                }
+            };
+            *quantity += movement.quantity();
+            *value += movement.value();
+        }
+        Ok(totals.into_iter().collect())
     }
 
     async fn find(
@@ -364,6 +392,30 @@ mod tests {
             company,
             other_company,
             &entry_seed,
+            &seed,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn reports_the_stock_valuation_and_its_movements() {
+        let registers = Registers::new();
+        let (products, terms) = (
+            InMemoryProductRepository::default(),
+            InMemoryPaymentTermRepository::default(),
+        );
+        let (company, other_company) = (CompanyId::generate(), CompanyId::generate());
+        let seed =
+            contract::seed_sales_records(&registers.parties, &products, &terms, company).await;
+        let stock = StockService::new(
+            InMemoryStockMovementRepository::default(),
+            products,
+            InMemoryStockSettingsRepository::default(),
+        );
+        contract::reports_the_stock_valuation_and_its_movements(
+            &stock,
+            company,
+            other_company,
             &seed,
         )
         .await;

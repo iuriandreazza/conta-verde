@@ -101,10 +101,14 @@ payment link (`sends_reminders_on_schedule`).
 - [x] Stock movements: in, out, adjustment; balances and average cost per product ([ADR 0054](adr/0054-stock-movements.md)) — a ledger never edited (reversed instead), the weighted average cost with one rounding rule held in the domain, receipts, completed sales, returns and cancellations move it; one stock, so no transfer ([ADR 0052](adr/0052-purchases-and-inventory-plan.md))
 - [x] Minimum stock alerts; block sale without balance (configurable) ([ADR 0055](adr/0055-minimum-stock-and-the-sale-block.md)) — `GET /stock/alerts` lists the active products below their minimum; `PUT /stock/settings` turns on the per-company block, which refuses completing a sale the stock cannot cover with a `409` naming the product
 - [x] Inventory count and adjustment ([ADR 0056](adr/0056-inventory-count.md)) — an open count holds what was found and shows the difference to the stock now; applying writes the adjustments once, valued at the average, on the day of the count
-- [ ] Reports: stock position, movements, valuation
+- [x] Reports: stock position, movements, valuation ([ADR 0058](adr/0058-stock-reports.md)) — `GET /stock-reports/valuation?on=` (by product and in total, with shares) and `GET /stock-reports/movements?from=&to=` (opening, in, out, adjusted, closing per product, up to 366 days), with the Relatórios de estoque page
 
 Exit criteria: a purchase XML creates payables and stock; a sale reduces stock and the
-average cost is right against a worked example in the tests.
+average cost is right against a worked example in the tests. Both hold in the tests: an NF-e entered through the API
+makes the payable on the invoice's installments and the stock at what each item costs, and a sale then takes the stock at
+the average cost (`a_purchase_xml_creates_payables_and_stock_and_a_sale_takes_it_at_the_average_cost`; on both adapters
+`enters_a_supplier_invoice_once` and `stock_follows_purchases_and_sales`, the worked example of ADR 0054: 10 at 5 and
+10 at 7 are 20 worth 120, a sale of 5 takes 30).
 
 ## Phase 6 — Accountant and reporting (v0.7)
 
