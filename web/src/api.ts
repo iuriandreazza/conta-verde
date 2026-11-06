@@ -1205,6 +1205,49 @@ export interface StockSettings {
   block_sale_without_balance: boolean;
 }
 
+export type InventoryCountStatus = "open" | "applied" | "cancelled";
+
+export interface InventoryCountLine {
+  product_id: string;
+  /** What was found: a decimal string. */
+  counted: string;
+  /** What the stock held (now while open, at the application once applied); `null` in a list and when cancelled. */
+  expected: string | null;
+  /** Counted less expected, signed; `null` where `expected` is. */
+  difference: string | null;
+}
+
+/** A count of what is on the shelf, which an application turns into stock adjustments (ADR 0056). */
+export interface InventoryCount {
+  id: string;
+  company_id: string;
+  number: number;
+  counted_on: string;
+  notes: string | null;
+  status: InventoryCountStatus;
+  lines: InventoryCountLine[];
+}
+
+export interface InventoryCountPage {
+  items: InventoryCount[];
+  next_cursor: string | null;
+}
+
+/** Replaces the whole count while it is open. */
+export interface InventoryCountInput {
+  counted_on: string;
+  notes?: string;
+  lines: { product_id: string; counted: string }[];
+}
+
+export interface InventoryCountFilters {
+  q: string;
+  status: "" | InventoryCountStatus;
+  sort: "-number" | "number";
+}
+
+export const NO_COUNT_FILTERS: InventoryCountFilters = { q: "", status: "", sort: "-number" };
+
 export type BillingCycle = "monthly" | "bimonthly" | "quarterly" | "semiannual" | "yearly";
 export type ContractStatus = "active" | "paused" | "terminated";
 
@@ -1919,6 +1962,30 @@ export const api = {
     }),
   stockSettingsHistory: (companyId: string) =>
     request<HistoryEntry[]>(`/companies/${companyId}/stock/settings/history`),
+  listInventoryCounts: (companyId: string, filters: InventoryCountFilters = NO_COUNT_FILTERS, after?: string) => {
+    const params = new URLSearchParams();
+    if (filters.q) params.set("q", filters.q);
+    if (filters.status) params.set("status", filters.status);
+    if (filters.sort !== NO_COUNT_FILTERS.sort) params.set("sort", filters.sort);
+    if (after) params.set("after", after);
+    const query = params.size > 0 ? `?${params}` : "";
+    return request<InventoryCountPage>(`/companies/${companyId}/inventory-counts${query}`);
+  },
+  getInventoryCount: (companyId: string, id: string) =>
+    request<InventoryCount>(`/companies/${companyId}/inventory-counts/${id}`),
+  createInventoryCount: (companyId: string, input: InventoryCountInput) =>
+    post<InventoryCount>(`/companies/${companyId}/inventory-counts`, input),
+  updateInventoryCount: (companyId: string, id: string, input: InventoryCountInput) =>
+    request<InventoryCount>(`/companies/${companyId}/inventory-counts/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  applyInventoryCount: (companyId: string, id: string) =>
+    post<InventoryCount>(`/companies/${companyId}/inventory-counts/${id}/apply`),
+  cancelInventoryCount: (companyId: string, id: string) =>
+    post<InventoryCount>(`/companies/${companyId}/inventory-counts/${id}/cancel`),
+  inventoryCountHistory: (companyId: string, id: string) =>
+    request<HistoryEntry[]>(`/companies/${companyId}/inventory-counts/${id}/history`),
   /** The OFX file goes as it is, bytes and all: the API reads the charset. */
   importStatement: (companyId: string, accountId: string, file: File, dryRun: boolean) =>
     request<ImportResult>(

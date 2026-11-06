@@ -15,6 +15,7 @@ import { CostCentersPage } from "./pages/CostCentersPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { DelinquencyPage } from "./pages/DelinquencyPage";
 import { EntriesPage } from "./pages/EntriesPage";
+import { InventoryCountsPage } from "./pages/InventoryCountsPage";
 import { MembersPage } from "./pages/MembersPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { PartiesPage } from "./pages/PartiesPage";
@@ -50,6 +51,7 @@ export function App() {
           <Route path="/companies/:companyId/sales" element={<SalesPage />} />
           <Route path="/companies/:companyId/purchases" element={<PurchasesPage />} />
           <Route path="/companies/:companyId/stock" element={<StockPage />} />
+          <Route path="/companies/:companyId/inventory-counts" element={<InventoryCountsPage />} />
           <Route path="/companies/:companyId/contracts" element={<ContractsPage />} />
           <Route path="/companies/:companyId/commissions" element={<CommissionsPage />} />
           <Route path="/companies/:companyId/price-lists" element={<PriceListsPage />} />
