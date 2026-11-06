@@ -61,7 +61,12 @@ export function SettlementPanel({
   const [saved, setSaved] = useState<string | null>(null);
   const today = todayIso();
   const open = entry.installments.filter((installment) => balanceCents(installment) > 0n);
-  const [installment, setInstallment] = useState<number>(open[0]?.number ?? 1);
+  const [chosenNumber, setChosenNumber] = useState<number | null>(null);
+  // What was chosen counts only while it still has something left: after it is settled, or another is
+  // reopened by a reversal, the select shows the first that has, and that is what is sent.
+  const installment = open.some((item) => item.number === chosenNumber)
+    ? (chosenNumber as number)
+    : (open[0]?.number ?? 1);
   // Bumped after a settlement so the form starts over.
   const [formVersion, setFormVersion] = useState(0);
 
@@ -153,9 +158,10 @@ export function SettlementPanel({
       await load();
       onChanged();
     } catch (failure) {
-      setError(errorMessage(failure));
-      // Another tab may have reversed it already: read what is true now.
+      // Another tab may have reversed it already: read what is true now, then say what happened
+      // (the read clears the message).
       await load();
+      setError(errorMessage(failure));
     } finally {
       setReversingId(null);
     }
@@ -245,7 +251,7 @@ export function SettlementPanel({
               <select
                 name="installment"
                 value={installment}
-                onChange={(event) => setInstallment(Number(event.target.value))}
+                onChange={(event) => setChosenNumber(Number(event.target.value))}
               >
                 {open.map((item) => (
                   <option key={item.number} value={item.number}>

@@ -275,15 +275,15 @@ export function EntriesPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {entries.map((entry, index) => (
+                  {entries.map((entry, index) => {
+                    const status = entryStatus(entry, today);
+                    return (
                     <Fragment key={entry.id}>
                       <ListRow index={index} highlighted={entry.id === highlightedId}>
                         <td>
                           <div className="cell-title">{entry.description}</div>
                           <div className="muted">
-                            <span className={STATUS_BADGES[entryStatus(entry, today)]}>
-                              {STATUS_LABELS[entryStatus(entry, today)]}
-                            </span>{" "}
+                            <span className={STATUS_BADGES[status]}>{STATUS_LABELS[status]}</span>{" "}
                             {entry.kind === "receivable" ? "A receber" : "A pagar"} ·{" "}
                             {names.get(entry.category_id) ?? ""}
                           </div>
@@ -367,7 +367,8 @@ export function EntriesPage() {
                         </tr>
                       )}
                     </Fragment>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

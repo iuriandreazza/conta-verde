@@ -3259,6 +3259,64 @@ describe("financial entries", () => {
       expect(await panel.findByText("Baixa de R$ 62,00 registrada.")).toBeInTheDocument();
     });
 
+    it("sends the installment the select shows after the one that was chosen is settled in full", async () => {
+      const twoOpen: Entry = {
+        ...entry,
+        installments: [
+          { number: 1, due_date: "2099-01-10", amount: "100", settled: "0" },
+          { number: 2, due_date: "2099-02-10", amount: "100", settled: "0" },
+        ],
+        total: "200",
+      };
+      const afterwards: Entry = {
+        ...twoOpen,
+        installments: [twoOpen.installments[0], { ...twoOpen.installments[1], settled: "100" }],
+      };
+      let made = false;
+      const fetchMock = mockApi(
+        answer(
+          [],
+          (url, init) => {
+            if (url.endsWith("/settlements") && init?.method === "POST") {
+              made = true;
+              return { status: 201, body: { ...settlement, installment: 2, applied: "100", cash: "100" } };
+            }
+            if (url.endsWith("/settlements")) return { status: 200, body: [] };
+            if (url.includes("/entries")) return { status: 200, body: { items: [made ? afterwards : twoOpen], next_cursor: null } };
+            return undefined;
+          },
+        ),
+      );
+      renderAt("/companies/c1/entries");
+      await userEvent.click(await screen.findByRole("button", { name: "Baixas de Venda parcelada" }));
+      const panel = within(await screen.findByRole("region", { name: "Baixas de Venda parcelada" }));
+      await userEvent.selectOptions(await panel.findByLabelText("Parcela"), "2");
+      await userEvent.selectOptions(panel.getByLabelText("Conta"), "b1");
+      await userEvent.click(panel.getByRole("button", { name: "Baixar" }));
+      await waitFor(() => expect(sent(fetchMock, "POST")).toHaveLength(1));
+      await waitFor(() => expect(within(panel.getByLabelText("Parcela")).getAllByRole("option")).toHaveLength(1));
+
+      await userEvent.selectOptions(panel.getByLabelText("Conta"), "b1");
+      await userEvent.click(panel.getByRole("button", { name: "Baixar" }));
+      await waitFor(() => expect(sent(fetchMock, "POST")).toHaveLength(2));
+      expect(JSON.parse(String(sent(fetchMock, "POST")[1][1]?.body)).installment).toBe(1);
+    });
+
+    it("says why a reversal failed even though the list is read again", async () => {
+      mockApi(
+        answer([sale], (url, init) => {
+          if (url.endsWith("/settlements/s1") && init?.method === "DELETE") return { status: 404, body: { error: "settlement not found" } };
+          return url.endsWith("/settlements") ? { status: 200, body: [settlement] } : undefined;
+        }),
+      );
+      renderAt("/companies/c1/entries");
+      await userEvent.click(await screen.findByRole("button", { name: "Baixas de Venda parcelada" }));
+      const panel = within(await screen.findByRole("region", { name: "Baixas de Venda parcelada" }));
+      await userEvent.click(await panel.findByRole("button", { name: /Estornar/ }));
+
+      expect(await panel.findByRole("alert")).toHaveTextContent("settlement not found");
+    });
+
     it("will not send a settlement without an amount in cents, and says which", async () => {
       const fetchMock = mockApi(answer([sale], (url) => (url.endsWith("/settlements") ? { status: 200, body: [] } : undefined)));
       renderAt("/companies/c1/entries");
