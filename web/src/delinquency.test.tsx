@@ -66,3 +66,17 @@ it("asks again for the day that is chosen, and says when nothing is late", async
     fetchMock.mock.calls.some(([url]) => String(url).endsWith("/delinquency?on=2027-01-31")),
   ).toBe(true);
 });
+
+it("calls a customer that is not among the names read by its id, and drops the report when the day is cleared", async () => {
+  mockApi((url) => {
+    if (url === "/api/auth/me") return { status: 200, body: profile };
+    if (url.includes("/delinquency?on=")) return { status: 200, body: report };
+    if (url.endsWith("/categories")) return { status: 200, body: { items: [] } };
+    return { status: 200, body: { items: [], next_cursor: null } };
+  });
+  renderAt("/companies/c1/delinquency");
+
+  expect(await screen.findByText("Cliente p1")).toBeInTheDocument();
+  await userEvent.clear(screen.getByLabelText("Posição em"));
+  expect(screen.queryByText("Cliente p1")).not.toBeInTheDocument();
+});
