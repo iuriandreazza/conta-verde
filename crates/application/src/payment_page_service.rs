@@ -10,7 +10,7 @@ use crate::{
 /// Whether the customer can still pay what the page shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PageState {
-    /// The charge is open and its installment still has something to pay.
+    /// The charge is open and its installment still owes what the charge asks.
     Payable,
     /// The charge was paid.
     Paid,
@@ -104,16 +104,27 @@ where
                     .entries
                     .settlements_of(target.company_id, &[entry.id()])
                     .await?;
-                let left = entry
-                    .installment(charge.installment())
-                    .map(|item| {
-                        item.amount().as_decimal() - settled_of(&settlements, charge.installment())
-                    })
-                    .is_some_and(|left| left.is_sign_positive() && !left.is_zero());
-                if entry.is_voided() || !left {
-                    PageState::Unavailable
+                // The webhook settles the installment before it marks the charge paid: in between, the
+                // customer who just paid is told so and not that there is nothing to pay.
+                if settlements
+                    .iter()
+                    .any(|settlement| settlement.charge_id() == Some(charge.id()))
+                {
+                    PageState::Paid
                 } else {
-                    PageState::Payable
+                    // Payable only while the installment still owes exactly what the charge asks: after
+                    // a part was settled another way, paying the old amount would overpay.
+                    let owes_the_charge =
+                        entry.installment(charge.installment()).is_some_and(|item| {
+                            item.amount().as_decimal()
+                                - settled_of(&settlements, charge.installment())
+                                == charge.amount().as_decimal()
+                        });
+                    if entry.is_voided() || !owes_the_charge {
+                        PageState::Unavailable
+                    } else {
+                        PageState::Payable
+                    }
                 }
             }
             ChargeStatus::Cancelled | ChargeStatus::Expired => PageState::Unavailable,

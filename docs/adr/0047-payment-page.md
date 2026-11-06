@@ -38,10 +38,12 @@ is `404`. It shows **no id of the company's books**: the company's name, the des
 company typed it, the number of the installment and how many there are, the method, the amount, the due day,
 and a **state**:
 
-- `payable`: the charge is open, the entry is not cancelled and the installment still has something to pay. Only
+- `payable`: the charge is open, the entry is not cancelled and the installment **still owes exactly what the
+  charge asks** (after a part was settled another way, paying the old amount would overpay). Only
   here does the page carry what to pay with (the boleto's digitable line, the Pix copy-and-paste text, the
   provider's address for the boleto's paper or the card checkout).
-- `paid`: the charge was paid; the page says so with the day.
+- `paid`: the charge was paid; the page says so with the day. A charge whose own payment already settled the
+  installment but is not marked yet (the webhook does it in steps) is `paid` too.
 - `unavailable`: called off, expired, or the installment was settled or cancelled another way. The page says
   there is nothing to pay and to talk to the company. It never shows what to pay with.
 
@@ -65,5 +67,5 @@ with the company, the description and the installment, the amount and due day, a
 
 ## Revisit when
 
-Links must expire or be revoked one by one, the page needs the company's logo or the payer's name, or a
+Links must expire or be revoked one by one (today a leaked link is closed only by cancelling the charge), the page needs the company's logo or the payer's name, or a
 provider offers no hosted page for the boleto and the product has to draw it.

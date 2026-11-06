@@ -11837,6 +11837,52 @@ pub async fn serves_payment_pages<L, C, E, F, P, S, Sec>(
         PageState::Unavailable
     );
 
+    // A part settled another way: the old amount would overpay, so the page offers nothing; reversing the part
+    // makes it payable again.
+    let partly = new_entry("Venda parcial").await.unwrap();
+    let partial = charges
+        .issue(company, &ana, partly.id(), 1, ChargeMethod::Pix, None)
+        .await
+        .unwrap();
+    let partial_link = pages
+        .new_link(company, partly.id(), partial.id())
+        .await
+        .unwrap();
+    let partial_token = partial_link
+        .strip_prefix("https://app.example/pay/")
+        .unwrap();
+    let part = entries
+        .settle(company, &ana, partly.id(), settlement_draft(seed, 1, "30"))
+        .await
+        .unwrap();
+    assert_eq!(
+        pages.page(partial_token).await.unwrap().state,
+        PageState::Unavailable
+    );
+    entries
+        .reverse(company, &ana, partly.id(), part.id())
+        .await
+        .unwrap();
+    assert_eq!(
+        pages.page(partial_token).await.unwrap().state,
+        PageState::Payable
+    );
+    // Settled by the charge's own payment, before the webhook marked it paid: the customer is told it was paid.
+    entries
+        .settle_charge(
+            company,
+            &ana,
+            partly.id(),
+            settlement_draft(seed, 1, "100"),
+            partial.id(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        pages.page(partial_token).await.unwrap().state,
+        PageState::Paid
+    );
+
     // A charge that is called off has nothing to pay, and no new link.
     let other = charges
         .issue(company, &ana, sale.id(), 2, ChargeMethod::Boleto, None)

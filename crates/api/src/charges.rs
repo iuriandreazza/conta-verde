@@ -345,7 +345,7 @@ pub(crate) async fn public_charge<X: Ports>(
     let company_name = state.auth.company_name(page.charge.company_id()).await?;
     let payment = page.charge.payment();
     Ok(Json(PublicChargeResponse {
-        company_name: company_name.chars().take(70).collect(),
+        company_name: crate::quotes::clipped(&company_name),
         description: page.description,
         installment: page.charge.installment(),
         installments: page.installments,
