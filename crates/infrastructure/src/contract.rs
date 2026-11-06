@@ -20,6 +20,7 @@ use conta_verde_application::{
     ImportRow, InvitationRepository, InvitationState, Invited, MemberService, NewAccount,
     NewInvitation, NewUser, PaymentTermQuery, PaymentTermRepository, PaymentTermService,
 };
+use conta_verde_application::{PriceListQuery, PriceListRepository, PriceListService};
 use conta_verde_domain::{
     Account, AccountDraft, Actor, AddressDraft, AuditAction, AuditEntity, AuditEntry, BankAccount,
     BankAccountDraft, BankAccountId, BankAccountKind, CashFlowGroup, Category, CategoryId,
@@ -39,6 +40,7 @@ use conta_verde_domain::{
 };
 use conta_verde_domain::{InstallmentDraft, payment_term_changes, payment_term_creation_changes};
 use conta_verde_domain::{LineDraft, QuoteDraft, QuoteStatus};
+use conta_verde_domain::{PriceListDraft, PriceListItemDraft};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -10772,5 +10774,211 @@ pub async fn computes_commission_statements<CR, S2, R2, S, Q, E, F, R>(
             (a.number(), "1.85".to_owned()),
             (b.number(), "2.4".to_owned())
         ]
+    );
+}
+
+// ---- price lists
+
+fn price_list_draft(name: &str, prices: &[(ProductId, &str)], active: bool) -> PriceListDraft {
+    PriceListDraft {
+        name: name.into(),
+        items: prices
+            .iter()
+            .map(|(product_id, price)| PriceListItemDraft {
+                product_id: *product_id,
+                price: (*price).into(),
+            })
+            .collect(),
+        active,
+    }
+}
+
+async fn listed_price_list_names<R: PriceListRepository, F: SalesReferences>(
+    service: &PriceListService<R, F>,
+    company: CompanyId,
+    query: &PriceListQuery,
+    page_size: usize,
+) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = service
+            .list(company, query, cursor.as_ref(), Some(page_size))
+            .await
+            .unwrap();
+        names.extend(page.items.iter().map(|item| item.name().to_owned()));
+        match page.next {
+            Some(next) => cursor = Some(next),
+            None => return names,
+        }
+    }
+}
+
+/// A list is stored with its prices in the order they were written and its trail, scoped by company; an edit
+/// replaces the prices as a whole and records only what changed; a refused write leaves the list, its prices and
+/// its trail as they were.
+pub async fn runs_the_price_list_lifecycle<R: PriceListRepository, F: SalesReferences>(
+    service: &PriceListService<R, F>,
+    company: CompanyId,
+    other_company: CompanyId,
+    seed: &SalesSeed,
+) {
+    let who = actor();
+    let (coffee, bread) = (seed.product, seed.other_product);
+    let created = service
+        .register(
+            company,
+            &who,
+            price_list_draft("  Atacado ", &[(coffee, "10.50"), (bread, " 3 ")], true),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.name(), "Atacado");
+    // What comes back is what went in: the prices, in order, as the same numbers whichever adapter keeps them.
+    assert_eq!(service.get(company, created.id()).await.unwrap(), created);
+    assert_eq!(
+        created.items_text(),
+        format!("{}:10.5\n{}:3", coffee.as_uuid(), bread.as_uuid())
+    );
+    assert_eq!(
+        service.get(other_company, created.id()).await,
+        Err(ApplicationError::PriceListNotFound)
+    );
+    assert_eq!(
+        service.history(other_company, created.id()).await,
+        Err(ApplicationError::PriceListNotFound)
+    );
+    let trail = |id| async move { service.history(company, id).await.unwrap().len() };
+    assert_eq!(trail(created.id()).await, 1);
+
+    // The same name, whatever its case, is refused: no list, no prices, no entry.
+    assert_eq!(
+        service
+            .register(
+                company,
+                &who,
+                price_list_draft("ATACADO", &[(coffee, "1")], true)
+            )
+            .await,
+        Err(ApplicationError::Repository(RepositoryError::DuplicateName))
+    );
+    // A product that cannot be used, or that is not the company's, is refused.
+    for unusable in [seed.inactive_product, ProductId::generate()] {
+        assert_eq!(
+            service
+                .register(
+                    company,
+                    &who,
+                    price_list_draft("Outra", &[(unusable, "1")], true)
+                )
+                .await,
+            Err(ApplicationError::UnusableReference("product"))
+        );
+    }
+
+    // The same prices written differently are no change and write nothing.
+    service
+        .update(
+            company,
+            &who,
+            created.id(),
+            price_list_draft("Atacado", &[(coffee, "10.500"), (bread, "3.0")], true),
+        )
+        .await
+        .unwrap();
+    assert_eq!(trail(created.id()).await, 1);
+
+    // An edit replaces the prices as a whole, and the trail shows what changed.
+    let updated = service
+        .update(
+            company,
+            &who,
+            created.id(),
+            price_list_draft("Atacado", &[(bread, "2.75")], false),
+        )
+        .await
+        .unwrap();
+    assert_eq!(service.get(company, created.id()).await.unwrap(), updated);
+    assert_eq!(updated.items().len(), 1);
+    let history = service.history(company, created.id()).await.unwrap();
+    assert_eq!(history.len(), 2);
+    let changed: Vec<&str> = history[1]
+        .entry
+        .changes
+        .iter()
+        .map(|change| change.field.as_str())
+        .collect();
+    assert_eq!(changed, ["items", "active"]);
+
+    // A refused edit (a product twice, a clashing name, an unusable product) changes nothing and records nothing.
+    let other = service
+        .register(
+            company,
+            &who,
+            price_list_draft("Varejo", &[(coffee, "12")], true),
+        )
+        .await
+        .unwrap();
+    for (draft, expected) in [
+        (
+            price_list_draft("Varejo", &[(coffee, "1"), (coffee, "2")], true),
+            ApplicationError::Domain(DomainError::DuplicatePriceListProduct),
+        ),
+        (
+            price_list_draft("atacado", &[(coffee, "12")], true),
+            ApplicationError::Repository(RepositoryError::DuplicateName),
+        ),
+        (
+            price_list_draft(
+                "Varejo",
+                &[(coffee, "12"), (seed.inactive_product, "1")],
+                true,
+            ),
+            ApplicationError::UnusableReference("product"),
+        ),
+    ] {
+        assert_eq!(
+            service.update(company, &who, other.id(), draft).await,
+            Err(expected)
+        );
+    }
+    assert_eq!(service.get(company, other.id()).await.unwrap(), other);
+    assert_eq!(trail(other.id()).await, 1);
+    assert_eq!(
+        service
+            .update(
+                other_company,
+                &who,
+                other.id(),
+                price_list_draft("Varejo", &[(coffee, "12")], true)
+            )
+            .await,
+        Err(ApplicationError::PriceListNotFound)
+    );
+
+    // Filters, search and order follow ADR 0018, and a page holds each list's own prices.
+    let all = PriceListQuery::default();
+    let names = |query: PriceListQuery| async move {
+        listed_price_list_names(service, company, &query, 1).await
+    };
+    assert_eq!(names(all.clone()).await, ["Atacado", "Varejo"]);
+    assert_eq!(
+        names(all.clone().sorted(NameSort::NameDesc)).await,
+        ["Varejo", "Atacado"]
+    );
+    assert_eq!(names(all.clone().with_active(true)).await, ["Varejo"]);
+    assert_eq!(names(all.clone().with_active(false)).await, ["Atacado"]);
+    assert_eq!(names(all.clone().searching("VAR")).await, ["Varejo"]);
+    assert!(names(all.clone().searching("%")).await.is_empty());
+    let page = service.list(company, &all, None, None).await.unwrap();
+    let texts: Vec<usize> = page.items.iter().map(|list| list.items().len()).collect();
+    assert_eq!(texts, [1, 1]);
+    assert!(
+        service
+            .list(other_company, &all, None, None)
+            .await
+            .unwrap()
+            .items
+            .is_empty()
     );
 }

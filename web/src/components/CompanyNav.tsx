@@ -88,6 +88,7 @@ const SECTIONS: NavSection[] = [
       { path: "/sales", label: "Vendas", icon: HandCoinsIcon },
       { path: "/contracts", label: "Contratos", icon: RotateCCWIcon },
       { path: "/commissions", label: "Comissões", icon: CircleDollarSignIcon },
+      { path: "/price-lists", label: "Tabelas de preço", icon: LayersIcon },
     ],
   },
   {

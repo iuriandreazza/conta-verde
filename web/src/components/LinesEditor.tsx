@@ -1,6 +1,8 @@
-import type { DocumentLine, LineInput, Product } from "../api";
+import { useEffect, useState } from "react";
+import { api, type DocumentLine, type LineInput, type PriceList, type Product } from "../api";
 import { formatMoney, toApiDecimal, toInputDecimal } from "../lib/decimal";
 import { centsToApi } from "../lib/entryInstallments";
+import { readUpTo } from "../lib/readUpTo";
 import { linesTotalCents, lineTotalCents } from "../lib/saleLines";
 import { Button } from "./Button";
 import { PlusIcon } from "./icons/plus";
@@ -64,6 +66,7 @@ export function linesToInput(rows: LineRow[]): LineInput[] {
 }
 
 interface LinesEditorProps {
+  companyId: string;
   rows: LineRow[];
   onChange: (rows: LineRow[]) => void;
   /** What can be chosen: the active products and services, plus whatever the lines already hold. */
@@ -75,7 +78,40 @@ interface LinesEditorProps {
  * the unit price and a discount in reais. Each line and the total are worked out as the API will, so
  * what is shown is what is stored (ADR 0037).
  */
-export function LinesEditor({ rows, onChange, products }: LinesEditorProps) {
+export function LinesEditor({ companyId, rows, onChange, products }: LinesEditorProps) {
+  const [priceLists, setPriceLists] = useState<PriceList[]>([]);
+  // Kept here and never sent: a document keeps the prices its lines were filled with (ADR 0042).
+  const [priceListId, setPriceListId] = useState("");
+  useEffect(() => {
+    let current = true;
+    readUpTo((after) => api.listPriceLists(companyId, { q: "", active: "true", sort: "name" }, after))
+      .then((loaded) => current && setPriceLists(loaded))
+      // Without the lists the lines are priced by the products, as before.
+      .catch(() => undefined);
+    return () => {
+      current = false;
+    };
+  }, [companyId]);
+  const priceList = priceLists.find((list) => list.id === priceListId);
+  const priceOf = (product: Product | undefined, list: PriceList | undefined): string => {
+    const listed = list?.items.find((item) => item.product_id === product?.id);
+    const price = listed?.price ?? product?.sale_price ?? null;
+    return price === null ? "" : toInputDecimal(price);
+  };
+
+  function choosePriceList(id: string) {
+    setPriceListId(id);
+    const list = priceLists.find((candidate) => candidate.id === id);
+    // Every line that has a product is priced again: by the list when it names the product, else by the product.
+    onChange(
+      rows.map((row) =>
+        row.product_id === ""
+          ? row
+          : { ...row, unit_price: priceOf(products.find((item) => item.id === row.product_id), list) },
+      ),
+    );
+  }
+
   // A line nobody has started on yet is not a mistake: the sum waits for the ones that were chosen.
   const total = linesTotalCents(rows.filter((row) => row.product_id !== "").map(typed));
   const change = (key: number, patch: Partial<LineRow>) =>
@@ -87,13 +123,29 @@ export function LinesEditor({ rows, onChange, products }: LinesEditorProps) {
     change(key, {
       product_id: productId,
       description: product?.name ?? "",
-      unit_price: product?.sale_price ? toInputDecimal(product.sale_price) : "",
+      unit_price: priceOf(product, priceList),
     });
   }
 
   return (
     <fieldset className="lines">
       <legend>Itens</legend>
+      {priceLists.length > 0 && (
+        <>
+          <label className="span-all">
+            Tabela de preços
+            <select value={priceListId} onChange={(event) => choosePriceList(event.target.value)}>
+              <option value="">Preço de venda de cada produto</option>
+              {priceLists.map((list) => (
+                <option key={list.id} value={list.id}>
+                  {list.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="muted">Trocar a tabela refaz o preço dos itens que já têm produto.</p>
+        </>
+      )}
       {rows.map((row, index) => {
         const cents = lineTotalCents(typed(row));
         return (

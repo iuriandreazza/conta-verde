@@ -33,6 +33,7 @@ uuid_id!(InvitationId);
 uuid_id!(PartyId);
 uuid_id!(PaymentMethodId);
 uuid_id!(PaymentTermId);
+uuid_id!(PriceListId);
 uuid_id!(ProductId);
 uuid_id!(QuoteId);
 uuid_id!(RecurrenceId);

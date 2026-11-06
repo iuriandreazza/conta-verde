@@ -87,6 +87,8 @@ pub enum ApplicationError {
     BankAccountNotFound,
     /// No payment term with this id in the company (another company's looks the same).
     PaymentTermNotFound,
+    /// No price list with this id in the company (another company's looks the same).
+    PriceListNotFound,
     /// No financial entry with this id in the company (another company's looks the same).
     EntryNotFound,
     /// No attachment with this id in the entry (another company's looks the same), or it was removed
@@ -262,6 +264,7 @@ impl fmt::Display for ApplicationError {
             Self::BankAccountNotFound => f.write_str("bank account not found"),
             Self::PaymentMethodNotFound => f.write_str("payment method not found"),
             Self::PaymentTermNotFound => f.write_str("payment term not found"),
+            Self::PriceListNotFound => f.write_str("price list not found"),
             Self::EntryNotFound => f.write_str("entry not found"),
             Self::AttachmentNotFound => f.write_str("attachment not found"),
             Self::TooManyAttachments => {
