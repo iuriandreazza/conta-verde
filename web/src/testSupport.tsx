@@ -18,14 +18,14 @@ export const profile: Profile = {
   companies: [{ id: "c1", name: "Padaria", role: "owner", permissions: OWNER_PERMISSIONS }],
 };
 
-export type Reply = { status: number; body?: unknown };
+export type Reply = { status: number; body?: unknown; text?: string };
 export type Handler = (url: string, init?: RequestInit) => Reply;
 
 /** Stubs `fetch` with the API's answers, and keeps the calls so a test can read what was sent. */
 export function mockApi(handler: Handler) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const { status, body } = handler(String(input), init);
-    return new Response(body === undefined ? null : JSON.stringify(body), { status });
+    const { status, body, text } = handler(String(input), init);
+    return new Response(text ?? (body === undefined ? null : JSON.stringify(body)), { status });
   });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;

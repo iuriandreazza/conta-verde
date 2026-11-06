@@ -4,12 +4,15 @@ import { execFileSync, spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import net from "node:net";
 
-const isFree = (port) =>
+// Vite listens on `localhost`, which may be IPv6 only, so a port is free only if both loopbacks are.
+const isFreeOn = (port, host) =>
   new Promise((resolve) => {
     const server = net.createServer();
-    server.once("error", () => resolve(false));
-    server.listen(port, "127.0.0.1", () => server.close(() => resolve(true)));
+    server.once("error", (error) => resolve(error.code !== "EADDRINUSE"));
+    server.listen(port, host, () => server.close(() => resolve(true)));
   });
+
+const isFree = async (port) => (await isFreeOn(port, "127.0.0.1")) && (await isFreeOn(port, "::1"));
 
 async function freePort(preferred) {
   for (let port = preferred; port < preferred + 100; port++) {
@@ -48,6 +51,8 @@ const dbPort = runningDbPort() ?? (await freePort(5432));
 const mailSmtpPort = runningPort("mailpit", 1025) ?? (await freePort(1025));
 const mailUiPort = runningPort("mailpit", 8025) ?? (await freePort(8025));
 const apiPort = await freePort(3000);
+// The invitation link points at the web app, so the port Vite really gets has to be known up front.
+const webPort = await freePort(5173);
 
 execFileSync("docker", ["compose", "up", "-d", "--wait", "db", "mailpit"], {
   stdio: "inherit",
@@ -74,19 +79,19 @@ const children = [
       ...exampleEnv,
       DATABASE_URL: exampleEnv.DATABASE_URL.replace(":5432/", `:${dbPort}/`),
       BIND_ADDR: `127.0.0.1:${apiPort}`,
+      PUBLIC_URL: `http://localhost:${webPort}`,
       // Everything the app mails lands in Mailpit, never in a real mailbox.
       SMTP_URL: `smtp://127.0.0.1:${mailSmtpPort}`,
       SMTP_FROM: "conta-verde <no-reply@localhost>",
     },
   }),
-  // Vite moves to the next port on its own when 5173 is taken.
-  spawn("pnpm", ["--filter", "conta-verde-web", "dev"], {
+  spawn("pnpm", ["--filter", "conta-verde-web", "dev", "--port", String(webPort), "--strictPort"], {
     stdio: "inherit",
     env: { ...process.env, VITE_API_TARGET: `http://127.0.0.1:${apiPort}` },
   }),
 ];
 
-console.log(`db :${dbPort}  api :${apiPort}  mail http://localhost:${mailUiPort}`);
+console.log(`db :${dbPort}  api :${apiPort}  web http://localhost:${webPort}  mail http://localhost:${mailUiPort}`);
 
 const stop = () => children.forEach((child) => child.kill("SIGTERM"));
 process.on("SIGINT", stop);

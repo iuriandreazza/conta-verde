@@ -11,6 +11,7 @@ import { CostCentersPage } from "./pages/CostCentersPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { EntriesPage } from "./pages/EntriesPage";
 import { MembersPage } from "./pages/MembersPage";
+import { NotFoundPage } from "./pages/NotFoundPage";
 import { PartiesPage } from "./pages/PartiesPage";
 import { PaymentMethodsPage } from "./pages/PaymentMethodsPage";
 import { PaymentTermsPage } from "./pages/PaymentTermsPage";
@@ -49,6 +50,7 @@ export function App() {
           <Route path="/companies/:companyId/payment-terms" element={<PaymentTermsPage />} />
           <Route path="/companies/:companyId/members" element={<MembersPage />} />
         </Route>
+        <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>
   );

@@ -865,7 +865,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (response.status === 204) {
     return undefined as T;
   }
-  const body: unknown = await response.json().catch(() => null);
+  const text = await response.text();
+  const body = parseJson(text);
   // /auth/* answers 401 for ordinary reasons (wrong password, not signed in yet); only other calls mean a lost session.
   if (response.status === 401 && !path.startsWith("/auth/")) {
     onSessionLost?.();
@@ -877,7 +878,23 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
         : response.statusText;
     throw new ApiError(response.status, message);
   }
+  if (body === undefined) {
+    if (text === "") {
+      return undefined as T;
+    }
+    // A 2xx that is not JSON did not come from the API (a proxy aimed at another server, or a
+    // fallback serving the app for /api); passing it on as data would crash whatever reads it.
+    throw new ApiError(response.status, "Resposta inesperada do servidor: confira se o endereço da API está certo.");
+  }
   return body as T;
+}
+
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
 }
 
 const post = <T>(path: string, body?: unknown) =>

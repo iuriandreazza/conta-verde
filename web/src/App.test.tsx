@@ -48,6 +48,14 @@ describe("App", () => {
     expect(await screen.findByRole("heading", { name: "Entrar" })).toBeInTheDocument();
   });
 
+  it("says a page does not exist instead of showing nothing", async () => {
+    mockApi(() => ({ status: 401, body: { error: "authentication required" } }));
+    renderAt("/convite/abc123");
+    // The page is first drawn without chrome and again once the session is known, so wait for the final one.
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Página não encontrada" })).toBeInTheDocument());
+    expect(screen.getByRole("link", { name: "Voltar ao início" })).toHaveAttribute("href", "/");
+  });
+
   it("shows the password only while the toggle is pressed", async () => {
     mockApi(() => ({ status: 401 }));
     renderAt("/login");
@@ -2555,6 +2563,26 @@ describe("members and invitations", () => {
       expect(screen.getAllByText("bia@example.com").length).toBeGreaterThan(0);
       expect(screen.getByRole("link", { name: "Entrar" })).toHaveAttribute("href", "/login?next=%2Finvitations%2Fabc123");
       expect(screen.getByRole("link", { name: "Criar conta" })).toHaveAttribute("href", "/register?next=%2Finvitations%2Fabc123");
+    });
+
+    it("still shows the invitation when /api answers with a page instead of the API", async () => {
+      // A proxy aimed at the wrong server, or a fallback that serves the app for /api, answers 200 with HTML.
+      mockApi((url) =>
+        url.startsWith("/api/invitations/")
+          ? { status: 200, body: preview }
+          : { status: 200, text: "<!doctype html><html></html>" },
+      );
+      renderAt("/invitations/abc123");
+
+      expect(await screen.findByRole("heading", { name: "Convite para Mercearia" })).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "Criar conta" })).toBeInTheDocument();
+    });
+
+    it("tells the person when the invitation cannot be read from the answer", async () => {
+      mockApi(() => ({ status: 200, text: "<!doctype html><html></html>" }));
+      renderAt("/invitations/abc123");
+
+      expect(await screen.findByRole("heading", { name: "Convite não encontrado" })).toBeInTheDocument();
     });
 
     it("comes back to the invitation after signing in, and only to an invitation", async () => {
