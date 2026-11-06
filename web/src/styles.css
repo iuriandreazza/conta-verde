@@ -313,6 +313,14 @@ a {
   background: var(--green-soft);
 }
 
+.menu-hint {
+  margin-left: auto;
+  padding-left: 1rem;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.8rem;
+}
+
 .menu [aria-disabled="true"] {
   color: var(--muted);
   cursor: not-allowed;

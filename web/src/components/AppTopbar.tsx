@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Button } from "./Button";
 import { BoxIcon } from "./icons/box";
 import { CalendarDaysIcon } from "./icons/calendar-days";
@@ -29,6 +31,24 @@ interface AppTopbarProps {
   onSignOut: () => void;
 }
 
+/**
+ * The letters that, with Alt, start a record from anywhere. Some browsers use a few of them for their own
+ * menus, and on a Mac Option plus a letter types a symbol: the shortcut wins, in a field too, as in the
+ * products people come from.
+ */
+const SHORTCUTS: Partial<Record<string, string>> = {
+  entry: "L",
+  transfer: "T",
+  quote: "O",
+  sale: "V",
+  party: "C",
+  category: "K",
+  recurrence: "R",
+  invite: "M",
+  bankAccount: "B",
+  product: "P",
+};
+
 /** What a person can start from anywhere: only the registers their role may write. */
 function creationItems(
   companyId: string,
@@ -54,7 +74,11 @@ function creationItems(
   return items
     .filter((item) => permissions?.[item.area] === "write")
     // A register with a sheet opens it over the page that is showing; the others still go to their page.
-    .map(({ creates, area: _area, ...item }) => (creates ? { ...item, onSelect: () => openCreate(creates) } : item));
+    .map(({ creates, area: _area, ...item }) => ({
+      ...item,
+      shortcut: SHORTCUTS[item.key],
+      ...(creates ? { onSelect: () => openCreate(creates) } : {}),
+    }));
 }
 
 /** The bar over every signed-in page: the menu on a phone, "new" from anywhere, who is signed in and how to leave. */
@@ -70,6 +94,25 @@ export function AppTopbar({
 }: AppTopbarProps) {
   const { openCreate } = useCreation();
   const creating = companyId ? creationItems(companyId, permissions, openCreate) : [];
+  const navigate = useNavigate();
+  // A new key for the menu closes it: a shortcut used while it is open must not leave it behind the sheet.
+  const [menuKey, setMenuKey] = useState(0);
+
+  // Alt plus the letter starts the record from anywhere, unless a sheet is already open. The physical
+  // key is read (`code`), since Alt changes the character some layouts type.
+  useEffect(() => {
+    function start(event: KeyboardEvent) {
+      if (event.repeat || !event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      const item = creating.find((candidate) => candidate.shortcut && `Key${candidate.shortcut}` === event.code);
+      if (!item || document.querySelector('[role="dialog"]')) return;
+      event.preventDefault();
+      setMenuKey((key) => key + 1);
+      if (item.onSelect) item.onSelect();
+      else if (item.to) navigate(item.to);
+    }
+    window.addEventListener("keydown", start);
+    return () => window.removeEventListener("keydown", start);
+  });
   return (
     <div className="topbar">
       {companyId && (
@@ -84,7 +127,7 @@ export function AppTopbar({
         </button>
       )}
       <div className="topbar-actions">
-        {creating.length > 0 && <MenuButton variant="primary" icon={PlusIcon} label="Novo registro" items={creating} align="end" />}
+        {creating.length > 0 && <MenuButton key={menuKey} variant="primary" icon={PlusIcon} label="Novo registro" items={creating} align="end" />}
         <span className="avatar" aria-hidden>
           {userName.trim().charAt(0).toUpperCase()}
         </span>
