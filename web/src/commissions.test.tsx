@@ -149,7 +149,8 @@ describe("commissions", () => {
       ),
     );
     renderAt("/companies/c1/commissions");
-    const form = within((await screen.findByRole("heading", { name: "Nova regra" })).closest("aside")!);
+    await userEvent.click(await screen.findByRole("button", { name: "Nova regra de comissão" }));
+    const form = within((await screen.findByRole("heading", { name: "Nova regra de comissão" })).closest("aside")!);
     await form.findByLabelText("Vendedor");
 
     await userEvent.selectOptions(form.getByLabelText("Vendedor"), "s1");
@@ -177,7 +178,8 @@ describe("commissions", () => {
       ),
     );
     renderAt("/companies/c1/commissions");
-    const form = within((await screen.findByRole("heading", { name: "Nova regra" })).closest("aside")!);
+    await userEvent.click(await screen.findByRole("button", { name: "Nova regra de comissão" }));
+    const form = within((await screen.findByRole("heading", { name: "Nova regra de comissão" })).closest("aside")!);
     await form.findByLabelText("Percentual (%)");
 
     await userEvent.type(form.getByLabelText("Percentual (%)"), "1.050");
@@ -284,7 +286,7 @@ describe("commissions", () => {
     );
     renderAt("/companies/c1/commissions");
     await screen.findByRole("row", { name: /Todos os vendedores/ });
-    expect(screen.queryByRole("heading", { name: "Nova regra" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Nova regra de comissão" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Alterar a regra/ })).not.toBeInTheDocument();
     expect(screen.getByRole("row", { name: /Venda 7/ })).toBeInTheDocument();
   });

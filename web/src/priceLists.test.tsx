@@ -48,6 +48,10 @@ const answer =
   };
 
 const formOf = async (heading: string) => {
+  // A new list is asked for with the button; a change opens the sheet by itself.
+  if (heading === "Nova tabela de preço") {
+    await userEvent.click(await screen.findByRole("button", { name: heading }));
+  }
   const aside = (await screen.findByRole("heading", { name: heading })).closest("aside")!;
   const form = within(aside);
   await form.findByLabelText("Nome");
@@ -180,7 +184,7 @@ describe("price lists", () => {
     );
     renderAt("/companies/c1/price-lists");
     await screen.findByRole("row", { name: /Atacado/ });
-    expect(screen.queryByRole("heading", { name: "Nova tabela de preço" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Nova tabela de preço" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Alterar/ })).not.toBeInTheDocument();
   });
 });

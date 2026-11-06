@@ -8,12 +8,12 @@ import { EntryCreator } from "./EntryCreator";
 import { CategoryCreator } from "./CategoryCreator";
 import { RecurrenceCreator } from "./RecurrenceCreator";
 import { InviteCreator } from "./InviteCreator";
-import { BankAccountCreator, CostCenterCreator, PaymentMethodCreator, PaymentTermCreator } from "./registers";
+import { BankAccountCreator, CostCenterCreator, PaymentMethodCreator, PaymentTermCreator, PriceListCreator, CommissionRuleCreator } from "./registers";
 import { PartyCreator } from "./PartyCreator";
 import { ProductCreator } from "./ProductCreator";
 import { TransferCreator } from "./TransferCreator";
 
-export type CreateKind = "entry" | "party" | "product" | "transfer" | "costCenter" | "paymentMethod" | "paymentTerm" | "bankAccount" | "invite" | "recurrence" | "category";
+export type CreateKind = "entry" | "party" | "product" | "transfer" | "costCenter" | "paymentMethod" | "paymentTerm" | "bankAccount" | "invite" | "recurrence" | "category" | "priceList" | "commissionRule";
 
 /** What a creator tells the host when the record exists: the words for the confirmation, and the new id. */
 export interface Created {
@@ -41,6 +41,8 @@ export interface CreatorProps {
 
 const CREATORS: Record<CreateKind, { title: string; Creator: (props: CreatorProps) => ReactNode }> = {
   entry: { title: "Novo lançamento", Creator: EntryCreator },
+  commissionRule: { title: "Nova regra de comissão", Creator: CommissionRuleCreator },
+  priceList: { title: "Nova tabela de preço", Creator: PriceListCreator },
   category: { title: "Nova categoria", Creator: CategoryCreator },
   recurrence: { title: "Nova recorrência", Creator: RecurrenceCreator },
   invite: { title: "Convidar alguém", Creator: InviteCreator },

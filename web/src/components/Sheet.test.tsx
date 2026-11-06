@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it } from "vitest";
 import { BackButton } from "./BackButton";
-import { Sheet } from "./Sheet";
+import { Sheet, useSheetDirty } from "./Sheet";
 
 function Page() {
   const [open, setOpen] = useState(false);
@@ -196,5 +196,44 @@ describe("Sheet and what was typed", () => {
 
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(screen.getByRole("dialog", { name: "Novo" })).toBeInTheDocument();
+  });
+
+  it("counts a click-only change (a row added) as something to lose", async () => {
+    function Rows() {
+      const markDirty = useSheetDirty();
+      return <button onClick={markDirty}>Adicionar linha</button>;
+    }
+    render(
+      <Sheet open title="Novo" onClose={() => undefined}>
+        <Rows />
+      </Sheet>,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Adicionar linha" }));
+    await userEvent.click(screen.getByRole("button", { name: "Fechar" }));
+
+    expect(screen.getByRole("alertdialog", { name: "Descartar edições?" })).toBeInTheDocument();
+  });
+
+  it("does not re-render a controlled field in the middle of a change", async () => {
+    function Choice() {
+      useSheetDirty();
+      const [value, setValue] = useState("a");
+      return (
+        <select aria-label="Escolha" value={value} onChange={(event) => setValue(event.target.value)}>
+          <option value="a">A</option>
+          <option value="b">B</option>
+        </select>
+      );
+    }
+    render(
+      <Sheet open title="Novo" onClose={() => undefined}>
+        <Choice />
+      </Sheet>,
+    );
+
+    await userEvent.selectOptions(screen.getByLabelText("Escolha"), "b");
+
+    expect(screen.getByLabelText("Escolha")).toHaveValue("b");
   });
 });
