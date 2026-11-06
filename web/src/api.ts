@@ -536,6 +536,61 @@ export interface CashFlow {
 
 export type EntryKind = "receivable" | "payable";
 
+export type ReportGroup = "category" | "cost_center" | "party";
+export type ReportBasis = "competence" | "due";
+
+/** One group of the entries report: what was entered as receivable and payable, and in how many entries. */
+export interface ReportRow {
+  /** The category, cost center or party; null for what has no cost center or no party. */
+  id: string | null;
+  receivable: string;
+  payable: string;
+  /** Receivable less payable. */
+  net: string;
+  entries: number;
+}
+
+export interface EntriesReport {
+  group: ReportGroup;
+  basis: ReportBasis;
+  from: string;
+  to: string;
+  /** The biggest first. */
+  rows: ReportRow[];
+}
+
+export interface EntriesReportFilters {
+  group: ReportGroup;
+  basis: ReportBasis;
+  from: string;
+  to: string;
+}
+
+/** An installment that fell due and still has something left (ADR 0035). */
+export interface OverdueItem {
+  entry_id: string;
+  kind: EntryKind;
+  description: string;
+  party_id: string | null;
+  category_id: string;
+  installment: number;
+  due_date: string;
+  amount: string;
+  settled: string;
+  open: string;
+  days_late: number;
+}
+
+export interface OverdueReport {
+  on: string;
+  /** Oldest due day first, cut at the limit. */
+  items: OverdueItem[];
+  /** What is open on all of them, and how many there are, whatever the limit. */
+  receivable: string;
+  payable: string;
+  count: number;
+}
+
 export type StatementLineStatus = "pending" | "matched" | "ignored";
 
 /** One line of a bank statement and where it stands in the reconciliation (ADR 0034). */
@@ -1019,6 +1074,14 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(input),
     }),
+  entriesReport: (companyId: string, filters: EntriesReportFilters) =>
+    request<EntriesReport>(`/companies/${companyId}/reports/entries?${new URLSearchParams({ ...filters })}`),
+  /** `on` is today where the person is: the server does not know their zone. */
+  overdueReport: (companyId: string, on: string, kind: "" | EntryKind) => {
+    const params = new URLSearchParams({ on });
+    if (kind) params.set("kind", kind);
+    return request<OverdueReport>(`/companies/${companyId}/reports/overdue?${params}`);
+  },
   getCashFlow: (companyId: string, filters: CashFlowFilters) => {
     const params = new URLSearchParams({ from: filters.from, to: filters.to, granularity: filters.granularity });
     if (filters.account) params.set("account", filters.account);

@@ -39,6 +39,59 @@ pub struct DayOpen {
     pub payable: Decimal,
 }
 
+/// What the entries are grouped by in a report ([ADR 0035]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReportGroup {
+    Category,
+    CostCenter,
+    Party,
+}
+
+/// Which day puts an entry in the span of a report, and what is added up: the entries whose competence
+/// date is in it, by their total, or the installments whose due date is in it, by their amount.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReportBasis {
+    #[default]
+    Competence,
+    Due,
+}
+
+/// One group of a report: what was entered as receivable and as payable, and in how many entries.
+/// `id` is `None` for what has no cost center or no party.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReportRow {
+    pub id: Option<Uuid>,
+    pub receivable: Decimal,
+    pub payable: Decimal,
+    pub entries: u64,
+}
+
+/// An installment that fell due and still has something left.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OverdueItem {
+    pub entry_id: EntryId,
+    pub kind: EntryKind,
+    pub description: String,
+    pub party_id: Option<PartyId>,
+    pub category_id: CategoryId,
+    pub installment: u16,
+    pub due_date: CalendarDate,
+    pub amount: Decimal,
+    /// What the settlements that are not reversed settled; what is open is `amount - settled`.
+    pub settled: Decimal,
+}
+
+/// The overdue installments, oldest due day first and cut at a limit, with the totals of **all** of them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OverdueReport {
+    pub items: Vec<OverdueItem>,
+    /// What is open on all the overdue installments of receivables, and of payables.
+    pub receivable: Decimal,
+    pub payable: Decimal,
+    /// How many overdue installments there are, whatever the limit.
+    pub count: u64,
+}
+
 /// The order of the list of entries. Newest competence first is what a person looks at.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum EntrySort {
@@ -215,6 +268,28 @@ pub trait FinancialEntryRepository: Send + Sync {
         since: CalendarDate,
         until: CalendarDate,
     ) -> impl Future<Output = Result<Vec<DayOpen>, RepositoryError>> + Send;
+
+    /// The entries added up by `group` over the days from `since` through `until`, on `basis`: one row
+    /// per group that has any, the biggest of its two totals first, then by id with the rows that have
+    /// none last ([ADR 0035]).
+    fn report_entries(
+        &self,
+        company_id: CompanyId,
+        group: ReportGroup,
+        basis: ReportBasis,
+        since: CalendarDate,
+        until: CalendarDate,
+    ) -> impl Future<Output = Result<Vec<ReportRow>, RepositoryError>> + Send;
+
+    /// The installments due **before** `before` that still have something left, of entries of `kind` when
+    /// given, oldest due day first (then entry id, then number), at most `limit`, and the totals of all.
+    fn overdue_installments(
+        &self,
+        company_id: CompanyId,
+        before: CalendarDate,
+        kind: Option<EntryKind>,
+        limit: usize,
+    ) -> impl Future<Output = Result<OverdueReport, RepositoryError>> + Send;
 
     /// What was recorded about the entry, oldest first. Empty for another company's.
     fn history(

@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, vi } from "vitest";
 import { App } from "./App";
-import type { AccountBalance, CashFlow, CashFlowPeriod, Recurrence, StatementLine, Entry, Transfer, PaymentTerm, BankAccount, Category, CostCenter, PaymentMethod, DocumentCheck, HistoryEntry, Party, Product, Profile } from "./api";
+import type { AccountBalance, CashFlow, CashFlowPeriod, EntriesReport, OverdueReport, Recurrence, StatementLine, Entry, Transfer, PaymentTerm, BankAccount, Category, CostCenter, PaymentMethod, DocumentCheck, HistoryEntry, Party, Product, Profile } from "./api";
 import { AuthProvider } from "./auth";
 import { SOURCE_URL } from "./components/Footer";
 import { defaultSpan } from "./lib/cashFlow";
@@ -4395,5 +4395,137 @@ describe("reconciliation", () => {
     expect(screen.queryByLabelText("Arquivo OFX do banco")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Sugestões para/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Ignorar/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("reports", () => {
+  const vendas = { id: "cat1", company_id: "c1", parent_id: null, name: "Vendas", dre_group: "gross_revenue", cash_flow_group: "operating", level: 1, active: true };
+  const despesas = { ...vendas, id: "cat2", name: "Despesas", dre_group: "operating_expenses" };
+  const matriz = { id: "cc1", company_id: "c1", name: "Matriz", active: true };
+  const report = (overrides: Partial<EntriesReport> = {}): EntriesReport => ({
+    group: "category",
+    basis: "competence",
+    from: "2026-11-01",
+    to: "2026-11-30",
+    rows: [
+      { id: "cat2", receivable: "0", payable: "2500", net: "-2500", entries: 1 },
+      { id: "cat1", receivable: "150.5", payable: "0", net: "150.5", entries: 2 },
+    ],
+    ...overrides,
+  });
+  const overdue: OverdueReport = {
+    on: "2026-11-15",
+    items: [
+      { entry_id: "e1", kind: "payable", description: "Aluguel", party_id: null, category_id: "cat2", installment: 1, due_date: "2026-10-05", amount: "2500", settled: "1000", open: "1500", days_late: 41 },
+      { entry_id: "e2", kind: "receivable", description: "Venda 2", party_id: "p1", category_id: "cat1", installment: 1, due_date: "2026-11-14", amount: "300", settled: "0", open: "300", days_late: 1 },
+    ],
+    receivable: "300",
+    payable: "1500",
+    count: 3,
+  };
+
+  const answer =
+    (reply: (url: string) => Reply | undefined) =>
+    (url: string): Reply => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (url.endsWith("/categories")) return { status: 200, body: { items: [vendas, despesas] } };
+      if (url.includes("/cost-centers")) return { status: 200, body: { items: [matriz], next_cursor: null } };
+      if (url.includes("/parties")) return { status: 200, body: { items: [{ ...party("Maria"), id: "p1", name: "Maria" }], next_cursor: null } };
+      return reply(url) ?? { status: 404, body: { error: "not found" } };
+    };
+  const reportUrls = (fetchMock: ReturnType<typeof mockApi>) =>
+    fetchMock.mock.calls.map(([url]) => String(url)).filter((url) => url.includes("/reports/"));
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 10, 15, 12));
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("asks for this month by category and shows the groups with their names, the difference and the totals", async () => {
+    const fetchMock = mockApi(answer((url) => (url.includes("/reports/entries") ? { status: 200, body: report() } : undefined)));
+    renderAt("/companies/c1/reports");
+
+    const row = await screen.findByRole("row", { name: /Despesas/ });
+    expect(row).toHaveTextContent("R$ 2.500,00");
+    expect(within(row).getByText("R$ -2.500,00")).toHaveClass("negative");
+    expect(screen.getByRole("row", { name: /Vendas/ })).toHaveTextContent("R$ 150,50");
+    expect(screen.getByText("Resultado", { selector: ".stat-label" }).closest(".stat-tile")).toHaveTextContent("R$ -2.349,50");
+    expect(reportUrls(fetchMock)).toContain("/api/companies/c1/reports/entries?group=category&basis=competence&from=2026-11-01&to=2026-11-30");
+  });
+
+  it("asks again for another group or basis and names what has no cost center", async () => {
+    const fetchMock = mockApi(
+      answer((url) =>
+        url.includes("/reports/entries")
+          ? {
+              status: 200,
+              body: url.includes("group=cost_center")
+                ? report({ group: "cost_center", rows: [{ id: null, receivable: "10", payable: "0", net: "10", entries: 1 }, { id: "cc1", receivable: "5", payable: "0", net: "5", entries: 1 }] })
+                : report(),
+            }
+          : undefined,
+      ),
+    );
+    renderAt("/companies/c1/reports");
+    await screen.findByRole("row", { name: /Despesas/ });
+
+    await userEvent.selectOptions(screen.getByLabelText("Agrupar por"), "cost_center");
+    expect(await screen.findByRole("row", { name: /Sem centro de custo/ })).toBeInTheDocument();
+    expect(screen.getByRole("row", { name: /Matriz/ })).toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByLabelText("Base"), "due");
+    await waitFor(() => expect(reportUrls(fetchMock).some((url) => url.includes("group=cost_center&basis=due"))).toBe(true));
+  });
+
+  it("refuses a span that is not one without asking the API", async () => {
+    const fetchMock = mockApi(answer((url) => (url.includes("/reports/entries") ? { status: 200, body: report() } : undefined)));
+    renderAt("/companies/c1/reports");
+    await screen.findByRole("row", { name: /Despesas/ });
+    const before = reportUrls(fetchMock).length;
+    fireEvent.change(screen.getByLabelText("De"), { target: { value: "2099-01-01" } });
+    expect(await screen.findByText("O primeiro dia não pode ser depois do último.")).toBeInTheDocument();
+    expect(reportUrls(fetchMock)).toHaveLength(before);
+  });
+
+  it("shows what the API refused", async () => {
+    mockApi(answer((url) => (url.includes("/reports/entries") ? { status: 400, body: { error: "invalid group" } } : undefined)));
+    renderAt("/companies/c1/reports");
+    expect(await screen.findByRole("alert")).toHaveTextContent("invalid group");
+  });
+
+  it("says when there is nothing in the period", async () => {
+    mockApi(answer((url) => (url.includes("/reports/entries") ? { status: 200, body: report({ rows: [] }) } : undefined)));
+    renderAt("/companies/c1/reports");
+    expect(await screen.findByText("Nenhum lançamento nesse período.")).toBeInTheDocument();
+  });
+
+  it("lists what is overdue today with the party, how much is left and how late, and the totals of all", async () => {
+    const fetchMock = mockApi(answer((url) => (url.includes("/reports/overdue") ? { status: 200, body: overdue } : undefined)));
+    renderAt("/companies/c1/reports");
+    await userEvent.click(await screen.findByRole("button", { name: "Em atraso" }));
+
+    const late = await screen.findByRole("row", { name: /Aluguel/ });
+    expect(late).toHaveTextContent("05/10/2026");
+    expect(late).toHaveTextContent("A pagar · parcela 1");
+    expect(late).toHaveTextContent("R$ 1.500,00");
+    expect(late).toHaveTextContent("41 dias");
+    const sale = screen.getByRole("row", { name: /Venda 2/ });
+    expect(sale).toHaveTextContent("Maria");
+    expect(sale).toHaveTextContent("1 dia");
+    expect(screen.getByText("A receber em atraso").closest(".stat-tile")).toHaveTextContent("R$ 300,00");
+    expect(screen.getByText("Parcelas vencidas").closest(".stat-tile")).toHaveTextContent("3");
+    // Cut at the limit: the table says so, and the totals are of all.
+    expect(screen.getByText(/Mostrando as 2 mais antigas de 3/)).toBeInTheDocument();
+    expect(reportUrls(fetchMock)).toContain("/api/companies/c1/reports/overdue?on=2026-11-15");
+
+    await userEvent.selectOptions(screen.getByLabelText("Mostrar"), "receivable");
+    await waitFor(() => expect(reportUrls(fetchMock)).toContain("/api/companies/c1/reports/overdue?on=2026-11-15&kind=receivable"));
+  });
+
+  it("says when nothing is overdue", async () => {
+    mockApi(answer((url) => (url.includes("/reports/overdue") ? { status: 200, body: { on: "2026-11-15", items: [], receivable: "0", payable: "0", count: 0 } } : undefined)));
+    renderAt("/companies/c1/reports");
+    await userEvent.click(await screen.findByRole("button", { name: "Em atraso" }));
+    expect(await screen.findByText("Nada em atraso.")).toBeInTheDocument();
   });
 });

@@ -7804,3 +7804,362 @@ pub async fn reconciles_statement_lines<S, E, T, F>(
     );
     assert_eq!(store.find(other_company, pix.id()).await.unwrap(), None);
 }
+
+// ---------- reports of the entries ----------
+
+use conta_verde_application::{OverdueReport, ReportBasis, ReportGroup, ReportRow};
+
+/// A report row as text: the group, receivable, payable and the number of entries.
+fn report_rows(rows: &[ReportRow]) -> Vec<(String, String, String, u64)> {
+    rows.iter()
+        .map(|row| {
+            (
+                row.id.map_or("-".to_owned(), |id| id.to_string()),
+                row.receivable.to_string(),
+                row.payable.to_string(),
+                row.entries,
+            )
+        })
+        .collect()
+}
+
+fn overdue_of(report: &OverdueReport) -> (Vec<String>, String, String, u64) {
+    (
+        report
+            .items
+            .iter()
+            .map(|item| {
+                format!(
+                    "{} {} {}",
+                    item.due_date,
+                    item.description,
+                    item.amount - item.settled
+                )
+            })
+            .collect(),
+        report.receivable.to_string(),
+        report.payable.to_string(),
+        report.count,
+    )
+}
+
+/// The entries are added up by category, cost center and party over a span, by the day of competence (their
+/// totals) or by due day (their installments), biggest first and what has no cost center or party last; the
+/// overdue list has what fell due before a day and still has something left, oldest first, cut at a limit
+/// with the totals of all, and reversing a settlement gives the amount back; nothing of another company's
+/// shows, and a span that is not one is refused.
+pub async fn reports_the_entries<R, F>(
+    service: &FinancialEntryService<R, F>,
+    company: CompanyId,
+    other_company: CompanyId,
+    seed: &EntrySeed,
+) where
+    R: FinancialEntryRepository,
+    F: EntryReferences,
+{
+    let ana = actor();
+    let day = |text: &str| CalendarDate::parse(text).unwrap();
+    let draft = |kind: EntryKind,
+                 description: &str,
+                 category: CategoryId,
+                 competence: &str,
+                 parts: &[(&str, &str)]| {
+        FinancialEntryDraft {
+            kind,
+            category_id: category,
+            ..entry_draft(seed, description, competence, parts)
+        }
+    };
+    let with_cost_center = |draft: FinancialEntryDraft| FinancialEntryDraft {
+        cost_center_id: Some(seed.cost_center),
+        ..draft
+    };
+    let with_party = |draft: FinancialEntryDraft| FinancialEntryDraft {
+        party_id: Some(seed.party),
+        ..draft
+    };
+    let sale = service
+        .register(
+            company,
+            &ana,
+            with_party(with_cost_center(draft(
+                EntryKind::Receivable,
+                "Venda 1",
+                seed.category,
+                "2026-10-10",
+                &[("2026-10-20", "100"), ("2026-11-20", "50.5")],
+            ))),
+        )
+        .await
+        .unwrap();
+    let rent = service
+        .register(
+            company,
+            &ana,
+            draft(
+                EntryKind::Payable,
+                "Aluguel",
+                seed.other_category,
+                "2026-10-05",
+                &[("2026-10-05", "2500")],
+            ),
+        )
+        .await
+        .unwrap();
+    service
+        .register(
+            company,
+            &ana,
+            draft(
+                EntryKind::Receivable,
+                "Venda 2",
+                seed.category,
+                "2026-11-02",
+                &[("2026-11-12", "300")],
+            ),
+        )
+        .await
+        .unwrap();
+    service
+        .register(
+            company,
+            &ana,
+            with_cost_center(draft(
+                EntryKind::Payable,
+                "Material",
+                seed.category,
+                "2026-09-30",
+                &[("2026-10-30", "40")],
+            )),
+        )
+        .await
+        .unwrap();
+    let settle = |entry: EntryId, installment: u16, applied: &str| {
+        service.settle(
+            company,
+            &ana,
+            entry,
+            settlement_draft(seed, installment, applied),
+        )
+    };
+    settle(sale.id(), 1, "100").await.unwrap();
+    let part = settle(rent.id(), 1, "1000").await.unwrap();
+
+    let october = (day("2026-10-01"), day("2026-10-31"));
+    let report = |group, basis, span: (CalendarDate, CalendarDate)| {
+        service.report(company, group, basis, span.0, span.1)
+    };
+    let id_of = |uuid: uuid::Uuid| uuid.to_string();
+
+    // By category: by competence, what was entered in October, by the total of each entry; by due day, by
+    // the installments that fall due in it (the entry of two installments counts in each month).
+    let by_category = report(ReportGroup::Category, ReportBasis::Competence, october)
+        .await
+        .unwrap();
+    assert_eq!(
+        report_rows(&by_category),
+        [
+            (
+                id_of(seed.other_category.as_uuid()),
+                "0".into(),
+                "2500".into(),
+                1
+            ),
+            (
+                id_of(seed.category.as_uuid()),
+                "150.5".into(),
+                "0".into(),
+                1
+            ),
+        ]
+    );
+    let by_due = report(ReportGroup::Category, ReportBasis::Due, october)
+        .await
+        .unwrap();
+    assert_eq!(
+        report_rows(&by_due),
+        [
+            (
+                id_of(seed.other_category.as_uuid()),
+                "0".into(),
+                "2500".into(),
+                1
+            ),
+            (id_of(seed.category.as_uuid()), "100".into(), "40".into(), 2),
+        ]
+    );
+    let november_due = report(
+        ReportGroup::Category,
+        ReportBasis::Due,
+        (day("2026-11-01"), day("2026-11-30")),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        report_rows(&november_due),
+        [(
+            id_of(seed.category.as_uuid()),
+            "350.5".into(),
+            "0".into(),
+            2
+        )]
+    );
+
+    // By cost center and by party, where what has none is a group of its own and comes last among equals.
+    let by_cost_center = report(ReportGroup::CostCenter, ReportBasis::Competence, october)
+        .await
+        .unwrap();
+    assert_eq!(
+        report_rows(&by_cost_center),
+        [
+            ("-".into(), "0".into(), "2500".into(), 1),
+            (
+                id_of(seed.cost_center.as_uuid()),
+                "150.5".into(),
+                "0".into(),
+                1
+            ),
+        ]
+    );
+    let by_party = report(ReportGroup::Party, ReportBasis::Competence, october)
+        .await
+        .unwrap();
+    assert_eq!(
+        report_rows(&by_party),
+        [
+            ("-".into(), "0".into(), "2500".into(), 1),
+            (id_of(seed.party.as_uuid()), "150.5".into(), "0".into(), 1),
+        ]
+    );
+    assert!(
+        report(
+            ReportGroup::Category,
+            ReportBasis::Competence,
+            (day("2025-01-01"), day("2025-12-31"))
+        )
+        .await
+        .unwrap()
+        .is_empty()
+    );
+    assert!(
+        service
+            .report(
+                other_company,
+                ReportGroup::Category,
+                ReportBasis::Competence,
+                october.0,
+                october.1
+            )
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(matches!(
+        service
+            .report(
+                company,
+                ReportGroup::Category,
+                ReportBasis::Competence,
+                october.1,
+                october.0
+            )
+            .await,
+        Err(ApplicationError::InvalidSpan(_))
+    ));
+
+    // What is overdue on a day: due before it, with something left, oldest first; the totals are of all.
+    let on = day("2026-11-15");
+    let overdue = service.overdue(company, on, None, None).await.unwrap();
+    assert_eq!(
+        overdue_of(&overdue),
+        (
+            vec![
+                "2026-10-05 Aluguel 1500".to_owned(),
+                "2026-10-30 Material 40".to_owned(),
+                "2026-11-12 Venda 2 300".to_owned()
+            ],
+            "300".to_owned(),
+            "1540".to_owned(),
+            3
+        )
+    );
+    assert_eq!(overdue.items[0].amount.to_string(), "2500");
+    assert_eq!(overdue.items[0].settled.to_string(), "1000");
+    assert_eq!(overdue.items[0].installment, 1);
+    assert_eq!(overdue.items[0].kind, EntryKind::Payable);
+    let receivable = service
+        .overdue(company, on, Some(EntryKind::Receivable), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        overdue_of(&receivable),
+        (
+            vec!["2026-11-12 Venda 2 300".to_owned()],
+            "300".to_owned(),
+            "0".to_owned(),
+            1
+        )
+    );
+    let cut = service.overdue(company, on, None, Some(2)).await.unwrap();
+    assert_eq!(
+        (cut.items.len(), cut.count, cut.payable.to_string()),
+        (2, 3, "1540".to_owned())
+    );
+    assert_eq!(
+        service
+            .overdue(company, day("2026-10-05"), None, None)
+            .await
+            .unwrap()
+            .count,
+        0
+    );
+    assert_eq!(
+        service
+            .overdue(other_company, on, None, None)
+            .await
+            .unwrap()
+            .count,
+        0
+    );
+
+    // Settling the rest takes it off the list; reversing the first settlement puts its amount back.
+    settle(rent.id(), 1, "1500").await.unwrap();
+    assert_eq!(
+        service
+            .overdue(company, on, None, None)
+            .await
+            .unwrap()
+            .count,
+        2
+    );
+    service
+        .reverse(company, &ana, rent.id(), part.id())
+        .await
+        .unwrap();
+    let after = service.overdue(company, on, None, None).await.unwrap();
+    assert_eq!(overdue_of(&after).0[0], "2026-10-05 Aluguel 1000");
+
+    // A sum is written without trailing zeros, however the database adds it up (0.5 + 0.5 is 1.0 in SQL).
+    service
+        .register(
+            company,
+            &ana,
+            draft(
+                EntryKind::Payable,
+                "Meio e meio",
+                seed.other_category,
+                "2030-01-10",
+                &[("2030-01-10", "0.5"), ("2030-02-10", "0.5")],
+            ),
+        )
+        .await
+        .unwrap();
+    let halves = report(
+        ReportGroup::Category,
+        ReportBasis::Competence,
+        (day("2030-01-01"), day("2030-01-31")),
+    )
+    .await
+    .unwrap();
+    assert_eq!(halves[0].payable.to_string(), "1");
+}

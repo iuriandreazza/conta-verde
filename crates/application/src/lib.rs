@@ -49,7 +49,7 @@ pub use cost_center_service::{CostCenterPage, CostCenterService};
 pub use email_sender::{EmailError, EmailMessage, EmailSender};
 pub use entry_repository::{
     DateCursor, DayOpen, EntryCursor, EntryReferences, EntrySort, FinancialEntryQuery,
-    FinancialEntryRepository,
+    FinancialEntryRepository, OverdueItem, OverdueReport, ReportBasis, ReportGroup, ReportRow,
 };
 pub use error::{ApplicationError, AuthError, RepositoryError};
 pub use financial_entry_service::{FinancialEntryPage, FinancialEntryService};

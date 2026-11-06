@@ -3,7 +3,8 @@ use std::sync::{Arc, Mutex};
 
 use conta_verde_application::{
     AccountMovement, DayMovement, DayOpen, EntryCursor, EntrySort, FinancialEntryQuery,
-    FinancialEntryRepository, RepositoryError, ensure_audit_describes,
+    FinancialEntryRepository, OverdueItem, OverdueReport, ReportBasis, ReportGroup, ReportRow,
+    RepositoryError, ensure_audit_describes,
 };
 use conta_verde_domain::{
     AuditEntity, AuditEntry, AuditRecord, BankAccountId, CalendarDate, CompanyId, Decimal, EntryId,
@@ -249,6 +250,118 @@ impl FinancialEntryRepository for InMemoryFinancialEntryRepository {
             .collect();
         found.sort_by_key(|settlement| (settlement.settled_on(), settlement.id().as_uuid()));
         Ok(found)
+    }
+
+    async fn report_entries(
+        &self,
+        company_id: CompanyId,
+        group: ReportGroup,
+        basis: ReportBasis,
+        since: CalendarDate,
+        until: CalendarDate,
+    ) -> Result<Vec<ReportRow>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        let mut groups: BTreeMap<Option<uuid::Uuid>, (Decimal, Decimal, u64)> = BTreeMap::new();
+        for entry in state
+            .entries
+            .iter()
+            .filter(|entry| entry.company_id() == company_id)
+        {
+            let amount = match basis {
+                ReportBasis::Competence => (since..=until)
+                    .contains(&entry.competence_date())
+                    .then(|| entry.total()),
+                ReportBasis::Due => {
+                    let due: Decimal = entry
+                        .installments()
+                        .iter()
+                        .filter(|installment| (since..=until).contains(&installment.due_date()))
+                        .map(|installment| installment.amount().as_decimal())
+                        .sum();
+                    entry
+                        .installments()
+                        .iter()
+                        .any(|installment| (since..=until).contains(&installment.due_date()))
+                        .then_some(due)
+                }
+            };
+            let Some(amount) = amount else { continue };
+            let key = match group {
+                ReportGroup::Category => Some(entry.category_id().as_uuid()),
+                ReportGroup::CostCenter => entry.cost_center_id().map(|id| id.as_uuid()),
+                ReportGroup::Party => entry.party_id().map(|id| id.as_uuid()),
+            };
+            let row = groups.entry(key).or_default();
+            match entry.kind() {
+                EntryKind::Receivable => row.0 += amount,
+                EntryKind::Payable => row.1 += amount,
+            }
+            row.2 += 1;
+        }
+        let mut rows: Vec<ReportRow> = groups
+            .into_iter()
+            .map(|(id, (receivable, payable, entries))| ReportRow {
+                id,
+                receivable: receivable.normalize(),
+                payable: payable.normalize(),
+                entries,
+            })
+            .collect();
+        crate::postgres_entries::sort_report(&mut rows);
+        Ok(rows)
+    }
+
+    async fn overdue_installments(
+        &self,
+        company_id: CompanyId,
+        before: CalendarDate,
+        kind: Option<EntryKind>,
+        limit: usize,
+    ) -> Result<OverdueReport, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        let mut all: Vec<OverdueItem> = Vec::new();
+        for entry in state.entries.iter().filter(|entry| {
+            entry.company_id() == company_id && kind.is_none_or(|kind| entry.kind() == kind)
+        }) {
+            let settlements: Vec<Settlement> = state
+                .settlements
+                .iter()
+                .filter(|settlement| settlement.entry_id() == entry.id())
+                .cloned()
+                .collect();
+            for installment in entry.installments() {
+                let settled = settled_of(&settlements, installment.number());
+                if installment.due_date() < before && installment.amount().as_decimal() > settled {
+                    all.push(OverdueItem {
+                        entry_id: entry.id(),
+                        kind: entry.kind(),
+                        description: entry.description().to_owned(),
+                        party_id: entry.party_id(),
+                        category_id: entry.category_id(),
+                        installment: installment.number(),
+                        due_date: installment.due_date(),
+                        amount: installment.amount().as_decimal().normalize(),
+                        settled: settled.normalize(),
+                    });
+                }
+            }
+        }
+        all.sort_by_key(|item| (item.due_date, item.entry_id.as_uuid(), item.installment));
+        let open = |item: &OverdueItem| item.amount - item.settled;
+        let total = |wanted: EntryKind| {
+            all.iter()
+                .filter(|item| item.kind == wanted)
+                .map(open)
+                .sum::<Decimal>()
+                .normalize()
+        };
+        let report = OverdueReport {
+            receivable: total(EntryKind::Receivable),
+            payable: total(EntryKind::Payable),
+            count: all.len() as u64,
+            items: all.into_iter().take(limit).collect(),
+        };
+        Ok(report)
     }
 
     async fn cash_by_day(
@@ -513,6 +626,18 @@ pub(crate) mod tests {
         );
         contract::settles_installments_and_reverses_them(&service, company, other_company, &seed)
             .await;
+    }
+
+    #[tokio::test]
+    async fn reports_the_entries() {
+        let registers = Registers::new();
+        let (company, other_company) = (CompanyId::generate(), CompanyId::generate());
+        let seed = registers.seed(company).await;
+        let service = FinancialEntryService::new(
+            InMemoryFinancialEntryRepository::default(),
+            registers.references(),
+        );
+        contract::reports_the_entries(&service, company, other_company, &seed).await;
     }
 
     #[tokio::test]

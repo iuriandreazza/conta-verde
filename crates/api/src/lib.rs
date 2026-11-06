@@ -21,6 +21,7 @@ mod postal_codes;
 mod products;
 mod products_import;
 mod recurrences;
+mod reports;
 mod session;
 mod statements;
 mod transfers;
@@ -299,6 +300,14 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         .route(
             "/companies/{company_id}/statement-lines/{line_id}/history",
             get(statements::statement_line_history::<X>),
+        )
+        .route(
+            "/companies/{company_id}/reports/entries",
+            get(reports::entries_report::<X>),
+        )
+        .route(
+            "/companies/{company_id}/reports/overdue",
+            get(reports::overdue_report::<X>),
         )
         .route(
             "/companies/{company_id}/recurrences",
@@ -6456,6 +6465,195 @@ mod tests {
                 StatusCode::FORBIDDEN
             };
             assert_eq!(write.status, expected, "{role:?} imports");
+        }
+    }
+
+    fn reports_uri(company_id: Uuid, path: &str) -> String {
+        format!("/companies/{company_id}/reports/{path}")
+    }
+
+    #[tokio::test]
+    async fn reports_the_entries_by_group_and_lists_what_is_overdue_through_the_api() {
+        let app = entry_app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let targets = entry_targets(&app, &cookie, company_id).await;
+        let post = |body: Value| {
+            send(
+                &app,
+                json_request("POST", &entries_uri(company_id), Some(&cookie), body),
+            )
+        };
+        let mut rent = entry_body(&targets, "Aluguel", &[("2026-10-05", "2500")]);
+        rent["kind"] = json!("payable");
+        rent["category_id"] = json!(targets.other_category);
+        rent["party_id"] = Value::Null;
+        rent["cost_center_id"] = Value::Null;
+        rent["competence_date"] = json!("2026-10-05");
+        let rent = post(rent).await;
+        let mut sale = entry_body(
+            &targets,
+            "Venda",
+            &[("2026-10-20", "100"), ("2026-11-20", "50.5")],
+        );
+        sale["competence_date"] = json!("2026-10-10");
+        assert_eq!(post(sale).await.status, StatusCode::CREATED);
+        assert_eq!(rent.status, StatusCode::CREATED, "{}", rent.body);
+
+        // By category over October, by competence: the biggest first, with the difference of the two totals.
+        let by_category = send(
+            &app,
+            get_request(
+                &reports_uri(
+                    company_id,
+                    "entries?group=category&from=2026-10-01&to=2026-10-31",
+                ),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(by_category.status, StatusCode::OK, "{}", by_category.body);
+        assert_eq!(
+            (
+                by_category.body["group"].as_str(),
+                by_category.body["basis"].as_str()
+            ),
+            (Some("category"), Some("competence"))
+        );
+        assert_eq!(
+            by_category.body["rows"],
+            json!([
+                { "id": targets.other_category, "receivable": "0", "payable": "2500", "net": "-2500", "entries": 1 },
+                { "id": targets.category, "receivable": "150.5", "payable": "0", "net": "150.5", "entries": 1 },
+            ])
+        );
+        // By cost center, by due day: what has none is a row of its own, with a null id.
+        let by_cost_center = send(
+            &app,
+            get_request(
+                &reports_uri(
+                    company_id,
+                    "entries?group=cost_center&basis=due&from=2026-10-01&to=2026-10-31",
+                ),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(by_cost_center.body["rows"][0]["id"], Value::Null);
+        assert_eq!(by_cost_center.body["rows"][1]["id"], targets.cost_center);
+        assert_eq!(by_cost_center.body["rows"][1]["receivable"], "100");
+
+        // What is overdue on a day, with its totals and how late it is.
+        let overdue = send(
+            &app,
+            get_request(
+                &reports_uri(company_id, "overdue?on=2026-11-15&limit=1"),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(overdue.status, StatusCode::OK, "{}", overdue.body);
+        assert_eq!(overdue.body["items"].as_array().unwrap().len(), 1);
+        assert_eq!(overdue.body["items"][0]["description"], "Aluguel");
+        assert_eq!(overdue.body["items"][0]["open"], "2500");
+        assert_eq!(overdue.body["items"][0]["days_late"], 41);
+        assert_eq!(
+            (
+                overdue.body["receivable"].as_str(),
+                overdue.body["payable"].as_str(),
+                overdue.body["count"].as_u64()
+            ),
+            (Some("100"), Some("2500"), Some(2))
+        );
+        let receivable = send(
+            &app,
+            get_request(
+                &reports_uri(company_id, "overdue?on=2026-11-15&kind=receivable"),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(receivable.body["count"], 1);
+
+        // What is not understood is a 400 in JSON, never ignored.
+        for uri in [
+            "entries?group=party&from=2026-10-01",
+            "entries?from=2026-10-01&to=2026-10-31",
+            "entries?group=product&from=2026-10-01&to=2026-10-31",
+            "entries?group=party&basis=paid&from=2026-10-01&to=2026-10-31",
+            "entries?group=party&from=tomorrow&to=2026-10-31",
+            "entries?group=party&from=2026-10-31&to=2026-10-01",
+            "overdue",
+            "overdue?on=2026-02-30",
+            "overdue?on=2026-11-15&kind=sale",
+        ] {
+            let reply = send(
+                &app,
+                get_request(&reports_uri(company_id, uri), Some(&cookie)),
+            )
+            .await;
+            assert_eq!(
+                reply.status,
+                StatusCode::BAD_REQUEST,
+                "{uri}: {}",
+                reply.body
+            );
+            assert!(reply.body["error"].is_string(), "{uri}");
+        }
+        // Another company's member does not learn that it exists.
+        let (stranger, _) = sign_up(&app, "bia@example.com").await;
+        assert_eq!(
+            send(
+                &app,
+                get_request(
+                    &reports_uri(company_id, "overdue?on=2026-11-15"),
+                    Some(&stranger)
+                )
+            )
+            .await
+            .status,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            send(
+                &app,
+                get_request(&reports_uri(company_id, "overdue?on=2026-11-15"), None)
+            )
+            .await
+            .status,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn every_role_reads_the_reports() {
+        use conta_verde_domain::Role;
+
+        let (app, identities, _) = app_with_mailbox();
+        let (_, company_id) = sign_up(&app, "dona@example.com").await;
+        for role in [
+            Role::Admin,
+            Role::Financial,
+            Role::Sales,
+            Role::Stock,
+            Role::Accountant,
+            Role::Viewer,
+        ] {
+            let cookie = member_with_role(&app, &identities, company_id, role).await;
+            for path in [
+                "entries?group=category&from=2026-10-01&to=2026-10-31",
+                "overdue?on=2026-11-15",
+            ] {
+                assert_eq!(
+                    send(
+                        &app,
+                        get_request(&reports_uri(company_id, path), Some(&cookie))
+                    )
+                    .await
+                    .status,
+                    StatusCode::OK,
+                    "{role:?} {path}"
+                );
+            }
         }
     }
 }
