@@ -11005,6 +11005,7 @@ pub async fn issues_and_cancels_charges<C, E, P, F, S>(
     entries: &FinancialEntryService<E, F>,
     settings: &CollectionService<S, F>,
     provider: &FakePaymentProvider,
+    parties: &P,
     company: CompanyId,
     other_company: CompanyId,
     seed: &EntrySeed,
@@ -11200,6 +11201,40 @@ pub async fn issues_and_cancels_charges<C, E, P, F, S>(
         );
     }
     assert_eq!(provider.created().len(), asked);
+
+    // The payer's address travels with the charge, for the providers whose boleto needs it.
+    let mut living = party_draft("Cliente com endereço", None);
+    living.address = Some(AddressDraft {
+        postal_code: "01310-100".into(),
+        street: "Av. Paulista".into(),
+        number: Some("1000".into()),
+        complement: None,
+        district: Some("Bela Vista".into()),
+        city: "São Paulo".into(),
+        state: "SP".into(),
+    });
+    let resident = Party::new(PartyId::generate(), company, living).unwrap();
+    parties
+        .save(&resident, &created_entry(&resident))
+        .await
+        .unwrap();
+    let mut draft = entry_draft(
+        seed,
+        "Venda com endereço",
+        "2026-11-10",
+        &[("2026-12-10", "10")],
+    );
+    draft.party_id = Some(resident.id());
+    let located = entries.register(company, &ana, draft).await.unwrap();
+    service
+        .issue(company, &ana, located.id(), 1, ChargeMethod::Boleto, None)
+        .await
+        .unwrap();
+    let address = provider.created().pop().unwrap().payer.address.unwrap();
+    assert_eq!(address.street, "Av. Paulista, 1000");
+    assert_eq!(address.city, "São Paulo");
+    assert_eq!(address.state, "SP");
+    assert_eq!(address.postal_code, "01310100");
 
     // A provider that fails leaves nothing behind, and says why.
     service

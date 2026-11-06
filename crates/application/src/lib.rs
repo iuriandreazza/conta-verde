@@ -117,8 +117,8 @@ pub use payment_method_repository::{PaymentMethodQuery, PaymentMethodRepository}
 pub use payment_method_service::{PaymentMethodPage, PaymentMethodService};
 pub use payment_page_service::{InstallmentLinks, PageState, PaymentPage, PaymentPageService};
 pub use payment_provider::{
-    Payer, PaymentProvider, ProviderCharge, ProviderChargeRequest, ProviderError, ProviderEvent,
-    ProviderEventKind, WebhookError, WebhookHeaders,
+    Payer, PayerAddress, PaymentProvider, ProviderCharge, ProviderChargeRequest, ProviderError,
+    ProviderEvent, ProviderEventKind, WebhookError, WebhookHeaders,
 };
 pub use payment_term_repository::{PaymentTermQuery, PaymentTermRepository};
 pub use payment_term_service::{PaymentTermPage, PaymentTermService};

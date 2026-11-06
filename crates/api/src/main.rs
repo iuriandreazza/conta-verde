@@ -27,7 +27,7 @@ use conta_verde_infrastructure::{
 };
 use conta_verde_infrastructure::{
     AsaasProvider, NoMessageSender, PostgresDunningPlanRepository, PostgresNotificationRepository,
-    WhatsAppCloudSender,
+    StripeProvider, WhatsAppCloudSender,
 };
 use conta_verde_infrastructure::{
     FakePaymentProvider, NoPaymentProvider, PostgresChargeRepository,
@@ -135,7 +135,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         LocalBlobStore::new(attachments_dir_from_env()),
         PostgresFinancialEntryRepository::new(pool.clone()),
     );
-    let payment_provider = payment_provider_from_env()?;
+    // Links in e-mails (an invitation, a quote, a payment) lead to the web app, which is where the person
+    // answers.
+    let public_url = std::env::var("PUBLIC_URL").unwrap_or_else(|_| {
+        tracing::warn!(
+            "PUBLIC_URL is not set: invitation links will lead to http://localhost:5173"
+        );
+        "http://localhost:5173".to_owned()
+    });
+    let payment_provider = payment_provider_from_env(&public_url)?;
     let charges = ChargeService::new(
         PostgresChargeRepository::new(pool.clone()),
         PostgresFinancialEntryRepository::new(pool.clone()),
@@ -187,13 +195,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         PostgresOpeningRepository::new(pool.clone()),
     );
     let postal_codes = PostalCodeService::new(postal_code_directory_from_env()?);
-    // Links in e-mails (an invitation, a quote) lead to the web app, which is where the person answers.
-    let public_url = std::env::var("PUBLIC_URL").unwrap_or_else(|_| {
-        tracing::warn!(
-            "PUBLIC_URL is not set: invitation links will lead to http://localhost:5173"
-        );
-        "http://localhost:5173".to_owned()
-    });
     let quotes = QuoteService::new(
         PostgresQuoteRepository::new(pool.clone()),
         RegisterSalesReferences::new(
@@ -427,6 +428,7 @@ enum ConfiguredPaymentProvider {
     Off(NoPaymentProvider),
     Fake(FakePaymentProvider),
     Asaas(Box<AsaasProvider>),
+    Stripe(Box<StripeProvider>),
 }
 
 impl PaymentProvider for ConfiguredPaymentProvider {
@@ -435,6 +437,7 @@ impl PaymentProvider for ConfiguredPaymentProvider {
             Self::Off(provider) => provider.key(),
             Self::Fake(provider) => provider.key(),
             Self::Asaas(provider) => provider.key(),
+            Self::Stripe(provider) => provider.key(),
         }
     }
 
@@ -443,6 +446,7 @@ impl PaymentProvider for ConfiguredPaymentProvider {
             Self::Off(provider) => provider.is_enabled(),
             Self::Fake(provider) => provider.is_enabled(),
             Self::Asaas(provider) => provider.is_enabled(),
+            Self::Stripe(provider) => provider.is_enabled(),
         }
     }
 
@@ -454,6 +458,7 @@ impl PaymentProvider for ConfiguredPaymentProvider {
             Self::Off(provider) => provider.create_charge(request).await,
             Self::Fake(provider) => provider.create_charge(request).await,
             Self::Asaas(provider) => provider.create_charge(request).await,
+            Self::Stripe(provider) => provider.create_charge(request).await,
         }
     }
 
@@ -462,6 +467,7 @@ impl PaymentProvider for ConfiguredPaymentProvider {
             Self::Off(provider) => provider.cancel_charge(external_id).await,
             Self::Fake(provider) => provider.cancel_charge(external_id).await,
             Self::Asaas(provider) => provider.cancel_charge(external_id).await,
+            Self::Stripe(provider) => provider.cancel_charge(external_id).await,
         }
     }
 
@@ -474,12 +480,14 @@ impl PaymentProvider for ConfiguredPaymentProvider {
             Self::Off(provider) => provider.verify_webhook(headers, body),
             Self::Fake(provider) => provider.verify_webhook(headers, body),
             Self::Asaas(provider) => provider.verify_webhook(headers, body),
+            Self::Stripe(provider) => provider.verify_webhook(headers, body),
         }
     }
 }
 
-fn payment_provider_from_env()
--> Result<ConfiguredPaymentProvider, Box<dyn std::error::Error + Send + Sync>> {
+fn payment_provider_from_env(
+    public_url: &str,
+) -> Result<ConfiguredPaymentProvider, Box<dyn std::error::Error + Send + Sync>> {
     let setting = std::env::var("PAYMENT_PROVIDER").ok();
     match setting.as_deref().map(str::trim) {
         None | Some("" | "off") => {
@@ -523,6 +531,39 @@ fn payment_provider_from_env()
             tracing::info!("charges are made at Asaas");
             Ok(ConfiguredPaymentProvider::Asaas(Box::new(
                 AsaasProvider::new(setting("ASAAS_API_URL").as_deref(), &key, &token)?,
+            )))
+        }
+        Some("stripe") => {
+            let setting = |name: &str| {
+                std::env::var(name)
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+            };
+            let (Some(key), Some(secret)) = (
+                setting("STRIPE_SECRET_KEY"),
+                setting("STRIPE_WEBHOOK_SECRET"),
+            ) else {
+                return Err(
+                    "PAYMENT_PROVIDER=stripe needs STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET"
+                        .into(),
+                );
+            };
+            // The signing secret of a Stripe webhook endpoint starts with whsec_; anything else is the wrong
+            // value (a key, say) and would never verify a notice.
+            if !secret.starts_with("whsec_") {
+                return Err(
+                    "STRIPE_WEBHOOK_SECRET must be the endpoint's signing secret (whsec_...)"
+                        .into(),
+                );
+            }
+            tracing::info!("charges are made at Stripe");
+            Ok(ConfiguredPaymentProvider::Stripe(Box::new(
+                StripeProvider::new(
+                    setting("STRIPE_API_URL").as_deref(),
+                    &key,
+                    &secret,
+                    public_url,
+                )?,
             )))
         }
         Some(other) => Err(format!("PAYMENT_PROVIDER={other} is not a known provider").into()),

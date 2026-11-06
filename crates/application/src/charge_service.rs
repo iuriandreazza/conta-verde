@@ -7,7 +7,8 @@ use conta_verde_domain::{
 use crate::audit::audit_entry;
 use crate::{
     ApplicationError, ChargeRepository, CollectionSettingsRepository, FinancialEntryRepository,
-    PartyRepository, Payer, PaymentProvider, ProviderChargeRequest, ProviderError, RepositoryError,
+    PartyRepository, Payer, PayerAddress, PaymentProvider, ProviderChargeRequest, ProviderError,
+    RepositoryError,
 };
 
 /// Charges for the installments of the receivables of a company ([ADR 0045]): the provider makes
@@ -110,6 +111,15 @@ where
                         .document()
                         .map(|document| document.as_str().to_owned()),
                     email: party.email().map(|email| email.as_str().to_owned()),
+                    address: party.address().map(|address| PayerAddress {
+                        street: match address.number() {
+                            Some(number) => format!("{}, {number}", address.street()),
+                            None => address.street().to_owned(),
+                        },
+                        city: address.city().to_owned(),
+                        state: address.state().to_owned(),
+                        postal_code: address.postal_code().to_owned(),
+                    }),
                 },
                 description: format!(
                     "{} ({}/{})",
