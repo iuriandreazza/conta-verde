@@ -3,11 +3,11 @@ use std::sync::{Arc, Mutex};
 
 use conta_verde_application::{
     DateCursor, RepositoryError, StockFloor, StockMovementQuery, StockMovementRepository,
-    ensure_audit_describes,
+    StockSettingsRepository, ensure_audit_describes,
 };
 use conta_verde_domain::{
-    AuditEntry, CalendarDate, CompanyId, Decimal, ProductId, StockBalance, StockMovement,
-    StockMovementId, StockOriginKind,
+    AuditEntity, AuditEntry, AuditRecord, CalendarDate, CompanyId, Decimal, ProductId,
+    StockBalance, StockMovement, StockMovementId, StockOriginKind, StockSettings,
 };
 use uuid::Uuid;
 
@@ -201,6 +201,45 @@ impl StockMovementRepository for InMemoryStockMovementRepository {
     }
 }
 
+/// Keeps the stock settings and their audit trail in process memory, for tests and for running the API without a
+/// database. Clones share the same records.
+#[derive(Default, Clone)]
+pub struct InMemoryStockSettingsRepository {
+    state: Arc<Mutex<SettingsState>>,
+}
+
+#[derive(Default)]
+struct SettingsState {
+    settings: HashMap<CompanyId, StockSettings>,
+    audit: AuditLog,
+}
+
+impl StockSettingsRepository for InMemoryStockSettingsRepository {
+    async fn find(&self, company_id: CompanyId) -> Result<Option<StockSettings>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        Ok(state.settings.get(&company_id).copied())
+    }
+
+    async fn save(
+        &self,
+        settings: &StockSettings,
+        audit: &AuditEntry,
+    ) -> Result<(), RepositoryError> {
+        ensure_audit_describes(audit, settings)?;
+        let mut state = self.state.lock().expect("repository lock poisoned");
+        state.settings.insert(settings.company_id(), *settings);
+        state.audit.record(audit);
+        Ok(())
+    }
+
+    async fn history(&self, company_id: CompanyId) -> Result<Vec<AuditRecord>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        Ok(state
+            .audit
+            .history(company_id, AuditEntity::StockSettings, company_id.as_uuid()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use conta_verde_application::{
@@ -225,7 +264,11 @@ mod tests {
         let (company, other_company) = (CompanyId::generate(), CompanyId::generate());
         let seed =
             contract::seed_sales_records(&registers.parties, &products, &terms, company).await;
-        let stock = StockService::new(InMemoryStockMovementRepository::default(), products);
+        let stock = StockService::new(
+            InMemoryStockMovementRepository::default(),
+            products,
+            InMemoryStockSettingsRepository::default(),
+        );
         contract::runs_the_stock_ledger(&stock, company, other_company, &seed).await;
     }
 
@@ -251,7 +294,13 @@ mod tests {
                 terms.clone(),
             )
         };
-        let stock_of = || StockService::new(ledger.clone(), products.clone());
+        let stock_of = || {
+            StockService::new(
+                ledger.clone(),
+                products.clone(),
+                InMemoryStockSettingsRepository::default(),
+            )
+        };
         let purchases = PurchaseService::new(
             InMemoryPurchaseOrderRepository::default(),
             FinancialEntryService::new(entry_store.clone(), registers.references()),
@@ -272,6 +321,48 @@ mod tests {
             &sales,
             &stock_of(),
             company,
+            &entry_seed,
+            &seed,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn blocks_a_sale_without_balance_when_the_company_says_so() {
+        let registers = Registers::new();
+        let (products, terms) = (
+            InMemoryProductRepository::default(),
+            InMemoryPaymentTermRepository::default(),
+        );
+        let (company, other_company) = (CompanyId::generate(), CompanyId::generate());
+        let entry_seed = registers.seed(company).await;
+        let seed =
+            contract::seed_sales_records(&registers.parties, &products, &terms, company).await;
+        let (ledger, settings) = (
+            InMemoryStockMovementRepository::default(),
+            InMemoryStockSettingsRepository::default(),
+        );
+        let stock_of = || StockService::new(ledger.clone(), products.clone(), settings.clone());
+        let sales = SaleService::new(
+            InMemorySaleRepository::default(),
+            InMemoryQuoteRepository::default(),
+            FinancialEntryService::new(
+                InMemoryFinancialEntryRepository::default(),
+                registers.references(),
+            ),
+            registers.references(),
+            RegisterDocumentReferences::new(
+                registers.parties.clone(),
+                products.clone(),
+                terms.clone(),
+            ),
+            stock_of(),
+        );
+        contract::blocks_a_sale_without_balance_when_the_company_says_so(
+            &sales,
+            &stock_of(),
+            company,
+            other_company,
             &entry_seed,
             &seed,
         )

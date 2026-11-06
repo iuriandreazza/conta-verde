@@ -66,6 +66,7 @@ mod secret_service;
 mod statement_line_repository;
 mod stock_repository;
 mod stock_service;
+mod stock_settings_repository;
 mod transfer_repository;
 mod transfer_service;
 
@@ -152,8 +153,9 @@ pub use secret_service::{SecretError, SecretService};
 pub use statement_line_repository::{MatchedTargets, StatementLineQuery, StatementLineRepository};
 pub use stock_repository::{StockFloor, StockMovementQuery, StockMovementRepository};
 pub use stock_service::{
-    DocumentStock, StockMovementPage, StockPosition, StockPositionPage, StockService,
+    DocumentStock, StockAlert, StockMovementPage, StockPosition, StockPositionPage, StockService,
 };
+pub use stock_settings_repository::StockSettingsRepository;
 pub use transfer_repository::{
     AccountMovement, DayMovement, OpeningRepository, TransferQuery, TransferRepository,
 };

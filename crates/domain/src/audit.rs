@@ -5,7 +5,8 @@ use crate::{
     AccountOpening, Attachment, BankAccount, Category, Charge, CollectionSettings, CommissionRule,
     CompanyId, Contract, CostCenter, DocumentCheck, DunningPlan, FinancialEntry, LineMatch, Party,
     PaymentMethod, PaymentTerm, PriceList, Product, PurchaseOrder, PurchaseReceipt, Quote,
-    Recurrence, Sale, SaleReturn, Settlement, StatementLine, StockMovement, Tag, Transfer, UserId,
+    Recurrence, Sale, SaleReturn, Settlement, StatementLine, StockMovement, StockSettings, Tag,
+    Transfer, UserId,
 };
 
 /// Who made a change. The name is a snapshot: history must keep reading the same after the user is
@@ -47,6 +48,8 @@ pub enum AuditEntity {
     PurchaseOrder,
     PurchaseReceipt,
     StockMovement,
+    /// One per company: the audit id is the company's.
+    StockSettings,
 }
 
 impl AuditEntity {
@@ -75,6 +78,7 @@ impl AuditEntity {
             Self::PurchaseOrder => "purchase_order",
             Self::PurchaseReceipt => "purchase_receipt",
             Self::StockMovement => "stock_movement",
+            Self::StockSettings => "stock_settings",
             Self::Settlement => "settlement",
             Self::Transfer => "transfer",
             Self::AccountOpening => "account_opening",
@@ -429,6 +433,20 @@ impl Audited for Charge {
 impl Audited for CollectionSettings {
     fn audit_entity(&self) -> AuditEntity {
         AuditEntity::CollectionSettings
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.company_id().as_uuid()
+    }
+}
+
+impl Audited for StockSettings {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::StockSettings
     }
 
     fn audit_company(&self) -> CompanyId {
@@ -1195,6 +1213,22 @@ pub fn collection_settings_changes(
         collection_settings_fields(before),
         collection_settings_fields(after),
     )
+}
+
+fn stock_settings_fields(settings: &StockSettings) -> Fields {
+    vec![(
+        "block_sale_without_balance",
+        Some(settings.blocks_sales_without_balance().to_string()),
+    )]
+}
+
+/// Every field settings that were just made have set.
+pub fn stock_settings_creation_changes(settings: &StockSettings) -> Vec<FieldChange> {
+    creation_from(stock_settings_fields(settings))
+}
+
+pub fn stock_settings_changes(before: &StockSettings, after: &StockSettings) -> Vec<FieldChange> {
+    changes_between(stock_settings_fields(before), stock_settings_fields(after))
 }
 
 fn dunning_plan_fields(plan: &DunningPlan) -> Fields {

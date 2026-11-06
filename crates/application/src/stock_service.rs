@@ -5,7 +5,8 @@ use conta_verde_domain::{
     Actor, AuditAction, CalendarDate, CompanyId, Decimal, DomainError, Product, ProductId,
     ProductKind, PurchaseOrder, PurchaseReceipt, Sale, SaleId, SaleReturn, StockBalance,
     StockMovement, StockMovementDraft, StockMovementId, StockMovementKind, StockOrigin,
-    StockOriginKind, round_to_cents, stock_movement_creation_changes,
+    StockOriginKind, StockSettings, round_to_cents, stock_movement_creation_changes,
+    stock_settings_changes, stock_settings_creation_changes,
 };
 use uuid::Uuid;
 
@@ -13,8 +14,9 @@ use crate::audit::audit_entry;
 use crate::list_query::{clamp_limit, split_page};
 use crate::{
     ApplicationError, DateCursor, NameCursor, ProductQuery, ProductRepository, RepositoryError,
-    StockFloor, StockMovementQuery, StockMovementRepository,
+    StockFloor, StockMovementQuery, StockMovementRepository, StockSettingsRepository,
 };
+use conta_verde_domain::AuditRecord;
 
 /// How many times a write is valued again when another one changed the stock under it.
 const ATTEMPTS: usize = 5;
@@ -22,6 +24,14 @@ const ATTEMPTS: usize = 5;
 /// What sales and purchases ask of the stock ([ADR 0054]). Every step is idempotent: asking again writes only what
 /// is missing, so a failure between a document and its stock is finished by asking again.
 pub trait DocumentStock: Send + Sync {
+    /// Whether the stock can cover the sale, when the company refuses a sale without balance: asked before the sale
+    /// is completed so that a refusal changes nothing. It answers the same `StockInsufficient` the exits would.
+    fn ensure_available_for_sale(
+        &self,
+        company_id: CompanyId,
+        sale: &Sale,
+    ) -> impl Future<Output = Result<(), ApplicationError>> + Send;
+
     /// The exits of a completed sale: one per line that is a product, for the day of the sale.
     fn take_for_sale(
         &self,
@@ -79,6 +89,13 @@ pub struct StockPositionPage {
     pub next: Option<NameCursor>,
 }
 
+/// A product that has less than its minimum.
+#[derive(Debug, Clone)]
+pub struct StockAlert {
+    pub product: Product,
+    pub quantity: Decimal,
+}
+
 /// One movement to write, before it is valued.
 struct NewMovement {
     draft: StockMovementDraft,
@@ -95,20 +112,102 @@ enum Undo {
 
 /// The stock of a company ([ADR 0054]): the ledger of its movements, what each product has, and what the documents
 /// do to it.
-pub struct StockService<M, P> {
+pub struct StockService<M, P, S> {
     movements: M,
     products: P,
+    settings: S,
 }
 
-impl<M, P> StockService<M, P>
+impl<M, P, S> StockService<M, P, S>
 where
     M: StockMovementRepository,
     P: ProductRepository,
+    S: StockSettingsRepository,
 {
-    pub fn new(movements: M, products: P) -> Self {
+    pub fn new(movements: M, products: P, settings: S) -> Self {
         Self {
             movements,
             products,
+            settings,
+        }
+    }
+
+    /// How the company's stock behaves; a company that never said has the default.
+    pub async fn settings(&self, company_id: CompanyId) -> Result<StockSettings, ApplicationError> {
+        Ok(self
+            .settings
+            .find(company_id)
+            .await?
+            .unwrap_or_else(|| StockSettings::open(company_id)))
+    }
+
+    /// Replaces the settings; one that changes nothing writes nothing.
+    pub async fn replace_settings(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        block_sale_without_balance: bool,
+    ) -> Result<StockSettings, ApplicationError> {
+        let before = self.settings.find(company_id).await?;
+        let after = StockSettings::new(company_id, block_sale_without_balance);
+        if before.as_ref() == Some(&after) {
+            return Ok(after);
+        }
+        let (action, changes) = match &before {
+            Some(stored) => (AuditAction::Updated, stock_settings_changes(stored, &after)),
+            None => (
+                AuditAction::Created,
+                stock_settings_creation_changes(&after),
+            ),
+        };
+        let audit = audit_entry(&after, actor, action, changes);
+        self.settings.save(&after, &audit).await?;
+        Ok(after)
+    }
+
+    /// What was recorded about the company's stock settings, oldest first.
+    pub async fn settings_history(
+        &self,
+        company_id: CompanyId,
+    ) -> Result<Vec<AuditRecord>, ApplicationError> {
+        Ok(self.settings.history(company_id).await?)
+    }
+
+    /// The active products that have less than their minimum now, by name. A product with no minimum, a service and
+    /// an inactive product are never listed.
+    pub async fn alerts(&self, company_id: CompanyId) -> Result<Vec<StockAlert>, ApplicationError> {
+        let query = ProductQuery::default()
+            .of_kind(ProductKind::Product)
+            .with_active(true);
+        let mut alerts = Vec::new();
+        let mut after: Option<NameCursor> = None;
+        loop {
+            let page = self
+                .products
+                .list_by_company(company_id, &query, after.as_ref(), 200 + 1)
+                .await?;
+            let (products, next): (Vec<Product>, Option<NameCursor>) = split_page(page, 200);
+            let tracked: Vec<Product> = products
+                .into_iter()
+                .filter(|product| product.minimum_stock().is_some())
+                .collect();
+            let ids: Vec<ProductId> = tracked.iter().map(Product::id).collect();
+            let balances = self.movements.balances(company_id, &ids, None).await?;
+            for (product, (_, balance)) in tracked.into_iter().zip(balances) {
+                let minimum = product
+                    .minimum_stock()
+                    .map_or(Decimal::ZERO, |m| m.as_decimal());
+                if balance.quantity() < minimum {
+                    alerts.push(StockAlert {
+                        product,
+                        quantity: balance.quantity(),
+                    });
+                }
+            }
+            match next {
+                Some(cursor) => after = Some(cursor),
+                None => return Ok(alerts),
+            }
         }
     }
 
@@ -247,6 +346,23 @@ where
             .next()
             .map(|(_, balance)| balance)
             .unwrap_or(StockBalance::EMPTY))
+    }
+
+    /// The refusal for a product that has `on_hand` and is asked for more: it names the product.
+    async fn short_of(
+        &self,
+        company_id: CompanyId,
+        product_id: ProductId,
+        on_hand: Decimal,
+    ) -> ApplicationError {
+        let name = match self.products.find(company_id, product_id).await {
+            Ok(Some(product)) => product.name().to_owned(),
+            _ => "the product".to_owned(),
+        };
+        ApplicationError::StockInsufficient {
+            product: name,
+            available: on_hand.max(Decimal::ZERO).normalize().to_string(),
+        }
     }
 
     /// The product, if it is one that has stock.
@@ -427,14 +543,9 @@ where
             for (product_id, before) in seen {
                 let after = books.get(product_id).copied().unwrap_or(*before);
                 if after.quantity() < Decimal::ZERO && after.quantity() < before.quantity() {
-                    let name = match self.products.find(company_id, *product_id).await? {
-                        Some(product) => product.name().to_owned(),
-                        None => "the product".to_owned(),
-                    };
-                    return Err(ApplicationError::StockInsufficient {
-                        product: name,
-                        available: before.quantity().max(Decimal::ZERO).to_string(),
-                    });
+                    return Err(self
+                        .short_of(company_id, *product_id, before.quantity())
+                        .await);
                 }
             }
         }
@@ -461,11 +572,46 @@ fn quantity_text(quantity: Decimal) -> String {
     quantity.normalize().to_string()
 }
 
-impl<M, P> DocumentStock for StockService<M, P>
+impl<M, P, S> DocumentStock for StockService<M, P, S>
 where
     M: StockMovementRepository,
     P: ProductRepository,
+    S: StockSettingsRepository,
 {
+    async fn ensure_available_for_sale(
+        &self,
+        company_id: CompanyId,
+        sale: &Sale,
+    ) -> Result<(), ApplicationError> {
+        if !self
+            .settings(company_id)
+            .await?
+            .blocks_sales_without_balance()
+        {
+            return Ok(());
+        }
+        let mut wanted: Vec<(ProductId, Decimal)> = Vec::new();
+        for line in sale.lines() {
+            if !self.has_stock(company_id, line.product_id()).await? {
+                continue;
+            }
+            match wanted.iter_mut().find(|(id, _)| *id == line.product_id()) {
+                Some((_, quantity)) => *quantity += line.quantity().as_decimal(),
+                None => wanted.push((line.product_id(), line.quantity().as_decimal())),
+            }
+        }
+        let ids: Vec<ProductId> = wanted.iter().map(|(id, _)| *id).collect();
+        let balances = self.movements.balances(company_id, &ids, None).await?;
+        for ((product_id, needed), (_, balance)) in wanted.into_iter().zip(balances) {
+            if balance.quantity() < needed {
+                return Err(self
+                    .short_of(company_id, product_id, balance.quantity())
+                    .await);
+            }
+        }
+        Ok(())
+    }
+
     async fn take_for_sale(
         &self,
         company_id: CompanyId,
@@ -494,9 +640,16 @@ where
                 }),
             });
         }
-        self.write(company_id, actor, items, StockFloor::Open)
-            .await
-            .map(drop)
+        let floor = if self
+            .settings(company_id)
+            .await?
+            .blocks_sales_without_balance()
+        {
+            StockFloor::Zero
+        } else {
+            StockFloor::Open
+        };
+        self.write(company_id, actor, items, floor).await.map(drop)
     }
 
     async fn put_back_cancelled_sale(

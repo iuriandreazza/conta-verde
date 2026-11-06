@@ -33,7 +33,9 @@ use conta_verde_application::{PriceListQuery, PriceListRepository, PriceListServ
 use conta_verde_application::{
     PurchaseOrderPage, PurchaseOrderQuery, PurchaseOrderRepository, PurchaseService,
 };
-use conta_verde_application::{StockMovementQuery, StockMovementRepository, StockService};
+use conta_verde_application::{
+    StockMovementQuery, StockMovementRepository, StockService, StockSettingsRepository,
+};
 use conta_verde_domain::{
     Account, AccountDraft, Actor, AddressDraft, AuditAction, AuditEntity, AuditEntry, BankAccount,
     BankAccountDraft, BankAccountId, BankAccountKind, CashFlowGroup, Category, CategoryId,
@@ -13011,14 +13013,15 @@ fn stock_draft(
 /// What the ledger of a company holds, by hand: the worked example of the average cost, the floor of a manual
 /// exit, reversals, listing, and two writes racing for the same stock.
 #[allow(clippy::too_many_lines)]
-pub async fn runs_the_stock_ledger<M, P>(
-    stock: &StockService<M, P>,
+pub async fn runs_the_stock_ledger<M, P, St>(
+    stock: &StockService<M, P, St>,
     company: CompanyId,
     other_company: CompanyId,
     seed: &SalesSeed,
 ) where
     M: StockMovementRepository,
     P: ProductRepository,
+    St: StockSettingsRepository,
 {
     use conta_verde_domain::StockMovementKind::{Adjustment, In, Out};
     let ana = actor();
@@ -13340,10 +13343,10 @@ pub async fn runs_the_stock_ledger<M, P>(
 /// cost (worked out below), a return puts back what the sale took, and cancelling a sale undoes its exits; each
 /// step is written once however often it is asked for.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-pub async fn stock_follows_purchases_and_sales<P, E, F, R, T, S, Q, M, Pr>(
+pub async fn stock_follows_purchases_and_sales<P, E, F, R, T, S, Q, M, Pr, St>(
     purchases: &PurchaseService<P, E, F, R, T>,
     sales: &SaleService<S, Q, E, F, R, T>,
-    stock: &StockService<M, Pr>,
+    stock: &StockService<M, Pr, St>,
     company: CompanyId,
     entry_seed: &EntrySeed,
     seed: &SalesSeed,
@@ -13357,6 +13360,7 @@ pub async fn stock_follows_purchases_and_sales<P, E, F, R, T, S, Q, M, Pr>(
     Q: QuoteRepository,
     M: StockMovementRepository,
     Pr: ProductRepository,
+    St: StockSettingsRepository,
 {
     let ana = actor();
     let state = |balance: conta_verde_domain::StockBalance| {
@@ -13504,4 +13508,158 @@ pub async fn stock_follows_purchases_and_sales<P, E, F, R, T, S, Q, M, Pr>(
         .await
         .unwrap();
     assert_eq!(state(coffee().await).0, "20");
+}
+
+/// Minimum stock alerts and the block of a sale without balance ([ADR 0055]).
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub async fn blocks_a_sale_without_balance_when_the_company_says_so<S, Q, E, F, R, T, M, Pr, St>(
+    sales: &SaleService<S, Q, E, F, R, T>,
+    stock: &StockService<M, Pr, St>,
+    company: CompanyId,
+    other_company: CompanyId,
+    entry_seed: &EntrySeed,
+    seed: &SalesSeed,
+) where
+    S: SaleRepository,
+    Q: QuoteRepository,
+    E: FinancialEntryRepository,
+    F: EntryReferences,
+    R: DocumentReferences,
+    T: DocumentStock,
+    M: StockMovementRepository,
+    Pr: ProductRepository,
+    St: StockSettingsRepository,
+{
+    use conta_verde_domain::StockMovementKind::In;
+    let ana = actor();
+    let bought = |product: ProductId, quantity: &str| {
+        let mut draft = stock_draft(product, In, quantity, "2026-11-01");
+        draft.unit_cost = Some("5".into());
+        draft
+    };
+    let short = |product: &str, available: &str| ApplicationError::StockInsufficient {
+        product: product.into(),
+        available: available.into(),
+    };
+
+    // A company that never said allows a sale without balance; saying so is audited, and saying the same twice
+    // is not.
+    assert!(
+        !stock
+            .settings(company)
+            .await
+            .unwrap()
+            .blocks_sales_without_balance()
+    );
+    assert!(stock.settings_history(company).await.unwrap().is_empty());
+
+    // The alerts: active products with a minimum (2.5 each) and less than it, by name. A product that is retired
+    // and a service have none.
+    let alerts = |alerts: Vec<conta_verde_application::StockAlert>| -> Vec<(String, String)> {
+        alerts
+            .iter()
+            .map(|alert| (alert.product.name().to_owned(), alert.quantity.to_string()))
+            .collect()
+    };
+    assert_eq!(
+        alerts(stock.alerts(company).await.unwrap()),
+        [("Café".into(), "0".into()), ("Pão".into(), "0".into())]
+    );
+    stock
+        .record(company, &ana, bought(seed.product, "2"))
+        .await
+        .unwrap();
+    assert_eq!(
+        alerts(stock.alerts(company).await.unwrap()),
+        [("Café".into(), "2".into()), ("Pão".into(), "0".into())]
+    );
+    stock
+        .record(company, &ana, bought(seed.product, "3"))
+        .await
+        .unwrap();
+    assert_eq!(
+        alerts(stock.alerts(company).await.unwrap()),
+        [("Pão".into(), "0".into())]
+    );
+    assert!(stock.alerts(other_company).await.unwrap().is_empty());
+
+    // The block is on: a sale that the stock cannot cover is refused before it changes, naming what is short.
+    assert!(
+        stock
+            .replace_settings(company, &ana, true)
+            .await
+            .unwrap()
+            .blocks_sales_without_balance()
+    );
+    stock.replace_settings(company, &ana, true).await.unwrap();
+    assert_eq!(stock.settings_history(company).await.unwrap().len(), 1);
+    let sale = sales
+        .register(company, &ana, sale_draft(entry_seed, seed))
+        .await
+        .unwrap();
+    assert_eq!(
+        sales.complete(company, &ana, sale.id()).await.unwrap_err(),
+        short("Pão", "0")
+    );
+    assert_eq!(
+        sales.get(company, sale.id()).await.unwrap().status(),
+        SaleStatus::Open
+    );
+    assert!(
+        sales
+            .receivable(company, sale.id())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    stock
+        .record(company, &ana, bought(seed.other_product, "1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        sales.complete(company, &ana, sale.id()).await.unwrap_err(),
+        short("Pão", "1")
+    );
+    stock
+        .record(company, &ana, bought(seed.other_product, "0.5"))
+        .await
+        .unwrap();
+    sales.complete(company, &ana, sale.id()).await.unwrap();
+    let state = |balance: conta_verde_domain::StockBalance| balance.quantity().to_string();
+    assert_eq!(
+        state(stock.balance_of(company, seed.product).await.unwrap()),
+        "2"
+    );
+    assert_eq!(
+        state(stock.balance_of(company, seed.other_product).await.unwrap()),
+        "0"
+    );
+
+    // The same product on two lines is asked for together: 2 and 2 of the 2 that are left.
+    let mut twice = sale_draft(entry_seed, seed);
+    twice.lines = vec![
+        sale_line(seed.product, "Café 500g", "1", "10", "0"),
+        sale_line(seed.product, "Café 250g", "2", "10", "0"),
+    ];
+    let twice = sales.register(company, &ana, twice).await.unwrap();
+    assert_eq!(
+        sales.complete(company, &ana, twice.id()).await.unwrap_err(),
+        short("Café", "2")
+    );
+
+    // The block is off again: the sale is made and the balance goes below zero.
+    stock.replace_settings(company, &ana, false).await.unwrap();
+    assert_eq!(stock.settings_history(company).await.unwrap().len(), 2);
+    sales.complete(company, &ana, twice.id()).await.unwrap();
+    assert_eq!(
+        state(stock.balance_of(company, seed.product).await.unwrap()),
+        "-1"
+    );
+    assert!(
+        !stock
+            .settings(other_company)
+            .await
+            .unwrap()
+            .blocks_sales_without_balance()
+    );
 }

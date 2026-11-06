@@ -254,6 +254,10 @@ where
                 let completed = sale.completed()?;
                 let receivable = self.receivable_of(&completed).await?;
                 self.entries.validate(company_id, receivable).await?;
+                // A company that refuses a sale without balance finds out before the sale changes.
+                self.stock
+                    .ensure_available_for_sale(company_id, &completed)
+                    .await?;
                 let audit = audit_entry(
                     &completed,
                     actor,

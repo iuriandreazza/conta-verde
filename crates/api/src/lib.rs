@@ -55,7 +55,8 @@ use conta_verde_application::{
     PriceListService, ProductRepository, ProductService, PurchaseOrderRepository, PurchaseService,
     QuoteRepository, QuoteService, ReconciliationService, RecurrenceRepository, RecurrenceService,
     SaleRepository, SaleService, SalesReportService, SecretService, StatementLineRepository,
-    StockMovementRepository, StockService, TransferRepository, TransferService,
+    StockMovementRepository, StockService, StockSettingsRepository, TransferRepository,
+    TransferService,
 };
 use conta_verde_application::{
     CollectionService, CollectionSettingsRepository, DunningPlanRepository, DunningService,
@@ -106,6 +107,7 @@ pub trait Ports: 'static {
     type Sales: SaleRepository + 'static;
     type Purchases: PurchaseOrderRepository + 'static;
     type StockMovements: StockMovementRepository + 'static;
+    type StockSettings: StockSettingsRepository + 'static;
     type Contracts: ContractRepository + 'static;
     type CommissionRules: CommissionRuleRepository + 'static;
     type Statements: StatementLineRepository + 'static;
@@ -154,7 +156,8 @@ type WebhooksOf<X> = PaymentWebhookService<
 >;
 
 /// The stock use case over the adapters of `X`.
-type StockOf<X> = StockService<<X as Ports>::StockMovements, <X as Ports>::Products>;
+type StockOf<X> =
+    StockService<<X as Ports>::StockMovements, <X as Ports>::Products, <X as Ports>::StockSettings>;
 
 /// The sales use case over the adapters of `X`.
 type SalesOf<X> = SaleService<
@@ -698,6 +701,18 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
             get(stock::list_positions::<X>),
         )
         .route(
+            "/companies/{company_id}/stock/alerts",
+            get(stock::list_alerts::<X>),
+        )
+        .route(
+            "/companies/{company_id}/stock/settings",
+            get(stock::get_settings::<X>).put(stock::put_settings::<X>),
+        )
+        .route(
+            "/companies/{company_id}/stock/settings/history",
+            get(stock::settings_history::<X>),
+        )
+        .route(
             "/companies/{company_id}/purchase-orders",
             get(purchase_orders::list_purchase_orders::<X>)
                 .post(purchase_orders::register_purchase_order::<X>),
@@ -793,7 +808,8 @@ mod tests {
         InMemoryPostalCodeDirectory, InMemoryPriceListRepository, InMemoryProductRepository,
         InMemoryPurchaseOrderRepository, InMemoryQuoteRepository, InMemoryRecurrenceRepository,
         InMemorySaleRepository, InMemoryStatementLineRepository, InMemoryStockMovementRepository,
-        InMemoryTransferRepository, RegisterDocumentReferences, RegisterReferences,
+        InMemoryStockSettingsRepository, InMemoryTransferRepository, RegisterDocumentReferences,
+        RegisterReferences,
     };
     use http_body_util::BodyExt;
     use serde_json::{Value, json};
@@ -878,6 +894,7 @@ mod tests {
         type Sales = InMemorySaleRepository;
         type Purchases = InMemoryPurchaseOrderRepository;
         type StockMovements = InMemoryStockMovementRepository;
+        type StockSettings = InMemoryStockSettingsRepository;
         type Contracts = InMemoryContractRepository;
         type CommissionRules = InMemoryCommissionRuleRepository;
         type Statements = InMemoryStatementLineRepository;
@@ -921,6 +938,7 @@ mod tests {
         type Sales = InMemorySaleRepository;
         type Purchases = InMemoryPurchaseOrderRepository;
         type StockMovements = InMemoryStockMovementRepository;
+        type StockSettings = InMemoryStockSettingsRepository;
         type Contracts = InMemoryContractRepository;
         type CommissionRules = InMemoryCommissionRuleRepository;
         type Statements = InMemoryStatementLineRepository;
@@ -1290,7 +1308,11 @@ mod tests {
         TestStock,
     >;
 
-    type TestStock = StockService<InMemoryStockMovementRepository, InMemoryProductRepository>;
+    type TestStock = StockService<
+        InMemoryStockMovementRepository,
+        InMemoryProductRepository,
+        InMemoryStockSettingsRepository,
+    >;
 
     /// Sales over the registers, the quotes and the entries a test keeps a handle to, so that a quote can be
     /// turned into a sale and the sale's receivable shows in the entries and the cash flow.
@@ -1307,6 +1329,7 @@ mod tests {
         products: &InMemoryProductRepository,
         payment_terms: &InMemoryPaymentTermRepository,
         ledger: InMemoryStockMovementRepository,
+        settings: InMemoryStockSettingsRepository,
     ) -> TestSales {
         let references = || {
             references_over(
@@ -1327,7 +1350,7 @@ mod tests {
                 products.clone(),
                 payment_terms.clone(),
             ),
-            StockService::new(ledger, products.clone()),
+            StockService::new(ledger, products.clone(), settings),
         )
     }
 
@@ -1345,6 +1368,7 @@ mod tests {
             &InMemoryProductRepository::default(),
             &InMemoryPaymentTermRepository::default(),
             InMemoryStockMovementRepository::default(),
+            InMemoryStockSettingsRepository::default(),
         )
     }
 
@@ -1370,6 +1394,7 @@ mod tests {
         products: &InMemoryProductRepository,
         payment_terms: &InMemoryPaymentTermRepository,
         ledger: InMemoryStockMovementRepository,
+        settings: InMemoryStockSettingsRepository,
     ) -> TestPurchases {
         let references = || {
             references_over(
@@ -1389,7 +1414,7 @@ mod tests {
                 products.clone(),
                 payment_terms.clone(),
             ),
-            StockService::new(ledger, products.clone()),
+            StockService::new(ledger, products.clone(), settings),
         )
     }
 
@@ -1406,6 +1431,7 @@ mod tests {
             &InMemoryProductRepository::default(),
             &InMemoryPaymentTermRepository::default(),
             InMemoryStockMovementRepository::default(),
+            InMemoryStockSettingsRepository::default(),
         )
     }
 
@@ -1414,6 +1440,7 @@ mod tests {
         StockService::new(
             InMemoryStockMovementRepository::default(),
             InMemoryProductRepository::default(),
+            InMemoryStockSettingsRepository::default(),
         )
     }
 
@@ -5212,6 +5239,7 @@ mod tests {
         let quote_store = InMemoryQuoteRepository::default();
         let sale_store = InMemorySaleRepository::default();
         let ledger = InMemoryStockMovementRepository::default();
+        let stock_settings = InMemoryStockSettingsRepository::default();
         let sales = || {
             sales_over(
                 sale_store.clone(),
@@ -5225,6 +5253,7 @@ mod tests {
                 &products,
                 &payment_terms,
                 ledger.clone(),
+                stock_settings.clone(),
             )
         };
         router::<MemoryPorts>(
@@ -5322,8 +5351,9 @@ mod tests {
                     &products,
                     &payment_terms,
                     ledger.clone(),
+                    stock_settings.clone(),
                 ),
-                stock: StockService::new(ledger.clone(), products.clone()),
+                stock: StockService::new(ledger.clone(), products.clone(), stock_settings.clone()),
                 contracts: ContractService::new(InMemoryContractRepository::default(), sales()),
                 commissions: commissions_over(
                     sale_store.clone(),
@@ -9417,6 +9447,154 @@ mod tests {
             .status,
             StatusCode::BAD_REQUEST
         );
+    }
+
+    #[tokio::test]
+    async fn minimum_stock_alerts_and_the_block_of_a_sale_without_balance() {
+        let app = entry_app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let targets = sales_targets(&app, &cookie, company_id).await;
+        let category = revenue_category(&app, &cookie, company_id).await;
+        let alerts_uri = format!("{}/alerts", stock_uri(company_id));
+        let settings_uri = format!("{}/settings", stock_uri(company_id));
+        let movements = format!("{}/movements", stock_uri(company_id));
+
+        // Both products have a minimum of 10 and nothing on hand.
+        let alerts = send(&app, get_request(&alerts_uri, Some(&cookie))).await;
+        assert_eq!(alerts.status, StatusCode::OK, "{}", alerts.body);
+        let names: Vec<&str> = alerts.body["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["Café", "Pão"]);
+        assert_eq!(alerts.body["items"][0]["shortfall"], "10");
+        let enter = |product: &str, quantity: &str| {
+            json!({ "product_id": product, "kind": "in", "quantity": quantity,
+                    "unit_cost": "5", "occurred_on": "2026-11-01" })
+        };
+        for (product, quantity) in [(&targets.product, "10"), (&targets.other_product, "1")] {
+            let made = send(
+                &app,
+                json_request("POST", &movements, Some(&cookie), enter(product, quantity)),
+            )
+            .await;
+            assert_eq!(made.status, StatusCode::CREATED, "{}", made.body);
+        }
+        let alerts = send(&app, get_request(&alerts_uri, Some(&cookie))).await;
+        let items = alerts.body["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            (
+                &items[0]["name"],
+                &items[0]["quantity"],
+                &items[0]["shortfall"]
+            ),
+            (&json!("Pão"), &json!("1"), &json!("9"))
+        );
+
+        // The setting is off until the company says so, and saying it is recorded.
+        let settings = send(&app, get_request(&settings_uri, Some(&cookie))).await;
+        assert_eq!(settings.body["block_sale_without_balance"], false);
+        let turned_on = send(
+            &app,
+            json_request(
+                "PUT",
+                &settings_uri,
+                Some(&cookie),
+                json!({ "block_sale_without_balance": true }),
+            ),
+        )
+        .await;
+        assert_eq!(turned_on.status, StatusCode::OK, "{}", turned_on.body);
+        assert_eq!(turned_on.body["block_sale_without_balance"], true);
+        assert_eq!(
+            send(
+                &app,
+                json_request("PUT", &settings_uri, Some(&cookie), json!({}))
+            )
+            .await
+            .status,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let history = send(
+            &app,
+            get_request(&format!("{settings_uri}/history"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(history.body.as_array().unwrap().len(), 1);
+
+        // A sale of 3 coffees and 1.5 breads, with 1 bread on hand: refused with a clear 409, naming what is short,
+        // and the order stays open.
+        let sale = send(
+            &app,
+            json_request(
+                "POST",
+                &sales_uri(company_id),
+                Some(&cookie),
+                sale_body(&targets, &category),
+            ),
+        )
+        .await;
+        let sale_uri = format!(
+            "{}/{}",
+            sales_uri(company_id),
+            sale.body["id"].as_str().unwrap()
+        );
+        let refused = send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{sale_uri}/complete"),
+                Some(&cookie),
+                Value::Null,
+            ),
+        )
+        .await;
+        assert_eq!(refused.status, StatusCode::CONFLICT);
+        assert_eq!(refused.body["error"], "not enough stock of Pão: 1 on hand");
+        assert_eq!(
+            send(&app, get_request(&sale_uri, Some(&cookie))).await.body["status"],
+            "open"
+        );
+        // Without the block the same sale is made and leaves the bread below zero.
+        send(
+            &app,
+            json_request(
+                "PUT",
+                &settings_uri,
+                Some(&cookie),
+                json!({ "block_sale_without_balance": false }),
+            ),
+        )
+        .await;
+        let done = send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{sale_uri}/complete"),
+                Some(&cookie),
+                Value::Null,
+            ),
+        )
+        .await;
+        assert_eq!(done.status, StatusCode::OK, "{}", done.body);
+        let positions = send(
+            &app,
+            get_request(
+                &format!("{}/positions", stock_uri(company_id)),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        let bread = positions.body["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["product_id"] == targets.other_product)
+            .unwrap();
+        assert_eq!(bread["quantity"], "-0.5");
     }
 
     #[tokio::test]

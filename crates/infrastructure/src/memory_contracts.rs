@@ -154,12 +154,12 @@ mod tests {
     use conta_verde_application::StockService;
 
     use super::*;
-    use crate::InMemoryStockMovementRepository;
     use crate::memory_entries::tests::Registers;
     use crate::{
         InMemoryFinancialEntryRepository, InMemoryPaymentTermRepository, InMemoryProductRepository,
         InMemoryQuoteRepository, InMemorySaleRepository, RegisterDocumentReferences, contract,
     };
+    use crate::{InMemoryStockMovementRepository, InMemoryStockSettingsRepository};
 
     #[tokio::test]
     async fn bills_contracts_every_cycle() {
@@ -188,7 +188,11 @@ mod tests {
                     products.clone(),
                     terms.clone(),
                 ),
-                StockService::new(InMemoryStockMovementRepository::default(), products.clone()),
+                StockService::new(
+                    InMemoryStockMovementRepository::default(),
+                    products.clone(),
+                    InMemoryStockSettingsRepository::default(),
+                ),
             )
         };
         let service = ContractService::new(InMemoryContractRepository::default(), sales());
