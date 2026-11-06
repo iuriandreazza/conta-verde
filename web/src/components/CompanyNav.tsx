@@ -10,6 +10,7 @@ import { CircleDollarSignIcon } from "./icons/circle-dollar-sign";
 import { CreditCardIcon } from "./icons/credit-card";
 import { FileTextIcon } from "./icons/file-text";
 import { FolderTreeIcon } from "./icons/folder-tree";
+import { HandCoinsIcon } from "./icons/hand-coins";
 import { LayersIcon } from "./icons/layers";
 import { RotateCCWIcon } from "./icons/rotate-ccw";
 import { SendIcon } from "./icons/send";
@@ -68,6 +69,14 @@ function NavGroup({ base, section }: { base: string; section: NavSection }) {
 const HOME: NavItem = { path: "", label: "Painel", icon: ChartLineIcon };
 
 const SECTIONS: NavSection[] = [
+  {
+    key: "commercial",
+    label: "Comercial",
+    items: [
+      { path: "/quotes", label: "Orçamentos", icon: FileTextIcon },
+      { path: "/sales", label: "Vendas", icon: HandCoinsIcon },
+    ],
+  },
   {
     key: "finance",
     label: "Financeiro",

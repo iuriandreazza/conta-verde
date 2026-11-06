@@ -1,6 +1,8 @@
 import { Button } from "./Button";
 import { BoxIcon } from "./icons/box";
 import { CircleDollarSignIcon } from "./icons/circle-dollar-sign";
+import { FileTextIcon } from "./icons/file-text";
+import { HandCoinsIcon } from "./icons/hand-coins";
 import { LogoutIcon } from "./icons/logout";
 import { PlusIcon } from "./icons/plus";
 import { SendIcon } from "./icons/send";
@@ -25,6 +27,8 @@ function creationItems(companyId: string, permissions: AppTopbarProps["permissio
   const items: (MenuItem & { area: Area })[] = [
     { key: "entry", label: "Novo lançamento", icon: CircleDollarSignIcon, to: `${base}/entries`, area: "finance" },
     { key: "transfer", label: "Nova transferência", icon: SendIcon, to: `${base}/transfers`, area: "finance" },
+    { key: "quote", label: "Novo orçamento", icon: FileTextIcon, to: `${base}/quotes`, area: "sales" },
+    { key: "sale", label: "Nova venda", icon: HandCoinsIcon, to: `${base}/sales`, area: "sales" },
     { key: "party", label: "Novo cliente ou fornecedor", icon: UsersIcon, to: `${base}/parties`, area: "parties" },
     { key: "product", label: "Novo produto ou serviço", icon: BoxIcon, to: `${base}/products`, area: "products" },
   ];

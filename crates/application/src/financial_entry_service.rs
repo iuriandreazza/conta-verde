@@ -57,10 +57,9 @@ impl<R: FinancialEntryRepository, F: EntryReferences> FinancialEntryService<R, F
         Ok(record)
     }
 
-    /// Like `register`, for an entry a recurrence generated ([ADR 0033]): it remembers where it came
-    /// from, and the store refuses, with `DuplicateOccurrence`, a second one for the same
-    /// occurrence day.
-    pub async fn register_generated(
+    /// Like `register`, for an entry that something made ([ADR 0033], [ADR 0037]): it remembers where it
+    /// came from, and the store refuses, with `DuplicateOrigin`, a second one for the same origin.
+    pub async fn register_with_origin(
         &self,
         company_id: CompanyId,
         actor: &Actor,
@@ -78,6 +77,54 @@ impl<R: FinancialEntryRepository, F: EntryReferences> FinancialEntryService<R, F
         );
         self.repository.save(&record, &audit).await?;
         Ok(record)
+    }
+
+    /// Whether the draft would be accepted as an entry of the company, without writing it: the rules of
+    /// the entry and of what it points at. A use case that has to be sure of the entry before it changes
+    /// anything of its own asks this first.
+    pub async fn validate(
+        &self,
+        company_id: CompanyId,
+        draft: FinancialEntryDraft,
+    ) -> Result<(), ApplicationError> {
+        let record = FinancialEntry::new(EntryId::generate(), company_id, draft)?;
+        self.check_references(&record, None).await
+    }
+
+    /// Cancels an entry ([ADR 0037]): refused while it has settlements that are not reversed, and one that
+    /// is cancelled already is not found.
+    pub async fn void(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        id: EntryId,
+    ) -> Result<FinancialEntry, ApplicationError> {
+        let before = self.find(company_id, id).await?;
+        let after = before.voided()?;
+        let audit = audit_entry(
+            &after,
+            actor,
+            AuditAction::Updated,
+            entry_changes(&before, &after),
+        );
+        self.repository
+            .void(&after, &audit)
+            .await
+            .map_err(|error| match error {
+                RepositoryError::NotFound => ApplicationError::EntryNotFound,
+                RepositoryError::EntrySettled => ApplicationError::EntryIsSettled,
+                other => other.into(),
+            })?;
+        Ok(after)
+    }
+
+    /// The entry something made, if it did.
+    pub async fn made_by(
+        &self,
+        company_id: CompanyId,
+        origin: EntryOrigin,
+    ) -> Result<Option<FinancialEntry>, ApplicationError> {
+        Ok(self.repository.find_by_origin(company_id, origin).await?)
     }
 
     /// The entries of the company added up by `group` over a span, see [ADR 0035]. `from` is not after `to`.
@@ -156,6 +203,7 @@ impl<R: FinancialEntryRepository, F: EntryReferences> FinancialEntryService<R, F
                 // It vanished between the read and the write.
                 RepositoryError::NotFound => ApplicationError::EntryNotFound,
                 RepositoryError::EntrySettled => ApplicationError::EntryIsSettled,
+                RepositoryError::EntryVoided => ApplicationError::EntryIsVoided,
                 other => other.into(),
             })?;
         Ok(after)
@@ -172,6 +220,9 @@ impl<R: FinancialEntryRepository, F: EntryReferences> FinancialEntryService<R, F
         draft: SettlementDraft,
     ) -> Result<Settlement, ApplicationError> {
         let entry = self.find(company_id, entry_id).await?;
+        if entry.is_voided() {
+            return Err(ApplicationError::EntryIsVoided);
+        }
         let settlement = Settlement::new(SettlementId::generate(), company_id, entry_id, draft)?;
         if entry.installment(settlement.installment()).is_none() {
             return Err(ApplicationError::UnusableReference("installment"));
@@ -203,6 +254,7 @@ impl<R: FinancialEntryRepository, F: EntryReferences> FinancialEntryService<R, F
             .map_err(|error| match error {
                 RepositoryError::NotFound => ApplicationError::EntryNotFound,
                 RepositoryError::Overpaid => ApplicationError::SettlementExceedsBalance,
+                RepositoryError::EntryVoided => ApplicationError::EntryIsVoided,
                 other => other.into(),
             })?;
         Ok(settlement)

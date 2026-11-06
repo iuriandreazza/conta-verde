@@ -71,6 +71,15 @@ impl<R: PaymentTermRepository> PaymentTermService<R> {
         Ok(after)
     }
 
+    /// The payment term, only if it belongs to the company.
+    pub async fn get(
+        &self,
+        company_id: CompanyId,
+        id: PaymentTermId,
+    ) -> Result<PaymentTerm, ApplicationError> {
+        self.find(company_id, id).await
+    }
+
     /// What was recorded about the payment term, oldest first.
     pub async fn history(
         &self,

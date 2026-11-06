@@ -63,6 +63,26 @@ pub(crate) fn push_text_keyset(
     .push_bind(i64::try_from(limit).unwrap_or(i64::MAX));
 }
 
+/// The next number of a kind of document of the company ([ADR 0037]), taken on the connection of the
+/// transaction that writes the document: the counter's row stays locked until it commits, so two writers
+/// never get the same number, and a write that fails gives its number back.
+pub(crate) async fn next_document_number(
+    connection: &mut sqlx::PgConnection,
+    company_id: conta_verde_domain::CompanyId,
+    kind: &str,
+) -> Result<i64, RepositoryError> {
+    sqlx::query_scalar(
+        "INSERT INTO document_counters (company_id, kind, last) VALUES ($1, $2, 1) \
+         ON CONFLICT (company_id, kind) DO UPDATE SET last = document_counters.last + 1 \
+         RETURNING last",
+    )
+    .bind(company_id.as_uuid())
+    .bind(kind)
+    .fetch_one(connection)
+    .await
+    .map_err(storage_error)
+}
+
 /// A transaction that sees one moment of the database. Records with children (a payment term's
 /// installments, a party's contacts and tags) are read in several statements, and a write
 /// committed between them would otherwise give a record that never existed: the old name with the

@@ -2,6 +2,7 @@ use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use conta_verde_application::{ApplicationError, AuthError, RepositoryError};
+use conta_verde_domain::DomainError;
 use serde::Serialize;
 
 #[derive(Debug)]
@@ -53,6 +54,16 @@ impl IntoResponse for ApiError {
 
 fn describe(error: &ApplicationError) -> (StatusCode, String) {
     match error {
+        // The quote is not in a status that allows it: not the request's fault, but the state's.
+        ApplicationError::Domain(
+            error @ (DomainError::QuoteIsLocked
+            | DomainError::QuoteIsNotSent
+            | DomainError::SaleIsLocked
+            | DomainError::SaleIsNotCompleted
+            | DomainError::EntryIsVoided
+            | DomainError::ReturnExceedsSold
+            | DomainError::EntryFollowsASale),
+        ) => (StatusCode::CONFLICT, error.to_string()),
         ApplicationError::Domain(error) => (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()),
         ApplicationError::Repository(
             error @ (RepositoryError::DuplicateDocument
@@ -64,11 +75,17 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
             | RepositoryError::DuplicateMembership
             | RepositoryError::Overpaid
             | RepositoryError::EntrySettled
-            | RepositoryError::DuplicateOccurrence
+            | RepositoryError::DuplicateOrigin
             | RepositoryError::DuplicateLine
             | RepositoryError::AlreadyMatched
             | RepositoryError::LineChanged
-            | RepositoryError::DuplicateInvitation),
+            | RepositoryError::DuplicateInvitation
+            | RepositoryError::QuoteChanged
+            | RepositoryError::EntryVoided
+            | RepositoryError::SaleChanged
+            | RepositoryError::DuplicateQuoteSale
+            | RepositoryError::ReturnTooMuch
+            | RepositoryError::SaleHasReturns),
         ) => (StatusCode::CONFLICT, error.to_string()),
         ApplicationError::Auth(error) => {
             let status = match error {
@@ -102,7 +119,17 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
         ApplicationError::LookupDisabled | ApplicationError::PostalCodeLookupDisabled => {
             (StatusCode::CONFLICT, error.to_string())
         }
-        ApplicationError::EntryNotFound
+        ApplicationError::QuoteChanged
+        | ApplicationError::SaleChanged
+        | ApplicationError::EntryIsVoided
+        | ApplicationError::SaleHasSettlements
+        | ApplicationError::SaleHasReturns
+        | ApplicationError::QuoteAlreadyConverted => (StatusCode::CONFLICT, error.to_string()),
+        // It existed and cannot be approved any more: its validity has run out.
+        ApplicationError::QuoteExpired => (StatusCode::GONE, error.to_string()),
+        ApplicationError::QuoteNotFound
+        | ApplicationError::SaleNotFound
+        | ApplicationError::EntryNotFound
         | ApplicationError::StatementLineNotFound
         | ApplicationError::RecurrenceNotFound
         | ApplicationError::SettlementNotFound

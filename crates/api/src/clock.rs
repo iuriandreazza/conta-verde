@@ -12,3 +12,11 @@ pub fn today() -> CalendarDate {
     CalendarDate::from_unix_days(i64::try_from(seconds / 86_400).unwrap_or(0))
         .unwrap_or(CalendarDate::EARLIEST)
 }
+
+/// The day a customer's answer is judged against: yesterday by the server's UTC clock. UTC changes day at 21:00
+/// in Brazil, and a customer approving on the last day of a quote's validity in the evening must still be
+/// in time; the cost is that one east of Greenwich may answer a few hours late ([ADR 0038]).
+pub fn customer_today() -> CalendarDate {
+    let day = today();
+    day.pred().unwrap_or(day)
+}

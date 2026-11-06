@@ -1,7 +1,16 @@
 use std::fmt;
 use std::str::FromStr;
 
-use rust_decimal::Decimal;
+use rust_decimal::{Decimal, RoundingStrategy};
+
+/// The one rounding rule of sales (ADR 0037): to the cent, halves away from zero. A quantity times a
+/// price, a rate of a commission and a percentage of an adjustment go through it; splitting an amount
+/// into installments does not (the remainder goes to the last one).
+pub fn round_to_cents(value: Decimal) -> Decimal {
+    value
+        .round_dp_with_strategy(2, RoundingStrategy::MidpointAwayFromZero)
+        .normalize()
+}
 
 // What fits `NUMERIC(19, 6)`, the column for unit prices and quantities (ADR 0003).
 const MAX_INTEGER_DIGITS: usize = 13;
@@ -93,6 +102,16 @@ mod tests {
 
     fn text(raw: &str) -> Option<String> {
         Amount::parse(raw).map(|amount| amount.to_string())
+    }
+
+    #[test]
+    fn rounds_to_the_cent_with_halves_going_up() {
+        let rounded = |raw: &str| round_to_cents(Decimal::from_str(raw).unwrap()).to_string();
+        assert_eq!(rounded("4.995"), "5");
+        assert_eq!(rounded("4.994999"), "4.99");
+        assert_eq!(rounded("0.005"), "0.01");
+        assert_eq!(rounded("2.5000"), "2.5");
+        assert_eq!(rounded("10"), "10");
     }
 
     #[test]

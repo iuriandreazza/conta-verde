@@ -24,6 +24,8 @@ pub enum Area {
     /// The registers money hangs from: categories, cost centers, bank accounts, payment methods and
     /// payment terms. Entries and settlements join them in Phase 2.
     Finance,
+    /// Quotes, sales, contracts, price lists, commissions and their reports ([ADR 0037]).
+    Sales,
     /// Who is a member of the company, and their invitations.
     Members,
 }
@@ -64,22 +66,22 @@ impl Role {
 
     /// How far this role reaches into an area, `None` for not at all. The table of [ADR 0026]:
     ///
-    /// | role       | parties | products | finance | members |
-    /// |------------|---------|----------|---------|---------|
-    /// | owner      | write   | write    | write   | write   |
-    /// | admin      | write   | write    | write   | write   |
-    /// | financial  | write   | read     | write   | -       |
-    /// | sales      | write   | read     | read    | -       |
-    /// | stock      | read    | write    | read    | -       |
-    /// | accountant | read    | read     | read    | -       |
-    /// | viewer     | read    | read     | read    | -       |
+    /// | role       | parties | products | finance | sales | members |
+    /// |------------|---------|----------|---------|-------|---------|
+    /// | owner      | write   | write    | write   | write | write   |
+    /// | admin      | write   | write    | write   | write | write   |
+    /// | financial  | write   | read     | write   | read  | -       |
+    /// | sales      | write   | read     | read    | write | -       |
+    /// | stock      | read    | write    | read    | read  | -       |
+    /// | accountant | read    | read     | read    | read  | -       |
+    /// | viewer     | read    | read     | read    | read  | -       |
     pub fn access_to(self, area: Area) -> Option<Access> {
         use Access::{Read, Write};
         match (self, area) {
             (Self::Owner | Self::Admin, _) => Some(Write),
             (_, Area::Members) => None,
             (Self::Financial, Area::Parties | Area::Finance) => Some(Write),
-            (Self::Sales, Area::Parties) => Some(Write),
+            (Self::Sales, Area::Parties | Area::Sales) => Some(Write),
             (Self::Stock, Area::Products) => Some(Write),
             _ => Some(Read),
         }
@@ -92,13 +94,20 @@ impl Role {
 }
 
 impl Area {
-    pub const ALL: [Area; 4] = [Self::Parties, Self::Products, Self::Finance, Self::Members];
+    pub const ALL: [Area; 5] = [
+        Self::Parties,
+        Self::Products,
+        Self::Finance,
+        Self::Sales,
+        Self::Members,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Parties => "parties",
             Self::Products => "products",
             Self::Finance => "finance",
+            Self::Sales => "sales",
             Self::Members => "members",
         }
     }
@@ -144,24 +153,48 @@ mod tests {
     #[test]
     fn the_table_of_permissions() {
         use Access::{Read, Write};
-        // parties, products, finance, members
+        // parties, products, finance, sales, members
         let expected = [
             (
                 Role::Owner,
-                [Some(Write), Some(Write), Some(Write), Some(Write)],
+                [
+                    Some(Write),
+                    Some(Write),
+                    Some(Write),
+                    Some(Write),
+                    Some(Write),
+                ],
             ),
             (
                 Role::Admin,
-                [Some(Write), Some(Write), Some(Write), Some(Write)],
+                [
+                    Some(Write),
+                    Some(Write),
+                    Some(Write),
+                    Some(Write),
+                    Some(Write),
+                ],
             ),
             (
                 Role::Financial,
-                [Some(Write), Some(Read), Some(Write), None],
+                [Some(Write), Some(Read), Some(Write), Some(Read), None],
             ),
-            (Role::Sales, [Some(Write), Some(Read), Some(Read), None]),
-            (Role::Stock, [Some(Read), Some(Write), Some(Read), None]),
-            (Role::Accountant, [Some(Read), Some(Read), Some(Read), None]),
-            (Role::Viewer, [Some(Read), Some(Read), Some(Read), None]),
+            (
+                Role::Sales,
+                [Some(Write), Some(Read), Some(Read), Some(Write), None],
+            ),
+            (
+                Role::Stock,
+                [Some(Read), Some(Write), Some(Read), Some(Read), None],
+            ),
+            (
+                Role::Accountant,
+                [Some(Read), Some(Read), Some(Read), Some(Read), None],
+            ),
+            (
+                Role::Viewer,
+                [Some(Read), Some(Read), Some(Read), Some(Read), None],
+            ),
         ];
         for (role, levels) in expected {
             let found = Area::ALL.map(|area| role.access_to(area));
@@ -175,6 +208,8 @@ mod tests {
         assert!(Role::Sales.can(Area::Parties, Access::Read));
         assert!(Role::Sales.can(Area::Products, Access::Read));
         assert!(!Role::Sales.can(Area::Products, Access::Write));
+        assert!(Role::Sales.can(Area::Sales, Access::Write));
+        assert!(!Role::Financial.can(Area::Sales, Access::Write));
         assert!(!Role::Viewer.can(Area::Members, Access::Read));
         assert!(!Role::Accountant.can(Area::Members, Access::Write));
     }

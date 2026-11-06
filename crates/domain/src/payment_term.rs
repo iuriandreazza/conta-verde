@@ -1,7 +1,7 @@
-use rust_decimal::Decimal;
+use rust_decimal::{Decimal, RoundingStrategy};
 
 use crate::name::clean_name;
-use crate::{Amount, CompanyId, DomainError, PaymentTermId};
+use crate::{Amount, CalendarDate, CompanyId, DomainError, EntryInstallmentDraft, PaymentTermId};
 
 /// How many installments a term can have.
 pub const MAX_INSTALLMENTS: usize = 24;
@@ -120,6 +120,40 @@ impl PaymentTerm {
 
     pub fn is_active(&self) -> bool {
         self.active
+    }
+
+    /// The installments of an entry for `total` (in cents, more than 0) counted from the day `from`: each is
+    /// the total times its percentage **cut to the cent** and the last takes what is left, so they add up to
+    /// the total exactly ([ADR 0037]; 33.33, 33.33 and 33.34 of 100). Nothing is rounded up: an installment of
+    /// less than a cent is refused.
+    pub fn split(
+        &self,
+        total: Decimal,
+        from: CalendarDate,
+    ) -> Result<Vec<EntryInstallmentDraft>, DomainError> {
+        let mut left = total;
+        let mut parts = Vec::with_capacity(self.installments.len());
+        for (index, installment) in self.installments.iter().enumerate() {
+            let last = index + 1 == self.installments.len();
+            let share = if last {
+                left
+            } else {
+                (total * installment.percent.as_decimal() / Decimal::ONE_HUNDRED)
+                    .round_dp_with_strategy(2, RoundingStrategy::ToZero)
+            };
+            if share <= Decimal::ZERO {
+                return Err(DomainError::InstallmentTooSmall);
+            }
+            left -= share;
+            let due = from
+                .plus_days(installment.days)
+                .ok_or(DomainError::InvalidDate("due_date"))?;
+            parts.push(EntryInstallmentDraft {
+                due_date: due.to_string(),
+                amount: share.normalize().to_string(),
+            });
+        }
+        Ok(parts)
     }
 
     /// The installments in one canonical text, `days:percent` separated by commas (`0:50,30:50`),
@@ -311,5 +345,59 @@ mod tests {
         assert_eq!(replaced.company_id(), term.company_id());
         assert_eq!(replaced.installments_text(), "0:40,30:60");
         assert!(!replaced.is_active());
+    }
+
+    #[test]
+    fn splits_an_amount_with_the_remainder_on_the_last_installment() {
+        let term = PaymentTerm::new(
+            PaymentTermId::generate(),
+            CompanyId::generate(),
+            PaymentTermDraft {
+                name: "30/60/90".into(),
+                installments: vec![
+                    InstallmentDraft {
+                        days: 30,
+                        percent: "33.33".into(),
+                    },
+                    InstallmentDraft {
+                        days: 60,
+                        percent: "33.33".into(),
+                    },
+                    InstallmentDraft {
+                        days: 90,
+                        percent: "33.34".into(),
+                    },
+                ],
+                active: true,
+            },
+        )
+        .unwrap();
+        let from = CalendarDate::parse("2026-11-30").unwrap();
+        let parts = term.split(Decimal::from(100), from).unwrap();
+        let shown: Vec<(&str, &str)> = parts
+            .iter()
+            .map(|p| (p.due_date.as_str(), p.amount.as_str()))
+            .collect();
+        // 30 days after 30 November is 30 December; the shares are cut, the last takes the cent that is left.
+        assert_eq!(
+            shown,
+            [
+                ("2026-12-30", "33.33"),
+                ("2027-01-29", "33.33"),
+                ("2027-02-28", "33.34")
+            ]
+        );
+        let odd = term.split("100.01".parse().unwrap(), from).unwrap();
+        let sum: Decimal = odd
+            .iter()
+            .map(|p| p.amount.parse::<Decimal>().unwrap())
+            .sum();
+        assert_eq!(sum.to_string(), "100.01");
+        assert_eq!(odd[2].amount, "33.35");
+        // A cent split three ways leaves an installment of nothing.
+        assert_eq!(
+            term.split("0.01".parse().unwrap(), from).unwrap_err(),
+            DomainError::InstallmentTooSmall
+        );
     }
 }

@@ -2,7 +2,7 @@ use std::future::Future;
 
 use conta_verde_domain::{
     AuditEntry, AuditRecord, BankAccountId, CalendarDate, CategoryId, CompanyId, CostCenterId,
-    Decimal, EntryId, EntryKind, FinancialEntry, PartyId, PaymentMethodId, Settlement,
+    Decimal, EntryId, EntryKind, EntryOrigin, FinancialEntry, PartyId, PaymentMethodId, Settlement,
     SettlementId,
 };
 use uuid::Uuid;
@@ -106,6 +106,7 @@ pub struct FinancialEntryQuery {
     search: Option<String>,
     kind: Option<EntryKind>,
     category: Option<CategoryId>,
+    voided: Option<bool>,
     sort: EntrySort,
 }
 
@@ -126,6 +127,12 @@ impl FinancialEntryQuery {
         self
     }
 
+    /// Only the cancelled entries (`true`) or only the others (`false`); both are listed when not said.
+    pub fn with_voided(mut self, voided: bool) -> Self {
+        self.voided = Some(voided);
+        self
+    }
+
     pub fn sorted(mut self, sort: EntrySort) -> Self {
         self.sort = sort;
         self
@@ -143,6 +150,10 @@ impl FinancialEntryQuery {
         self.category
     }
 
+    pub fn voided(&self) -> Option<bool> {
+        self.voided
+    }
+
     pub fn sort(&self) -> EntrySort {
         self.sort
     }
@@ -153,6 +164,7 @@ impl FinancialEntryQuery {
             && self
                 .category
                 .is_none_or(|category| entry.category_id() == category)
+            && self.voided.is_none_or(|voided| entry.is_voided() == voided)
             && self.search().is_none_or(|text| {
                 entry
                     .description()
@@ -259,8 +271,8 @@ pub trait FinancialEntryRepository: Send + Sync {
         until: CalendarDate,
     ) -> impl Future<Output = Result<Vec<DayMovement>, RepositoryError>> + Send;
 
-    /// What is left of the installments, their amount less what the settlements that are not
-    /// reversed settled, summed by due day from `since` through `until`, oldest day first, only for
+    /// What is left of the installments **of the entries that are not cancelled**, their amount less what the
+    /// settlements that are not reversed settled, summed by due day from `since` through `until`, oldest day first, only for
     /// the days that have something left: `receivable` of receivables and `payable` of payables.
     fn open_by_due_day(
         &self,
@@ -290,6 +302,22 @@ pub trait FinancialEntryRepository: Send + Sync {
         kind: Option<EntryKind>,
         limit: usize,
     ) -> impl Future<Output = Result<OverdueReport, RepositoryError>> + Send;
+
+    /// Cancels a stored entry, with its audit entry, atomically ([ADR 0037]). `NotFound` when the company has
+    /// no such entry or it is cancelled already, and `EntrySettled` when it has settlements that are not
+    /// reversed: the rule is the adapter's, inside the write, so a settlement that races it cannot slip past.
+    fn void(
+        &self,
+        voided: &FinancialEntry,
+        audit: &AuditEntry,
+    ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
+
+    /// The entry made by this origin (a sale, a return), if one was.
+    fn find_by_origin(
+        &self,
+        company_id: CompanyId,
+        origin: EntryOrigin,
+    ) -> impl Future<Output = Result<Option<FinancialEntry>, RepositoryError>> + Send;
 
     /// What was recorded about the entry, oldest first. Empty for another company's.
     fn history(

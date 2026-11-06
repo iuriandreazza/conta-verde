@@ -72,6 +72,26 @@ pub enum DomainError {
     InvalidTag,
     TooManyTags,
     OwnerCannotBeInvited,
+    InvalidLineQuantity,
+    NoLines,
+    TooManyLines,
+    DiscountExceedsLine,
+    DocumentTooLarge,
+    InvalidQuoteNotes,
+    QuoteValidityBeforeIssue,
+    QuoteIsLocked,
+    QuoteIsNotSent,
+    EntryIsVoided,
+    SaleIsLocked,
+    SaleIsNotCompleted,
+    SaleIsEmpty,
+    InvalidReturnQuantity,
+    NoReturnItems,
+    ReturnLineUnknown,
+    ReturnRefundIsNothing,
+    InstallmentTooSmall,
+    ReturnExceedsSold,
+    EntryFollowsASale,
 }
 
 impl fmt::Display for DomainError {
@@ -223,6 +243,42 @@ impl fmt::Display for DomainError {
             Self::OwnerCannotBeInvited => {
                 f.write_str("nobody is invited as an owner: creating a company is what makes one")
             }
+            Self::InvalidLineQuantity => f.write_str(
+                "quantity must be more than 0, with at most 3 decimals, written like 1.5",
+            ),
+            Self::NoLines => f.write_str("a document needs at least one line"),
+            Self::TooManyLines => f.write_str("a document has at most 100 lines"),
+            Self::DiscountExceedsLine => {
+                f.write_str("a discount cannot be more than the value of its line")
+            }
+            Self::DocumentTooLarge => f.write_str("the total is more than the system holds"),
+            Self::InvalidQuoteNotes => f.write_str(
+                "notes must have at most 2000 characters and no null characters",
+            ),
+            Self::QuoteValidityBeforeIssue => {
+                f.write_str("valid_until must not be before issued_on")
+            }
+            Self::QuoteIsLocked => {
+                f.write_str("a quote that was approved, declined or turned into a sale cannot change")
+            }
+            Self::QuoteIsNotSent => f.write_str("only a quote that was sent can be answered"),
+            Self::EntryIsVoided => f.write_str("the entry was cancelled: it cannot change, and it counts nowhere"),
+            Self::SaleIsLocked => f.write_str("only an order that is still open can change"),
+            Self::SaleIsNotCompleted => f.write_str("only a completed sale has returns"),
+            Self::SaleIsEmpty => f.write_str("a sale to be completed must be worth more than 0"),
+            Self::InvalidReturnQuantity => f.write_str(
+                "a returned quantity must be more than 0, with at most 3 decimals, written like 1.5",
+            ),
+            Self::NoReturnItems => f.write_str("a return needs at least one item"),
+            Self::ReturnLineUnknown => f.write_str("a return is of the items the sale has, each once"),
+            Self::ReturnRefundIsNothing => f.write_str("what is returned is worth less than one cent"),
+            Self::InstallmentTooSmall => f.write_str(
+                "the amount is too small to be split by this payment term: an installment would be less than one cent",
+            ),
+            Self::ReturnExceedsSold => f.write_str("a return cannot be of more than was sold and not returned yet"),
+            Self::EntryFollowsASale => f.write_str(
+                "an entry made by a sale or by a return changes through the sale, not on its own",
+            ),
             Self::KindCannotChange => f.write_str("the kind cannot change once registered"),
         }
     }

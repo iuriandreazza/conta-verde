@@ -160,6 +160,16 @@ impl<I: IdentityRepository, S: SecretService> AuthService<I, S> {
         }
     }
 
+    /// The name of a company the caller was already shown to belong to, or whose public page they
+    /// are looking at; empty if it vanished.
+    pub async fn company_name(&self, company_id: CompanyId) -> Result<String, ApplicationError> {
+        Ok(self
+            .identities
+            .company_name(company_id)
+            .await?
+            .unwrap_or_default())
+    }
+
     /// The user a session belongs to, for what is asked of a person who is not (yet) a member of any
     /// company in particular, like accepting an invitation.
     pub async fn current_user(&self, token: &str) -> Result<User, ApplicationError> {

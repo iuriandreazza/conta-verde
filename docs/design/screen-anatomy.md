@@ -20,7 +20,7 @@ This is the spec the new pages (Phase 3 on) are built to, and the one the existi
 | Part | Rule |
 |------|------|
 | Top bar | Always visible. Left: logo and the **title of the page**. Right: a global **"Novo registro" menu** (new entry, new sale, new party…, only what the role may write), search when it exists, the user menu (company switch, sign out) |
-| Sidebar | Groups, never a flat list: **Início**, **Financeiro**, **Vendas** (Phase 3), **Cadastros**, **Relatórios**, **Configurações**. A group opens in place and the group of the current page stays open; the current link is marked. A control collapses the whole sidebar to icons |
+| Sidebar | Groups, never a flat list: **Início**, **Financeiro**, **Comercial** (Orçamentos, Vendas), **Cadastros**, **Relatórios**, **Configurações**. A group opens in place and the group of the current page stays open; the current link is marked. A control collapses the whole sidebar to icons |
 | Company | Named in the sidebar header, and in the user menu when there is more than one |
 | Mobile | The sidebar becomes a drawer opened from the top bar: the content starts under the bar, never under a block of navigation |
 

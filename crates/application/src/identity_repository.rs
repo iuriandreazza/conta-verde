@@ -62,6 +62,12 @@ pub trait IdentityRepository: Send + Sync {
         user_id: UserId,
     ) -> impl Future<Output = Result<Vec<CompanyMembership>, RepositoryError>> + Send;
 
+    /// The name of the company, `None` when there is no such company.
+    fn company_name(
+        &self,
+        company_id: CompanyId,
+    ) -> impl Future<Output = Result<Option<String>, RepositoryError>> + Send;
+
     /// The company's members and what each is, ordered by name ignoring case, then by id.
     fn members_of(
         &self,

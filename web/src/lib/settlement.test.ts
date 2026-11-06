@@ -21,6 +21,9 @@ const entryOf = (installments: EntryInstallment[]): Entry => ({
   installments,
   total: "0",
   recurrence_id: null,
+  sale_id: null,
+  sale_return_id: null,
+  voided: false,
 });
 
 describe("what is left of an installment", () => {

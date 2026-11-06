@@ -8,6 +8,10 @@ use conta_verde_application::{
     PaymentMethodService, ProductQuery, ProductRepository, ProductService, RepositoryError,
     SecretService,
 };
+use conta_verde_application::{Conversion, Refund, SaleQuery, SaleRepository, SaleService};
+use conta_verde_application::{
+    EmailSender, NumberSort, QuotePage, QuoteQuery, QuoteRepository, QuoteService, SalesReferences,
+};
 use conta_verde_application::{
     ImportRow, InvitationRepository, InvitationState, Invited, MemberService, NewAccount,
     NewInvitation, NewUser, PaymentTermQuery, PaymentTermRepository, PaymentTermService,
@@ -24,7 +28,12 @@ use conta_verde_domain::{
     document_check_changes, payment_method_changes, payment_method_creation_changes,
     product_changes, product_creation_changes,
 };
+use conta_verde_domain::{
+    EntryOrigin, ReturnItemDraft, SaleDraft, SaleReturn, SaleReturnDraft, SaleReturnId, SaleStatus,
+    sale_return_creation_changes,
+};
 use conta_verde_domain::{InstallmentDraft, payment_term_changes, payment_term_creation_changes};
+use conta_verde_domain::{LineDraft, QuoteDraft, QuoteStatus};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -6616,7 +6625,7 @@ pub async fn adds_the_cash_flow_up<A, E, T, O, F>(
 // ---------- recurring entries ----------
 
 use conta_verde_application::{RecurrenceQuery, RecurrenceRepository, RecurrenceService};
-use conta_verde_domain::{EntryOrigin, Frequency, RecurrenceDraft};
+use conta_verde_domain::{Frequency, RecurrenceDraft, RecurrenceOrigin};
 
 fn recurrence_draft(
     seed: &EntrySeed,
@@ -6652,9 +6661,12 @@ async fn generated_by<E: FinancialEntryRepository>(
         .unwrap()
         .iter()
         .filter_map(|entry| {
-            let origin = entry
-                .origin()
-                .filter(|origin| origin.recurrence_id == recurrence)?;
+            let Some(EntryOrigin::Recurrence(origin)) = entry.origin() else {
+                return None;
+            };
+            if origin.recurrence_id != recurrence {
+                return None;
+            }
             // An occurrence is an entry with one installment that falls due on its day.
             assert_eq!(entry.installments().len(), 1);
             assert_eq!(entry.installments()[0].due_date(), origin.occurrence_on);
@@ -6905,7 +6917,7 @@ pub async fn generates_recurring_entries_ahead<R, E, F, C>(
     );
 
     // The store itself refuses a second entry for the same occurrence, and leaves no trace of it.
-    let origin = EntryOrigin {
+    let origin = RecurrenceOrigin {
         recurrence_id: paused.id(),
         occurrence_on: day("2026-11-20"),
     };
@@ -6913,14 +6925,14 @@ pub async fn generates_recurring_entries_ahead<R, E, F, C>(
         company,
         entry_draft(seed, "Seguro", "2026-11-20", &[("2026-11-20", "1200")]),
     )
-    .with_origin(origin);
+    .with_origin(EntryOrigin::Recurrence(origin));
     let record = entry_record(&twin, AuditAction::Created, entry_creation_changes(&twin));
     assert_eq!(
         entries.save(&twin, &record).await.unwrap_err(),
-        RepositoryError::DuplicateOccurrence
+        RepositoryError::DuplicateOrigin
     );
     assert_eq!(entry_trail(entries, company, &twin).await, 0);
-    let elsewhere = EntryOrigin {
+    let elsewhere = RecurrenceOrigin {
         occurrence_on: day("2026-11-21"),
         ..origin
     };
@@ -6928,7 +6940,7 @@ pub async fn generates_recurring_entries_ahead<R, E, F, C>(
         company,
         entry_draft(seed, "Seguro", "2026-11-21", &[("2026-11-21", "1200")]),
     )
-    .with_origin(elsewhere);
+    .with_origin(EntryOrigin::Recurrence(elsewhere));
     let record = entry_record(&fresh, AuditAction::Created, entry_creation_changes(&fresh));
     entries.save(&fresh, &record).await.unwrap();
     assert_eq!(
@@ -6938,7 +6950,7 @@ pub async fn generates_recurring_entries_ahead<R, E, F, C>(
             .unwrap()
             .unwrap()
             .origin(),
-        Some(elsewhere)
+        Some(EntryOrigin::Recurrence(elsewhere))
     );
 
     // What it points at has to be usable, and what is refused leaves nothing behind.
@@ -8479,4 +8491,1517 @@ where
         )
         .await
         .unwrap_err()
+}
+
+/// What the sales contract tests point at: a customer, products (one retired) and payment terms (one
+/// retired), all of one company.
+pub struct SalesSeed {
+    pub customer: PartyId,
+    /// A party that is a seller, and so is not the customer.
+    pub seller: PartyId,
+    pub product: ProductId,
+    pub other_product: ProductId,
+    pub inactive_product: ProductId,
+    pub term: PaymentTermId,
+    pub inactive_term: PaymentTermId,
+}
+
+pub async fn seed_sales_records<P, R, T>(
+    parties: &P,
+    products: &R,
+    terms: &T,
+    company: CompanyId,
+) -> SalesSeed
+where
+    P: PartyRepository,
+    R: ProductRepository,
+    T: PaymentTermRepository,
+{
+    let customer = Party::new(
+        PartyId::generate(),
+        company,
+        party_draft("Cliente Exemplo", None),
+    )
+    .unwrap();
+    parties
+        .save(&customer, &created_entry(&customer))
+        .await
+        .unwrap();
+    let seller = Party::new(
+        PartyId::generate(),
+        company,
+        PartyDraft {
+            is_customer: false,
+            is_seller: true,
+            ..party_draft("Vendedora Vera", None)
+        },
+    )
+    .unwrap();
+    parties
+        .save(&seller, &created_entry(&seller))
+        .await
+        .unwrap();
+    let mut saved = Vec::new();
+    for (name, active) in [("Café", true), ("Pão", true), ("Descontinuado", false)] {
+        let product = Product::new(
+            ProductId::generate(),
+            company,
+            product_draft(name, ProductKind::Product, None, active),
+        )
+        .unwrap();
+        let entry = product_entry(
+            &product,
+            AuditAction::Created,
+            product_creation_changes(&product),
+        );
+        products.save(&product, &entry).await.unwrap();
+        saved.push(product.id());
+    }
+    let term = new_term(company, "30/60", &[(30, "50"), (60, "50")]);
+    let retired = PaymentTerm::new(
+        PaymentTermId::generate(),
+        company,
+        term_draft("Antigo", &[(0, "100")], false),
+    )
+    .unwrap();
+    for item in [&term, &retired] {
+        save_term(terms, item).await.unwrap();
+    }
+    SalesSeed {
+        customer: customer.id(),
+        seller: seller.id(),
+        product: saved[0],
+        other_product: saved[1],
+        inactive_product: saved[2],
+        term: term.id(),
+        inactive_term: retired.id(),
+    }
+}
+
+pub async fn sales_references_say_what_is_usable<R: SalesReferences>(
+    references: &R,
+    company: CompanyId,
+    other_company: CompanyId,
+    seed: &SalesSeed,
+) {
+    assert!(
+        references
+            .customer_exists(company, seed.customer)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !references
+            .customer_exists(other_company, seed.customer)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !references
+            .customer_exists(company, PartyId::generate())
+            .await
+            .unwrap()
+    );
+    assert!(
+        references
+            .seller_is_usable(company, seed.seller)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !references
+            .seller_is_usable(company, seed.customer)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !references
+            .seller_is_usable(other_company, seed.seller)
+            .await
+            .unwrap()
+    );
+    assert!(
+        references
+            .payment_term(company, seed.term)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        references
+            .payment_term(other_company, seed.term)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        references
+            .product_is_usable(company, seed.product)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !references
+            .product_is_usable(company, seed.inactive_product)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !references
+            .product_is_usable(other_company, seed.product)
+            .await
+            .unwrap()
+    );
+    assert!(
+        references
+            .payment_term_is_usable(company, seed.term)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !references
+            .payment_term_is_usable(company, seed.inactive_term)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !references
+            .payment_term_is_usable(other_company, seed.term)
+            .await
+            .unwrap()
+    );
+}
+
+pub fn sale_line(
+    product: ProductId,
+    description: &str,
+    quantity: &str,
+    unit_price: &str,
+    discount: &str,
+) -> LineDraft {
+    LineDraft {
+        product_id: product,
+        description: description.into(),
+        quantity: quantity.into(),
+        unit_price: unit_price.into(),
+        discount: discount.into(),
+    }
+}
+
+fn quote_draft(seed: &SalesSeed, valid_until: &str) -> QuoteDraft {
+    QuoteDraft {
+        customer_id: seed.customer,
+        issued_on: "2026-11-06".into(),
+        valid_until: valid_until.into(),
+        payment_term_id: Some(seed.term),
+        notes: Some("Entrega em 5 dias".into()),
+        lines: vec![
+            sale_line(seed.product, "Café 500g", "3", "10.10", "0.30"),
+            sale_line(seed.other_product, "Pão francês", "1.5", "3.33", "0"),
+        ],
+    }
+}
+
+fn token_of(link: &str) -> &str {
+    link.rsplit('/').next().unwrap()
+}
+
+fn quote_numbers(page: &QuotePage) -> Vec<i64> {
+    page.items.iter().map(|quote| quote.number()).collect()
+}
+
+/// A quote is written with the next number of its company and a trail, listed, filtered and paged,
+/// changed while it is a draft or sent, sent with a link of its own that the next send and any change
+/// take back, and answered once through the link, in the name of whoever sent it, never past its
+/// validity. What it points at has to be usable, and nothing of another company's shows.
+pub async fn runs_the_quote_lifecycle<Q, R, E, S>(
+    service: &QuoteService<Q, R, E, S>,
+    store: &Q,
+    emails: &InMemoryEmailSender,
+    company: CompanyId,
+    other_company: CompanyId,
+    seed: &SalesSeed,
+) where
+    Q: QuoteRepository,
+    R: SalesReferences,
+    E: EmailSender,
+    S: SecretService,
+{
+    let ana = actor();
+    let day = |text: &str| CalendarDate::parse(text).unwrap();
+
+    // Written: numbered per company, worth the sum of its rounded lines, with one entry in its trail.
+    let first = service
+        .register(company, &ana, quote_draft(seed, "2026-11-20"))
+        .await
+        .unwrap();
+    assert_eq!(first.number(), 1);
+    assert_eq!(first.status(), QuoteStatus::Draft);
+    // 3 x 10.10 - 0.30 = 30 and 1.5 x 3.33 = 4.995 -> 5.
+    assert_eq!(first.total().to_string(), "35");
+    let stored = service.get(company, first.id()).await.unwrap();
+    assert_eq!(stored, first);
+    let trail = service.history(company, first.id()).await.unwrap();
+    assert_eq!(trail.len(), 1);
+    assert_eq!(trail[0].entry.action, AuditAction::Created);
+    assert_eq!(trail[0].entry.actor, ana);
+    let second = service
+        .register(company, &ana, quote_draft(seed, "2026-12-31"))
+        .await
+        .unwrap();
+    assert_eq!(second.number(), 2);
+    // Four writes at once never share a number.
+    let (a, b, c, d) = tokio::join!(
+        service.register(company, &ana, quote_draft(seed, "2026-11-20")),
+        service.register(company, &ana, quote_draft(seed, "2026-11-20")),
+        service.register(company, &ana, quote_draft(seed, "2026-11-20")),
+        service.register(company, &ana, quote_draft(seed, "2026-11-20")),
+    );
+    let mut numbers: Vec<i64> = [a, b, c, d]
+        .iter()
+        .map(|quote| quote.as_ref().unwrap().number())
+        .collect();
+    numbers.sort_unstable();
+    assert_eq!(numbers, [3, 4, 5, 6]);
+
+    // What is refused leaves no number and no trace; a customer, a product or a term has to be usable.
+    let mut bad = quote_draft(seed, "2026-11-20");
+    bad.customer_id = PartyId::generate();
+    assert_eq!(
+        service.register(company, &ana, bad).await.unwrap_err(),
+        ApplicationError::UnusableReference("customer")
+    );
+    let mut bad = quote_draft(seed, "2026-11-20");
+    bad.lines[1].product_id = seed.inactive_product;
+    assert_eq!(
+        service.register(company, &ana, bad).await.unwrap_err(),
+        ApplicationError::UnusableReference("product")
+    );
+    let mut bad = quote_draft(seed, "2026-11-20");
+    bad.payment_term_id = Some(seed.inactive_term);
+    assert_eq!(
+        service.register(company, &ana, bad).await.unwrap_err(),
+        ApplicationError::UnusableReference("payment term")
+    );
+    let mut bad = quote_draft(seed, "2026-11-20");
+    bad.lines.clear();
+    assert_eq!(
+        service.register(company, &ana, bad).await.unwrap_err(),
+        ApplicationError::Domain(DomainError::NoLines)
+    );
+    let next = service
+        .register(company, &ana, quote_draft(seed, "2026-11-20"))
+        .await
+        .unwrap();
+    assert_eq!(next.number(), 7);
+
+    // Another company has none of it; its own numbers start over.
+    assert_eq!(
+        service.get(other_company, first.id()).await.unwrap_err(),
+        ApplicationError::QuoteNotFound
+    );
+    assert_eq!(
+        service
+            .history(other_company, first.id())
+            .await
+            .unwrap_err(),
+        ApplicationError::QuoteNotFound
+    );
+    let none = service
+        .list(other_company, &QuoteQuery::default(), None, None)
+        .await
+        .unwrap();
+    assert!(none.items.is_empty());
+
+    // Listed newest first, by status, customer and search, and paged.
+    let all = service
+        .list(company, &QuoteQuery::default(), None, None)
+        .await
+        .unwrap();
+    assert_eq!(quote_numbers(&all), [7, 6, 5, 4, 3, 2, 1]);
+    let ascending = service
+        .list(
+            company,
+            &QuoteQuery::default().sorted(NumberSort::NumberAsc),
+            None,
+            Some(3),
+        )
+        .await
+        .unwrap();
+    assert_eq!(quote_numbers(&ascending), [1, 2, 3]);
+    let rest = service
+        .list(
+            company,
+            &QuoteQuery::default().sorted(NumberSort::NumberAsc),
+            ascending.next.as_ref(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(quote_numbers(&rest), [4, 5, 6, 7]);
+    assert!(rest.next.is_none());
+    let by_text = |text: &str| QuoteQuery::default().searching(text);
+    for (text, expected) in [
+        ("pão fran", 7),
+        ("6", 1),
+        ("ENTREGA", 7),
+        ("nada disso", 0),
+        ("%", 0),
+    ] {
+        let found = service
+            .list(company, &by_text(text), None, None)
+            .await
+            .unwrap();
+        assert_eq!(found.items.len(), expected, "{text}");
+    }
+    let drafts = service
+        .list(
+            company,
+            &QuoteQuery::default().with_status(QuoteStatus::Draft),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(drafts.items.len(), 7);
+    let approved = service
+        .list(
+            company,
+            &QuoteQuery::default().with_status(QuoteStatus::Approved),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(approved.items.is_empty());
+    let of_customer = service
+        .list(
+            company,
+            &QuoteQuery::default().with_customer(seed.customer),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(of_customer.items.len(), 7);
+    let of_nobody = service
+        .list(
+            company,
+            &QuoteQuery::default().with_customer(PartyId::generate()),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(of_nobody.items.is_empty());
+
+    // Changed: the trail records the change, a draft that changes nothing records nothing.
+    let mut edit = quote_draft(seed, "2026-11-25");
+    edit.lines[0].quantity = "4".into();
+    let changed = service
+        .update(company, &ana, first.id(), edit.clone())
+        .await
+        .unwrap();
+    assert_eq!(changed.number(), 1);
+    assert_eq!(changed.total().to_string(), "45.1");
+    let trail = service.history(company, first.id()).await.unwrap();
+    assert_eq!(trail.len(), 2);
+    let fields: Vec<&str> = trail[1]
+        .entry
+        .changes
+        .iter()
+        .map(|change| change.field.as_str())
+        .collect();
+    assert_eq!(fields, ["valid_until", "lines"]);
+    service
+        .update(company, &ana, first.id(), edit.clone())
+        .await
+        .unwrap();
+    assert_eq!(service.history(company, first.id()).await.unwrap().len(), 2);
+    let mut bad = edit.clone();
+    bad.lines[0].product_id = seed.inactive_product;
+    assert_eq!(
+        service
+            .update(company, &ana, first.id(), bad)
+            .await
+            .unwrap_err(),
+        ApplicationError::UnusableReference("product")
+    );
+    assert_eq!(
+        service
+            .update(other_company, &ana, first.id(), edit.clone())
+            .await
+            .unwrap_err(),
+        ApplicationError::QuoteNotFound
+    );
+
+    // A change the trail has no field of its own for is still a change: only a line's description.
+    let mut reworded = edit.clone();
+    reworded.lines[0].description = "Café torrado 500g".into();
+    let reworded = service
+        .update(company, &ana, first.id(), reworded)
+        .await
+        .unwrap();
+    assert_eq!(reworded.lines()[0].description(), "Café torrado 500g");
+    assert_eq!(
+        service.get(company, first.id()).await.unwrap().lines()[0].description(),
+        "Café torrado 500g"
+    );
+    assert_eq!(service.history(company, first.id()).await.unwrap().len(), 3);
+    let edit = {
+        let mut back = edit.clone();
+        back.lines[0].description = "Café torrado 500g".into();
+        back
+    };
+
+    // Sent: a link of its own, e-mailed, that leads to the quote.
+    assert_eq!(
+        service
+            .send(
+                company,
+                &ana,
+                first.id(),
+                "not an address",
+                "Padaria",
+                day("2026-11-10")
+            )
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::InvalidEmail)
+    );
+    let sent = service
+        .send(
+            company,
+            &ana,
+            first.id(),
+            "cliente@exemplo.com",
+            "Padaria",
+            day("2026-11-10"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sent.quote.status(), QuoteStatus::Sent);
+    assert!(sent.emailed);
+    assert!(sent.link.starts_with("https://erp.example/quote/"));
+    let message = emails.sent().pop().unwrap();
+    assert_eq!(message.to.as_str(), "cliente@exemplo.com");
+    assert!(message.subject.contains("nº 1"));
+    assert!(message.body.contains(&sent.link));
+    assert!(message.body.contains("2026-11-25"));
+    let first_token = token_of(&sent.link).to_owned();
+    assert_eq!(service.by_link(&first_token).await.unwrap(), sent.quote);
+    assert_eq!(
+        service.by_link("not-a-token").await.unwrap_err(),
+        ApplicationError::QuoteNotFound
+    );
+    let trail = service.history(company, first.id()).await.unwrap();
+    assert_eq!(trail.len(), 4);
+    assert!(
+        trail[3]
+            .entry
+            .changes
+            .iter()
+            .any(|change| change.field == "link" && change.to.as_deref() == Some("made and sent"))
+    );
+
+    // Sent again, the earlier link stops working and the new one works.
+    let resent = service
+        .send(
+            company,
+            &ana,
+            first.id(),
+            "cliente@exemplo.com",
+            "Padaria",
+            day("2026-11-10"),
+        )
+        .await
+        .unwrap();
+    let second_token = token_of(&resent.link).to_owned();
+    assert_ne!(first_token, second_token);
+    assert_eq!(
+        service.by_link(&first_token).await.unwrap_err(),
+        ApplicationError::QuoteNotFound
+    );
+    assert!(service.by_link(&second_token).await.is_ok());
+
+    // A change to a sent quote makes it a draft again and takes its link back; a change of nothing does not.
+    service
+        .update(company, &ana, first.id(), edit.clone())
+        .await
+        .unwrap();
+    assert!(service.by_link(&second_token).await.is_ok());
+    let mut other_edit = edit.clone();
+    other_edit.notes = None;
+    let redone = service
+        .update(company, &ana, first.id(), other_edit)
+        .await
+        .unwrap();
+    assert_eq!(redone.status(), QuoteStatus::Draft);
+    assert_eq!(
+        service.by_link(&second_token).await.unwrap_err(),
+        ApplicationError::QuoteNotFound
+    );
+    assert_eq!(
+        service
+            .answer(&second_token, true, day("2026-11-10"))
+            .await
+            .unwrap_err(),
+        ApplicationError::QuoteNotFound
+    );
+
+    // Answered through the link, once, in the name of whoever sent it, and the quote is then fixed.
+    let resent = service
+        .send(
+            company,
+            &ana,
+            first.id(),
+            "cliente@exemplo.com",
+            "Padaria",
+            day("2026-11-10"),
+        )
+        .await
+        .unwrap();
+    let token = token_of(&resent.link).to_owned();
+    let answered = service
+        .answer(&token, true, day("2026-11-25"))
+        .await
+        .unwrap();
+    assert_eq!(answered.status(), QuoteStatus::Approved);
+    let trail = service.history(company, first.id()).await.unwrap();
+    let last = trail.last().unwrap();
+    assert_eq!(last.entry.actor, ana);
+    assert!(
+        last.entry
+            .changes
+            .iter()
+            .any(|change| change.field == "status" && change.to.as_deref() == Some("approved"))
+    );
+    assert!(
+        last.entry
+            .changes
+            .iter()
+            .any(|change| change.field == "answered_by")
+    );
+    // The link still shows it, answered; it cannot be answered again, changed or sent again.
+    assert_eq!(
+        service.by_link(&token).await.unwrap().status(),
+        QuoteStatus::Approved
+    );
+    assert_eq!(
+        service
+            .answer(&token, false, day("2026-11-25"))
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::QuoteIsNotSent)
+    );
+    assert_eq!(
+        service
+            .update(company, &ana, first.id(), edit.clone())
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::QuoteIsLocked)
+    );
+    assert_eq!(
+        service
+            .send(
+                company,
+                &ana,
+                first.id(),
+                "cliente@exemplo.com",
+                "Padaria",
+                day("2026-11-10")
+            )
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::QuoteIsLocked)
+    );
+
+    // Declined, and one past its validity is not approved (its last day is still good).
+    let declined = service
+        .send(
+            company,
+            &ana,
+            second.id(),
+            "cliente@exemplo.com",
+            "Padaria",
+            day("2026-11-10"),
+        )
+        .await
+        .unwrap();
+    let declined = service
+        .answer(token_of(&declined.link), false, day("2026-12-31"))
+        .await
+        .unwrap();
+    assert_eq!(declined.status(), QuoteStatus::Declined);
+    let late = service
+        .send(
+            company,
+            &ana,
+            next.id(),
+            "cliente@exemplo.com",
+            "Padaria",
+            day("2026-11-10"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .answer(token_of(&late.link), true, day("2026-11-21"))
+            .await
+            .unwrap_err(),
+        ApplicationError::QuoteExpired
+    );
+    assert_eq!(
+        service.get(company, next.id()).await.unwrap().status(),
+        QuoteStatus::Sent
+    );
+    assert_eq!(
+        service
+            .answer(token_of(&late.link), true, day("2026-11-20"))
+            .await
+            .unwrap()
+            .status(),
+        QuoteStatus::Approved
+    );
+
+    // Declining is allowed after the validity; sending is not.
+    let stale = service
+        .register(company, &ana, quote_draft(seed, "2026-11-20"))
+        .await
+        .unwrap();
+    let sent = service
+        .send(
+            company,
+            &ana,
+            stale.id(),
+            "cliente@exemplo.com",
+            "Padaria",
+            day("2026-11-10"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .send(
+                company,
+                &ana,
+                stale.id(),
+                "cliente@exemplo.com",
+                "Padaria",
+                day("2026-11-21")
+            )
+            .await
+            .unwrap_err(),
+        ApplicationError::QuoteExpired
+    );
+    assert_eq!(
+        service
+            .answer(token_of(&sent.link), false, day("2026-12-01"))
+            .await
+            .unwrap()
+            .status(),
+        QuoteStatus::Declined
+    );
+
+    // An answer made to what the customer saw before is refused when the quote was changed and sent
+    // again meanwhile: the store checks the link the answer came through, and writes only the status.
+    let racing = service
+        .register(company, &ana, quote_draft(seed, "2026-11-20"))
+        .await
+        .unwrap();
+    let old_link = service
+        .send(
+            company,
+            &ana,
+            racing.id(),
+            "cliente@exemplo.com",
+            "Padaria",
+            day("2026-11-10"),
+        )
+        .await
+        .unwrap();
+    let old_token = token_of(&old_link.link).to_owned();
+    let seen = service.by_link(&old_token).await.unwrap();
+    let mut changed = quote_draft(seed, "2026-11-25");
+    changed.lines[0].quantity = "9".into();
+    service
+        .update(company, &ana, racing.id(), changed)
+        .await
+        .unwrap();
+    service
+        .send(
+            company,
+            &ana,
+            racing.id(),
+            "cliente@exemplo.com",
+            "Padaria",
+            day("2026-11-10"),
+        )
+        .await
+        .unwrap();
+    let digest = crate::Argon2SecretService::new()
+        .unwrap()
+        .digest_token(&old_token);
+    let approval = seen.answered(true).unwrap();
+    let audit = AuditEntry {
+        company_id: company,
+        actor: ana.clone(),
+        entity: AuditEntity::Quote,
+        entity_id: racing.id().as_uuid(),
+        action: AuditAction::Updated,
+        changes: Vec::new(),
+    };
+    assert_eq!(
+        store.answer(&approval, &digest, &audit).await.unwrap_err(),
+        RepositoryError::QuoteChanged
+    );
+    let after = service.get(company, racing.id()).await.unwrap();
+    assert_eq!(after.status(), QuoteStatus::Sent);
+    assert_eq!(after.lines()[0].quantity().to_string(), "9");
+    assert_eq!(
+        service.history(company, racing.id()).await.unwrap().len(),
+        4
+    );
+}
+
+fn sale_draft(entry_seed: &EntrySeed, seed: &SalesSeed) -> SaleDraft {
+    SaleDraft {
+        customer_id: seed.customer,
+        seller_id: Some(seed.seller),
+        sold_on: "2026-11-06".into(),
+        payment_term_id: Some(seed.term),
+        category_id: entry_seed.category,
+        cost_center_id: Some(entry_seed.cost_center),
+        notes: Some("Entrega em 5 dias".into()),
+        lines: vec![
+            sale_line(seed.product, "Café 500g", "3", "10.10", "0.30"),
+            sale_line(seed.other_product, "Pão francês", "1.5", "3.33", "0"),
+        ],
+    }
+}
+
+fn return_draft(items: &[(u16, &str)]) -> SaleReturnDraft {
+    SaleReturnDraft {
+        returned_on: "2026-11-10".into(),
+        reason: Some("Estragou".into()),
+        items: items
+            .iter()
+            .map(|(line, quantity)| ReturnItemDraft {
+                line: *line,
+                quantity: (*quantity).into(),
+            })
+            .collect(),
+    }
+}
+
+fn sale_numbers(sales: &conta_verde_application::SalePage) -> Vec<i64> {
+    sales.items.iter().map(|sale| sale.number()).collect()
+}
+
+/// An entry is cancelled once and for good, refused while it has settlements that are not reversed, and
+/// then counts nowhere: not in what is open by due day, not in the overdue installments, not in the reports,
+/// and it takes no edit and no settlement. It is still listed, and says so.
+#[allow(clippy::too_many_arguments)]
+pub async fn voids_entries<R, F>(
+    service: &FinancialEntryService<R, F>,
+    company: CompanyId,
+    other_company: CompanyId,
+    seed: &EntrySeed,
+) where
+    R: FinancialEntryRepository,
+    F: EntryReferences,
+{
+    let ana = actor();
+    let day = |text: &str| CalendarDate::parse(text).unwrap();
+    let draft = entry_draft(
+        seed,
+        "Venda a cancelar",
+        "2026-11-05",
+        &[("2026-11-10", "100")],
+    );
+    let entry = service
+        .register(company, &ana, draft.clone())
+        .await
+        .unwrap();
+    let kept = service
+        .register(
+            company,
+            &ana,
+            entry_draft(
+                seed,
+                "Venda que fica",
+                "2026-11-05",
+                &[("2026-11-12", "40")],
+            ),
+        )
+        .await
+        .unwrap();
+    let report = |basis| {
+        service.report(
+            company,
+            ReportGroup::Category,
+            basis,
+            day("2026-11-01"),
+            day("2026-11-30"),
+        )
+    };
+    assert_eq!(
+        report(ReportBasis::Competence).await.unwrap()[0]
+            .receivable
+            .to_string(),
+        "140"
+    );
+
+    // Not while it has a settlement that is not reversed.
+    let settled = service
+        .settle(company, &ana, entry.id(), settlement_draft(seed, 1, "30"))
+        .await
+        .unwrap();
+    assert_eq!(
+        service.void(company, &ana, entry.id()).await.unwrap_err(),
+        ApplicationError::EntryIsSettled
+    );
+    assert!(!service.get(company, entry.id()).await.unwrap().is_voided());
+    service
+        .reverse(company, &ana, entry.id(), settled.id())
+        .await
+        .unwrap();
+
+    // Another company cannot cancel it.
+    assert_eq!(
+        service
+            .void(other_company, &ana, entry.id())
+            .await
+            .unwrap_err(),
+        ApplicationError::EntryNotFound
+    );
+    let trail_before = service.history(company, entry.id()).await.unwrap().len();
+    let voided = service.void(company, &ana, entry.id()).await.unwrap();
+    assert!(voided.is_voided());
+    assert!(service.get(company, entry.id()).await.unwrap().is_voided());
+    let trail = service.history(company, entry.id()).await.unwrap();
+    assert_eq!(trail.len(), trail_before + 1);
+    assert_eq!(trail.last().unwrap().entry.changes[0].field, "voided");
+
+    // Once: it is not cancelled again, edited or settled.
+    assert_eq!(
+        service.void(company, &ana, entry.id()).await.unwrap_err(),
+        ApplicationError::Domain(DomainError::EntryIsVoided)
+    );
+    assert_eq!(
+        service
+            .update(company, &ana, entry.id(), draft.clone())
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::EntryIsVoided)
+    );
+    assert_eq!(
+        service
+            .settle(company, &ana, entry.id(), settlement_draft(seed, 1, "10"))
+            .await
+            .unwrap_err(),
+        ApplicationError::EntryIsVoided
+    );
+
+    // It counts nowhere, and the others still do.
+    assert_eq!(
+        report(ReportBasis::Competence).await.unwrap()[0]
+            .receivable
+            .to_string(),
+        "40"
+    );
+    assert_eq!(
+        report(ReportBasis::Due).await.unwrap()[0]
+            .receivable
+            .to_string(),
+        "40"
+    );
+    let overdue = service
+        .overdue(company, day("2027-01-01"), None, None)
+        .await
+        .unwrap();
+    assert_eq!(overdue.count, 1);
+    assert_eq!(overdue.items[0].entry_id, kept.id());
+    assert_eq!(overdue.receivable.to_string(), "40");
+
+    // It is listed, and the list can be narrowed to it or without it.
+    let all = service
+        .list(company, &FinancialEntryQuery::default(), None, None)
+        .await
+        .unwrap();
+    assert_eq!(all.items.len(), 2);
+    let only = |voided| FinancialEntryQuery::default().with_voided(voided);
+    let cancelled = service
+        .list(company, &only(true), None, None)
+        .await
+        .unwrap();
+    assert_eq!(cancelled.items.len(), 1);
+    assert_eq!(cancelled.items[0].id(), entry.id());
+    let live = service
+        .list(company, &only(false), None, None)
+        .await
+        .unwrap();
+    assert_eq!(live.items.len(), 1);
+    assert_eq!(live.items[0].id(), kept.id());
+}
+
+/// A sale is written with a number, an order that is open can change, a quote becomes one sale, a completed
+/// sale makes its receivable once by its payment term, a return refunds the returned part with a payable, and
+/// a cancelled sale cancels its receivable unless money was settled on it. Everything it points at has to be
+/// usable and nothing of another company's shows.
+#[allow(clippy::too_many_arguments)]
+pub async fn runs_the_sale_lifecycle<S, Q, E, F, R, Q2, R2, Em, Se>(
+    sales: &SaleService<S, Q, E, F, R>,
+    store: &S,
+    quotes: &QuoteService<Q2, R2, Em, Se>,
+    entries: &FinancialEntryService<E, F>,
+    company: CompanyId,
+    other_company: CompanyId,
+    entry_seed: &EntrySeed,
+    seed: &SalesSeed,
+) where
+    S: SaleRepository,
+    Q: QuoteRepository,
+    E: FinancialEntryRepository,
+    F: EntryReferences,
+    R: SalesReferences,
+    Q2: QuoteRepository,
+    R2: SalesReferences,
+    Em: EmailSender,
+    Se: SecretService,
+{
+    let ana = actor();
+    let day = |text: &str| CalendarDate::parse(text).unwrap();
+
+    // Written as an open order, numbered per company, worth the sum of its lines.
+    let first = sales
+        .register(company, &ana, sale_draft(entry_seed, seed))
+        .await
+        .unwrap();
+    assert_eq!((first.number(), first.status()), (1, SaleStatus::Open));
+    assert_eq!(first.total().to_string(), "35");
+    assert_eq!(sales.get(company, first.id()).await.unwrap(), first);
+    let trail = sales.history(company, first.id()).await.unwrap();
+    assert_eq!(trail.len(), 1);
+    assert_eq!(trail[0].entry.action, AuditAction::Created);
+    let second = sales
+        .register(company, &ana, sale_draft(entry_seed, seed))
+        .await
+        .unwrap();
+    assert_eq!(second.number(), 2);
+
+    // What it points at has to be usable, and what is refused leaves nothing.
+    let refused = |error| ApplicationError::UnusableReference(error);
+    for (what, change) in [
+        (
+            "customer",
+            Box::new(|d: &mut SaleDraft| d.customer_id = PartyId::generate())
+                as Box<dyn Fn(&mut SaleDraft)>,
+        ),
+        (
+            "seller",
+            Box::new(|d: &mut SaleDraft| d.seller_id = Some(d.customer_id)),
+        ),
+        (
+            "payment term",
+            Box::new(|d: &mut SaleDraft| d.payment_term_id = Some(seed.inactive_term)),
+        ),
+        (
+            "product",
+            Box::new(|d: &mut SaleDraft| d.lines[0].product_id = seed.inactive_product),
+        ),
+    ] {
+        let mut bad = sale_draft(entry_seed, seed);
+        change(&mut bad);
+        assert_eq!(
+            sales.register(company, &ana, bad).await.unwrap_err(),
+            refused(what),
+            "{what}"
+        );
+    }
+    for (category, what) in [
+        (entry_seed.inactive_category, "category"),
+        (entry_seed.transfer_category, "category"),
+    ] {
+        let mut bad = sale_draft(entry_seed, seed);
+        bad.category_id = category;
+        assert_eq!(
+            sales.register(company, &ana, bad).await.unwrap_err(),
+            refused(what)
+        );
+    }
+    let mut bad = sale_draft(entry_seed, seed);
+    bad.cost_center_id = Some(entry_seed.inactive_cost_center);
+    assert_eq!(
+        sales.register(company, &ana, bad).await.unwrap_err(),
+        refused("cost center")
+    );
+    let mut bad = sale_draft(entry_seed, seed);
+    bad.lines.clear();
+    assert_eq!(
+        sales.register(company, &ana, bad).await.unwrap_err(),
+        ApplicationError::Domain(DomainError::NoLines)
+    );
+    let third = sales
+        .register(company, &ana, sale_draft(entry_seed, seed))
+        .await
+        .unwrap();
+    assert_eq!(third.number(), 3);
+
+    // Nothing of another company's shows.
+    assert_eq!(
+        sales.get(other_company, first.id()).await.unwrap_err(),
+        ApplicationError::SaleNotFound
+    );
+    assert!(
+        sales
+            .list(other_company, &SaleQuery::default(), None, None)
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
+
+    // Listed newest first, by status, customer, seller and text, and paged.
+    let listed = sales
+        .list(company, &SaleQuery::default(), None, None)
+        .await
+        .unwrap();
+    assert_eq!(sale_numbers(&listed), [3, 2, 1]);
+    let page = sales
+        .list(company, &SaleQuery::default(), None, Some(2))
+        .await
+        .unwrap();
+    assert_eq!(sale_numbers(&page), [3, 2]);
+    let rest = sales
+        .list(company, &SaleQuery::default(), page.next.as_ref(), None)
+        .await
+        .unwrap();
+    assert_eq!(sale_numbers(&rest), [1]);
+    for (query, expected) in [
+        (SaleQuery::default().with_status(SaleStatus::Open), 3),
+        (SaleQuery::default().with_status(SaleStatus::Completed), 0),
+        (SaleQuery::default().with_customer(seed.customer), 3),
+        (SaleQuery::default().with_seller(seed.seller), 3),
+        (SaleQuery::default().with_seller(seed.customer), 0),
+        (SaleQuery::default().searching("pão fran"), 3),
+        (SaleQuery::default().searching("2"), 1),
+        (SaleQuery::default().searching("%"), 0),
+    ] {
+        let found = sales.list(company, &query, None, None).await.unwrap();
+        assert_eq!(found.items.len(), expected, "{query:?}");
+    }
+
+    // An open order changes; one that changes nothing records nothing.
+    let mut edit = sale_draft(entry_seed, seed);
+    edit.lines[0].quantity = "4".into();
+    let changed = sales
+        .update(company, &ana, first.id(), edit.clone())
+        .await
+        .unwrap();
+    assert_eq!(changed.total().to_string(), "45.1");
+    sales
+        .update(company, &ana, first.id(), edit.clone())
+        .await
+        .unwrap();
+    assert_eq!(sales.history(company, first.id()).await.unwrap().len(), 2);
+    let mut bad = edit.clone();
+    bad.seller_id = Some(seed.customer);
+    assert_eq!(
+        sales
+            .update(company, &ana, first.id(), bad)
+            .await
+            .unwrap_err(),
+        refused("seller")
+    );
+
+    // Completed: its receivable is one entry split by the term (30/60, half and half), in the customer's
+    // name, once however often it is asked for.
+    let (done_a, done_b) = tokio::join!(
+        sales.complete(company, &ana, first.id()),
+        sales.complete(company, &ana, first.id())
+    );
+    assert_eq!(done_a.unwrap().status(), SaleStatus::Completed);
+    done_b.unwrap();
+    assert_eq!(
+        sales
+            .complete(company, &ana, first.id())
+            .await
+            .unwrap()
+            .status(),
+        SaleStatus::Completed
+    );
+    let receivable = sales
+        .receivable(company, first.id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(receivable.kind(), EntryKind::Receivable);
+    assert_eq!(receivable.description(), "Venda nº 1");
+    assert_eq!(receivable.party_id(), Some(seed.customer));
+    assert_eq!(receivable.category_id(), entry_seed.category);
+    assert_eq!(receivable.cost_center_id(), Some(entry_seed.cost_center));
+    assert_eq!(receivable.origin(), Some(EntryOrigin::Sale(first.id())));
+    assert_eq!(
+        receivable.installments_text(),
+        "1:2026-12-06:22.55,2:2027-01-05:22.55"
+    );
+    assert_eq!(receivable.competence_date().to_string(), "2026-11-06");
+    let everything = entries
+        .list(company, &FinancialEntryQuery::default(), None, None)
+        .await
+        .unwrap();
+    assert_eq!(everything.items.len(), 1);
+    // Its items are fixed, and it is not cancelled or completed again without cause.
+    assert_eq!(
+        sales
+            .update(company, &ana, first.id(), edit)
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::SaleIsLocked)
+    );
+    assert!(
+        sales
+            .receivable(company, second.id())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    // A sale with no term has one installment due on the day of the sale.
+    let mut single = sale_draft(entry_seed, seed);
+    single.payment_term_id = None;
+    let single = sales.register(company, &ana, single).await.unwrap();
+    sales.complete(company, &ana, single.id()).await.unwrap();
+    assert_eq!(
+        sales
+            .receivable(company, single.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .installments_text(),
+        "1:2026-11-06:35"
+    );
+
+    // Returns: the returned part of a line is refunded by a payable, cumulatively, never more than was sold.
+    let refund = || Refund {
+        category_id: entry_seed.other_category,
+        due_on: "2026-11-20".into(),
+    };
+    assert_eq!(
+        sales
+            .register_return(
+                company,
+                &ana,
+                second.id(),
+                return_draft(&[(1, "1")]),
+                refund()
+            )
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::SaleIsNotCompleted)
+    );
+    let made = sales
+        .register_return(
+            company,
+            &ana,
+            first.id(),
+            return_draft(&[(1, "1"), (2, "0.5")]),
+            refund(),
+        )
+        .await
+        .unwrap();
+    // 1 of 4 of the line worth 40.1 is 10.025 -> 10.03, and a third of the line worth 5 is 1.67.
+    assert_eq!(made.sale_return.refund().to_string(), "11.7");
+    let payable = made.refund.unwrap();
+    assert_eq!(payable.kind(), EntryKind::Payable);
+    assert_eq!(payable.party_id(), Some(seed.customer));
+    assert_eq!(payable.total().to_string(), "11.7");
+    assert_eq!(payable.installments_text(), "1:2026-11-20:11.7");
+    assert_eq!(
+        payable.origin(),
+        Some(EntryOrigin::SaleReturn(made.sale_return.id()))
+    );
+    assert_eq!(
+        sales
+            .register_return(
+                company,
+                &ana,
+                first.id(),
+                return_draft(&[(1, "3.001")]),
+                refund()
+            )
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::ReturnExceedsSold)
+    );
+    let rest = sales
+        .register_return(
+            company,
+            &ana,
+            first.id(),
+            return_draft(&[(1, "3")]),
+            refund(),
+        )
+        .await
+        .unwrap();
+    // The line is worth 40.1 (4 x 10.10 less 0.30): 10.03 and then 30.07, so that they add up to the line.
+    assert_eq!(rest.sale_return.refund().to_string(), "30.07");
+    let returns = sales.returns(company, first.id()).await.unwrap();
+    assert_eq!(returns.len(), 2);
+    assert!(returns.iter().all(|record| record.refund.is_some()));
+    assert_eq!(returns[0].sale_return.id(), made.sale_return.id());
+    assert_eq!(
+        sales.returns(other_company, first.id()).await.unwrap_err(),
+        ApplicationError::SaleNotFound
+    );
+    // The store itself refuses a return of more than was sold and not returned, and leaves no trace of it:
+    // what the use case checks beforehand is also checked with the sale locked.
+    // Line 2 sold 1.5 and 0.5 of it came back: a return of all 1.5 fits what the domain knows of the sale
+    // alone, and not what the store has.
+    let sold_sale = sales.get(company, first.id()).await.unwrap();
+    let too_big = SaleReturn::new(
+        SaleReturnId::generate(),
+        &sold_sale,
+        return_draft(&[(2, "1.5")]),
+        &[],
+    )
+    .unwrap();
+    let refused_audit = AuditEntry {
+        company_id: company,
+        actor: ana.clone(),
+        entity: AuditEntity::SaleReturn,
+        entity_id: too_big.id().as_uuid(),
+        action: AuditAction::Created,
+        changes: sale_return_creation_changes(&too_big),
+    };
+    assert_eq!(
+        store
+            .save_return(&too_big, 2, &refused_audit)
+            .await
+            .unwrap_err(),
+        RepositoryError::ReturnTooMuch
+    );
+    // A return worked out from fewer returns than the store has is refused: its refund would be wrong.
+    assert_eq!(
+        store
+            .save_return(&too_big, 1, &refused_audit)
+            .await
+            .unwrap_err(),
+        RepositoryError::SaleChanged
+    );
+    let stored = store.returns_of(company, first.id()).await.unwrap();
+    assert_eq!(stored.len(), 2);
+    assert!(stored.iter().all(|made| made.id() != too_big.id()));
+
+    // What is refunded stands: a sale with returns is not cancelled.
+    assert_eq!(
+        sales.cancel(company, &ana, first.id()).await.unwrap_err(),
+        ApplicationError::SaleHasReturns
+    );
+
+    // Cancelled: an open order just is; a completed sale takes its receivable with it unless it was settled.
+    assert_eq!(
+        sales
+            .cancel(company, &ana, second.id())
+            .await
+            .unwrap()
+            .status(),
+        SaleStatus::Cancelled
+    );
+    assert_eq!(
+        sales.cancel(company, &ana, second.id()).await.unwrap_err(),
+        ApplicationError::Domain(DomainError::SaleIsLocked)
+    );
+    let entry = sales
+        .receivable(company, single.id())
+        .await
+        .unwrap()
+        .unwrap();
+    let settlement = entries
+        .settle(
+            company,
+            &ana,
+            entry.id(),
+            settlement_draft(entry_seed, 1, "10"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        sales.cancel(company, &ana, single.id()).await.unwrap_err(),
+        ApplicationError::SaleHasSettlements
+    );
+    assert_eq!(
+        sales.get(company, single.id()).await.unwrap().status(),
+        SaleStatus::Completed
+    );
+    entries
+        .reverse(company, &ana, entry.id(), settlement.id())
+        .await
+        .unwrap();
+    assert_eq!(
+        sales
+            .cancel(company, &ana, single.id())
+            .await
+            .unwrap()
+            .status(),
+        SaleStatus::Cancelled
+    );
+    assert!(
+        sales
+            .receivable(company, single.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .is_voided()
+    );
+    assert_eq!(
+        sales
+            .complete(company, &ana, single.id())
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::SaleIsLocked)
+    );
+    let overdue = entries
+        .overdue(
+            company,
+            day("2028-01-01"),
+            Some(EntryKind::Receivable),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(overdue.items.iter().all(|item| item.entry_id != entry.id()));
+
+    // A quote becomes one sale: its lines and customer are copied, it is marked converted, and asking again
+    // gives the same sale. A declined one does not.
+    let quote = quotes
+        .register(
+            company,
+            &ana,
+            QuoteDraft {
+                customer_id: seed.customer,
+                issued_on: "2026-11-06".into(),
+                valid_until: "2026-11-20".into(),
+                payment_term_id: Some(seed.term),
+                notes: None,
+                lines: vec![sale_line(seed.product, "Café 500g", "2", "10", "0")],
+            },
+        )
+        .await
+        .unwrap();
+    let conversion = || Conversion {
+        sold_on: "2026-11-07".into(),
+        category_id: entry_seed.category,
+        cost_center_id: None,
+        seller_id: Some(seed.seller),
+        payment_term_id: None,
+    };
+    let bad_conversion = Conversion {
+        category_id: entry_seed.inactive_category,
+        ..conversion()
+    };
+    assert_eq!(
+        sales
+            .convert_quote(company, &ana, quote.id(), bad_conversion)
+            .await
+            .unwrap_err(),
+        refused("category")
+    );
+    assert_eq!(
+        quotes.get(company, quote.id()).await.unwrap().status(),
+        QuoteStatus::Draft
+    );
+    let converted = sales
+        .convert_quote(company, &ana, quote.id(), conversion())
+        .await
+        .unwrap();
+    assert_eq!(converted.quote_id(), Some(quote.id()));
+    assert_eq!(converted.payment_term_id(), Some(seed.term));
+    assert_eq!(converted.total().to_string(), "20");
+    assert_eq!(converted.lines()[0].description(), "Café 500g");
+    assert_eq!(
+        quotes.get(company, quote.id()).await.unwrap().status(),
+        QuoteStatus::Converted
+    );
+    let again = sales
+        .convert_quote(company, &ana, quote.id(), conversion())
+        .await
+        .unwrap();
+    assert_eq!(again.id(), converted.id());
+    assert_eq!(
+        sales
+            .list(company, &SaleQuery::default(), None, None)
+            .await
+            .unwrap()
+            .items
+            .len(),
+        5
+    );
+    assert_eq!(
+        sales
+            .convert_quote(other_company, &ana, quote.id(), conversion())
+            .await
+            .unwrap_err(),
+        ApplicationError::QuoteNotFound
+    );
+    assert_eq!(
+        quotes
+            .update(
+                company,
+                &ana,
+                quote.id(),
+                QuoteDraft {
+                    customer_id: seed.customer,
+                    issued_on: "2026-11-06".into(),
+                    valid_until: "2026-11-20".into(),
+                    payment_term_id: None,
+                    notes: None,
+                    lines: vec![sale_line(seed.product, "X", "1", "1", "0")],
+                }
+            )
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::QuoteIsLocked)
+    );
+    let declined = quotes
+        .register(
+            company,
+            &ana,
+            QuoteDraft {
+                customer_id: seed.customer,
+                issued_on: "2026-11-06".into(),
+                valid_until: "2026-11-20".into(),
+                payment_term_id: None,
+                notes: None,
+                lines: vec![sale_line(seed.product, "Café", "1", "1", "0")],
+            },
+        )
+        .await
+        .unwrap();
+    let link = quotes
+        .send(
+            company,
+            &ana,
+            declined.id(),
+            "cliente@exemplo.com",
+            "Padaria",
+            day("2026-11-10"),
+        )
+        .await
+        .unwrap();
+    quotes
+        .answer(
+            link.link.rsplit('/').next().unwrap(),
+            false,
+            day("2026-11-10"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        sales
+            .convert_quote(company, &ana, declined.id(), conversion())
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::QuoteIsLocked)
+    );
 }

@@ -8,8 +8,8 @@ use conta_verde_application::{
 use conta_verde_domain::{
     Amount, AuditEntity, AuditEntry, AuditRecord, BankAccountId, CalendarDate, CategoryId,
     CompanyId, CostCenterId, Decimal, EntryId, EntryInstallmentDraft, EntryKind, EntryOrigin,
-    FinancialEntry, FinancialEntryDraft, PartyId, PaymentMethodId, RecurrenceId, Settlement,
-    SettlementDraft, SettlementId,
+    FinancialEntry, FinancialEntryDraft, PartyId, PaymentMethodId, RecurrenceId, RecurrenceOrigin,
+    SaleId, SaleReturnId, Settlement, SettlementDraft, SettlementId,
 };
 use sqlx::postgres::PgRow;
 use sqlx::{PgConnection, PgPool, Postgres, QueryBuilder, Row};
@@ -18,11 +18,17 @@ use uuid::Uuid;
 use crate::postgres::{snapshot, storage_error};
 use crate::postgres_audit;
 
-const OCCURRENCE_UNIQUE_INDEX: &str = "financial_entries_occurrence_key";
+/// The unique indexes that say an origin already has its entry.
+const ORIGIN_UNIQUE_INDEXES: [&str; 3] = [
+    "financial_entries_occurrence_key",
+    "financial_entries_sale_key",
+    "financial_entries_sale_return_key",
+];
 
 const SELECT_ENTRIES: &str = "SELECT id, company_id, kind, description, party_id, category_id, \
      cost_center_id, to_char(competence_date, 'YYYY-MM-DD') AS competence_date, recurrence_id, \
-     to_char(occurrence_on, 'YYYY-MM-DD') AS occurrence_on FROM financial_entries";
+     to_char(occurrence_on, 'YYYY-MM-DD') AS occurrence_on, sale_id, sale_return_id, voided \
+     FROM financial_entries";
 
 pub struct PostgresFinancialEntryRepository {
     pool: PgPool,
@@ -72,8 +78,8 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
         sqlx::query(
             "INSERT INTO financial_entries \
              (id, company_id, kind, description, party_id, category_id, cost_center_id, competence_date, \
-              recurrence_id, occurrence_on) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, CAST($8 AS DATE), $9, CAST($10 AS DATE))",
+              recurrence_id, occurrence_on, sale_id, sale_return_id) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, CAST($8 AS DATE), $9, CAST($10 AS DATE), $11, $12)",
         )
         .bind(entry.id().as_uuid())
         .bind(entry.company_id().as_uuid())
@@ -83,13 +89,31 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
         .bind(entry.category_id().as_uuid())
         .bind(entry.cost_center_id().map(|id| id.as_uuid()))
         .bind(entry.competence_date().to_string())
-        .bind(entry.origin().map(|origin| origin.recurrence_id.as_uuid()))
-        .bind(entry.origin().map(|origin| origin.occurrence_on.to_string()))
+        .bind(match entry.origin() {
+            Some(EntryOrigin::Recurrence(origin)) => Some(origin.recurrence_id.as_uuid()),
+            _ => None,
+        })
+        .bind(match entry.origin() {
+            Some(EntryOrigin::Recurrence(origin)) => Some(origin.occurrence_on.to_string()),
+            _ => None,
+        })
+        .bind(match entry.origin() {
+            Some(EntryOrigin::Sale(id)) => Some(id.as_uuid()),
+            _ => None,
+        })
+        .bind(match entry.origin() {
+            Some(EntryOrigin::SaleReturn(id)) => Some(id.as_uuid()),
+            _ => None,
+        })
         .execute(&mut *tx)
         .await
         .map_err(|error| match &error {
-            sqlx::Error::Database(db) if db.constraint() == Some(OCCURRENCE_UNIQUE_INDEX) => {
-                RepositoryError::DuplicateOccurrence
+            sqlx::Error::Database(db)
+                if db
+                    .constraint()
+                    .is_some_and(|name| ORIGIN_UNIQUE_INDEXES.contains(&name)) =>
+            {
+                RepositoryError::DuplicateOrigin
             }
             _ => storage_error(error),
         })?;
@@ -127,17 +151,20 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
         let mut tx = self.pool.begin().await.map_err(storage_error)?;
         // The entry row is locked for the check and the write, so a settlement cannot slip in
         // between: it takes the same lock before it looks at the installments.
-        let stored_kind: Option<String> = sqlx::query_scalar(
-            "SELECT kind FROM financial_entries WHERE id = $1 AND company_id = $2 FOR UPDATE",
+        let stored: Option<(String, bool)> = sqlx::query_as(
+            "SELECT kind, voided FROM financial_entries WHERE id = $1 AND company_id = $2 FOR UPDATE",
         )
         .bind(entry.id().as_uuid())
         .bind(entry.company_id().as_uuid())
         .fetch_optional(&mut *tx)
         .await
         .map_err(storage_error)?;
-        let Some(stored_kind) = stored_kind else {
+        let Some((stored_kind, voided)) = stored else {
             return Err(RepositoryError::NotFound);
         };
+        if voided {
+            return Err(RepositoryError::EntryVoided);
+        }
         refuse_to_change_what_was_settled(&mut tx, entry, &stored_kind).await?;
         let result = sqlx::query(
             "UPDATE financial_entries SET kind = $3, description = $4, party_id = $5, \
@@ -185,16 +212,18 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
         // The entry row is locked first, like an edit does, and then the installment: two
         // settlements of the same installment, or one and an edit, take turns, and what is left of the
         // installment is read after the one before has committed.
-        let entry_exists: Option<Uuid> = sqlx::query_scalar(
-            "SELECT id FROM financial_entries WHERE id = $1 AND company_id = $2 FOR SHARE",
+        let entry_state: Option<bool> = sqlx::query_scalar(
+            "SELECT voided FROM financial_entries WHERE id = $1 AND company_id = $2 FOR SHARE",
         )
         .bind(settlement.entry_id().as_uuid())
         .bind(settlement.company_id().as_uuid())
         .fetch_optional(&mut *tx)
         .await
         .map_err(storage_error)?;
-        if entry_exists.is_none() {
-            return Err(RepositoryError::NotFound);
+        match entry_state {
+            None => return Err(RepositoryError::NotFound),
+            Some(true) => return Err(RepositoryError::EntryVoided),
+            Some(false) => {}
         }
         // The installment row is locked in a statement of its own, and the balance is read in the next
         // one: in READ COMMITTED each statement sees what was committed when it starts, so a
@@ -414,12 +443,14 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
                  JOIN (SELECT company_id, entry_id, SUM(amount) AS total \
                        FROM financial_entry_installments GROUP BY company_id, entry_id) t \
                    ON t.company_id = e.company_id AND t.entry_id = e.id \
-                 WHERE e.company_id = $1 AND e.competence_date BETWEEN CAST($2 AS DATE) AND CAST($3 AS DATE)"
+                 WHERE e.company_id = $1 AND NOT e.voided \
+                   AND e.competence_date BETWEEN CAST($2 AS DATE) AND CAST($3 AS DATE)"
             }
             ReportBasis::Due => {
                 "FROM financial_entries e \
                  JOIN financial_entry_installments t ON t.company_id = e.company_id AND t.entry_id = e.id \
-                 WHERE e.company_id = $1 AND t.due_date BETWEEN CAST($2 AS DATE) AND CAST($3 AS DATE)"
+                 WHERE e.company_id = $1 AND NOT e.voided \
+                   AND t.due_date BETWEEN CAST($2 AS DATE) AND CAST($3 AS DATE)"
             }
         };
         let amount = match basis {
@@ -472,7 +503,7 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
                  SELECT SUM(applied) AS settled FROM entry_settlements \
                  WHERE company_id = i.company_id AND entry_id = i.entry_id \
                    AND installment = i.number AND NOT reversed) s ON true \
-             WHERE i.company_id = $1 AND i.due_date < CAST($2 AS DATE) \
+             WHERE i.company_id = $1 AND NOT e.voided AND i.due_date < CAST($2 AS DATE) \
                AND i.amount - COALESCE(s.settled, 0) > 0 \
                AND (CAST($3 AS TEXT) IS NULL OR e.kind = $3)";
         let rows = sqlx::query(&format!(
@@ -593,7 +624,7 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
                  SELECT SUM(applied) AS settled FROM entry_settlements \
                  WHERE company_id = i.company_id AND entry_id = i.entry_id \
                    AND installment = i.number AND NOT reversed) s ON true \
-             WHERE i.company_id = $1 \
+             WHERE i.company_id = $1 AND NOT e.voided \
                AND i.due_date BETWEEN CAST($2 AS DATE) AND CAST($3 AS DATE) \
                AND i.amount - COALESCE(s.settled, 0) > 0 \
              GROUP BY i.due_date ORDER BY i.due_date",
@@ -613,6 +644,77 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
                 })
             })
             .collect()
+    }
+
+    async fn void(
+        &self,
+        voided: &FinancialEntry,
+        audit: &AuditEntry,
+    ) -> Result<(), RepositoryError> {
+        ensure_audit_describes(audit, voided)?;
+        let mut tx = self.pool.begin().await.map_err(storage_error)?;
+        // The row is locked, so a settlement cannot slip in between the check and the write: it takes
+        // the same lock before it looks at the installments.
+        let state: Option<bool> = sqlx::query_scalar(
+            "SELECT voided FROM financial_entries WHERE id = $1 AND company_id = $2 FOR UPDATE",
+        )
+        .bind(voided.id().as_uuid())
+        .bind(voided.company_id().as_uuid())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(storage_error)?;
+        if state != Some(false) {
+            return Err(RepositoryError::NotFound);
+        }
+        let settled: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM entry_settlements \
+             WHERE company_id = $1 AND entry_id = $2 AND NOT reversed)",
+        )
+        .bind(voided.company_id().as_uuid())
+        .bind(voided.id().as_uuid())
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(storage_error)?;
+        if settled {
+            return Err(RepositoryError::EntrySettled);
+        }
+        sqlx::query("UPDATE financial_entries SET voided = true WHERE id = $1 AND company_id = $2")
+            .bind(voided.id().as_uuid())
+            .bind(voided.company_id().as_uuid())
+            .execute(&mut *tx)
+            .await
+            .map_err(storage_error)?;
+        postgres_audit::insert(&mut tx, audit).await?;
+        tx.commit().await.map_err(storage_error)
+    }
+
+    async fn find_by_origin(
+        &self,
+        company_id: CompanyId,
+        origin: EntryOrigin,
+    ) -> Result<Option<FinancialEntry>, RepositoryError> {
+        let (column, value) = match origin {
+            EntryOrigin::Sale(id) => ("sale_id", id.as_uuid()),
+            EntryOrigin::SaleReturn(id) => ("sale_return_id", id.as_uuid()),
+            EntryOrigin::Recurrence(_) => {
+                return Err(RepositoryError::Storage(
+                    "an entry is looked up by sale or return, never by occurrence".to_owned(),
+                ));
+            }
+        };
+        let mut tx = snapshot(&self.pool).await?;
+        let row = sqlx::query(&format!(
+            "{SELECT_ENTRIES} WHERE company_id = $1 AND {column} = $2"
+        ))
+        .bind(company_id.as_uuid())
+        .bind(value)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(storage_error)?;
+        let Some(row) = row else { return Ok(None) };
+        let mut entries = with_installments(&mut tx, company_id, vec![row]).await?;
+        tx.commit().await.map_err(storage_error)?;
+        Ok(entries.pop())
     }
 
     async fn history(
@@ -646,6 +748,9 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
         if let Some(category) = query.category() {
             sql.push(" AND category_id = ")
                 .push_bind(category.as_uuid());
+        }
+        if let Some(voided) = query.voided() {
+            sql.push(" AND voided = ").push_bind(voided);
         }
         if let Some(text) = query.search() {
             // `strpos` instead of `LIKE` so that `%` and `_` in the text mean themselves.
@@ -853,16 +958,30 @@ fn entry_from_row(
     })?;
     let recurrence: Option<Uuid> = row.try_get("recurrence_id").map_err(storage_error)?;
     let occurrence: Option<String> = row.try_get("occurrence_on").map_err(storage_error)?;
-    match (
+    let sale: Option<Uuid> = row.try_get("sale_id").map_err(storage_error)?;
+    let sale_return: Option<Uuid> = row.try_get("sale_return_id").map_err(storage_error)?;
+    let voided: bool = row.try_get("voided").map_err(storage_error)?;
+    let origin = match (
         recurrence,
         occurrence.as_deref().and_then(CalendarDate::parse),
+        sale,
+        sale_return,
     ) {
-        (Some(recurrence_id), Some(occurrence_on)) => Ok(entry.with_origin(EntryOrigin {
-            recurrence_id: RecurrenceId::from_uuid(recurrence_id),
-            occurrence_on,
-        })),
-        _ => Ok(entry),
-    }
+        (Some(recurrence_id), Some(occurrence_on), _, _) => {
+            Some(EntryOrigin::Recurrence(RecurrenceOrigin {
+                recurrence_id: RecurrenceId::from_uuid(recurrence_id),
+                occurrence_on,
+            }))
+        }
+        (_, _, Some(id), _) => Some(EntryOrigin::Sale(SaleId::from_uuid(id))),
+        (_, _, _, Some(id)) => Some(EntryOrigin::SaleReturn(SaleReturnId::from_uuid(id))),
+        _ => None,
+    };
+    let entry = entry.with_voided(voided);
+    Ok(match origin {
+        Some(origin) => entry.with_origin(origin),
+        None => entry,
+    })
 }
 
 #[cfg(test)]

@@ -4,8 +4,8 @@ use axum::http::StatusCode;
 use conta_verde_application::{ApplicationError, EntrySort, FinancialEntryQuery};
 use conta_verde_domain::{
     BankAccountId, CategoryId, CostCenterId, EntryId, EntryInstallmentDraft, EntryKind,
-    FinancialEntry, FinancialEntryDraft, PartyId, PaymentMethodId, Settlement, SettlementDraft,
-    SettlementId, settled_of,
+    EntryOrigin, FinancialEntry, FinancialEntryDraft, PartyId, PaymentMethodId, Settlement,
+    SettlementDraft, SettlementId, settled_of,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -76,6 +76,8 @@ pub(crate) struct ListQuery {
     kind: Option<String>,
     /// The id of a category.
     category: Option<String>,
+    /// `true` for the cancelled entries only, `false` for the others only; both when it is absent.
+    voided: Option<String>,
     /// `competence_date` for oldest first, or `-competence_date` (the default) for newest first.
     sort: Option<String>,
 }
@@ -95,6 +97,11 @@ impl ListQuery {
             let id = Uuid::parse_str(category)
                 .map_err(|_| ApiError::InvalidQuery("invalid category: expected an id"))?;
             query = query.with_category(CategoryId::from_uuid(id));
+        }
+        if let Some(voided) = list_params::active(self.voided.as_deref())
+            .map_err(|_| ApiError::InvalidQuery("invalid voided: expected true or false"))?
+        {
+            query = query.with_voided(voided);
         }
         let sort = match self.sort.as_deref() {
             None | Some("-competence_date") => EntrySort::CompetenceDesc,
@@ -135,6 +142,12 @@ pub(crate) struct EntryResponse {
     total: String,
     /// The recurrence that generated it, if one did.
     recurrence_id: Option<Uuid>,
+    /// The sale whose receivable it is, if one made it.
+    sale_id: Option<Uuid>,
+    /// The return it refunds, if one made it.
+    sale_return_id: Option<Uuid>,
+    /// Cancelled: it counts nowhere and takes no edit or settlement.
+    voided: bool,
 }
 
 impl EntryResponse {
@@ -159,7 +172,19 @@ impl EntryResponse {
                 })
                 .collect(),
             total: entry.total().to_string(),
-            recurrence_id: entry.origin().map(|origin| origin.recurrence_id.as_uuid()),
+            recurrence_id: match entry.origin() {
+                Some(EntryOrigin::Recurrence(origin)) => Some(origin.recurrence_id.as_uuid()),
+                _ => None,
+            },
+            sale_id: match entry.origin() {
+                Some(EntryOrigin::Sale(id)) => Some(id.as_uuid()),
+                _ => None,
+            },
+            sale_return_id: match entry.origin() {
+                Some(EntryOrigin::SaleReturn(id)) => Some(id.as_uuid()),
+                _ => None,
+            },
+            voided: entry.is_voided(),
         }
     }
 }

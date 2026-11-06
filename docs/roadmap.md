@@ -62,8 +62,8 @@ Planned in [ADR 0037](adr/0037-sales-module-plan.md), which also settles what th
 (a voided mark on entries, a sale as an entry's origin, applying a payment term, the `sales` area, the one
 rounding rule). No proposed ADR belongs to this phase. One slice per pull request, in this order:
 
-- [ ] Quotes: items (products and services), discounts, validity, PDF, send by e-mail, public approval link
-- [ ] Sales orders and sales: status lifecycle, receivables generated according to payment terms, cancellation and returns; a quote becomes a sale
+- [x] Quotes: items (products and services), discounts, validity, PDF, send by e-mail, public approval link ([ADR 0038](adr/0038-quotes.md)) — numbered quotes with discounted lines and a validity, a PDF, a link e-mailed to the customer (shown once, taken back when the quote changes or is sent again) where they approve or decline without an account, and the `sales` area; the quote becomes a sale in the next slice
+- [x] Sales orders and sales: status lifecycle, receivables generated according to payment terms, cancellation and returns; a quote becomes a sale ([ADR 0039](adr/0039-sales.md)) — an open order becomes a completed sale that makes its one receivable by the payment term (in the cash flow forecast), is cancelled with its receivable (entries gain a one-way cancelled mark), takes returns that refund with a payable, and is made from an approved quote
 - [ ] Recurring contracts: billing cycle, automatic sale and receivable per period, adjustment and termination
 - [ ] Sellers and commissions: rules per seller or product, commission statement
 - [ ] Price lists

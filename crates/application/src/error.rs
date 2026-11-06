@@ -30,8 +30,20 @@ pub enum RepositoryError {
     AlreadyMatched,
     /// The statement line is no longer in the status the move was made from.
     LineChanged,
-    /// The recurrence already has the entry of that occurrence day.
-    DuplicateOccurrence,
+    /// The origin (an occurrence of a recurrence, a sale, a return) already has its entry.
+    DuplicateOrigin,
+    /// The entry is cancelled: it takes no more settlements.
+    EntryVoided,
+    /// The sale is no longer in the status the write was made from.
+    SaleChanged,
+    /// The quote already became a sale.
+    DuplicateQuoteSale,
+    /// A return would take back more of a line than was sold.
+    ReturnTooMuch,
+    /// The sale has returns, which stand.
+    SaleHasReturns,
+    /// The quote is no longer in the status the write was made from.
+    QuoteChanged,
     Storage(String),
 }
 
@@ -93,6 +105,24 @@ pub enum ApplicationError {
     TooManyImportRows,
     /// No recurrence with this id in the company (another company's looks the same).
     RecurrenceNotFound,
+    /// No sale with this id in the company (another company's looks the same).
+    SaleNotFound,
+    /// The sale was changed while this was being done.
+    SaleChanged,
+    /// The entry is cancelled: it cannot change or be settled.
+    EntryIsVoided,
+    /// The sale's receivable has settlements that are not reversed: reverse them before cancelling.
+    SaleHasSettlements,
+    /// The quote already became a sale.
+    QuoteAlreadyConverted,
+    /// The sale has returns: they stand, so the sale cannot be cancelled.
+    SaleHasReturns,
+    /// No quote with this id in the company, or no link that leads to one.
+    QuoteNotFound,
+    /// The quote was changed or answered while this was being done.
+    QuoteChanged,
+    /// The quote's validity has run out: it can no longer be approved.
+    QuoteExpired,
     /// No transfer with this id in the company, or it was reversed already.
     TransferNotFound,
     /// No settlement with this id in the entry (another company's looks the same), or it was
@@ -183,9 +213,13 @@ impl fmt::Display for RepositoryError {
             Self::DuplicateLine => f.write_str("the account already has this statement line"),
             Self::AlreadyMatched => f.write_str("another statement line is already matched to it"),
             Self::LineChanged => f.write_str("the statement line was changed meanwhile"),
-            Self::DuplicateOccurrence => {
-                f.write_str("the recurrence already has the entry of this occurrence")
-            }
+            Self::DuplicateOrigin => f.write_str("this origin already has its entry"),
+            Self::EntryVoided => f.write_str("the entry was cancelled"),
+            Self::SaleChanged => f.write_str("the sale was changed meanwhile"),
+            Self::DuplicateQuoteSale => f.write_str("the quote already became a sale"),
+            Self::ReturnTooMuch => f.write_str("a return cannot be of more than was sold"),
+            Self::SaleHasReturns => f.write_str("the sale has returns"),
+            Self::QuoteChanged => f.write_str("the quote was changed meanwhile"),
             Self::Storage(message) => write!(f, "storage failure: {message}"),
         }
     }
@@ -224,6 +258,17 @@ impl fmt::Display for ApplicationError {
             Self::SettlementNotFound => f.write_str("settlement not found"),
             Self::TransferNotFound => f.write_str("transfer not found"),
             Self::RecurrenceNotFound => f.write_str("recurrence not found"),
+            Self::QuoteNotFound => f.write_str("quote not found"),
+            Self::SaleNotFound => f.write_str("sale not found"),
+            Self::SaleChanged => f.write_str("the sale was changed meanwhile: read it again"),
+            Self::EntryIsVoided => f.write_str("the entry was cancelled: it cannot change or be settled"),
+            Self::SaleHasSettlements => f.write_str(
+                "the receivable of this sale has settlements: reverse them before cancelling it",
+            ),
+            Self::QuoteAlreadyConverted => f.write_str("the quote already became a sale"),
+            Self::SaleHasReturns => f.write_str("the sale has returns, which stand: it cannot be cancelled"),
+            Self::QuoteChanged => f.write_str("the quote was changed meanwhile: read it again"),
+            Self::QuoteExpired => f.write_str("the quote is past its validity"),
             Self::StatementLineNotFound => f.write_str("statement line not found"),
             Self::AlreadyMatched => f.write_str("another statement line is already matched to it"),
             Self::LineChanged => f.write_str("the statement line was changed meanwhile: read it again"),
