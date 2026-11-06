@@ -18,8 +18,8 @@ use conta_verde_application::{
     ContractService, Conversion, Refund, SaleQuery, SaleRepository, SaleService,
 };
 use conta_verde_application::{
-    ContractQuery, EmailSender, NumberSort, QuotePage, QuoteQuery, QuoteRepository, QuoteService,
-    SalesReferences,
+    ContractQuery, DocumentReferences, EmailSender, NumberSort, QuotePage, QuoteQuery,
+    QuoteRepository, QuoteService,
 };
 use conta_verde_application::{
     DunningPlanRepository, DunningService, EmailMessage, InstallmentLinks, MessageSender,
@@ -30,6 +30,9 @@ use conta_verde_application::{
     NewInvitation, NewUser, PaymentTermQuery, PaymentTermRepository, PaymentTermService,
 };
 use conta_verde_application::{PriceListQuery, PriceListRepository, PriceListService};
+use conta_verde_application::{
+    PurchaseOrderPage, PurchaseOrderQuery, PurchaseOrderRepository, PurchaseService,
+};
 use conta_verde_domain::{
     Account, AccountDraft, Actor, AddressDraft, AuditAction, AuditEntity, AuditEntry, BankAccount,
     BankAccountDraft, BankAccountId, BankAccountKind, CashFlowGroup, Category, CategoryId,
@@ -52,6 +55,9 @@ use conta_verde_domain::{InstallmentDraft, payment_term_changes, payment_term_cr
 use conta_verde_domain::{LineDraft, QuoteDraft, QuoteStatus};
 use conta_verde_domain::{PaymentEvent, PaymentEventId, PaymentEventKind, PaymentEventOutcome};
 use conta_verde_domain::{PriceListDraft, PriceListItemDraft};
+use conta_verde_domain::{
+    PurchaseOrderDraft, PurchaseReceiptDraft, PurchaseReceiptId, PurchaseStatus, ReceiptItemDraft,
+};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -8519,6 +8525,8 @@ pub struct SalesSeed {
     pub customer: PartyId,
     /// A party that is a seller, and so is not the customer.
     pub seller: PartyId,
+    /// A party that is a supplier only.
+    pub supplier: PartyId,
     pub product: ProductId,
     pub other_product: ProductId,
     pub inactive_product: ProductId,
@@ -8561,6 +8569,20 @@ where
         .save(&seller, &created_entry(&seller))
         .await
         .unwrap();
+    let supplier = Party::new(
+        PartyId::generate(),
+        company,
+        PartyDraft {
+            is_customer: false,
+            is_supplier: true,
+            ..party_draft("Fornecedor Fábio", None)
+        },
+    )
+    .unwrap();
+    parties
+        .save(&supplier, &created_entry(&supplier))
+        .await
+        .unwrap();
     let mut saved = Vec::new();
     for (name, active) in [("Café", true), ("Pão", true), ("Descontinuado", false)] {
         let product = Product::new(
@@ -8590,6 +8612,7 @@ where
     SalesSeed {
         customer: customer.id(),
         seller: seller.id(),
+        supplier: supplier.id(),
         product: saved[0],
         other_product: saved[1],
         inactive_product: saved[2],
@@ -8598,7 +8621,7 @@ where
     }
 }
 
-pub async fn sales_references_say_what_is_usable<R: SalesReferences>(
+pub async fn document_references_say_what_is_usable<R: DocumentReferences>(
     references: &R,
     company: CompanyId,
     other_company: CompanyId,
@@ -8637,6 +8660,24 @@ pub async fn sales_references_say_what_is_usable<R: SalesReferences>(
     assert!(
         !references
             .seller_is_usable(other_company, seed.seller)
+            .await
+            .unwrap()
+    );
+    assert!(
+        references
+            .supplier_is_usable(company, seed.supplier)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !references
+            .supplier_is_usable(company, seed.customer)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !references
+            .supplier_is_usable(other_company, seed.supplier)
             .await
             .unwrap()
     );
@@ -8743,7 +8784,7 @@ pub async fn runs_the_quote_lifecycle<Q, R, E, S>(
     seed: &SalesSeed,
 ) where
     Q: QuoteRepository,
-    R: SalesReferences,
+    R: DocumentReferences,
     E: EmailSender,
     S: SecretService,
 {
@@ -9484,9 +9525,9 @@ pub async fn runs_the_sale_lifecycle<S, Q, E, F, R, Q2, R2, Em, Se>(
     Q: QuoteRepository,
     E: FinancialEntryRepository,
     F: EntryReferences,
-    R: SalesReferences,
+    R: DocumentReferences,
     Q2: QuoteRepository,
-    R2: SalesReferences,
+    R2: DocumentReferences,
     Em: EmailSender,
     Se: SecretService,
 {
@@ -10059,7 +10100,7 @@ where
     Q: QuoteRepository,
     E: FinancialEntryRepository,
     F: EntryReferences,
-    R: SalesReferences,
+    R: DocumentReferences,
 {
     let mut found: Vec<(String, String, bool)> = sales
         .list(
@@ -10113,7 +10154,7 @@ pub async fn bills_contracts_every_cycle<C, S, Q, E, F, R>(
     Q: QuoteRepository,
     E: FinancialEntryRepository,
     F: EntryReferences,
-    R: SalesReferences,
+    R: DocumentReferences,
 {
     let ana = actor();
     let day = |text: &str| CalendarDate::parse(text).unwrap();
@@ -10508,12 +10549,12 @@ pub async fn computes_commission_statements<CR, S2, R2, S, Q, E, F, R>(
 ) where
     CR: CommissionRuleRepository,
     S2: SaleRepository,
-    R2: SalesReferences,
+    R2: DocumentReferences,
     S: SaleRepository,
     Q: QuoteRepository,
     E: FinancialEntryRepository,
     F: EntryReferences,
-    R: SalesReferences,
+    R: DocumentReferences,
 {
     let ana = actor();
     let day = |text: &str| CalendarDate::parse(text).unwrap();
@@ -10806,7 +10847,7 @@ fn price_list_draft(name: &str, prices: &[(ProductId, &str)], active: bool) -> P
     }
 }
 
-async fn listed_price_list_names<R: PriceListRepository, F: SalesReferences>(
+async fn listed_price_list_names<R: PriceListRepository, F: DocumentReferences>(
     service: &PriceListService<R, F>,
     company: CompanyId,
     query: &PriceListQuery,
@@ -10830,7 +10871,7 @@ async fn listed_price_list_names<R: PriceListRepository, F: SalesReferences>(
 /// A list is stored with its prices in the order they were written and its trail, scoped by company; an edit
 /// replaces the prices as a whole and records only what changed; a refused write leaves the list, its prices and
 /// its trail as they were.
-pub async fn runs_the_price_list_lifecycle<R: PriceListRepository, F: SalesReferences>(
+pub async fn runs_the_price_list_lifecycle<R: PriceListRepository, F: DocumentReferences>(
     service: &PriceListService<R, F>,
     company: CompanyId,
     other_company: CompanyId,
@@ -12426,4 +12467,502 @@ pub async fn reports_delinquency<R, F, P>(
         .unwrap();
     assert_eq!(earlier.installments, 4);
     assert_eq!(earlier.owed.to_string(), "147");
+}
+
+fn purchase_draft(entry_seed: &EntrySeed, seed: &SalesSeed) -> PurchaseOrderDraft {
+    PurchaseOrderDraft {
+        supplier_id: seed.supplier,
+        ordered_on: "2026-11-06".into(),
+        expected_on: Some("2026-11-20".into()),
+        payment_term_id: Some(seed.term),
+        category_id: entry_seed.category,
+        cost_center_id: Some(entry_seed.cost_center),
+        notes: Some("Entregar no depósito".into()),
+        lines: vec![
+            sale_line(seed.product, "Café 500g", "10", "8.10", "0.50"),
+            sale_line(seed.other_product, "Pão francês", "3", "3.33", "0"),
+        ],
+    }
+}
+
+fn receipt_draft(day: &str, items: &[(u16, &str)]) -> PurchaseReceiptDraft {
+    PurchaseReceiptDraft {
+        received_on: day.into(),
+        notes: None,
+        items: items
+            .iter()
+            .map(|(line, quantity)| ReceiptItemDraft {
+                line: *line,
+                quantity: (*quantity).into(),
+            })
+            .collect(),
+    }
+}
+
+fn purchase_numbers(orders: &PurchaseOrderPage) -> Vec<i64> {
+    orders.items.iter().map(|order| order.number()).collect()
+}
+
+/// A purchase order from a draft to everything received: numbering, what it points at, listing, the life of
+/// the order, and the payable each receipt makes, valued cumulatively so partial receipts add up.
+#[allow(clippy::too_many_lines)]
+pub async fn runs_the_purchase_lifecycle<P, E, F, R>(
+    purchases: &PurchaseService<P, E, F, R>,
+    store: &P,
+    entries: &FinancialEntryService<E, F>,
+    company: CompanyId,
+    other_company: CompanyId,
+    entry_seed: &EntrySeed,
+    seed: &SalesSeed,
+) where
+    P: PurchaseOrderRepository,
+    E: FinancialEntryRepository,
+    F: EntryReferences,
+    R: DocumentReferences,
+{
+    let ana = actor();
+
+    // Written as a draft, numbered per company, worth the sum of its lines.
+    let first = purchases
+        .register(company, &ana, purchase_draft(entry_seed, seed))
+        .await
+        .unwrap();
+    assert_eq!((first.number(), first.status()), (1, PurchaseStatus::Draft));
+    assert_eq!(first.total().to_string(), "90.49");
+    assert_eq!(purchases.get(company, first.id()).await.unwrap(), first);
+    let trail = purchases.history(company, first.id()).await.unwrap();
+    assert_eq!(trail.len(), 1);
+    assert_eq!(trail[0].entry.action, AuditAction::Created);
+    let second = purchases
+        .register(company, &ana, purchase_draft(entry_seed, seed))
+        .await
+        .unwrap();
+    assert_eq!(second.number(), 2);
+
+    // What it points at has to be usable, and what is refused leaves nothing.
+    let refused = |what| ApplicationError::UnusableReference(what);
+    for (what, change) in [
+        (
+            "supplier",
+            Box::new(|d: &mut PurchaseOrderDraft| d.supplier_id = seed.customer)
+                as Box<dyn Fn(&mut PurchaseOrderDraft)>,
+        ),
+        (
+            "payment term",
+            Box::new(|d: &mut PurchaseOrderDraft| d.payment_term_id = Some(seed.inactive_term)),
+        ),
+        (
+            "product",
+            Box::new(|d: &mut PurchaseOrderDraft| d.lines[0].product_id = seed.inactive_product),
+        ),
+        (
+            "category",
+            Box::new(|d: &mut PurchaseOrderDraft| d.category_id = entry_seed.inactive_category),
+        ),
+        (
+            "category",
+            Box::new(|d: &mut PurchaseOrderDraft| d.category_id = entry_seed.transfer_category),
+        ),
+        (
+            "cost center",
+            Box::new(|d: &mut PurchaseOrderDraft| {
+                d.cost_center_id = Some(entry_seed.inactive_cost_center);
+            }),
+        ),
+    ] {
+        let mut bad = purchase_draft(entry_seed, seed);
+        change(&mut bad);
+        assert_eq!(
+            purchases.register(company, &ana, bad).await.unwrap_err(),
+            refused(what),
+            "{what}"
+        );
+    }
+    let mut bad = purchase_draft(entry_seed, seed);
+    bad.lines.clear();
+    assert_eq!(
+        purchases.register(company, &ana, bad).await.unwrap_err(),
+        ApplicationError::Domain(DomainError::NoLines)
+    );
+    let mut bad = purchase_draft(entry_seed, seed);
+    bad.expected_on = Some("2026-11-05".into());
+    assert_eq!(
+        purchases.register(company, &ana, bad).await.unwrap_err(),
+        ApplicationError::Domain(DomainError::ExpectedBeforeOrdered)
+    );
+    let third = purchases
+        .register(company, &ana, purchase_draft(entry_seed, seed))
+        .await
+        .unwrap();
+    assert_eq!(third.number(), 3);
+
+    // Nothing of another company's shows, and none of it can be used from there.
+    assert_eq!(
+        purchases.get(other_company, first.id()).await.unwrap_err(),
+        ApplicationError::PurchaseNotFound
+    );
+    assert_eq!(
+        purchases
+            .approve(other_company, &ana, first.id())
+            .await
+            .unwrap_err(),
+        ApplicationError::PurchaseNotFound
+    );
+    assert!(
+        purchases
+            .list(other_company, &PurchaseOrderQuery::default(), None, None)
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
+
+    // Listed newest first, by status, supplier and text, and paged.
+    let listed = purchases
+        .list(company, &PurchaseOrderQuery::default(), None, None)
+        .await
+        .unwrap();
+    assert_eq!(purchase_numbers(&listed), [3, 2, 1]);
+    let page = purchases
+        .list(company, &PurchaseOrderQuery::default(), None, Some(2))
+        .await
+        .unwrap();
+    assert_eq!(purchase_numbers(&page), [3, 2]);
+    let rest = purchases
+        .list(
+            company,
+            &PurchaseOrderQuery::default(),
+            page.next.as_ref(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(purchase_numbers(&rest), [1]);
+    for (query, expected) in [
+        (
+            PurchaseOrderQuery::default().with_status(PurchaseStatus::Draft),
+            3,
+        ),
+        (
+            PurchaseOrderQuery::default().with_status(PurchaseStatus::Received),
+            0,
+        ),
+        (
+            PurchaseOrderQuery::default().with_supplier(seed.supplier),
+            3,
+        ),
+        (
+            PurchaseOrderQuery::default().with_supplier(seed.customer),
+            0,
+        ),
+        (PurchaseOrderQuery::default().searching("pão fran"), 3),
+        (PurchaseOrderQuery::default().searching("2"), 1),
+        (PurchaseOrderQuery::default().searching("%"), 0),
+    ] {
+        let found = purchases.list(company, &query, None, None).await.unwrap();
+        assert_eq!(found.items.len(), expected, "{query:?}");
+    }
+
+    // A draft changes; one that changes nothing records nothing.
+    let mut edit = purchase_draft(entry_seed, seed);
+    edit.lines[0].quantity = "12".into();
+    let changed = purchases
+        .update(company, &ana, first.id(), edit.clone())
+        .await
+        .unwrap();
+    // 12 x 8.10 - 0.50 = 96.70, and 3 x 3.33 = 9.99.
+    assert_eq!(changed.total().to_string(), "106.69");
+    purchases
+        .update(company, &ana, first.id(), edit.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        purchases.history(company, first.id()).await.unwrap().len(),
+        2
+    );
+
+    // Nothing arrives at a draft; a draft is cancelled once.
+    assert_eq!(
+        purchases
+            .receive(
+                company,
+                &ana,
+                first.id(),
+                receipt_draft("2026-11-10", &[(1, "1")])
+            )
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::PurchaseIsNotReceivable)
+    );
+    let cancelled = purchases.cancel(company, &ana, third.id()).await.unwrap();
+    assert_eq!(cancelled.status(), PurchaseStatus::Cancelled);
+    assert_eq!(
+        purchases
+            .cancel(company, &ana, third.id())
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::PurchaseIsLocked)
+    );
+
+    // Approved: its items are fixed.
+    let approved = purchases.approve(company, &ana, first.id()).await.unwrap();
+    assert_eq!(approved.status(), PurchaseStatus::Approved);
+    for error in [
+        purchases
+            .approve(company, &ana, first.id())
+            .await
+            .unwrap_err(),
+        purchases
+            .update(company, &ana, first.id(), edit)
+            .await
+            .unwrap_err(),
+    ] {
+        assert_eq!(
+            error,
+            ApplicationError::Domain(DomainError::PurchaseIsLocked)
+        );
+    }
+
+    // The first receipt: 5 of 12 coffees and every bread. The value of a line is taken cumulatively
+    // (96.70 x 5/12 = 40.29) and the payable is split by the term (30/60, half and half) from the day it arrived.
+    let one = purchases
+        .receive(
+            company,
+            &ana,
+            first.id(),
+            receipt_draft("2026-11-10", &[(1, "5"), (2, "3")]),
+        )
+        .await
+        .unwrap();
+    let values: Vec<String> = one
+        .receipt
+        .items()
+        .iter()
+        .map(|item| item.value.to_string())
+        .collect();
+    assert_eq!(values, ["40.29", "9.99"]);
+    assert_eq!(one.receipt.total().to_string(), "50.28");
+    let payable = one.payable.clone().unwrap();
+    assert_eq!(payable.kind(), EntryKind::Payable);
+    assert_eq!(payable.description(), "Compra nº 1");
+    assert_eq!(payable.party_id(), Some(seed.supplier));
+    assert_eq!(payable.category_id(), entry_seed.category);
+    assert_eq!(payable.cost_center_id(), Some(entry_seed.cost_center));
+    assert_eq!(
+        payable.origin(),
+        Some(EntryOrigin::PurchaseReceipt(one.receipt.id()))
+    );
+    assert_eq!(payable.competence_date().to_string(), "2026-11-10");
+    assert_eq!(
+        payable.installments_text(),
+        "1:2026-12-10:25.14,2:2027-01-09:25.14"
+    );
+    assert_eq!(
+        purchases.get(company, first.id()).await.unwrap().status(),
+        PurchaseStatus::PartiallyReceived
+    );
+
+    // More than was left is refused, and so are lines the order does not have; nothing is left behind.
+    for (items, error) in [
+        (&[(1, "7.001")][..], DomainError::ReceiptExceedsOrdered),
+        (&[(3, "1")][..], DomainError::ReceiptLineUnknown),
+        (&[(2, "0.001")][..], DomainError::ReceiptExceedsOrdered),
+    ] {
+        assert_eq!(
+            purchases
+                .receive(
+                    company,
+                    &ana,
+                    first.id(),
+                    receipt_draft("2026-11-12", items)
+                )
+                .await
+                .unwrap_err(),
+            ApplicationError::Domain(error),
+            "{items:?}"
+        );
+    }
+    assert_eq!(
+        purchases.receipts(company, first.id()).await.unwrap().len(),
+        1
+    );
+    // A partly received order is not cancelled, but it can be closed once what is left is given up.
+    assert_eq!(
+        purchases
+            .cancel(company, &ana, first.id())
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::PurchaseIsLocked)
+    );
+
+    // The rest arrives: the line adds up to its total exactly (96.70 - 40.29 = 56.41), and the order is received.
+    let two = purchases
+        .receive(
+            company,
+            &ana,
+            first.id(),
+            receipt_draft("2026-11-15", &[(1, "7")]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(two.receipt.total().to_string(), "56.41");
+    assert_eq!(
+        two.payable.as_ref().unwrap().installments_text(),
+        "1:2026-12-15:28.2,2:2027-01-14:28.21"
+    );
+    assert_eq!(
+        purchases.get(company, first.id()).await.unwrap().status(),
+        PurchaseStatus::Received
+    );
+    assert_eq!(
+        purchases
+            .receive(
+                company,
+                &ana,
+                first.id(),
+                receipt_draft("2026-11-16", &[(1, "1")])
+            )
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::PurchaseIsNotReceivable)
+    );
+    assert_eq!(
+        purchases
+            .close(company, &ana, first.id())
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::PurchaseIsLocked)
+    );
+
+    // Each receipt has its payable, once however often it is finished.
+    let records = purchases.receipts(company, first.id()).await.unwrap();
+    assert_eq!(
+        records
+            .iter()
+            .map(|record| record.receipt.id())
+            .collect::<Vec<_>>(),
+        [one.receipt.id(), two.receipt.id()]
+    );
+    assert!(records.iter().all(|record| record.payable.is_some()));
+    let finished = purchases
+        .finish_receipt(company, &ana, first.id(), one.receipt.id())
+        .await
+        .unwrap();
+    assert_eq!(finished.payable.unwrap().id(), payable.id());
+    assert_eq!(
+        purchases
+            .finish_receipt(company, &ana, first.id(), PurchaseReceiptId::generate())
+            .await
+            .unwrap_err(),
+        ApplicationError::PurchaseReceiptNotFound
+    );
+    let payables = entries
+        .list(company, &FinancialEntryQuery::default(), None, None)
+        .await
+        .unwrap();
+    assert_eq!(payables.items.len(), 2);
+    // What a receipt made is not edited as an entry of its own.
+    let mut same = FinancialEntryDraft {
+        kind: EntryKind::Payable,
+        description: "Outra".into(),
+        party_id: Some(seed.supplier),
+        category_id: entry_seed.category,
+        cost_center_id: None,
+        competence_date: "2026-11-10".into(),
+        installments: vec![EntryInstallmentDraft {
+            due_date: "2026-12-10".into(),
+            amount: "50.28".into(),
+        }],
+    };
+    assert_eq!(
+        entries
+            .update(company, &ana, payable.id(), same.clone())
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::EntryFollowsASale)
+    );
+    same.description = "Compra nº 1".into();
+
+    // Two receipts of what is left of the same line at once: one lands, the other is refused.
+    let approved = purchases.approve(company, &ana, second.id()).await.unwrap();
+    assert_eq!(approved.status(), PurchaseStatus::Approved);
+    let (a, b) = tokio::join!(
+        purchases.receive(
+            company,
+            &ana,
+            second.id(),
+            receipt_draft("2026-11-10", &[(1, "10")])
+        ),
+        purchases.receive(
+            company,
+            &ana,
+            second.id(),
+            receipt_draft("2026-11-10", &[(1, "10")])
+        )
+    );
+    assert_eq!(a.is_ok() as u8 + b.is_ok() as u8, 1, "{a:?} {b:?}");
+    assert_eq!(
+        purchases
+            .receipts(company, second.id())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    // A partly received order is closed: what is left is given up.
+    assert_eq!(
+        purchases.get(company, second.id()).await.unwrap().status(),
+        PurchaseStatus::PartiallyReceived
+    );
+    let closed = purchases.close(company, &ana, second.id()).await.unwrap();
+    assert_eq!(closed.status(), PurchaseStatus::Received);
+
+    // A receipt of goods that cost nothing (all discounted) makes no payable; an order with no term is due the
+    // day the goods arrive.
+    let mut mixed = purchase_draft(entry_seed, seed);
+    mixed.payment_term_id = None;
+    mixed.lines = vec![
+        sale_line(seed.product, "Café 500g", "1", "10", "0"),
+        sale_line(seed.other_product, "Brinde", "1", "5", "5"),
+    ];
+    let mixed = purchases.register(company, &ana, mixed).await.unwrap();
+    purchases.approve(company, &ana, mixed.id()).await.unwrap();
+    let gift = purchases
+        .receive(
+            company,
+            &ana,
+            mixed.id(),
+            receipt_draft("2026-11-10", &[(2, "1")]),
+        )
+        .await
+        .unwrap();
+    assert!(gift.payable.is_none());
+    assert_eq!(gift.receipt.total().to_string(), "0");
+    let paid = purchases
+        .receive(
+            company,
+            &ana,
+            mixed.id(),
+            receipt_draft("2026-11-11", &[(1, "1")]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(paid.payable.unwrap().installments_text(), "1:2026-11-11:10");
+    assert_eq!(
+        purchases.get(company, mixed.id()).await.unwrap().status(),
+        PurchaseStatus::Received
+    );
+
+    // The trail of the first order: written, edited, approved, partly received, received.
+    let trail = purchases.history(company, first.id()).await.unwrap();
+    assert_eq!(trail.len(), 5);
+    assert_eq!(
+        store
+            .find(company, first.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .number(),
+        1
+    );
 }

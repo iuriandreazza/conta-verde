@@ -4,9 +4,9 @@ use conta_verde_domain::{CompanyId, PartyId, PaymentTerm, PaymentTermId, Product
 
 use crate::RepositoryError;
 
-/// Whether what a quote, a sale or a contract points at can be used, asked before it is written
+/// Whether what a quote, a sale, a contract or a purchase order points at can be used, asked before it is written
 /// ([ADR 0037]). A reference to another company's record answers like one that does not exist.
-pub trait SalesReferences: Send + Sync {
+pub trait DocumentReferences: Send + Sync {
     /// The customer exists in the company.
     fn customer_exists(
         &self,
@@ -26,6 +26,13 @@ pub trait SalesReferences: Send + Sync {
         &self,
         company_id: CompanyId,
         id: PaymentTermId,
+    ) -> impl Future<Output = Result<bool, RepositoryError>> + Send;
+
+    /// The party exists in the company and is a supplier.
+    fn supplier_is_usable(
+        &self,
+        company_id: CompanyId,
+        id: PartyId,
     ) -> impl Future<Output = Result<bool, RepositoryError>> + Send;
 
     /// The party exists in the company and is a seller.

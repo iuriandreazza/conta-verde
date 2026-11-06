@@ -4,8 +4,8 @@ use crate::line::lines_text;
 use crate::{
     AccountOpening, Attachment, BankAccount, Category, Charge, CollectionSettings, CommissionRule,
     CompanyId, Contract, CostCenter, DocumentCheck, DunningPlan, FinancialEntry, LineMatch, Party,
-    PaymentMethod, PaymentTerm, PriceList, Product, Quote, Recurrence, Sale, SaleReturn,
-    Settlement, StatementLine, Tag, Transfer, UserId,
+    PaymentMethod, PaymentTerm, PriceList, Product, PurchaseOrder, PurchaseReceipt, Quote,
+    Recurrence, Sale, SaleReturn, Settlement, StatementLine, Tag, Transfer, UserId,
 };
 
 /// Who made a change. The name is a snapshot: history must keep reading the same after the user is
@@ -44,6 +44,8 @@ pub enum AuditEntity {
     SaleReturn,
     Contract,
     CommissionRule,
+    PurchaseOrder,
+    PurchaseReceipt,
 }
 
 impl AuditEntity {
@@ -69,6 +71,8 @@ impl AuditEntity {
             Self::SaleReturn => "sale_return",
             Self::Contract => "contract",
             Self::CommissionRule => "commission_rule",
+            Self::PurchaseOrder => "purchase_order",
+            Self::PurchaseReceipt => "purchase_receipt",
             Self::Settlement => "settlement",
             Self::Transfer => "transfer",
             Self::AccountOpening => "account_opening",
@@ -297,6 +301,34 @@ impl Audited for Quote {
 impl Audited for Sale {
     fn audit_entity(&self) -> AuditEntity {
         AuditEntity::Sale
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.id().as_uuid()
+    }
+}
+
+impl Audited for PurchaseOrder {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::PurchaseOrder
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.id().as_uuid()
+    }
+}
+
+impl Audited for PurchaseReceipt {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::PurchaseReceipt
     }
 
     fn audit_company(&self) -> CompanyId {
@@ -827,6 +859,67 @@ pub fn sale_return_creation_changes(sale_return: &SaleReturn) -> Vec<FieldChange
             ),
         ),
         ("refund", Some(sale_return.refund().to_string())),
+    ])
+}
+
+fn purchase_order_fields(order: &PurchaseOrder) -> Fields {
+    vec![
+        (
+            "supplier_id",
+            Some(order.supplier_id().as_uuid().to_string()),
+        ),
+        ("ordered_on", Some(order.ordered_on().to_string())),
+        (
+            "expected_on",
+            order.expected_on().map(|day| day.to_string()),
+        ),
+        (
+            "payment_term_id",
+            order.payment_term_id().map(|id| id.as_uuid().to_string()),
+        ),
+        (
+            "category_id",
+            Some(order.category_id().as_uuid().to_string()),
+        ),
+        (
+            "cost_center_id",
+            order.cost_center_id().map(|id| id.as_uuid().to_string()),
+        ),
+        ("notes", order.notes().map(str::to_owned)),
+        ("lines", Some(lines_text(order.lines()))),
+        ("status", Some(order.status().as_str().to_owned())),
+    ]
+}
+
+/// Every field a new purchase order has set.
+pub fn purchase_order_creation_changes(order: &PurchaseOrder) -> Vec<FieldChange> {
+    creation_from(purchase_order_fields(order))
+}
+
+pub fn purchase_order_changes(before: &PurchaseOrder, after: &PurchaseOrder) -> Vec<FieldChange> {
+    changes_between(purchase_order_fields(before), purchase_order_fields(after))
+}
+
+/// Every field a new receipt has set.
+pub fn purchase_receipt_creation_changes(receipt: &PurchaseReceipt) -> Vec<FieldChange> {
+    creation_from(vec![
+        (
+            "purchase_id",
+            Some(receipt.purchase_id().as_uuid().to_string()),
+        ),
+        ("received_on", Some(receipt.received_on().to_string())),
+        ("notes", receipt.notes().map(str::to_owned)),
+        (
+            "items",
+            Some(
+                receipt
+                    .items()
+                    .iter()
+                    .map(|item| format!("{}:{}:{}", item.line, item.quantity, item.value))
+                    .collect::<Vec<_>>()
+                    .join(","),
+            ),
+        ),
     ])
 }
 

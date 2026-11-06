@@ -155,7 +155,7 @@ mod tests {
     use crate::memory_entries::tests::Registers;
     use crate::{
         InMemoryFinancialEntryRepository, InMemoryPaymentTermRepository, InMemoryProductRepository,
-        InMemoryQuoteRepository, InMemorySaleRepository, RegisterSalesReferences, contract,
+        InMemoryQuoteRepository, InMemorySaleRepository, RegisterDocumentReferences, contract,
     };
 
     #[tokio::test]
@@ -180,7 +180,7 @@ mod tests {
                 quotes.clone(),
                 FinancialEntryService::new(entries.clone(), registers.references()),
                 registers.references(),
-                RegisterSalesReferences::new(
+                RegisterDocumentReferences::new(
                     registers.parties.clone(),
                     products.clone(),
                     terms.clone(),

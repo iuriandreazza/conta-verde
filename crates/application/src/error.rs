@@ -36,6 +36,10 @@ pub enum RepositoryError {
     EntryVoided,
     /// The sale is no longer in the status the write was made from.
     SaleChanged,
+    /// The purchase order is no longer in the status the write was made from.
+    PurchaseChanged,
+    /// A receipt would take in more of a line than was ordered.
+    ReceiptTooMuch,
     /// The quote already became a sale.
     DuplicateQuoteSale,
     /// The contract already has the sale of that cycle.
@@ -139,6 +143,12 @@ pub enum ApplicationError {
     ContractChanged,
     /// The sale was changed while this was being done.
     SaleChanged,
+    /// No purchase order with this id in the company (another company's looks the same).
+    PurchaseNotFound,
+    /// No receipt with this id in the purchase order.
+    PurchaseReceiptNotFound,
+    /// The purchase order was changed while this was being done.
+    PurchaseChanged,
     /// The entry is cancelled: it cannot change or be settled.
     EntryIsVoided,
     /// The sale's receivable has settlements that are not reversed: reverse them before cancelling.
@@ -258,6 +268,8 @@ impl fmt::Display for RepositoryError {
             Self::DuplicateOrigin => f.write_str("this origin already has its entry"),
             Self::EntryVoided => f.write_str("the entry was cancelled"),
             Self::SaleChanged => f.write_str("the sale was changed meanwhile"),
+            Self::PurchaseChanged => f.write_str("the purchase order was changed meanwhile"),
+            Self::ReceiptTooMuch => f.write_str("a receipt cannot be of more than was ordered"),
             Self::DuplicateQuoteSale => f.write_str("the quote already became a sale"),
             Self::DuplicateCycle => f.write_str("the contract already has the sale of this cycle"),
             Self::ContractChanged => f.write_str("the contract was changed meanwhile"),
@@ -325,6 +337,11 @@ impl fmt::Display for ApplicationError {
             Self::CommissionRuleNotFound => f.write_str("commission rule not found"),
             Self::ContractChanged => f.write_str("the contract was changed meanwhile: read it again"),
             Self::SaleChanged => f.write_str("the sale was changed meanwhile: read it again"),
+            Self::PurchaseNotFound => f.write_str("purchase order not found"),
+            Self::PurchaseReceiptNotFound => f.write_str("receipt not found"),
+            Self::PurchaseChanged => {
+                f.write_str("the purchase order was changed meanwhile: read it again")
+            }
             Self::EntryIsVoided => f.write_str("the entry was cancelled: it cannot change or be settled"),
             Self::SaleHasSettlements => f.write_str(
                 "the receivable of this sale has settlements: reverse them before cancelling it",

@@ -6,8 +6,8 @@ use conta_verde_domain::{
 use crate::audit::audit_entry;
 use crate::list_query::{clamp_limit, split_page};
 use crate::{
-    ApplicationError, EmailMessage, EmailSender, LinkChange, NumberCursor, QuoteQuery,
-    QuoteRepository, RepositoryError, SalesReferences, SecretService,
+    ApplicationError, DocumentReferences, EmailMessage, EmailSender, LinkChange, NumberCursor,
+    QuoteQuery, QuoteRepository, RepositoryError, SecretService,
 };
 
 #[derive(Debug, Clone)]
@@ -41,7 +41,7 @@ pub struct QuoteService<Q, R, E, S> {
 impl<Q, R, E, S> QuoteService<Q, R, E, S>
 where
     Q: QuoteRepository,
-    R: SalesReferences,
+    R: DocumentReferences,
     E: EmailSender,
     S: SecretService,
 {

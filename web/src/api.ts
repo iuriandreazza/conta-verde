@@ -9,7 +9,7 @@ export interface User {
 export type Role = "owner" | "admin" | "financial" | "sales" | "stock" | "accountant" | "viewer";
 
 /** A part of the product a permission is about (ADR 0026). */
-export type Area = "parties" | "products" | "finance" | "sales" | "members";
+export type Area = "parties" | "products" | "finance" | "sales" | "purchases" | "members";
 
 export interface Company {
   id: string;
@@ -1183,6 +1183,8 @@ export interface Entry {
   sale_id: string | null;
   /** The return it refunds, if one made it. */
   sale_return_id: string | null;
+  /** The receipt of goods whose payable it is, if one made it (ADR 0053). */
+  purchase_receipt_id: string | null;
   /** Cancelled: it counts nowhere and takes no edit or settlement (ADR 0037). */
   voided: boolean;
 }

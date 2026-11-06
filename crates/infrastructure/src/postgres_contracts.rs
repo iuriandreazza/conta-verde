@@ -351,7 +351,7 @@ mod tests {
         PostgresBankAccountRepository, PostgresCategoryRepository, PostgresCostCenterRepository,
         PostgresFinancialEntryRepository, PostgresPartyRepository, PostgresPaymentMethodRepository,
         PostgresPaymentTermRepository, PostgresProductRepository, PostgresQuoteRepository,
-        PostgresSaleRepository, RegisterReferences, RegisterSalesReferences, contract,
+        PostgresSaleRepository, RegisterDocumentReferences, RegisterReferences, contract,
     };
 
     fn references(
@@ -379,7 +379,7 @@ mod tests {
         PostgresQuoteRepository,
         PostgresFinancialEntryRepository,
         impl conta_verde_application::EntryReferences,
-        impl conta_verde_application::SalesReferences,
+        impl conta_verde_application::DocumentReferences,
     > {
         SaleService::new(
             PostgresSaleRepository::new(pool.clone()),
@@ -389,7 +389,7 @@ mod tests {
                 references(pool),
             ),
             references(pool),
-            RegisterSalesReferences::new(
+            RegisterDocumentReferences::new(
                 PostgresPartyRepository::new(pool.clone()),
                 PostgresProductRepository::new(pool.clone()),
                 PostgresPaymentTermRepository::new(pool.clone()),

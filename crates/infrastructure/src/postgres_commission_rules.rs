@@ -172,7 +172,7 @@ mod tests {
         PostgresBankAccountRepository, PostgresCategoryRepository, PostgresCostCenterRepository,
         PostgresFinancialEntryRepository, PostgresPartyRepository, PostgresPaymentMethodRepository,
         PostgresPaymentTermRepository, PostgresProductRepository, PostgresQuoteRepository,
-        PostgresSaleRepository, RegisterReferences, RegisterSalesReferences, contract,
+        PostgresSaleRepository, RegisterDocumentReferences, RegisterReferences, contract,
     };
 
     fn references(
@@ -193,14 +193,14 @@ mod tests {
         )
     }
 
-    fn sales_references(
+    fn document_references(
         pool: &PgPool,
-    ) -> RegisterSalesReferences<
+    ) -> RegisterDocumentReferences<
         PostgresPartyRepository,
         PostgresProductRepository,
         PostgresPaymentTermRepository,
     > {
-        RegisterSalesReferences::new(
+        RegisterDocumentReferences::new(
             PostgresPartyRepository::new(pool.clone()),
             PostgresProductRepository::new(pool.clone()),
             PostgresPaymentTermRepository::new(pool.clone()),
@@ -237,12 +237,12 @@ mod tests {
                 references(&pool),
             ),
             references(&pool),
-            sales_references(&pool),
+            document_references(&pool),
         );
         let commissions = CommissionService::new(
             PostgresCommissionRuleRepository::new(pool.clone()),
             PostgresSaleRepository::new(pool.clone()),
-            sales_references(&pool),
+            document_references(&pool),
         );
         contract::computes_commission_statements(
             &commissions,

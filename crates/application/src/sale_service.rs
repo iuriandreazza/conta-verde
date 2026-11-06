@@ -8,8 +8,9 @@ use conta_verde_domain::{
 use crate::audit::audit_entry;
 use crate::list_query::{clamp_limit, split_page};
 use crate::{
-    ApplicationError, EntryReferences, FinancialEntryRepository, FinancialEntryService, LinkChange,
-    NumberCursor, QuoteRepository, RepositoryError, SaleQuery, SaleRepository, SalesReferences,
+    ApplicationError, DocumentReferences, EntryReferences, FinancialEntryRepository,
+    FinancialEntryService, LinkChange, NumberCursor, QuoteRepository, RepositoryError, SaleQuery,
+    SaleRepository,
 };
 
 #[derive(Debug, Clone)]
@@ -62,7 +63,7 @@ where
     Q: QuoteRepository,
     E: FinancialEntryRepository,
     F: EntryReferences,
-    R: SalesReferences,
+    R: DocumentReferences,
 {
     /// The receivable is made through `entries`; `entry_references` is asked about the category and the cost
     /// center when the sale is written, so a mistake is refused when it is made and not when it is billed.

@@ -30,6 +30,7 @@ mod payment_method;
 mod payment_term;
 mod price_list;
 mod product;
+mod purchase_order;
 mod quote;
 mod recurrence;
 mod role;
@@ -55,11 +56,12 @@ pub use audit::{
     entry_creation_changes, opening_changes, opening_creation_changes, party_changes,
     payment_method_changes, payment_method_creation_changes, payment_term_changes,
     payment_term_creation_changes, price_list_changes, price_list_creation_changes,
-    product_changes, product_creation_changes, quote_changes, quote_creation_changes,
-    recurrence_changes, recurrence_creation_changes, sale_changes, sale_creation_changes,
-    sale_return_creation_changes, settlement_changes, settlement_creation_changes,
-    statement_line_changes, statement_line_creation_changes, transfer_changes,
-    transfer_creation_changes,
+    product_changes, product_creation_changes, purchase_order_changes,
+    purchase_order_creation_changes, purchase_receipt_creation_changes, quote_changes,
+    quote_creation_changes, recurrence_changes, recurrence_creation_changes, sale_changes,
+    sale_creation_changes, sale_return_creation_changes, settlement_changes,
+    settlement_creation_changes, statement_line_changes, statement_line_creation_changes,
+    transfer_changes, transfer_creation_changes,
 };
 pub use bank_account::{BankAccount, BankAccountDraft, BankAccountKind};
 pub use calendar_date::CalendarDate;
@@ -87,8 +89,8 @@ pub use financial_entry::{
 pub use ids::{
     AttachmentId, BankAccountId, CategoryId, ChargeId, CommissionRuleId, CompanyId, ContractId,
     CostCenterId, EntryId, InvitationId, NotificationId, PartyId, PaymentEventId, PaymentMethodId,
-    PaymentTermId, PriceListId, ProductId, QuoteId, RecurrenceId, SaleId, SaleReturnId,
-    SettlementId, StatementLineId, TransferId, UserId,
+    PaymentTermId, PriceListId, ProductId, PurchaseOrderId, PurchaseReceiptId, QuoteId,
+    RecurrenceId, SaleId, SaleReturnId, SettlementId, StatementLineId, TransferId, UserId,
 };
 pub use invitation::Invitation;
 pub use line::{Line, LineDraft, MAX_LINES, lines_total};
@@ -106,6 +108,10 @@ pub use price_list::{
     MAX_PRICE_LIST_ITEMS, PriceList, PriceListDraft, PriceListItem, PriceListItemDraft,
 };
 pub use product::{Product, ProductDraft, ProductKind};
+pub use purchase_order::{
+    PurchaseOrder, PurchaseOrderDraft, PurchaseReceipt, PurchaseReceiptDraft, PurchaseStatus,
+    ReceiptItem, ReceiptItemDraft,
+};
 pub use quote::{Quote, QuoteDraft, QuoteStatus};
 pub use recurrence::{Frequency, Recurrence, RecurrenceDraft};
 pub use role::{Access, Area, Role};

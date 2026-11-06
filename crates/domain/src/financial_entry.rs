@@ -3,7 +3,7 @@ use rust_decimal::Decimal;
 use crate::name::required_text;
 use crate::{
     Amount, CalendarDate, CategoryId, ChargeId, CompanyId, CostCenterId, DomainError, EntryId,
-    PartyId, RecurrenceId, SaleId, SaleReturnId,
+    PartyId, PurchaseReceiptId, RecurrenceId, SaleId, SaleReturnId,
 };
 
 /// How many installments an entry can have: ten years of monthly ones, a bound and not a rule.
@@ -83,6 +83,8 @@ pub enum EntryOrigin {
     SaleReturn(SaleReturnId),
     /// The fee a payment provider kept when a charge was paid ([ADR 0046]).
     ChargeFee(ChargeId),
+    /// The payable of a receipt of goods ([ADR 0053]).
+    PurchaseReceipt(PurchaseReceiptId),
 }
 
 /// Unvalidated input for registering or changing an entry.
@@ -163,7 +165,9 @@ impl FinancialEntry {
         }
         if matches!(
             self.origin,
-            Some(EntryOrigin::Sale(_) | EntryOrigin::SaleReturn(_))
+            Some(
+                EntryOrigin::Sale(_) | EntryOrigin::SaleReturn(_) | EntryOrigin::PurchaseReceipt(_)
+            )
         ) {
             return Err(DomainError::EntryFollowsASale);
         }

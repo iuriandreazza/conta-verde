@@ -275,7 +275,7 @@ mod tests {
     use crate::{
         Argon2SecretService, InMemoryEmailSender, InMemoryFinancialEntryRepository,
         InMemoryPaymentTermRepository, InMemoryProductRepository, InMemoryQuoteRepository,
-        RegisterSalesReferences, contract,
+        RegisterDocumentReferences, contract,
     };
 
     #[tokio::test]
@@ -301,8 +301,12 @@ mod tests {
         let entry_seed = registers.seed(company).await;
         let seed =
             contract::seed_sales_records(&registers.parties, &products, &terms, company).await;
-        let sales_references = || {
-            RegisterSalesReferences::new(registers.parties.clone(), products.clone(), terms.clone())
+        let document_references = || {
+            RegisterDocumentReferences::new(
+                registers.parties.clone(),
+                products.clone(),
+                terms.clone(),
+            )
         };
         let entry_store = InMemoryFinancialEntryRepository::default();
         let quote_store = InMemoryQuoteRepository::default();
@@ -312,11 +316,11 @@ mod tests {
             quote_store.clone(),
             FinancialEntryService::new(entry_store.clone(), registers.references()),
             registers.references(),
-            sales_references(),
+            document_references(),
         );
         let quotes = QuoteService::new(
             quote_store,
-            sales_references(),
+            document_references(),
             InMemoryEmailSender::default(),
             Argon2SecretService::new().unwrap(),
             "https://erp.example",
