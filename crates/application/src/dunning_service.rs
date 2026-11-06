@@ -175,8 +175,14 @@ where
                 .receivable_installments_due(company_id, since, until)
                 .await?
             {
-                self.remind(company_id, &company_name, *rule, &item, report)
-                    .await?;
+                // One installment that cannot be reminded of must not keep the later ones waiting.
+                if let Err(error) = self
+                    .remind(company_id, &company_name, *rule, &item, day, report)
+                    .await
+                {
+                    tracing::error!(%error, "a reminder could not be sent");
+                    report.failed += 1;
+                }
             }
         }
         Ok(())
@@ -188,6 +194,7 @@ where
         company_name: &str,
         rule: DunningRule,
         item: &OverdueItem,
+        day: CalendarDate,
         report: &mut DunningReport,
     ) -> Result<(), ApplicationError> {
         let Some(party_id) = item.party_id else {
@@ -220,21 +227,37 @@ where
             Claim::New(notification) | Claim::Retry(notification) => notification,
             Claim::Done => return Ok(()),
         };
-        // The link is made only for the reminder that is going to be sent.
-        let link = self
+        // The link is made only for the reminder that is going to be sent. Without it the reminder would go
+        // out with nothing to pay with, so a link that cannot be made fails the try, to be tried again.
+        let link = match self
             .links
             .link_for_installment(company_id, item.entry_id, item.installment)
             .await
-            .ok()
-            .flatten();
+        {
+            Ok(link) => link,
+            Err(error) => {
+                tracing::warn!(%error, "a payment link could not be made for a reminder");
+                report.failed += 1;
+                self.notifications
+                    .finish(
+                        company_id,
+                        notification.id(),
+                        NotificationStatus::Failed,
+                        Some("the payment link could not be made"),
+                    )
+                    .await?;
+                return Ok(());
+            }
+        };
         let text = ReminderText {
             company: company_name,
             customer: party.name(),
-            description: &item.description,
+            description: &clipped(&item.description),
             installment: item.installment,
             owed: item.amount - item.settled,
             due: item.due_date,
-            days: rule.days,
+            // Said by how far the due date really is, not by the rule: the pass catches up two days.
+            days: i16::try_from(day.to_unix_days() - item.due_date.to_unix_days()).unwrap_or(0),
             link: link.as_deref(),
         };
         let sent = match rule.channel {
@@ -273,6 +296,11 @@ where
     }
 }
 
+/// A description in a reminder: the provider's template parameter is short.
+fn clipped(text: &str) -> String {
+    text.chars().take(120).collect()
+}
+
 /// `day` moved by `by` days, if it is still a day.
 fn shifted(day: CalendarDate, by: i64) -> Option<CalendarDate> {
     CalendarDate::from_unix_days(day.to_unix_days() + by)
@@ -290,11 +318,12 @@ fn email_of(party: &Party) -> Option<&Email> {
 fn phone_of(party: &Party) -> Option<String> {
     let phone = party.contacts().iter().find_map(Contact::phone)?;
     let digits: String = phone.chars().filter(char::is_ascii_digit).collect();
-    Some(if matches!(digits.len(), 10 | 11) {
-        format!("55{digits}")
-    } else {
-        digits
-    })
+    // A number written with `+` already has its country code; only a Brazilian-looking one without it (10 or
+    // 11 digits, no trunk 0) is given 55.
+    let local = !phone.trim_start().starts_with('+')
+        && matches!(digits.len(), 10 | 11)
+        && !digits.starts_with('0');
+    Some(if local { format!("55{digits}") } else { digits })
 }
 
 /// What a reminder says, in Portuguese: the same words by e-mail and by WhatsApp.
@@ -406,6 +435,40 @@ mod tests {
             brazilian_date(CalendarDate::parse("2026-12-09").unwrap()),
             "09/12/2026"
         );
+    }
+
+    #[test]
+    fn a_plus_keeps_the_number_and_only_a_local_one_gets_the_country_code() {
+        let party = |phone: &str| {
+            Party::new(
+                conta_verde_domain::PartyId::generate(),
+                CompanyId::generate(),
+                conta_verde_domain::PartyDraft {
+                    name: "Ana".into(),
+                    is_customer: true,
+                    contacts: vec![conta_verde_domain::ContactDraft {
+                        name: "Ana".into(),
+                        phone: Some(phone.into()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            phone_of(&party("(81) 99999-0000")).unwrap(),
+            "5581999990000"
+        );
+        assert_eq!(
+            phone_of(&party("+55 81 99999-0000")).unwrap(),
+            "5581999990000"
+        );
+        assert_eq!(
+            phone_of(&party("+1 (415) 555-2671")).unwrap(),
+            "14155552671"
+        );
+        assert_eq!(phone_of(&party("081 99999-0000")).unwrap(), "081999990000");
     }
 
     #[test]

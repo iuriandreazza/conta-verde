@@ -37,12 +37,12 @@ quotes use), so a reminder is never early for a customer in Brazil; the tests mo
 
 A reminder is for one customer, one installment, one rule and one channel. The customer is the entry's party;
 the address is the party's e-mail or the first contact's, and the phone of a WhatsApp reminder is the first
-contact's phone as digits with the country code (a number of 10 or 11 digits gets `55`). An installment with
+contact's phone as digits with the country code (a number written with `+` is kept as it is; a local one of 10 or 11 digits, with no leading 0, gets `55`). An installment with
 nobody to reach by that channel, or an entry with no party, is left alone (counted, not sent). A rule for
 WhatsApp is not tried at all while no WhatsApp provider is configured.
 
 The text is Portuguese, in the product (the same words by e-mail and by WhatsApp): who is asking, the
-description, the installment, when it falls due in words ("vence em 3 dias", "vence hoje", "venceu há 3 dias"),
+description (cut to 120 characters, a template parameter is short), the installment, when it falls due in words, **by how far the due date really is** (not by the rule: the pass catches up two days) ("vence em 3 dias", "vence hoje", "venceu há 3 dias"),
 what is **still owed** (the amount less what was settled), the due date and, when the installment has an **open
 charge**, a fresh link to its payment page (each reminder makes its own, ADR 0047).
 
@@ -53,8 +53,9 @@ entry, installment, rule days and channel, inserted or, if an earlier try **fail
 made pending again with one attempt more, in one statement, so two passes at once cannot both get it. Then it
 is sent, and the row is finished `sent` or `failed` with a short note. A reminder that is `pending` for good (the
 server stopped after claiming and before finishing) is **not sent again**: a customer who gets a reminder twice is
-worse off than one who misses it. A failure is tried again by the next passes, three times in all, and then
-left; the web app lists what was sent and what failed under the entry's charges. Notifications are a log, not a
+worse off than one who misses it. A failure (the message, or the payment link that could not be made) is tried again by the next passes, three
+times in all, which is about three hours: a longer outage loses the reminder, and a pass that meets an installment it
+cannot handle logs it and goes on with the others; the web app lists what was sent and what failed under the entry's charges. Notifications are a log, not a
 register: not audited, and they keep the address or phone they went to.
 
 ### The ports

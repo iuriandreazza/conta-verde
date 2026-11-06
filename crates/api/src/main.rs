@@ -336,9 +336,6 @@ fn attachments_dir_from_env() -> String {
     })
 }
 
-/// The scheduled job of ADR 0033: once an hour, generates the recurring entries that fall due in the
-/// next two months. It is safe to repeat and to run in several instances, so a failed pass only waits for
-/// the next one.
 /// Every hour, sends the reminders the plans of the companies call for ([ADR 0048]): the day is the one the
 /// customers are in, and each reminder is claimed in the store first, so a pass that overlaps another, or a
 /// restart, sends nothing twice.
@@ -366,6 +363,9 @@ where
     }
 }
 
+/// The scheduled job of ADR 0033: once an hour, generates the recurring entries that fall due in the
+/// next two months. It is safe to repeat and to run in several instances, so a failed pass only waits for
+/// the next one.
 async fn generate_recurring_entries<R, E, F>(service: RecurrenceService<R, E, F>)
 where
     R: conta_verde_application::RecurrenceRepository,
