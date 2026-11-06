@@ -2,7 +2,7 @@ use conta_verde_domain::{
     Amount, AuditAction, CalendarDate, Charge, ChargeReceipt, ChargeStatus, CollectionSettings,
     CompanyId, Decimal, EntryInstallmentDraft, EntryKind, EntryOrigin, FinancialEntry,
     FinancialEntryDraft, PaymentEvent, PaymentEventId, PaymentEventKind, PaymentEventOutcome,
-    SettlementDraft, charge_changes, settled_of,
+    SettlementDraft, charge_changes, event_note, settled_of,
 };
 
 use crate::audit::audit_entry;
@@ -71,12 +71,17 @@ where
             return Err(ApplicationError::ChargeNotFound);
         }
         let notices = self.provider.verify_webhook(headers, body)?;
+        let mut taken = 0;
         for notice in &notices {
-            let charge = self
+            // A notice of a charge that is not the company's is left out; if none is, the request is `404`.
+            let Some(charge) = self
                 .charges
                 .find_by_external(company_id, provider_key, &notice.external_id)
                 .await?
-                .ok_or(ApplicationError::ChargeNotFound)?;
+            else {
+                continue;
+            };
+            taken += 1;
             let event = PaymentEvent::new(
                 PaymentEventId::generate(),
                 company_id,
@@ -103,7 +108,10 @@ where
                 .finish(company_id, event.id(), outcome, note.as_deref())
                 .await?;
         }
-        Ok(notices.len())
+        if taken == 0 {
+            return Err(ApplicationError::ChargeNotFound);
+        }
+        Ok(taken)
     }
 
     async fn apply(
@@ -179,7 +187,8 @@ where
                 );
             }
         }
-        let note = (!notes.is_empty()).then(|| notes.join("; "));
+        // Cut to what a note holds, so a long reason cannot keep the charge from being marked paid.
+        let note = event_note((!notes.is_empty()).then(|| notes.join("; ")).as_deref());
         if charge.status() != ChargeStatus::Paid {
             let paid = charge.paid(ChargeReceipt {
                 paid_on,
@@ -329,12 +338,15 @@ where
             bank_account_id: settings.bank_account_id(),
             payment_method_id: None,
         };
-        settled_or_why(
-            self.entries
-                .settle(company_id, charge.issued_by(), fee_entry.id(), draft)
-                .await
-                .map(|_| ()),
-        )
+        match self
+            .entries
+            .settle(company_id, charge.issued_by(), fee_entry.id(), draft)
+            .await
+        {
+            // Another request settled the fee between the check and the write: it is settled.
+            Err(ApplicationError::SettlementExceedsBalance) => Ok(None),
+            other => settled_or_why(other.map(|_| ())),
+        }
     }
 
     fn audit_move(&self, before: &Charge, after: &Charge) -> conta_verde_domain::AuditEntry {

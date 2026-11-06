@@ -90,6 +90,10 @@ thing that needs the `notifications` table (next slices).
 
 ## Consequences
 
+- Part of the installment settled by hand, and the customer pays the whole charge: the excess over what is left
+  is booked as interest (the cash must match what was paid) and the person is expected to refund it; a charge
+  superseded by another one for the same installment is not called off when the other is paid.
+- A body with several notices applies those of the company's charges and is `404` only if none is.
 - The exit criterion's first half is a test: a Pix charge settles its installment through a signed webhook (in
   both adapters, and through the API).
 - A provider that retries is safe; one that does not retry a `5xx` loses the payment until someone asks it again.

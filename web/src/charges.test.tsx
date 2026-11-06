@@ -198,7 +198,7 @@ it("says what was paid, and warns when the payment could not settle the installm
   const item = await panel.findByRole("listitem");
   expect(item).toHaveTextContent("Paga");
   expect(item).toHaveTextContent("Paga em 09/12/2026: R$ 62,00, taxa R$ 1,99.");
-  expect(await panel.findByText(/a parcela não foi baixada: a parcela já estava baixada\./)).toBeInTheDocument();
+  expect(await panel.findByText(/houve um problema ao lançá-lo: a parcela já estava baixada\./)).toBeInTheDocument();
 });
 
 it("asks for the account charges are paid into before offering to issue one", async () => {

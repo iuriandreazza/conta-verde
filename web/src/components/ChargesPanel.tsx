@@ -32,6 +32,11 @@ const STATUS_LABELS: Record<ChargeStatus, string> = {
 /** What the server says in English when it kept a payment without settling it, in words for the person. */
 const NOTES: Record<string, string> = {
   "the installment was already settled": "a parcela já estava baixada.",
+  "the installment was settled meanwhile": "a parcela foi baixada nesse meio tempo.",
+  "the charge was already paid": "a cobrança já tinha sido paga.",
+  "the notice says nothing was paid": "o aviso diz que nada foi pago.",
+  "the fee category can no longer be used": "a categoria da taxa não pode mais ser usada.",
+  "the bank account can no longer be used": "a conta de recebimento não pode mais ser usada.",
   "the entry was cancelled": "o lançamento foi cancelado.",
   "the account charges are paid into is not set": "a conta de recebimento não está configurada.",
   "the installment no longer exists": "a parcela não existe mais.",
@@ -200,7 +205,10 @@ export function ChargesPanel({ companyId, entry, canWrite }: ChargesPanelProps) 
                     message={
                       charge.note === null
                         ? null
-                        : `Pagamento recebido, mas a parcela não foi baixada: ${NOTES[charge.note] ?? charge.note}`
+                        : `Pagamento recebido, mas houve um problema ao lançá-lo: ${charge.note
+                            .split("; ")
+                            .map((note) => NOTES[note] ?? note)
+                            .join(" ")}`
                     }
                   />
                   {canWrite && charge.status === "open" && (
