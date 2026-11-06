@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it } from "vitest";
@@ -161,5 +161,40 @@ describe("Sheet and what was typed", () => {
     await userEvent.click(screen.getByRole("button", { name: "Fechar" }));
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("keeps Tab and Escape inside the question, and gives the focus back to the field", async () => {
+    render(<Typing />);
+    const field = screen.getByLabelText("Nome");
+    await userEvent.type(field, "Aluguel");
+    await userEvent.keyboard("{Escape}");
+    expect(screen.getByRole("button", { name: "Voltar e editar" })).toHaveFocus();
+
+    await userEvent.tab();
+    expect(screen.getByRole("button", { name: "Descartar e fechar" })).toHaveFocus();
+    await userEvent.tab();
+    expect(screen.getByRole("button", { name: "Voltar e editar" })).toHaveFocus();
+
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    await waitFor(() => expect(field).toHaveFocus());
+  });
+
+  it("neither closes nor asks while a save is on its way", async () => {
+    function Saving() {
+      return (
+        <Sheet open title="Novo" locked onClose={() => undefined}>
+          <input aria-label="Nome" />
+        </Sheet>
+      );
+    }
+    render(<Saving />);
+    await userEvent.type(screen.getByLabelText("Nome"), "Aluguel");
+
+    await userEvent.click(screen.getByRole("button", { name: "Fechar" }));
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Novo" })).toBeInTheDocument();
   });
 });

@@ -17,6 +17,8 @@ interface SheetProps {
   onClose: () => void;
   /** Only the close button closes it: for what must be read first, a stray click or key must not. */
   explicitClose?: boolean;
+  /** A save is on its way: nothing closes the sheet, and nothing asks about it, until it ends. */
+  locked?: boolean;
   children: ReactNode;
 }
 
@@ -27,7 +29,7 @@ const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), selec
  * leaving the list. A dialog for assistive technology: the focus goes in, stays in until it closes,
  * Escape and the shade close it, and the focus returns to what opened it.
  */
-export function Sheet({ open, title, onClose, explicitClose = false, children }: SheetProps) {
+export function Sheet({ open, title, onClose, explicitClose = false, locked = false, children }: SheetProps) {
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   const opener = useRef<HTMLElement | null>(null);
@@ -43,18 +45,32 @@ export function Sheet({ open, title, onClose, explicitClose = false, children }:
     }
   }, [open]);
   useEffect(() => {
-    if (explicitClose) setDirty(false);
+    if (explicitClose) {
+      setDirty(false);
+      setConfirming(null);
+    }
   }, [explicitClose]);
+  // The question takes the focus, and gives it back to what had it when the person goes on editing.
+  const beforeConfirm = useRef<HTMLElement | null>(null);
   useEffect(() => {
-    if (confirming) confirmRef.current?.focus();
+    if (confirming) {
+      beforeConfirm.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      confirmRef.current?.focus();
+    }
   }, [confirming]);
+  function keepEditing() {
+    setConfirming(null);
+    // After the question has left the page.
+    requestAnimationFrame(() => beforeConfirm.current?.focus());
+  }
 
   const guard = useCallback(
     (action: () => void) => {
+      if (locked) return;
       if (dirty) setConfirming(() => action);
       else action();
     },
-    [dirty],
+    [dirty, locked],
   );
 
   useEffect(() => {
@@ -83,12 +99,14 @@ export function Sheet({ open, title, onClose, explicitClose = false, children }:
   function keep(event: KeyboardEvent) {
     if (event.key === "Escape") {
       event.stopPropagation();
-      if (confirming) setConfirming(null);
+      if (confirming) keepEditing();
       else if (!explicitClose) guard(onClose);
       return;
     }
     if (event.key !== "Tab") return;
-    const focusable = Array.from(panelRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? []);
+    // While the question is up, the Tab key goes round inside it and nowhere else.
+    const scope = confirming ? panelRef.current?.querySelector(".sheet-confirm") : panelRef.current;
+    const focusable = Array.from(scope?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? []);
     const [first, last] = [focusable[0], focusable[focusable.length - 1]];
     const onPanel = document.activeElement === panelRef.current;
     if (event.shiftKey && (document.activeElement === first || onPanel)) {
@@ -126,24 +144,24 @@ export function Sheet({ open, title, onClose, explicitClose = false, children }:
             exit={{ y: "100%" }}
             transition={{ type: "spring", stiffness: 380, damping: 40 }}
           >
-            <header className="sheet-head">
+            <header className="sheet-head" inert={confirming !== null || undefined}>
               <h2 id={titleId}>{title}</h2>
               <Button type="button" variant="ghost" icon={XIcon} onClick={() => guard(onClose)}>
                 Fechar
               </Button>
             </header>
             <SheetGuard.Provider value={guard}>
-              <div className="sheet-body" onInput={() => setDirty(true)} onChange={() => setDirty(true)}>
+              <div className="sheet-body" inert={confirming !== null || undefined} onInput={() => setDirty(true)} onChange={() => setDirty(true)}>
                 {children}
               </div>
             </SheetGuard.Provider>
             {confirming && (
-              <div className="sheet-confirm" role="alertdialog" aria-modal="true" aria-labelledby={`${titleId}-confirm`}>
+              <div className="sheet-confirm" role="alertdialog" aria-modal="true" aria-labelledby={`${titleId}-confirm`} aria-describedby={`${titleId}-confirm-text`}>
                 <div className="sheet-confirm-box">
                   <h3 id={`${titleId}-confirm`}>Descartar edições?</h3>
-                  <p className="muted">O que você preencheu ainda não foi salvo.</p>
+                  <p id={`${titleId}-confirm-text`} className="muted">O que você preencheu ainda não foi salvo.</p>
                   <div className="form-actions">
-                    <Button ref={confirmRef} type="button" variant="ghost" onClick={() => setConfirming(null)}>
+                    <Button ref={confirmRef} type="button" variant="ghost" onClick={keepEditing}>
                       Voltar e editar
                     </Button>
                     <Button

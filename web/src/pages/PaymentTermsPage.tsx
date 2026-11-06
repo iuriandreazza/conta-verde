@@ -260,7 +260,7 @@ export function PaymentTermsPage() {
           )}
         </section>
         {canWrite && (
-          <Sheet open={editing !== null} title={`Alterar ${shown?.name ?? ""}`} onClose={closeSheet}>
+          <Sheet open={editing !== null} locked={saving} title={`Alterar ${shown?.name ?? ""}`} onClose={closeSheet}>
             {shown !== null && (
               <PaymentTermForm
                 key={shown.id}
