@@ -5368,3 +5368,61 @@ pub async fn filters_and_sorts_entries<R, F>(
         2
     );
 }
+
+/// An edit that leaves a reference alone does not need it to be usable any more: a category that was
+/// deactivated since does not stop the description from being fixed. Choosing it again, from another
+/// category, is refused.
+pub async fn an_edit_may_keep_what_was_deactivated_since<R, F, C>(
+    service: &FinancialEntryService<R, F>,
+    categories: &C,
+    company: CompanyId,
+    seed: &EntrySeed,
+) where
+    R: FinancialEntryRepository,
+    F: EntryReferences,
+    C: CategoryRepository,
+{
+    let ana = actor();
+    let draft = entry_draft(seed, "Aluguel", "2026-11-01", &[("2026-11-10", "100")]);
+    let rent = service
+        .register(company, &ana, draft.clone())
+        .await
+        .unwrap();
+
+    let before = categories
+        .find(company, seed.category)
+        .await
+        .unwrap()
+        .unwrap();
+    let after = before.changed(before.name(), false).unwrap();
+    let entry = category_entry(
+        &after,
+        AuditAction::Updated,
+        category_changes(&before, &after),
+    );
+    categories.update(&after, &entry).await.unwrap();
+
+    let fixed = FinancialEntryDraft {
+        description: "Aluguel de novembro".into(),
+        ..draft.clone()
+    };
+    service
+        .update(company, &ana, rent.id(), fixed.clone())
+        .await
+        .unwrap();
+    let elsewhere = FinancialEntryDraft {
+        category_id: seed.other_category,
+        ..fixed.clone()
+    };
+    service
+        .update(company, &ana, rent.id(), elsewhere)
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .update(company, &ana, rent.id(), fixed)
+            .await
+            .unwrap_err(),
+        ApplicationError::UnusableReference("category")
+    );
+}

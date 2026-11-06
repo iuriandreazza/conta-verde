@@ -211,6 +211,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_edit_may_keep_what_was_deactivated_since() {
+        let registers = Registers::new();
+        let company = CompanyId::generate();
+        let seed = registers.seed(company).await;
+        let service = FinancialEntryService::new(
+            InMemoryFinancialEntryRepository::default(),
+            registers.references(),
+        );
+        contract::an_edit_may_keep_what_was_deactivated_since(
+            &service,
+            &registers.categories,
+            company,
+            &seed,
+        )
+        .await;
+    }
+
+    #[tokio::test]
     async fn filters_and_sorts_entries() {
         let registers = Registers::new();
         let (company, other_company) = (CompanyId::generate(), CompanyId::generate());

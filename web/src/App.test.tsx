@@ -3093,6 +3093,73 @@ describe("financial entries", () => {
     expect(form.getByLabelText("Valor da parcela 1")).toHaveValue("89,90");
   });
 
+  it("generates the installments on Enter in the generator, without sending the entry", async () => {
+    const fetchMock = mockApi(answer([]));
+    renderAt("/companies/c1/entries");
+    const form = await formPanel("Novo lançamento");
+    await userEvent.type(form.getByLabelText("Valor total"), "90");
+    await userEvent.clear(form.getByLabelText("Parcelas"));
+    await userEvent.type(form.getByLabelText("Parcelas"), "2");
+    fireEvent.change(form.getByLabelText("Primeiro vencimento"), { target: { value: "2026-12-10" } });
+    await userEvent.type(form.getByLabelText("Primeiro vencimento"), "{Enter}");
+
+    expect(form.getByLabelText("Valor da parcela 2")).toHaveValue("45");
+    expect(sent(fetchMock, "POST")).toHaveLength(0);
+  });
+
+  it("will not generate installments from a total that could be a thousand or one", async () => {
+    mockApi(answer([]));
+    renderAt("/companies/c1/entries");
+    const form = await formPanel("Novo lançamento");
+    await userEvent.type(form.getByLabelText("Valor total"), "1.000");
+    fireEvent.change(form.getByLabelText("Primeiro vencimento"), { target: { value: "2026-12-10" } });
+    await userEvent.click(form.getByRole("button", { name: "Gerar parcelas" }));
+
+    expect(await form.findByRole("alert")).toHaveTextContent("reais e centavos");
+    expect(form.getByLabelText("Valor da parcela 1")).toHaveValue("");
+  });
+
+  it("keeps the party and the inactive cost center an entry points at when only its description changes", async () => {
+    const closed = { ...matriz, id: "cc9", name: "Fechado", active: false };
+    const pointing: Entry = { ...entry, party_id: "far-away", cost_center_id: "cc9" };
+    const fetchMock = mockApi(
+      answer([pointing], (url, init) => {
+        if (url.includes("/cost-centers")) return { status: 200, body: { items: [matriz, closed], next_cursor: null } };
+        if (url.endsWith("/entries/e1") && init?.method === "PUT") return { status: 200, body: pointing };
+        return undefined;
+      }),
+    );
+    renderAt("/companies/c1/entries");
+    await userEvent.click(await screen.findByRole("button", { name: "Alterar Venda parcelada" }));
+    const form = await formPanel("Alterar Venda parcelada");
+    await userEvent.clear(form.getByLabelText("Descrição"));
+    await userEvent.type(form.getByLabelText("Descrição"), "Venda de novembro");
+    await userEvent.click(form.getByRole("button", { name: "Salvar alterações" }));
+
+    await waitFor(() => expect(sent(fetchMock, "PUT")).toHaveLength(1));
+    const body = JSON.parse(String(sent(fetchMock, "PUT")[0][1]?.body));
+    expect(body.party_id).toBe("far-away");
+    expect(body.cost_center_id).toBe("cc9");
+  });
+
+  it("reads the list again after a change, since the entry may move or leave the filter", async () => {
+    const fetchMock = mockApi(
+      answer([entry], (url, init) =>
+        url.endsWith("/entries/e1") && init?.method === "PUT" ? { status: 200, body: entry } : undefined,
+      ),
+    );
+    renderAt("/companies/c1/entries");
+    await userEvent.click(await screen.findByRole("button", { name: "Alterar Venda parcelada" }));
+    const form = await formPanel("Alterar Venda parcelada");
+    const lists = () => fetchMock.mock.calls.filter(([url, init]) => String(url).endsWith("/entries") && !init?.method).length;
+    const before = lists();
+    await userEvent.clear(form.getByLabelText("Descrição"));
+    await userEvent.type(form.getByLabelText("Descrição"), "Outra");
+    await userEvent.click(form.getByRole("button", { name: "Salvar alterações" }));
+
+    await waitFor(() => expect(lists()).toBeGreaterThan(before));
+  });
+
   it("offers every party, not only the first page of them, to point an entry at", async () => {
     mockApi(
       answer([], (url) => {

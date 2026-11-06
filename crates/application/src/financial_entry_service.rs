@@ -40,7 +40,7 @@ impl<R: FinancialEntryRepository, F: EntryReferences> FinancialEntryService<R, F
         draft: FinancialEntryDraft,
     ) -> Result<FinancialEntry, ApplicationError> {
         let record = FinancialEntry::new(EntryId::generate(), company_id, draft)?;
-        self.check_references(&record).await?;
+        self.check_references(&record, None).await?;
         let audit = audit_entry(
             &record,
             actor,
@@ -67,7 +67,7 @@ impl<R: FinancialEntryRepository, F: EntryReferences> FinancialEntryService<R, F
         if changes.is_empty() {
             return Ok(after);
         }
-        self.check_references(&after).await?;
+        self.check_references(&after, Some(&before)).await?;
         let audit = audit_entry(&after, actor, AuditAction::Updated, changes);
         self.repository
             .update(&after, &audit)
@@ -126,23 +126,32 @@ impl<R: FinancialEntryRepository, F: EntryReferences> FinancialEntryService<R, F
             .ok_or(ApplicationError::EntryNotFound)
     }
 
-    /// The category, cost center and party must be usable in the company. The answer names the
-    /// field so the form can say which.
-    async fn check_references(&self, entry: &FinancialEntry) -> Result<(), ApplicationError> {
+    /// The category, cost center and party must be usable in the company, the answer naming the
+    /// field so the form can say which. When the entry was already stored, only a reference that
+    /// the edit **changes** is checked: a category that was deactivated since does not stop the
+    /// description or an installment from being fixed, it only cannot be chosen again.
+    async fn check_references(
+        &self,
+        entry: &FinancialEntry,
+        before: Option<&FinancialEntry>,
+    ) -> Result<(), ApplicationError> {
         let company = entry.company_id();
-        if !self
-            .references
-            .category_is_usable(company, entry.category_id())
-            .await?
+        if before.is_none_or(|stored| stored.category_id() != entry.category_id())
+            && !self
+                .references
+                .category_is_usable(company, entry.category_id())
+                .await?
         {
             return Err(ApplicationError::UnusableReference("category"));
         }
         if let Some(id) = entry.cost_center_id()
+            && before.is_none_or(|stored| stored.cost_center_id() != entry.cost_center_id())
             && !self.references.cost_center_is_usable(company, id).await?
         {
             return Err(ApplicationError::UnusableReference("cost center"));
         }
         if let Some(id) = entry.party_id()
+            && before.is_none_or(|stored| stored.party_id() != entry.party_id())
             && !self.references.party_exists(company, id).await?
         {
             return Err(ApplicationError::UnusableReference("party"));

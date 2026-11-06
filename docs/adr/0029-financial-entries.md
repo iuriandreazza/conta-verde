@@ -75,6 +75,10 @@ rule that matters for tenancy; whether the category is active and is not the tra
 by the database, and two requests at the same moment can slip past it, as with the categories' own
 neighbour rules.
 
+An edit checks only the references it **changes**: a category or cost center that was deactivated
+after the entry was made does not stop the description or an installment from being fixed, it only
+cannot be chosen again.
+
 ### The list
 
 `GET /companies/{company_id}/entries` follows [ADR 0018](0018-list-endpoints-search-filter-sort.md):

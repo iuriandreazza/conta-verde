@@ -1,4 +1,4 @@
-import { useRef, useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import type { Category, CostCenter, Entry, EntryInput, EntryKind } from "../api";
 import { treeRows } from "../lib/categoryTree";
 import { formatMoney, isAmbiguousDecimal, toInputDecimal } from "../lib/decimal";
@@ -76,6 +76,12 @@ export function EntryForm({
   const costCenters = targets.costCenters.filter(
     (center) => center.id === entry?.cost_center_id || center.active,
   );
+  // The choices are the first of the party list: one the entry already points at may be past them,
+  // and a form that did not list it would silently remove it on save.
+  const parties =
+    entry?.party_id && !targets.parties.some((party) => party.id === entry.party_id)
+      ? [...targets.parties, { id: entry.party_id, name: "Cliente ou fornecedor atual" }]
+      : targets.parties;
 
   const total = sumCents(rows.map((row) => row.amount));
   const sumMessage =
@@ -90,6 +96,11 @@ export function EntryForm({
 
   function generate() {
     const count = Number(generator.count);
+    // `1.000` could be a thousand or one: the person says which, as in every amount field.
+    if (isAmbiguousDecimal(generator.total)) {
+      setFieldError("O valor total precisa estar em reais e centavos, por exemplo 1.000,00.");
+      return;
+    }
     const shares = splitAmount(generator.total, count);
     const dates = monthlyDates(generator.first, count);
     if (shares === null || dates === null || count > MAX_INSTALLMENTS) {
@@ -100,6 +111,14 @@ export function EntryForm({
     }
     setFieldError(null);
     setRows(shares.map((share, index) => newRow(dates[index], toInputDecimal(share))));
+  }
+
+  /** Enter in a field of the generator makes the installments, and never sends the entry. */
+  function generateOnEnter(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      generate();
+    }
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -186,7 +205,7 @@ export function EntryForm({
         Cliente ou fornecedor
         <select name="party_id" defaultValue={entry?.party_id ?? ""}>
           <option value="">Nenhum</option>
-          {targets.parties.map((party) => (
+          {parties.map((party) => (
             <option key={party.id} value={party.id}>
               {party.name}
             </option>
@@ -209,6 +228,7 @@ export function EntryForm({
               placeholder="0,00"
               value={generator.total}
               onChange={(event) => setGenerator({ ...generator, total: event.target.value })}
+              onKeyDown={generateOnEnter}
             />
           </label>
           <label>
@@ -218,6 +238,7 @@ export function EntryForm({
               autoComplete="off"
               value={generator.count}
               onChange={(event) => setGenerator({ ...generator, count: event.target.value })}
+              onKeyDown={generateOnEnter}
             />
           </label>
           <label>
@@ -226,6 +247,7 @@ export function EntryForm({
               type="date"
               value={generator.first}
               onChange={(event) => setGenerator({ ...generator, first: event.target.value })}
+              onKeyDown={generateOnEnter}
             />
           </label>
         </div>

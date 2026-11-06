@@ -80,7 +80,7 @@ export function EntriesPage() {
     let current = true;
     Promise.all([
       api.listCategories(companyId),
-      readUpTo((after) => api.listCostCenters(companyId, { q: "", active: "true", sort: "name" }, after), MAX_CHOICES),
+      readUpTo((after) => api.listCostCenters(companyId, { q: "", active: "", sort: "name" }, after), MAX_CHOICES),
       readUpTo((after) => api.listParties(companyId, undefined, after), MAX_CHOICES),
     ])
       .then(([categoryList, costCenterList, partyList]) => {
@@ -108,7 +108,6 @@ export function EntriesPage() {
 
   const {
     items: entries,
-    setItems,
     nextCursor,
     loading,
     loadingMore,
@@ -135,11 +134,12 @@ export function EntriesPage() {
         await reload();
       } else {
         const updated = await api.updateEntry(companyId, editing.id, input);
-        // In place: the list keeps its page and its filters.
-        setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)));
         setEditing(null);
         setSaved(`${updated.description} atualizado.`);
         setFormVersion((version) => version + 1);
+        // Read again, not changed in place: a new date, kind or category can move the entry to
+        // another place in the list, or out of the filter the list is showing.
+        await reload();
       }
     } catch (failure) {
       setFormError(errorMessage(failure));

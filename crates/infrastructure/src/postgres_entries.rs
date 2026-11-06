@@ -360,6 +360,25 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires DATABASE_URL"]
+    async fn an_edit_may_keep_what_was_deactivated_since() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let seed = seed(&pool, company).await;
+        let service = FinancialEntryService::new(
+            PostgresFinancialEntryRepository::new(pool.clone()),
+            references(&pool),
+        );
+        contract::an_edit_may_keep_what_was_deactivated_since(
+            &service,
+            &PostgresCategoryRepository::new(pool.clone()),
+            company,
+            &seed,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
     async fn filters_and_sorts_entries() {
         let pool = contract::test_pool().await;
         let company = contract::create_company(&pool).await;
