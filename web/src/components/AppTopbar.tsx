@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "./Button";
 import { BoxIcon } from "./icons/box";
@@ -31,7 +31,11 @@ interface AppTopbarProps {
   onSignOut: () => void;
 }
 
-/** The letters that, with Alt, start a record from anywhere: the usual ones, away from the browser's own. */
+/**
+ * The letters that, with Alt, start a record from anywhere. Some browsers use a few of them for their own
+ * menus, and on a Mac Option plus a letter types a symbol: the shortcut wins, in a field too, as in the
+ * products people come from.
+ */
 const SHORTCUTS: Partial<Record<string, string>> = {
   entry: "L",
   transfer: "T",
@@ -91,15 +95,18 @@ export function AppTopbar({
   const { openCreate } = useCreation();
   const creating = companyId ? creationItems(companyId, permissions, openCreate) : [];
   const navigate = useNavigate();
+  // A new key for the menu closes it: a shortcut used while it is open must not leave it behind the sheet.
+  const [menuKey, setMenuKey] = useState(0);
 
   // Alt plus the letter starts the record from anywhere, unless a sheet is already open. The physical
   // key is read (`code`), since Alt changes the character some layouts type.
   useEffect(() => {
     function start(event: KeyboardEvent) {
-      if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      if (event.repeat || !event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
       const item = creating.find((candidate) => candidate.shortcut && `Key${candidate.shortcut}` === event.code);
       if (!item || document.querySelector('[role="dialog"]')) return;
       event.preventDefault();
+      setMenuKey((key) => key + 1);
       if (item.onSelect) item.onSelect();
       else if (item.to) navigate(item.to);
     }
@@ -120,7 +127,7 @@ export function AppTopbar({
         </button>
       )}
       <div className="topbar-actions">
-        {creating.length > 0 && <MenuButton variant="primary" icon={PlusIcon} label="Novo registro" items={creating} align="end" />}
+        {creating.length > 0 && <MenuButton key={menuKey} variant="primary" icon={PlusIcon} label="Novo registro" items={creating} align="end" />}
         <span className="avatar" aria-hidden>
           {userName.trim().charAt(0).toUpperCase()}
         </span>

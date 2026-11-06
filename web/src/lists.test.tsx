@@ -326,9 +326,10 @@ describe("creating from the top bar", () => {
     await userEvent.keyboard("{Alt>}{l}{/Alt}");
     expect(await screen.findByRole("dialog", { name: "Novo lançamento" })).toBeInTheDocument();
 
-    // A sheet is open: another shortcut does not stack a second one.
+    // A sheet is open: another shortcut does not swap it for another form, which would lose what was typed.
     fireEvent.keyDown(window, { key: "t", code: "KeyT", altKey: true });
-    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(screen.getByRole("dialog", { name: "Novo lançamento" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Nova transferência" })).not.toBeInTheDocument();
   });
 
   it("shows the letter beside each item that has one, without making it part of the name", async () => {
@@ -342,5 +343,31 @@ describe("creating from the top bar", () => {
     const item = screen.getByRole("menuitem", { name: "Novo lançamento" });
     expect(item).toHaveAttribute("aria-keyshortcuts", "Alt+L");
     expect(item).toHaveTextContent("Alt+L");
+  });
+
+  it("closes the menu when a shortcut is used while it is open", async () => {
+    mockApi((url) =>
+      url === "/api/auth/me" ? { status: 200, body: profile } : { status: 200, body: { items: [], next_cursor: null } },
+    );
+    renderAt("/companies/c1/parties");
+    await userEvent.click(await screen.findByRole("button", { name: "Novo registro" }));
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "l", code: "KeyL", altKey: true });
+
+    expect(await screen.findByRole("dialog", { name: "Novo lançamento" })).toBeInTheDocument();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("ignores a key held down", async () => {
+    mockApi((url) =>
+      url === "/api/auth/me" ? { status: 200, body: profile } : { status: 200, body: { items: [], next_cursor: null } },
+    );
+    renderAt("/companies/c1/parties");
+    await screen.findByRole("button", { name: "Novo registro" });
+
+    fireEvent.keyDown(window, { key: "l", code: "KeyL", altKey: true, repeat: true });
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 });
