@@ -6,11 +6,11 @@ import { PlusIcon } from "./icons/plus";
 import { SendIcon } from "./icons/send";
 import { UsersIcon } from "./icons/users";
 import { MenuButton, type MenuItem } from "./MenuButton";
-import type { Area } from "../api";
+import type { Area, Company } from "../api";
 
 interface AppTopbarProps {
   userName: string;
-  permissions: Partial<Record<Area, "read" | "write">> | undefined;
+  permissions: Company["permissions"] | undefined;
   companyId: string | undefined;
   signingOut: boolean;
   signOutFailed: boolean;

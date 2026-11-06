@@ -77,6 +77,8 @@ export function MenuButton({ label, items, icon, variant = "ghost", align = "sta
       event.preventDefault();
       closeAndRefocus();
     } else if (event.key === "Tab") {
+      // The focused choice is about to leave the page: the button takes the focus so Tab goes on from there.
+      triggerRef.current?.focus();
       setOpen(false);
     }
   }

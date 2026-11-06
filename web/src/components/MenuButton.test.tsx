@@ -54,6 +54,16 @@ describe("MenuButton", () => {
     expect(trigger).toHaveFocus();
   });
 
+  it("closes on Tab and goes on to the next control", async () => {
+    const { trigger } = setup();
+    await userEvent.click(trigger);
+
+    await userEvent.tab();
+
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Outro" })).toHaveFocus();
+  });
+
   it("closes when the person clicks anywhere else", async () => {
     const { trigger } = setup();
     await userEvent.click(trigger);
