@@ -32,7 +32,9 @@ For every period, over the accounts of the company (inactive ones included) or o
   settled, of receivables and of payables;
 - `transfers_in` and `transfers_out`: the transfers that are not reversed, by the day they occurred. With
   no account chosen every transfer has both ends in the company, so the two are equal and the consolidated
-  balance does not move; with an account chosen they are what came into it and went out of it;
+  balance does not move, except when one end is an account whose opening day is after the transfer: that
+  end is left out by the opening-day rule below, like in the balances, and the other is counted; with an
+  account chosen they are what came into it and went out of it;
 - `net`: `received - paid + transfers_in - transfers_out`;
 - `new_opening_balances`: the opening balances ([ADR 0031](0031-transfers-and-balances.md)) whose day falls
   in the period, which are money that enters the account's history that day;
@@ -55,6 +57,12 @@ were settled on the first day, because what is late is what the person has to lo
 installments inside the span are in the period of their due date. An installment has no bank account, so **the forecast is only for the consolidated
 view**: with an `account` chosen the three forecast fields, and `past_due`, are `null`.
 
+The forecast is what is open **now**: an installment's open amount takes every settlement that is not
+reversed, whatever its date. So a period that is already over would be missing an installment that was
+settled after it ended, both from its open amounts and from its realized balance. The web app therefore
+shows `projected_balance` only from the period that has not ended yet (it knows today's date, the server
+does not), and a span that ends in the past has no projection to read.
+
 ### Where the rules live
 
 Like the balances, it is composed by `BalanceService` from the ports, never by one query across tables:
@@ -62,6 +70,10 @@ per account, the settled cash by day (entries' port) and the transfers by day (t
 account's opening day, and the open installments by due day (entries' port). The cutting into periods, the
 running balance and the forecast are done in the use case, so both adapters answer alike. Amounts are
 exact decimals, never floats ([ADR 0003](0003-money-as-decimal.md)).
+
+The reads are not one snapshot (each account is several queries), so a settlement or a transfer landing
+while the answer is being made can leave it slightly out of step with itself until the next read; the same
+is accepted for the balances ([ADR 0031](0031-transfers-and-balances.md)).
 
 ### Roles
 

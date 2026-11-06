@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
-import { api, errorMessage, type BankAccount, type CashFlow, type CashFlowFilters } from "../api";
+import { api, errorMessage, type BankAccount, type CashFlow, type CashFlowFilters, type CashFlowPeriod } from "../api";
 import { ChartCard } from "../components/charts/ChartCard";
 import { Legend, type LegendItem } from "../components/charts/Legend";
 import { LineChart } from "../components/charts/LineChart";
 import { StatTile } from "../components/charts/StatTile";
-import { WavesIcon } from "../components/icons/waves";
 import { Notice } from "../components/Notice";
 import { PageHeader } from "../components/PageHeader";
 import { Spinner } from "../components/Spinner";
@@ -37,7 +36,10 @@ export function CashFlowPage() {
   const [accounts, setAccounts] = useState<BankAccount[]>([]);
   const [flow, setFlow] = useState<CashFlow | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [accountsError, setAccountsError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // Today where the person is: the projected balance only means something from the period it falls in.
+  const [today] = useState(() => todayIso());
   // Only the latest reply is used: a slow answer to an earlier span cannot replace a newer one.
   const latest = useRef(0);
 
@@ -45,7 +47,7 @@ export function CashFlowPage() {
     let current = true;
     readUpTo((after) => api.listBankAccounts(companyId, undefined, after))
       .then((list) => current && setAccounts(list))
-      .catch((failure: unknown) => current && setError(errorMessage(failure)));
+      .catch((failure: unknown) => current && setAccountsError(errorMessage(failure)));
     return () => {
       current = false;
     };
@@ -83,13 +85,18 @@ export function CashFlowPage() {
       });
   }, [companyId, filters, spanError]);
 
+  // What is drawn follows the reply that is on screen, not the filters being typed: after a refusal
+  // the old periods stay, and they are still in the grouping and for the account they were asked.
   const periods = flow?.periods ?? [];
   const forecasting = periods.length > 0 && periods[0].projected_balance !== null;
   const totals = useMemo(() => totalsOf(periods), [periods]);
   const last = periods[periods.length - 1];
   const series = forecasting ? SERIES : SERIES.slice(0, 1);
-  const labelOf = (index: number) => periodLabel(periods[index], filters.granularity);
-  const unit = filters.granularity === "day" ? "dia" : "mês";
+  const labelOf = (index: number) => periodLabel(periods[index], flow?.granularity ?? "month");
+  const unit = flow?.granularity === "day" ? "dia" : "mês";
+  // The forecast counts what is open now, so a period that is over would be missing what was settled
+  // after it ended: it is only shown from the period that has not ended yet (ADR 0032).
+  const projectedOf = (period: CashFlowPeriod): string | null => (period.end < today ? null : period.projected_balance);
 
   return (
     <>
@@ -141,9 +148,11 @@ export function CashFlowPage() {
         </div>
         <Notice message={spanError} />
       </section>
+      <Notice message={accountsError} />
       <Notice message={error} />
       {flow === null || spanError !== null ? (
-        spanError === null && (
+        spanError === null &&
+        loading && (
           <p role="status" className="status">
             <Spinner /> Carregando…
           </p>
@@ -158,8 +167,8 @@ export function CashFlowPage() {
               label={`Saldo em ${formatDate(flow.to)}`}
               value={formatMoney(last.closing_balance)}
               note={
-                forecasting && last.projected_balance !== null
-                  ? `Previsto: ${formatMoney(last.projected_balance)}`
+                forecasting && projectedOf(last) !== null
+                  ? `Previsto: ${formatMoney(projectedOf(last))}`
                   : "Só o que já aconteceu."
               }
             />
@@ -183,7 +192,7 @@ export function CashFlowPage() {
               rows: periods.map((period, index) => [
                 labelOf(index),
                 formatMoney(period.closing_balance),
-                ...(forecasting ? [formatMoney(period.projected_balance)] : []),
+                ...(forecasting ? [formatMoney(projectedOf(period))] : []),
               ]),
             }}
           >
@@ -194,7 +203,7 @@ export function CashFlowPage() {
               points={periods.map((period, index) => ({
                 label: labelOf(index),
                 values: forecasting
-                  ? [period.closing_balance, period.projected_balance ?? period.closing_balance]
+                  ? [period.closing_balance, projectedOf(period) ?? period.closing_balance]
                   : [period.closing_balance],
               }))}
             />
@@ -231,16 +240,14 @@ export function CashFlowPage() {
                       <td className="num">{formatMoney(period.received)}</td>
                       <td className="num">{formatMoney(period.paid)}</td>
                       <td className="num" title="O que entrou menos o que saiu da conta">
-                        {filters.account === "" ? "—" : formatMoney(difference(period.transfers_in, period.transfers_out))}
+                        {flow.account_id === null ? "—" : formatMoney(difference(period.transfers_in, period.transfers_out))}
                       </td>
                       <td className={negative(period.closing_balance)}>{formatMoney(period.closing_balance)}</td>
                       {forecasting && (
                         <>
                           <td className="num">{formatMoney(period.to_receive)}</td>
                           <td className="num">{formatMoney(period.to_pay)}</td>
-                          <td className={negative(period.projected_balance ?? "0")}>
-                            {formatMoney(period.projected_balance)}
-                          </td>
+                          <td className={negative(projectedOf(period) ?? "0")}>{formatMoney(projectedOf(period))}</td>
                         </>
                       )}
                     </tr>
@@ -248,12 +255,6 @@ export function CashFlowPage() {
                 </tbody>
               </table>
             </div>
-            {periods.length === 0 && (
-              <div className="empty">
-                <WavesIcon size={40} aria-hidden />
-                <p>Nada nesse período.</p>
-              </div>
-            )}
           </section>
         </>
       )}

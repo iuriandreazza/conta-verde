@@ -16,10 +16,10 @@ export function defaultSpan(today: string): { from: string; to: string } {
   };
 }
 
-/** `2026-12-10` as `10/12`, or `2026-12-01` as `dez/2026` when the periods are months. */
+/** `2026-12-10` as `10/12/26` (a span of 400 days can repeat a day and month), or `2026-12-01` as `dez/2026` for months. */
 export function periodLabel(period: CashFlowPeriod, granularity: "day" | "month"): string {
   const [year, month, day] = period.start.split("-").map(Number);
-  return granularity === "day" ? `${two(day)}/${two(month)}` : `${MONTHS[month - 1]}/${year}`;
+  return granularity === "day" ? `${two(day)}/${two(month)}/${two(year % 100)}` : `${MONTHS[month - 1]}/${year}`;
 }
 
 /** What the periods received and paid in all, to the cent. Neither is ever negative. */

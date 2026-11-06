@@ -30,7 +30,8 @@ describe("defaultSpan", () => {
 describe("periodLabel", () => {
   it("names a month by its name and a day by its date", () => {
     expect(periodLabel(period(), "month")).toBe("dez/2026");
-    expect(periodLabel(period({ start: "2026-12-05" }), "day")).toBe("05/12");
+    expect(periodLabel(period({ start: "2026-12-05" }), "day")).toBe("05/12/26");
+    expect(periodLabel(period({ start: "2027-12-05" }), "day")).toBe("05/12/27");
   });
 });
 

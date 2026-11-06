@@ -3772,6 +3772,13 @@ describe("the balance of the bank accounts", () => {
 });
 
 describe("cash flow", () => {
+  // The projected balance depends on today, so the clock stands still on a day before the periods.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 10, 6, 12));
+  });
+  afterEach(() => vi.useRealTimers());
+
   const caixa: BankAccount = { id: "b1", company_id: "c1", kind: "cash", name: "Caixa", bank_code: null, branch: null, number: null, active: true };
   const banco: BankAccount = { ...caixa, id: "b2", kind: "checking", name: "Banco" };
   const period = (overrides: Partial<CashFlowPeriod> = {}): CashFlowPeriod => ({
@@ -3898,9 +3905,38 @@ describe("cash flow", () => {
     expect(screen.queryByText(/vencido antes de/)).not.toBeInTheDocument();
   });
 
-  it("shows what the API refused", async () => {
+  it("shows what the API refused, and stops saying it is loading", async () => {
     mockApi(answer(() => ({ status: 400, body: { error: "invalid span: the span may cut into at most 400 days" } })));
     renderAt("/companies/c1/cash-flow");
     expect(await screen.findByRole("alert")).toHaveTextContent("at most 400 days");
+    expect(screen.queryByText("Carregando…")).not.toBeInTheDocument();
+  });
+
+  it("shows the projected balance only from the period that has not ended, because it counts what is open now", async () => {
+    vi.setSystemTime(new Date(2027, 0, 15, 12));
+    mockApi(answer(() => ({ status: 200, body: consolidated })));
+    renderAt("/companies/c1/cash-flow");
+
+    const december = await screen.findByRole("row", { name: /dez\/2026/ });
+    expect(december).not.toHaveTextContent("R$ 1.243,00");
+    expect(december).toHaveTextContent("R$ 200,00");
+    expect(screen.getByRole("row", { name: /jan\/2027/ })).toHaveTextContent("R$ 1.193,00");
+  });
+
+  it("keeps the periods on screen in the grouping they were asked in when a new request is refused", async () => {
+    mockApi(
+      answer((url) =>
+        url.includes("granularity=day")
+          ? { status: 400, body: { error: "invalid span: the span may cut into at most 400 days" } }
+          : { status: 200, body: consolidated },
+      ),
+    );
+    renderAt("/companies/c1/cash-flow");
+    await screen.findByRole("row", { name: /dez\/2026/ });
+
+    await userEvent.selectOptions(screen.getByLabelText("Agrupar por"), "day");
+    expect(await screen.findByRole("alert")).toHaveTextContent("at most 400 days");
+    // Still labelled as the months they are, not as days.
+    expect(screen.getByRole("row", { name: /dez\/2026/ })).toBeInTheDocument();
   });
 });
