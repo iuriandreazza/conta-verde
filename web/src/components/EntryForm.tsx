@@ -157,7 +157,10 @@ export function EntryForm({
   }
 
   return (
-    <form onSubmit={handleSubmit}>
+    <form className="record-form" onSubmit={handleSubmit}>
+      <section className="form-section" aria-labelledby="entry-info">
+        <h3 id="entry-info">Informações do lançamento</h3>
+        <div className="field-grid">
       <label>
         Tipo
         <select name="kind" defaultValue={entry?.kind ?? "receivable"}>
@@ -216,7 +219,11 @@ export function EntryForm({
         Competência
         <input name="competence_date" type="date" required defaultValue={entry?.competence_date} />
       </label>
+        </div>
+      </section>
 
+      <section className="form-section" aria-labelledby="entry-payment">
+        <h3 id="entry-payment">Condição de pagamento</h3>
       <fieldset className="installments">
         <legend>Parcelas</legend>
         <div className="installment-row">
@@ -306,17 +313,16 @@ export function EntryForm({
           {sumMessage}
         </p>
       </fieldset>
+      </section>
 
       <Notice message={fieldError ?? error} />
-      <div className="form-actions">
+      <div className="form-footer">
+        <Button type="button" variant="ghost" disabled={pending} onClick={onCancel}>
+          Voltar
+        </Button>
         <Button type="submit" icon={entry === null ? PlusIcon : CheckIcon} pending={pending}>
           {entry === null ? "Adicionar" : "Salvar alterações"}
         </Button>
-        {entry !== null && (
-          <Button type="button" variant="ghost" disabled={pending} onClick={onCancel}>
-            Cancelar
-          </Button>
-        )}
       </div>
     </form>
   );
