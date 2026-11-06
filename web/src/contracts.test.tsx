@@ -95,6 +95,44 @@ describe("contracts", () => {
     expect(within(row).getByRole("button", { name: "Reajustar Manutenção mensal" })).toBeInTheDocument();
   });
 
+  it("changes a contract in its sheet, filled in as it is, and closes it once it is saved", async () => {
+    const fetchMock = mockApi(
+      answer([monthly], (url, init) =>
+        init?.method === "PUT" && url.endsWith("/contracts/k1") ? { status: 200, body: { ...monthly, name: "Manutenção anual" } } : undefined,
+      ),
+    );
+    renderAt("/companies/c1/contracts");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Alterar Manutenção mensal" }));
+    const form = within((await screen.findByRole("heading", { name: "Alterar Manutenção mensal" })).closest("aside")!);
+    await form.findByLabelText("Cliente");
+    expect(form.getByLabelText("Nome")).toHaveValue("Manutenção mensal");
+    expect(form.getByLabelText("Primeira cobrança")).toHaveValue("2026-11-05");
+
+    await userEvent.clear(form.getByLabelText("Nome"));
+    await userEvent.type(form.getByLabelText("Nome"), "Manutenção anual");
+    await userEvent.click(form.getByRole("button", { name: "Salvar alterações" }));
+
+    expect(await screen.findByText(/Manutenção anual atualizado/)).toBeInTheDocument();
+    expect(calls(fetchMock, "PUT")).toHaveLength(1);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("asks before throwing away what was typed in the sheet of a contract", async () => {
+    mockApi(answer([monthly]));
+    renderAt("/companies/c1/contracts");
+    await userEvent.click(await screen.findByRole("button", { name: "Alterar Manutenção mensal" }));
+    const form = within((await screen.findByRole("heading", { name: "Alterar Manutenção mensal" })).closest("aside")!);
+    await form.findByLabelText("Cliente");
+
+    await userEvent.type(form.getByLabelText("Nome"), " 2");
+    await userEvent.click(form.getByRole("button", { name: "Voltar" }));
+
+    expect(screen.getByRole("alertdialog", { name: "Descartar edições?" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Descartar e fechar" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
   it("registers a contract and says that the cycles already due were billed", async () => {
     const fetchMock = mockApi(
       answer([], (url, init) =>
@@ -102,6 +140,7 @@ describe("contracts", () => {
       ),
     );
     renderAt("/companies/c1/contracts");
+    await userEvent.click(await screen.findByRole("button", { name: "Novo contrato" }));
     const form = within((await screen.findByRole("heading", { name: "Novo contrato" })).closest("aside")!);
     await form.findByLabelText("Cliente");
 
@@ -187,7 +226,7 @@ describe("contracts", () => {
     );
     renderAt("/companies/c1/contracts");
     await screen.findByRole("row", { name: /Manutenção mensal/ });
-    expect(screen.queryByRole("heading", { name: "Novo contrato" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Novo contrato" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Reajustar|Encerrar/ })).not.toBeInTheDocument();
   });
 });

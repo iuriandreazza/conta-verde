@@ -236,4 +236,29 @@ describe("Sheet and what was typed", () => {
 
     expect(screen.getByLabelText("Escolha")).toHaveValue("b");
   });
+
+  it("starts from empty fields when it is reopened while the last one is still leaving", async () => {
+    function Reopen() {
+      const [open, setOpen] = useState(true);
+      return (
+        <>
+          <button onClick={() => setOpen(true)}>Reabrir</button>
+          <Sheet open={open} title="Novo" onClose={() => setOpen(false)}>
+            <label>
+              Nome
+              <input />
+            </label>
+          </Sheet>
+        </>
+      );
+    }
+    render(<Reopen />);
+    await userEvent.type(screen.getByLabelText("Nome"), "Aluguel");
+    // Closing and opening in one go: the old panel has not finished leaving.
+    await userEvent.click(screen.getByRole("button", { name: "Fechar" }));
+    await userEvent.click(screen.getByRole("button", { name: "Descartar e fechar" }));
+    await userEvent.click(screen.getByRole("button", { name: "Reabrir" }));
+
+    expect(screen.getByLabelText("Nome")).toHaveValue("");
+  });
 });

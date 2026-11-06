@@ -1,22 +1,14 @@
-import { Fragment, useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { Fragment, useCallback, useState } from "react";
 import { useParams } from "react-router-dom";
 import {
   NO_CONTRACT_FILTERS,
-  NO_FILTERS,
-  NO_PAYMENT_TERM_FILTERS,
-  NO_PRODUCT_FILTERS,
   api,
   errorMessage,
   type BillingCycle,
-  type Category,
   type Contract,
   type ContractFilters,
   type ContractInput,
   type ContractStatus,
-  type CostCenter,
-  type Party,
-  type PaymentTerm,
-  type Product,
 } from "../api";
 import { Button } from "../components/Button";
 import { History } from "../components/History";
@@ -26,16 +18,18 @@ import { HistoryIcon } from "../components/icons/history";
 import { PlusIcon } from "../components/icons/plus";
 import { RotateCCWIcon } from "../components/icons/rotate-ccw";
 import { SquarePenIcon } from "../components/icons/square-pen";
-import { LinesEditor, linesProblem, linesToInput, newLine, rowsFromLines, type LineRow } from "../components/LinesEditor";
 import { ListRow } from "../components/ListRow";
 import { Notice } from "../components/Notice";
+import { ContractForm } from "../components/ContractForm";
+import { Sheet } from "../components/Sheet";
+import { useCreation, useOnCreated } from "../creation/CreationProvider";
+import { useContractTargets } from "../lib/useContractTargets";
+import { useLastValue } from "../lib/useLastValue";
 import { PageHeader } from "../components/PageHeader";
 import { Spinner } from "../components/Spinner";
-import { treeRows } from "../lib/categoryTree";
 import { CONTRACT_STATUS_LABELS, CYCLE_LABELS } from "../lib/contractCycle";
 import { formatMoney, isAmbiguousDecimal, toApiDecimal } from "../lib/decimal";
 import { formatDate, isIsoDate } from "../lib/entryInstallments";
-import { readUpTo } from "../lib/readUpTo";
 import { todayIso } from "../lib/settlement";
 import { useCanWrite } from "../lib/useCanWrite";
 import { usePagedList } from "../lib/usePagedList";
@@ -63,8 +57,6 @@ export function ContractsPage() {
   const canWrite = useCanWrite("sales");
   const [filters, setFilters] = useState<ContractFilters>(NO_CONTRACT_FILTERS);
   const [editing, setEditing] = useState<Contract | null>(null);
-  const [formVersion, setFormVersion] = useState(0);
-  const [rows, setRows] = useState<LineRow[]>(() => [newLine()]);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
@@ -72,118 +64,39 @@ export function ContractsPage() {
   const [panel, setPanel] = useState<Panel | null>(null);
   const [acting, setActing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [parties, setParties] = useState<Party[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
-  const [terms, setTerms] = useState<PaymentTerm[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [costCenters, setCostCenters] = useState<CostCenter[]>([]);
-  const [targetsError, setTargetsError] = useState<string | null>(null);
-  const [targetsLoaded, setTargetsLoaded] = useState(false);
-
-  useEffect(() => {
-    let current = true;
-    Promise.all([
-      readUpTo((after) => api.listParties(companyId, NO_FILTERS, after)),
-      readUpTo((after) => api.listProducts(companyId, NO_PRODUCT_FILTERS, after)),
-      readUpTo((after) => api.listPaymentTerms(companyId, NO_PAYMENT_TERM_FILTERS, after)),
-      api.listCategories(companyId),
-      readUpTo((after) => api.listCostCenters(companyId, { q: "", active: "", sort: "name" }, after)),
-    ])
-      .then(([partyList, productList, termList, categoryList, centerList]) => {
-        if (current) {
-          setParties(partyList);
-          setProducts(productList);
-          setTerms(termList);
-          setCategories(categoryList.items);
-          setCostCenters(centerList);
-          setTargetsLoaded(true);
-        }
-      })
-      .catch((failure: unknown) => current && setTargetsError(errorMessage(failure)));
-    return () => {
-      current = false;
-    };
-  }, [companyId]);
-
-  const names = useMemo(() => {
-    const byId = new Map<string, string>();
-    for (const item of [...parties, ...terms, ...products, ...categories, ...costCenters]) {
-      byId.set(item.id, item.name);
-    }
-    return byId;
-  }, [parties, terms, products, categories, costCenters]);
+  const targets = useContractTargets(companyId);
+  const { names, error: targetsError, loaded: targetsLoaded } = targets;
 
   const { items, setItems, nextCursor, loading, loadingMore, error, applied, reload, loadMore } =
     usePagedList<Contract, ContractFilters>((applied, after) => api.listContracts(companyId, applied, after), filters);
   const isFiltered = applied.q !== "" || applied.status !== "";
 
-  const inContract = new Set(rows.map((row) => row.product_id));
-  const productChoices = products.filter((product) => product.active || inContract.has(product.id));
-  const termChoices = terms.filter((term) => term.active || term.id === editing?.payment_term_id);
-  const categoryRows = treeRows(categories).filter(
-    ({ category }) => category.id === editing?.category_id || (category.active && category.dre_group !== "transfers"),
-  );
-  const costCenterChoices = costCenters.filter((center) => center.id === editing?.cost_center_id || center.active);
-  const sellers = parties.filter((party) => party.is_seller);
-
-  function startEditing(contract: Contract | null) {
-    setEditing(contract);
-    setRows(contract === null ? [newLine()] : rowsFromLines(contract.lines));
-    setFormError(null);
+  const { openCreate } = useCreation();
+  const shown = useLastValue(editing);
+  // A contract made from the top bar or from here: read the list again and flash the new row.
+  useOnCreated("contract", (created) => {
     setSaved(null);
-    setFormVersion((version) => version + 1);
+    setHighlightedId(created.id);
+    void reload();
+  });
+
+  function closeSheet() {
+    // A change on its way finishes first: closing now would hide what a failure has to say.
+    if (saving) return;
+    setEditing(null);
+    setFormError(null);
   }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (saving) {
-      return;
-    }
-    const form = new FormData(event.currentTarget);
-    const field = (name: string) => String(form.get(name) ?? "").trim();
-    if (!isIsoDate(field("starts_on"))) {
-      setFormError("Informe a data da primeira cobrança.");
-      return;
-    }
-    if (field("ends_on") !== "" && (!isIsoDate(field("ends_on")) || field("ends_on") < field("starts_on"))) {
-      setFormError("A última cobrança precisa ser uma data que não venha antes da primeira.");
-      return;
-    }
-    const problem = linesProblem(rows);
-    if (problem !== null) {
-      setFormError(problem);
-      return;
-    }
-    const input: ContractInput = {
-      name: field("name"),
-      customer_id: field("customer_id"),
-      seller_id: field("seller_id") || undefined,
-      payment_term_id: field("payment_term_id") || undefined,
-      category_id: field("category_id"),
-      cost_center_id: field("cost_center_id") || undefined,
-      notes: field("notes") || undefined,
-      lines: linesToInput(rows),
-      cycle: field("cycle") as BillingCycle,
-      starts_on: field("starts_on"),
-      ends_on: field("ends_on") || undefined,
-      active: form.get("active") === "on",
-    };
+  async function handleSubmit(input: ContractInput) {
+    if (editing === null) return;
     setSaving(true);
     setFormError(null);
     setSaved(null);
     try {
-      if (editing === null) {
-        const created = await api.createContract(companyId, input);
-        setHighlightedId(created.id);
-        startEditing(null);
-        setSaved(`${created.name} cadastrado: os ciclos que já venceram foram cobrados.`);
-        await reload();
-      } else {
-        const updated = await api.updateContract(companyId, editing.id, input);
-        setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)));
-        startEditing(null);
-        setSaved(`${updated.name} atualizado. O que já foi cobrado não muda.`);
-      }
+      const updated = await api.updateContract(companyId, editing.id, input);
+      setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      setEditing(null);
+      setSaved(`${updated.name} atualizado. O que já foi cobrado não muda.`);
     } catch (failure) {
       setFormError(errorMessage(failure));
     } finally {
@@ -203,7 +116,7 @@ export function ContractsPage() {
       setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)));
       // A form open for this contract would save its old prices or its old status over what was just done.
       if (editing?.id === updated.id) {
-        startEditing(null);
+        setEditing(null);
       }
       setPanel(null);
       setSaved(message(updated));
@@ -226,7 +139,15 @@ export function ContractsPage() {
         title="Contratos"
         description="Cobranças que se repetem: cada ciclo vira uma venda concluída e a conta a receber, sozinhos, no dia."
       />
-      <div className={canWrite ? "split" : "split split-single"}>
+      {canWrite && (
+        <div className="list-actions">
+          <Button type="button" icon={PlusIcon} onClick={() => openCreate("contract")}>
+            Novo contrato
+          </Button>
+        </div>
+      )}
+      <Notice message={saved} tone="success" />
+      <div>
         <section className="card list-card">
           <h2>Cadastrados</h2>
           <div className="filters" role="search">
@@ -324,8 +245,12 @@ export function ContractsPage() {
                                 type="button"
                                 variant="ghost"
                                 aria-label={`Alterar ${contract.name}`}
-                                disabled={saving}
-                                onClick={() => startEditing(contract)}
+                                disabled={saving || acting}
+                                onClick={() => {
+                                  setEditing(contract);
+                                  setFormError(null);
+                                  setSaved(null);
+                                }}
                               >
                                 Alterar
                               </Button>
@@ -454,116 +379,27 @@ export function ContractsPage() {
           )}
         </section>
         {canWrite && (
-          <aside className="card form-card">
-            <h2>{editing === null ? "Novo contrato" : `Alterar ${editing.name}`}</h2>
-            {targetsLoaded && (
-              <form key={`${editing?.id ?? "new"}-${formVersion}`} onSubmit={(event) => void handleSubmit(event)}>
-                <label>
-                  Nome
-                  <input name="name" required maxLength={200} autoComplete="off" defaultValue={editing?.name} />
-                </label>
-                <label>
-                  Cliente
-                  <select name="customer_id" required defaultValue={editing?.customer_id ?? ""}>
-                    <option value="" disabled>
-                      Escolha um cliente
-                    </option>
-                    {parties.map((party) => (
-                      <option key={party.id} value={party.id}>
-                        {party.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Vendedor
-                  <select name="seller_id" defaultValue={editing?.seller_id ?? ""}>
-                    <option value="">Nenhum</option>
-                    {sellers.map((party) => (
-                      <option key={party.id} value={party.id}>
-                        {party.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Ciclo de cobrança
-                  <select name="cycle" defaultValue={editing?.cycle ?? "monthly"}>
-                    {Object.entries(CYCLE_LABELS).map(([key, label]) => (
-                      <option key={key} value={key}>
-                        {label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Primeira cobrança
-                  <input name="starts_on" type="date" required defaultValue={editing?.starts_on ?? todayIso()} />
-                </label>
-                <label>
-                  Última cobrança (opcional)
-                  <input name="ends_on" type="date" defaultValue={editing?.ends_on ?? ""} />
-                </label>
-                <label>
-                  Prazo de pagamento
-                  <select name="payment_term_id" defaultValue={editing?.payment_term_id ?? ""}>
-                    <option value="">À vista, no dia da cobrança</option>
-                    {termChoices.map((term) => (
-                      <option key={term.id} value={term.id}>
-                        {term.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Categoria da receita
-                  <select name="category_id" required defaultValue={editing?.category_id ?? ""}>
-                    <option value="" disabled>
-                      Escolha uma categoria
-                    </option>
-                    {categoryRows.map(({ category, depth }) => (
-                      <option key={category.id} value={category.id}>
-                        {"— ".repeat(depth)}
-                        {category.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Centro de custo
-                  <select name="cost_center_id" defaultValue={editing?.cost_center_id ?? ""}>
-                    <option value="">Nenhum</option>
-                    {costCenterChoices.map((center) => (
-                      <option key={center.id} value={center.id}>
-                        {center.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <LinesEditor companyId={companyId} rows={rows} onChange={setRows} products={productChoices} />
-                <label>
-                  Observações
-                  <textarea name="notes" rows={3} maxLength={2000} defaultValue={editing?.notes ?? ""} />
-                </label>
-                <label className="inline">
-                  <input name="active" type="checkbox" defaultChecked={editing ? editing.status === "active" : true} /> Ativo
-                </label>
-                <p className="muted">Mudar o contrato vale para as próximas cobranças; o que já foi cobrado não muda.</p>
-                <Notice message={formError} />
-                <div className="form-actions">
-                  <Button type="submit" icon={editing === null ? PlusIcon : CheckIcon} pending={saving}>
-                    {editing === null ? "Cadastrar contrato" : "Salvar alterações"}
-                  </Button>
-                  {editing !== null && (
-                    <Button type="button" variant="ghost" disabled={saving} onClick={() => startEditing(null)}>
-                      Cancelar edição
-                    </Button>
-                  )}
-                </div>
-              </form>
-            )}
-            <Notice message={saved} tone="success" />
-          </aside>
+          <Sheet open={editing !== null} locked={saving} title={`Alterar ${shown?.name ?? ""}`} onClose={closeSheet}>
+            {shown !== null &&
+              (targetsLoaded ? (
+                <ContractForm
+                  key={shown.id}
+                  companyId={companyId}
+                  contract={shown}
+                  targets={targets}
+                  pending={saving}
+                  error={formError}
+                  onSubmit={(input) => void handleSubmit(input)}
+                  onCancel={closeSheet}
+                />
+              ) : targetsError === null ? (
+                <p role="status" className="status">
+                  <Spinner /> Carregando…
+                </p>
+              ) : (
+                <p role="alert">{targetsError}</p>
+              ))}
+          </Sheet>
         )}
       </div>
     </>
