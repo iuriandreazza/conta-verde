@@ -50,12 +50,13 @@ called off, so it cannot be paid in vain.
 
 **Webhooks.** The token header is compared in constant time before anything is read. `PAYMENT_RECEIVED` is a
 payment (the day is `paymentDate`, what was paid is `value`, and the **fee is `value - netValue`**, the part Asaas
-did not pass on; the amounts are read from the JSON as the text they were written with); `PAYMENT_CONFIRMED` is a
+did not pass on; the amounts are JSON numbers read through serde_json's f64, exact for any amount in cents of a realistic size, and
+an amount with more decimals is refused, never rounded); `PAYMENT_CONFIRMED` is a
 payment only for a card, which is confirmed weeks before it is received (the later `PAYMENT_RECEIVED` is then flagged
 as a second notice of a paid charge, which is harmless); `PAYMENT_DELETED` cancels. Every other event (overdue,
 updated, refunded, created) changes nothing here and is **acknowledged with `200`**, because Asaas pauses a queue
-after fifteen failures; so a body whose notices are none is `200` and one whose notices are all of charges that are
-not the company's is still `404`. The webhook address to register is `{host}/api/public/payments/{company}/webhooks/asaas`,
+after fifteen failures; so a body whose notices are none is `200`, and so is one for payments made elsewhere in the account (a charge that is
+not the company's is left out, ADR 0046). The webhook address to register is `{host}/api/public/payments/{company}/webhooks/asaas`,
 shown on the Cobrança page.
 
 **Tests** use a local stand-in for the Asaas API (the key checked, the bodies kept, refusals and failures on
@@ -69,6 +70,19 @@ demand), never the real one. A test against the **sandbox** is in the suite but 
 - One installation talks to one provider (ADR 0044): the key is the installation's.
 - What the fake cannot show (Asaas's own limits, a customer it refuses) is found with the sandbox test.
 - A card payment that is chargebacked, or a refund, is not understood (ADR 0046).
+
+## Limits
+
+- One Asaas account is **one installation's**: its webhook has one address, so an installation with several companies
+  cannot give each its own Asaas account (per-company credentials, ADR 0044), and a payment of another company's
+  charge arriving at this one's address is left out.
+- A payment that Asaas made but whose answer was lost (a timeout) is not known here and nothing takes it back; it
+  shows up in Asaas, and its webhook is left out as a payment made elsewhere.
+- A card is a payment at `PAYMENT_CONFIRMED`, about a month before Asaas pays the money out: the account balance
+  counts it from then, and the fee is the confirmation's `value - netValue`.
+- Asaas also notifies customers by itself (the new charge), besides the reminders of ADR 0048.
+- A 404 on calling off is read as already gone, so a wrong `ASAAS_API_URL` would say every cancel worked; the
+  sandbox test catches that.
 
 ## Revisit when
 

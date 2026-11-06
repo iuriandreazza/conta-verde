@@ -21,6 +21,22 @@ const MAX_DESCRIPTION_CHARS: usize = 500;
 /// a float: this stands in the body until then.
 const VALUE_PLACEHOLDER: &str = "@@value@@";
 
+/// Why a call did not give an answer. A missing thing is told apart so that calling off one that is gone is
+/// not an error, without reading it from a message.
+enum Failed {
+    NotFound,
+    Provider(ProviderError),
+}
+
+impl From<Failed> for ProviderError {
+    fn from(failed: Failed) -> Self {
+        match failed {
+            Failed::NotFound => ProviderError::Rejected("not found".to_owned()),
+            Failed::Provider(error) => error,
+        }
+    }
+}
+
 /// A payment provider that charges through [Asaas](https://www.asaas.com): registered boleto, Pix with its
 /// copy-and-paste text, and a card page ([ADR 0049]). The money is the account holder's at Asaas, never ours.
 /// The API key and the webhook token come from the environment and are never logged or stored.
@@ -66,7 +82,7 @@ impl AsaasProvider {
         method: Method,
         path: &str,
         body: Option<String>,
-    ) -> Result<Value, ProviderError> {
+    ) -> Result<Value, Failed> {
         let mut request = self
             .client
             .request(method, format!("{}{path}", self.base_url))
@@ -79,7 +95,13 @@ impl AsaasProvider {
         let response = request
             .send()
             .await
-            .map_err(|error| ProviderError::Unavailable(format!("request failed: {error}")))?;
+            // Without the address: it holds the customer's document in a query.
+            .map_err(|error| {
+                Failed::Provider(ProviderError::Unavailable(format!(
+                    "request failed: {}",
+                    error.without_url()
+                )))
+            })?;
         let status = response.status();
         let answer: Value = response.json().await.unwrap_or(Value::Null);
         if status.is_success() {
@@ -91,22 +113,40 @@ impl AsaasProvider {
             .chars()
             .take(200)
             .collect::<String>();
-        if status == StatusCode::NOT_FOUND {
-            return Err(ProviderError::Rejected(format!("not found: {why}")));
-        }
-        if status.is_client_error() {
-            Err(ProviderError::Rejected(format!("{status}: {why}")))
-        } else {
-            Err(ProviderError::Unavailable(format!("{status}")))
+        match status {
+            StatusCode::NOT_FOUND => Err(Failed::NotFound),
+            // Our key being refused, a slow answer and the rate limit are not the payer's fault: trying
+            // again later, or the operator fixing the key, is the remedy.
+            StatusCode::UNAUTHORIZED
+            | StatusCode::FORBIDDEN
+            | StatusCode::REQUEST_TIMEOUT
+            | StatusCode::TOO_MANY_REQUESTS => Err(Failed::Provider(ProviderError::Unavailable(
+                format!("{status}"),
+            ))),
+            status if status.is_client_error() => Err(Failed::Provider(ProviderError::Rejected(
+                format!("{status}: {why}"),
+            ))),
+            status => Err(Failed::Provider(ProviderError::Unavailable(format!(
+                "{status}"
+            )))),
         }
     }
 
     /// The payer's id at Asaas: the customer with that CPF/CNPJ if there is one, otherwise a new one.
     async fn customer_for(&self, request: &ProviderChargeRequest) -> Result<String, ProviderError> {
+        self.find_or_make_customer(request)
+            .await
+            .map_err(ProviderError::from)
+    }
+
+    async fn find_or_make_customer(
+        &self,
+        request: &ProviderChargeRequest,
+    ) -> Result<String, Failed> {
         let Some(document) = request.payer.document.as_deref() else {
-            return Err(ProviderError::Rejected(
+            return Err(Failed::Provider(ProviderError::Rejected(
                 "Asaas bills a CPF or a CNPJ and the customer has none".to_owned(),
-            ));
+            )));
         };
         let found = self
             .call(
@@ -125,7 +165,7 @@ impl AsaasProvider {
         let made = self
             .call(Method::POST, "/v3/customers", Some(body.to_string()))
             .await?;
-        text(&made, "id")
+        text(&made, "id").map_err(Failed::Provider)
     }
 }
 
@@ -165,11 +205,15 @@ impl PaymentProvider for AsaasProvider {
             "externalReference": request.charge_id.as_uuid().to_string(),
         })
         .to_string()
+        // The whole pair, so a description that says the same words (its quotes are escaped) is left alone.
         .replace(
-            &format!("\"{VALUE_PLACEHOLDER}\""),
-            &request.amount.to_string(),
+            &format!("\"value\":\"{VALUE_PLACEHOLDER}\""),
+            &format!("\"value\":{}", request.amount),
         );
-        let made = self.call(Method::POST, "/v3/payments", Some(body)).await?;
+        let made = self
+            .call(Method::POST, "/v3/payments", Some(body))
+            .await
+            .map_err(ProviderError::from)?;
         let id = text(&made, "id")?;
         match self.payment_details(request.method, &id, &made).await {
             Ok(payment) => Ok(ProviderCharge {
@@ -191,10 +235,9 @@ impl PaymentProvider for AsaasProvider {
             .call(Method::DELETE, &format!("/v3/payments/{external_id}"), None)
             .await
         {
-            Ok(_) => Ok(()),
             // Already gone is what was asked for.
-            Err(ProviderError::Rejected(why)) if why.starts_with("not found") => Ok(()),
-            Err(other) => Err(other),
+            Ok(_) | Err(Failed::NotFound) => Ok(()),
+            Err(Failed::Provider(error)) => Err(error),
         }
     }
 
@@ -280,8 +323,9 @@ impl AsaasProvider {
 }
 
 /// What was paid, from the payment object of a notice: the day, the amount, and the fee as the part of it
-/// Asaas did not pass on (`value` less `netValue`). The amounts are JSON numbers, read as the text they were
-/// written with and never as floats.
+/// Asaas did not pass on (`value` less `netValue`). The amounts are JSON numbers; serde_json reads them as f64 and
+/// the shortest text that gives that float back is what is parsed, which is exact for any amount in cents of
+/// a realistic size (and an amount with more decimals is refused as malformed, never rounded).
 fn paid(payment: &Value) -> Result<ProviderEventKind, &'static str> {
     let decimal =
         |key: &str| -> Option<Decimal> { payment[key].as_number()?.to_string().parse().ok() };
@@ -593,7 +637,7 @@ mod tests {
             provider(addr, "wrong")
                 .create_charge(&request(ChargeMethod::Pix, Some("52998224725")))
                 .await,
-            Err(ProviderError::Rejected(_))
+            Err(ProviderError::Unavailable(_))
         ));
         let gone = {
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

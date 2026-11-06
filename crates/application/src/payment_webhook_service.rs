@@ -56,10 +56,11 @@ where
     }
 
     /// Takes a webhook the provider called the company's address with. The signature is checked over the
-    /// body before anything else (`Webhook`); a provider other than the configured one, or a charge that is
-    /// not the company's, is not found, and **nothing of it is stored**. A storage failure is returned so
+    /// body before anything else (`Webhook`); a provider other than the configured one is not found; a
+    /// notice of a charge that is not the company's is **left out, and nothing of it is stored** (the request
+    /// is still `Ok`, see below). A storage failure is returned so
     /// the provider sends the notice again: it stays pending until it has been applied. Answers how many
-    /// notices the request held.
+    /// notices were the company's.
     pub async fn receive(
         &self,
         company_id: CompanyId,
@@ -73,7 +74,10 @@ where
         let notices = self.provider.verify_webhook(headers, body)?;
         let mut taken = 0;
         for notice in &notices {
-            // A notice of a charge that is not the company's is left out; if none is, the request is `404`.
+            // A notice of a charge that is not the company's is **refused**: nothing is stored or applied. It is
+            // still answered `200` (once the signature is good): a provider account also has payments that
+            // were never made here, and one that gets errors for them pauses its queue and stops telling
+            // us about the ones that were.
             let Some(charge) = self
                 .charges
                 .find_by_external(company_id, provider_key, &notice.external_id)
@@ -107,11 +111,6 @@ where
             self.events
                 .finish(company_id, event.id(), outcome, note.as_deref())
                 .await?;
-        }
-        // A notice the provider sends that changes nothing here is acknowledged; one that is all of other
-        // companies' charges is not.
-        if taken == 0 && !notices.is_empty() {
-            return Err(ApplicationError::ChargeNotFound);
         }
         Ok(taken)
     }
