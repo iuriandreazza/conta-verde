@@ -58,6 +58,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0040](0040-contracts.md) | Recurring contracts that bill themselves | accepted | 3 |
 | [0041](0041-commissions.md) | Sellers and commissions | accepted | 3 |
 | [0042](0042-price-lists.md) | Price lists | accepted | 3 |
+| [0043](0043-sales-reports-and-dashboard.md) | Sales reports and the dashboard | accepted | 3 |
 
 ## Template
 

@@ -38,7 +38,7 @@ the decisions behind it that are expensive to reverse.
 - **Money stays decimal.** Chart data are decimal strings and every printed amount goes through `formatMoney`
   ([ADR 0003](0003-money-as-decimal.md)). `toDrawing` in `web/src/lib/chart.ts` is the single place a string becomes a
   `Number`, used only to place marks; axis ticks are round numbers chosen by `niceScale`, not figures derived from data.
-- **Sample data boundary.** Every dashboard number comes from `web/src/dashboard/sampleData.ts`, and the page says so
+- **Sample data boundary** (superseded by [ADR 0043](0043-sales-reports-and-dashboard.md): the dashboard reads real figures and the module is gone). Every dashboard number comes from `web/src/dashboard/sampleData.ts`, and the page says so
   in a visible notice. `sampleData.test.ts` checks the hand-written totals in cents with `BigInt`. Phase 2 replaces that
   import with the finance endpoints and deletes the notice.
 - **No dark mode yet.** Tokens are light only; chart tokens will get validated dark steps together with the app theme, not before.

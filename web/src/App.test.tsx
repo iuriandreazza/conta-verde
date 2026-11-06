@@ -987,56 +987,6 @@ describe("products and services", () => {
   });
 });
 
-describe("dashboard", () => {
-  beforeEach(() => {
-    mockApi((url) => (url === "/api/auth/me" ? { status: 200, body: profile } : { status: 404 }));
-  });
-
-  it("says its numbers are sample data", async () => {
-    renderAt("/companies/c1");
-    expect(await screen.findByText(/Dados de exemplo/)).toBeInTheDocument();
-  });
-
-  it("writes the cash balance as money", async () => {
-    renderAt("/companies/c1");
-    expect(await screen.findByText("R$ 48.720,35")).toBeInTheDocument();
-  });
-
-  it("scopes the chart table to the period chosen", async () => {
-    renderAt("/companies/c1");
-    await screen.findByRole("heading", { name: "Painel" });
-
-    await userEvent.click(screen.getAllByRole("button", { name: "Ver como tabela" })[0]);
-    const flow = screen.getByRole("table", { name: "Entradas e saídas" });
-    expect(within(flow).getAllByRole("row")).toHaveLength(1 + 6);
-
-    await userEvent.click(screen.getByLabelText("12 meses"));
-    expect(within(flow).getAllByRole("row")).toHaveLength(1 + 12);
-  });
-
-  it("offers the due ranges as a table, with overdue named in words", async () => {
-    renderAt("/companies/c1");
-    await screen.findByRole("heading", { name: "Painel" });
-
-    await userEvent.click(screen.getAllByRole("button", { name: "Ver como tabela" })[1]);
-    const due = screen.getByRole("table", { name: "Contas por vencimento" });
-    expect(within(due).getByRole("cell", { name: "Vencidas" })).toBeInTheDocument();
-    expect(within(due).getByRole("cell", { name: "R$ 21.350,50" })).toBeInTheDocument();
-  });
-
-  it("shows every series of a month, in money, when the chart is focused and moved with the arrows", async () => {
-    renderAt("/companies/c1");
-    const chart = await screen.findByRole("group", { name: /Entradas e saídas por mês/ });
-
-    chart.focus();
-    expect(await screen.findByText("R$ 54.300,00")).toBeInTheDocument();
-    expect(screen.getByText("R$ 46.780,00")).toBeInTheDocument();
-
-    await userEvent.keyboard("{ArrowLeft}");
-    expect(await screen.findByText("R$ 50.480,00")).toBeInTheDocument();
-  });
-});
-
 describe("cost centers", () => {
   function costCenter(name: string, active = true): CostCenter {
     return { id: `cc-${name}`, company_id: "c1", name, active };

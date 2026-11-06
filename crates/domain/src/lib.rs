@@ -28,6 +28,7 @@ mod quote;
 mod recurrence;
 mod role;
 mod sale;
+mod sales_report;
 mod settlement;
 mod statement_line;
 mod tag;
@@ -92,6 +93,7 @@ pub use role::{Access, Area, Role};
 /// The exact decimal money is made of, so a layer that adds amounts need not depend on its crate.
 pub use rust_decimal::Decimal;
 pub use sale::{ReturnItemDraft, Sale, SaleDraft, SaleReturn, SaleReturnDraft, SaleStatus};
+pub use sales_report::{AbcClass, SalesGroup, SalesReportRow, net_of_lines, sales_report};
 pub use settlement::{Settlement, SettlementDraft, settled_of};
 pub use statement_line::{LineMatch, LineStatus, StatementLine, StatementLineDraft};
 pub use tag::{MAX_TAGS, Tag};

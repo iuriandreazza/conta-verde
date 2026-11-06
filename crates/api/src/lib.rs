@@ -29,6 +29,7 @@ mod quotes;
 mod recurrences;
 mod reports;
 mod sales;
+mod sales_reports;
 mod session;
 mod statements;
 mod transfers;
@@ -47,8 +48,8 @@ use conta_verde_application::{
     PaymentMethodService, PaymentTermRepository, PaymentTermService, PostalCodeDirectory,
     PostalCodeService, PriceListRepository, PriceListService, ProductRepository, ProductService,
     QuoteRepository, QuoteService, ReconciliationService, RecurrenceRepository, RecurrenceService,
-    SaleRepository, SaleService, SalesReferences, SecretService, StatementLineRepository,
-    TransferRepository, TransferService,
+    SaleRepository, SaleService, SalesReferences, SalesReportService, SecretService,
+    StatementLineRepository, TransferRepository, TransferService,
 };
 use serde::Serialize;
 
@@ -121,6 +122,9 @@ type CommissionsOf<X> = CommissionService<
 /// The price lists use case over the adapters of `X`.
 type PriceListsOf<X> = PriceListService<<X as Ports>::PriceLists, <X as Ports>::SalesReferences>;
 
+/// The sales reports use case over the adapters of `X`.
+type SalesReportsOf<X> = SalesReportService<<X as Ports>::Sales>;
+
 /// The use cases the API serves.
 pub struct Services<X: Ports> {
     pub parties: PartyService<X::Parties, X::Registry>,
@@ -131,6 +135,7 @@ pub struct Services<X: Ports> {
     pub payment_methods: PaymentMethodService<X::PaymentMethods>,
     pub payment_terms: PaymentTermService<X::PaymentTerms>,
     pub price_lists: PriceListsOf<X>,
+    pub sales_reports: SalesReportsOf<X>,
     pub entries: FinancialEntryService<X::Entries, X::EntryReferences>,
     pub attachments: AttachmentService<X::Attachments, X::Blobs, X::Entries>,
     pub transfers: TransferService<X::Transfers, X::EntryReferences>,
@@ -156,6 +161,7 @@ pub(crate) struct AppState<X: Ports> {
     payment_methods: PaymentMethodService<X::PaymentMethods>,
     payment_terms: PaymentTermService<X::PaymentTerms>,
     price_lists: PriceListsOf<X>,
+    sales_reports: SalesReportsOf<X>,
     entries: FinancialEntryService<X::Entries, X::EntryReferences>,
     attachments: AttachmentService<X::Attachments, X::Blobs, X::Entries>,
     transfers: TransferService<X::Transfers, X::EntryReferences>,
@@ -186,6 +192,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         payment_methods: services.payment_methods,
         payment_terms: services.payment_terms,
         price_lists: services.price_lists,
+        sales_reports: services.sales_reports,
         entries: services.entries,
         attachments: services.attachments,
         transfers: services.transfers,
@@ -477,6 +484,10 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         .route(
             "/companies/{company_id}/commission-rules/{rule_id}/history",
             get(commissions::rule_history::<X>),
+        )
+        .route(
+            "/companies/{company_id}/sales-reports",
+            get(sales_reports::sales_report::<X>),
         )
         .route(
             "/companies/{company_id}/commissions",
@@ -1142,6 +1153,7 @@ mod tests {
                 ),
                 commissions: standalone_commissions(),
                 price_lists: standalone_price_lists(),
+                sales_reports: SalesReportService::new(InMemorySaleRepository::default()),
                 reconciliation: standalone_reconciliation(),
                 balances: standalone_balances(),
                 postal_codes: PostalCodeService::new(postal_codes),
@@ -1787,6 +1799,7 @@ mod tests {
                 ),
                 commissions: standalone_commissions(),
                 price_lists: standalone_price_lists(),
+                sales_reports: SalesReportService::new(InMemorySaleRepository::default()),
                 reconciliation: standalone_reconciliation(),
                 balances: standalone_balances(),
                 postal_codes: PostalCodeService::new(None),
@@ -3274,6 +3287,7 @@ mod tests {
                 ),
                 commissions: standalone_commissions(),
                 price_lists: standalone_price_lists(),
+                sales_reports: SalesReportService::new(InMemorySaleRepository::default()),
                 reconciliation: standalone_reconciliation(),
                 balances: standalone_balances(),
                 postal_codes: PostalCodeService::new(None),
@@ -4842,6 +4856,7 @@ mod tests {
                     &payment_terms,
                 ),
                 price_lists: price_lists_over(&parties, &products, &payment_terms),
+                sales_reports: SalesReportService::new(sale_store.clone()),
                 balances: BalanceService::new(
                     bank_accounts.clone(),
                     entry_store,
@@ -8264,6 +8279,112 @@ mod tests {
             };
             assert_eq!(write.status, expected, "{role:?} writes");
         }
+    }
+
+    #[tokio::test]
+    async fn sales_reports_rank_what_was_sold_net_of_returns_with_the_abc_curve() {
+        let app = entry_app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let targets = sales_targets(&app, &cookie, company_id).await;
+        let category = revenue_category(&app, &cookie, company_id).await;
+        let uri = format!(
+            "/companies/{company_id}/sales-reports?by=product&from=2026-11-01&to=2026-11-30"
+        );
+
+        let empty = send(&app, get_request(&uri, Some(&cookie))).await;
+        assert_eq!(empty.status, StatusCode::OK, "{}", empty.body);
+        assert_eq!(empty.body["rows"], json!([]));
+        assert_eq!(empty.body["total"], "0");
+
+        // An order counts for nothing; the completed sale counts, less what came back.
+        let order = send(
+            &app,
+            json_request(
+                "POST",
+                &sales_uri(company_id),
+                Some(&cookie),
+                sale_body(&targets, &category),
+            ),
+        )
+        .await;
+        let order_id = order.body["id"].as_str().unwrap().to_owned();
+        let still_order = send(&app, get_request(&uri, Some(&cookie))).await;
+        assert_eq!(still_order.body["rows"], json!([]));
+        send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{}/{order_id}/complete", sales_uri(company_id)),
+                Some(&cookie),
+                Value::Null,
+            ),
+        )
+        .await;
+        let report = send(&app, get_request(&uri, Some(&cookie))).await;
+        assert_eq!(report.body["sales"], 1);
+        assert_eq!(report.body["total"], "35");
+        let rows = report.body["rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["net"], "30");
+        assert_eq!(rows[0]["share"], "85.71");
+        assert_eq!(rows[0]["class"], "A");
+        assert_eq!(rows[1]["net"], "5");
+        assert_eq!(rows[1]["cumulative"], "100");
+        assert_eq!(rows[1]["class"], "B");
+
+        let returned = send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{}/{order_id}/returns", sales_uri(company_id)),
+                Some(&cookie),
+                json!({
+                    "returned_on": "2026-11-10",
+                    "items": [{ "line": 1, "quantity": "1" }],
+                    "refund_category_id": category,
+                    "refund_due_on": "2026-11-20",
+                }),
+            ),
+        )
+        .await;
+        assert_eq!(returned.status, StatusCode::CREATED, "{}", returned.body);
+        let after = send(&app, get_request(&uri, Some(&cookie))).await;
+        assert_eq!(after.body["total"], "25");
+
+        let customers = send(
+            &app,
+            get_request(
+                &format!("/companies/{company_id}/sales-reports?by=customer&from=2026-11-01&to=2026-11-30"),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(customers.body["rows"][0]["key"], targets.customer);
+        assert_eq!(customers.body["rows"][0]["sales"], 1);
+
+        for bad in [
+            "by=colour&from=2026-11-01&to=2026-11-30",
+            "by=product&from=2026-11-01",
+            "by=product&from=x&to=2026-11-30",
+            "by=product&from=2026-12-01&to=2026-11-01",
+        ] {
+            let reply = send(
+                &app,
+                get_request(
+                    &format!("/companies/{company_id}/sales-reports?{bad}"),
+                    Some(&cookie),
+                ),
+            )
+            .await;
+            assert!(reply.status.is_client_error(), "{bad}: {}", reply.status);
+        }
+        let (other, other_company) = sign_up(&app, "bia@example.com").await;
+        let theirs = send(
+            &app,
+            get_request(&format!("/companies/{other_company}/sales-reports?by=customer&from=2026-01-01&to=2026-12-31"), Some(&other)),
+        )
+        .await;
+        assert_eq!(theirs.body["rows"], json!([]));
     }
 
     const STATEMENT: &str = "OFXHEADER:100\nDATA:OFXSGML\nVERSION:102\nCHARSET:1252\n\n<OFX><BANKMSGSRSV1><STMTTRNRS><STMTRS><BANKTRANLIST>\n\
