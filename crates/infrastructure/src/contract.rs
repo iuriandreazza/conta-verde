@@ -28,7 +28,10 @@ use conta_verde_domain::{
     document_check_changes, payment_method_changes, payment_method_creation_changes,
     product_changes, product_creation_changes,
 };
-use conta_verde_domain::{EntryOrigin, ReturnItemDraft, SaleDraft, SaleReturnDraft, SaleStatus};
+use conta_verde_domain::{
+    EntryOrigin, ReturnItemDraft, SaleDraft, SaleReturn, SaleReturnDraft, SaleReturnId, SaleStatus,
+    sale_return_creation_changes,
+};
 use conta_verde_domain::{InstallmentDraft, payment_term_changes, payment_term_creation_changes};
 use conta_verde_domain::{LineDraft, QuoteDraft, QuoteStatus};
 use sqlx::PgPool;
@@ -9449,6 +9452,7 @@ pub async fn voids_entries<R, F>(
 #[allow(clippy::too_many_arguments)]
 pub async fn runs_the_sale_lifecycle<S, Q, E, F, R, Q2, R2, Em, Se>(
     sales: &SaleService<S, Q, E, F, R>,
+    store: &S,
     quotes: &QuoteService<Q2, R2, Em, Se>,
     entries: &FinancialEntryService<E, F>,
     company: CompanyId,
@@ -9750,6 +9754,37 @@ pub async fn runs_the_sale_lifecycle<S, Q, E, F, R, Q2, R2, Em, Se>(
         sales.returns(other_company, first.id()).await.unwrap_err(),
         ApplicationError::SaleNotFound
     );
+    // The store itself refuses a return of more than was sold and not returned, and leaves no trace of it:
+    // what the use case checks beforehand is also checked with the sale locked.
+    // Line 2 sold 1.5 and 0.5 of it came back: a return of all 1.5 fits what the domain knows of the sale
+    // alone, and not what the store has.
+    let sold_sale = sales.get(company, first.id()).await.unwrap();
+    let too_big = SaleReturn::new(
+        SaleReturnId::generate(),
+        &sold_sale,
+        return_draft(&[(2, "1.5")]),
+        &[],
+    )
+    .unwrap();
+    let refused_audit = AuditEntry {
+        company_id: company,
+        actor: ana.clone(),
+        entity: AuditEntity::SaleReturn,
+        entity_id: too_big.id().as_uuid(),
+        action: AuditAction::Created,
+        changes: sale_return_creation_changes(&too_big),
+    };
+    assert_eq!(
+        store
+            .save_return(&too_big, &refused_audit)
+            .await
+            .unwrap_err(),
+        RepositoryError::ReturnTooMuch
+    );
+    let stored = store.returns_of(company, first.id()).await.unwrap();
+    assert_eq!(stored.len(), 2);
+    assert!(stored.iter().all(|made| made.id() != too_big.id()));
+
     // What is refunded stands: a sale with returns is not cancelled.
     assert_eq!(
         sales.cancel(company, &ana, first.id()).await.unwrap_err(),

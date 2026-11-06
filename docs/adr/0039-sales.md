@@ -86,6 +86,7 @@ reads and settles like any other.
   exit criterion of the phase is a test: a quote, approved through its link, converted, completed, in the forecast, and out of it
   when cancelled.
 - The entries page says where an entry came from and marks a cancelled one.
+- A completed sale whose receivable a storage failure left unmade is finished by asking `POST .../complete` again; no screen offers it yet (the API answer for a sale says `receivable_id`), and no job looks for it.
 - Commissions and the dashboard of the next slices read sales (completed, net of returns) and not entries.
 
 ## Revisit when

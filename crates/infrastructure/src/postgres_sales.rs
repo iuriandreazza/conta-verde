@@ -550,6 +550,7 @@ mod tests {
         let other_company = contract::create_company(&pool).await;
         let entry_seed = entry_seed(&pool, company).await;
         let seed = sales_seed(&pool, company).await;
+        let store = PostgresSaleRepository::new(pool.clone());
         let sales = SaleService::new(
             PostgresSaleRepository::new(pool.clone()),
             PostgresQuoteRepository::new(pool.clone()),
@@ -573,6 +574,7 @@ mod tests {
         );
         contract::runs_the_sale_lifecycle(
             &sales,
+            &store,
             &quotes,
             &entries,
             company,

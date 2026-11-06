@@ -236,8 +236,9 @@ mod tests {
         };
         let entry_store = InMemoryFinancialEntryRepository::default();
         let quote_store = InMemoryQuoteRepository::default();
+        let store = InMemorySaleRepository::default();
         let sales = SaleService::new(
-            InMemorySaleRepository::default(),
+            store.clone(),
             quote_store.clone(),
             FinancialEntryService::new(entry_store.clone(), registers.references()),
             registers.references(),
@@ -253,6 +254,7 @@ mod tests {
         let entries = FinancialEntryService::new(entry_store, registers.references());
         contract::runs_the_sale_lifecycle(
             &sales,
+            &store,
             &quotes,
             &entries,
             company,
