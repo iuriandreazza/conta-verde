@@ -314,4 +314,33 @@ describe("creating from the top bar", () => {
     await screen.findByRole("heading", { name: "Membros" });
     expect(screen.queryByRole("button", { name: "Convidar alguém" })).not.toBeInTheDocument();
   });
+
+  it("starts a record from anywhere with Alt and its letter, once, and not under an open sheet", async () => {
+    mockApi((url) =>
+      url === "/api/auth/me" ? { status: 200, body: profile } : { status: 200, body: { items: [], next_cursor: null } },
+    );
+    renderAt("/companies/c1/parties");
+    await screen.findByRole("heading", { name: "Clientes e fornecedores" });
+    await screen.findByRole("button", { name: "Novo registro" });
+
+    await userEvent.keyboard("{Alt>}{l}{/Alt}");
+    expect(await screen.findByRole("dialog", { name: "Novo lançamento" })).toBeInTheDocument();
+
+    // A sheet is open: another shortcut does not stack a second one.
+    fireEvent.keyDown(window, { key: "t", code: "KeyT", altKey: true });
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+  });
+
+  it("shows the letter beside each item that has one, without making it part of the name", async () => {
+    mockApi((url) =>
+      url === "/api/auth/me" ? { status: 200, body: profile } : { status: 200, body: { items: [], next_cursor: null } },
+    );
+    renderAt("/companies/c1/parties");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Novo registro" }));
+
+    const item = screen.getByRole("menuitem", { name: "Novo lançamento" });
+    expect(item).toHaveAttribute("aria-keyshortcuts", "Alt+L");
+    expect(item).toHaveTextContent("Alt+L");
+  });
 });

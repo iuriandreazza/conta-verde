@@ -13,7 +13,11 @@ export interface MenuItem {
   /** Does something here, as a button. */
   onSelect?: () => void;
   disabled?: boolean;
+  /** A letter that, with Alt, does the same from anywhere; shown beside the label. */
+  shortcut?: string;
 }
+
+const shortcutOf = (item: MenuItem) => (item.shortcut ? `Alt+${item.shortcut}` : undefined);
 
 interface MenuButtonProps {
   label: ReactNode;
@@ -127,10 +131,15 @@ export function MenuButton({ label, items, icon, variant = "ghost", align = "sta
               <>
                 {item.icon && <item.icon size={16} aria-hidden />}
                 {item.label}
+                {item.shortcut && (
+                  <kbd className="menu-hint" aria-hidden>
+                    Alt+{item.shortcut}
+                  </kbd>
+                )}
               </>
             );
             return item.to !== undefined && !item.disabled ? (
-              <Link key={item.key} role="menuitem" to={item.to} onClick={closeAndRefocus}>
+              <Link key={item.key} role="menuitem" to={item.to} aria-keyshortcuts={shortcutOf(item)} onClick={closeAndRefocus}>
                 {content}
               </Link>
             ) : (
@@ -138,6 +147,7 @@ export function MenuButton({ label, items, icon, variant = "ghost", align = "sta
                 key={item.key}
                 type="button"
                 role="menuitem"
+                aria-keyshortcuts={shortcutOf(item)}
                 aria-disabled={item.disabled || undefined}
                 onClick={() => {
                   if (item.disabled) return;

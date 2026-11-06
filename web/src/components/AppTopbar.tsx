@@ -1,3 +1,5 @@
+import { useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { Button } from "./Button";
 import { BoxIcon } from "./icons/box";
 import { CalendarDaysIcon } from "./icons/calendar-days";
@@ -29,6 +31,20 @@ interface AppTopbarProps {
   onSignOut: () => void;
 }
 
+/** The letters that, with Alt, start a record from anywhere: the usual ones, away from the browser's own. */
+const SHORTCUTS: Partial<Record<string, string>> = {
+  entry: "L",
+  transfer: "T",
+  quote: "O",
+  sale: "V",
+  party: "C",
+  category: "K",
+  recurrence: "R",
+  invite: "M",
+  bankAccount: "B",
+  product: "P",
+};
+
 /** What a person can start from anywhere: only the registers their role may write. */
 function creationItems(
   companyId: string,
@@ -54,7 +70,11 @@ function creationItems(
   return items
     .filter((item) => permissions?.[item.area] === "write")
     // A register with a sheet opens it over the page that is showing; the others still go to their page.
-    .map(({ creates, area: _area, ...item }) => (creates ? { ...item, onSelect: () => openCreate(creates) } : item));
+    .map(({ creates, area: _area, ...item }) => ({
+      ...item,
+      shortcut: SHORTCUTS[item.key],
+      ...(creates ? { onSelect: () => openCreate(creates) } : {}),
+    }));
 }
 
 /** The bar over every signed-in page: the menu on a phone, "new" from anywhere, who is signed in and how to leave. */
@@ -70,6 +90,22 @@ export function AppTopbar({
 }: AppTopbarProps) {
   const { openCreate } = useCreation();
   const creating = companyId ? creationItems(companyId, permissions, openCreate) : [];
+  const navigate = useNavigate();
+
+  // Alt plus the letter starts the record from anywhere, unless a sheet is already open. The physical
+  // key is read (`code`), since Alt changes the character some layouts type.
+  useEffect(() => {
+    function start(event: KeyboardEvent) {
+      if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      const item = creating.find((candidate) => candidate.shortcut && `Key${candidate.shortcut}` === event.code);
+      if (!item || document.querySelector('[role="dialog"]')) return;
+      event.preventDefault();
+      if (item.onSelect) item.onSelect();
+      else if (item.to) navigate(item.to);
+    }
+    window.addEventListener("keydown", start);
+    return () => window.removeEventListener("keydown", start);
+  });
   return (
     <div className="topbar">
       {companyId && (
