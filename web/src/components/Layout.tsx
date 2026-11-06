@@ -16,6 +16,15 @@ export function Layout() {
   const mainRef = useRef<HTMLElement>(null);
   // The drawer on a phone covers the page: going somewhere closes it.
   useEffect(() => setNavOpen(false), [location.pathname]);
+  // The drawer takes the focus when it opens, and gives it back to its button when it closes.
+  useEffect(() => {
+    if (navOpen) document.querySelector<HTMLElement>("#app-sidebar .side-nav a")?.focus();
+  }, [navOpen]);
+
+  function closeNav() {
+    setNavOpen(false);
+    document.querySelector<HTMLElement>(".topbar-menu")?.focus();
+  }
   const companyId = useMatch("/companies/:companyId/*")?.params.companyId;
 
   // The session only ends once the server confirms it, so a failure must stay visible.
@@ -97,7 +106,12 @@ export function Layout() {
     <div className="app">
       {/* Inside the sidebar, not before it: the sign-in layout and this one put <main> at the same position,
           which keeps the sign-up page mounted (and its outcome) when the session arrives. */}
-      <aside className="sidebar" id="app-sidebar" data-open={navOpen || undefined}>
+      <aside
+        className="sidebar"
+        id="app-sidebar"
+        data-open={navOpen || undefined}
+        onKeyDown={(event) => event.key === "Escape" && navOpen && closeNav()}
+      >
         <a href="#main" className="skip-link" onClick={skipToContent}>
           Ir para o conteúdo
         </a>
@@ -123,12 +137,13 @@ export function Layout() {
           signingOut={signingOut}
           signOutFailed={signOutFailed}
           navOpen={navOpen}
-          onToggleNav={() => setNavOpen(!navOpen)}
+          onToggleNav={() => (navOpen ? closeNav() : setNavOpen(true))}
           onSignOut={handleSignOut}
         />
         {page}
         <Footer />
       </div>
+      {navOpen && <button type="button" className="drawer-scrim" aria-label="Fechar o menu" onClick={closeNav} />}
     </div>
   );
 }

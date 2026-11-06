@@ -76,6 +76,10 @@ export function MenuButton({ label, items, icon, variant = "ghost", align = "sta
     } else if (event.key === "Escape") {
       event.preventDefault();
       closeAndRefocus();
+    } else if (event.key === " " && document.activeElement instanceof HTMLAnchorElement) {
+      // A link answers Enter by itself; a menu item also answers Space.
+      event.preventDefault();
+      document.activeElement.click();
     } else if (event.key === "Tab") {
       // The focused choice is about to leave the page: the button takes the focus so Tab goes on from there.
       triggerRef.current?.focus();
@@ -116,7 +120,7 @@ export function MenuButton({ label, items, icon, variant = "ghost", align = "sta
               </>
             );
             return item.to !== undefined && !item.disabled ? (
-              <Link key={item.key} role="menuitem" to={item.to} onClick={() => setOpen(false)}>
+              <Link key={item.key} role="menuitem" to={item.to} onClick={closeAndRefocus}>
                 {content}
               </Link>
             ) : (

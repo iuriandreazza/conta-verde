@@ -1,8 +1,12 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { MenuButton } from "./MenuButton";
+
+function LocationName() {
+  return <p>{useLocation().pathname}</p>;
+}
 
 function setup(onSelect = vi.fn()) {
   render(
@@ -42,6 +46,34 @@ describe("MenuButton", () => {
     expect(screen.getByRole("menuitem", { name: "Primeiro" })).toHaveFocus();
     await userEvent.keyboard("{End}");
     expect(screen.getByRole("menuitem", { name: "Terceiro" })).toHaveFocus();
+  });
+
+  it("opens from the keyboard with the down arrow", async () => {
+    const { trigger } = setup();
+    trigger.focus();
+
+    await userEvent.keyboard("{ArrowDown}");
+
+    expect(screen.getByRole("menuitem", { name: "Primeiro" })).toHaveFocus();
+  });
+
+  it("follows a link choice with Space too, and hands the focus back", async () => {
+    render(
+      <MemoryRouter initialEntries={["/aqui"]}>
+        <MenuButton label="Ir" items={[{ key: "x", label: "Lá", to: "/la" }]} />
+        <Routes>
+          <Route path="*" element={<LocationName />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Ir" }));
+    expect(screen.getByRole("menuitem", { name: "Lá" })).toHaveAttribute("href", "/la");
+
+    await userEvent.keyboard(" ");
+
+    expect(screen.getByText("/la")).toBeInTheDocument();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Ir" })).toHaveFocus();
   });
 
   it("closes on Escape and gives the focus back to the button", async () => {

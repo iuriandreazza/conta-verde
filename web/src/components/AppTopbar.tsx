@@ -45,15 +45,17 @@ export function AppTopbar({
   const creating = companyId ? creationItems(companyId, permissions) : [];
   return (
     <div className="topbar">
-      <button
-        type="button"
-        className="topbar-menu"
-        aria-expanded={navOpen}
-        aria-controls="app-sidebar"
-        onClick={onToggleNav}
-      >
-        Menu
-      </button>
+      {companyId && (
+        <button
+          type="button"
+          className="topbar-menu"
+          aria-expanded={navOpen}
+          aria-controls="app-sidebar"
+          onClick={onToggleNav}
+        >
+          Menu
+        </button>
+      )}
       <div className="topbar-actions">
         {creating.length > 0 && <MenuButton variant="primary" icon={PlusIcon} label="Novo registro" items={creating} align="end" />}
         <span className="avatar" aria-hidden>

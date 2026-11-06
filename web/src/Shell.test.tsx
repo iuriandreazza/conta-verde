@@ -129,4 +129,34 @@ describe("page shell", () => {
     expect(screen.queryByRole("menuitem", { name: "Novo lançamento" })).not.toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: "Novo produto ou serviço" })).not.toBeInTheDocument();
   });
+
+  it("opens the phone menu onto the sections and closes it with Escape or the shade", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(profile), { status: 200 })));
+    renderAt("/companies/c1");
+
+    const menu = await screen.findByRole("button", { name: "Menu" });
+    expect(menu).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: "Fechar o menu" })).not.toBeInTheDocument();
+
+    await userEvent.click(menu);
+    expect(menu).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("link", { name: "Painel" })).toHaveFocus();
+
+    await userEvent.keyboard("{Escape}");
+    expect(menu).toHaveAttribute("aria-expanded", "false");
+    expect(menu).toHaveFocus();
+
+    await userEvent.click(menu);
+    await userEvent.click(screen.getByRole("button", { name: "Fechar o menu" }));
+    expect(menu).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("has no phone menu where there are no sections to open", async () => {
+    const two = { ...profile, companies: [profile.companies[0], { ...profile.companies[0], id: "c2", name: "Mercearia" }] };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(two), { status: 200 })));
+    renderAt("/");
+
+    expect(await screen.findByRole("heading", { name: "Escolha uma empresa" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Menu" })).not.toBeInTheDocument();
+  });
 });
