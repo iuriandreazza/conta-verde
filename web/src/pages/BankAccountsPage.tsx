@@ -24,10 +24,10 @@ import { BriefcaseBusinessIcon } from "../components/icons/briefcase-business";
 import { CheckIcon } from "../components/icons/check";
 import { HistoryIcon } from "../components/icons/history";
 import { PlusIcon } from "../components/icons/plus";
-import { BANK_ACCOUNT_KINDS, bankAccountKindLabel } from "../lib/kinds";
+import { BANK_ACCOUNT_KINDS } from "../lib/kinds";
 import { usePagedList } from "../lib/usePagedList";
 import { useCanWrite } from "../lib/useCanWrite";
-import { bankName } from "../lib/banks";
+import { accountDetails } from "../lib/banks";
 import { formatMoney } from "../lib/decimal";
 import { formatDate } from "../lib/entryInstallments";
 import { todayIso } from "../lib/settlement";
@@ -56,14 +56,6 @@ import { SquarePenIcon } from "../components/icons/square-pen";
 import { StatusBadge } from "../components/StatusBadge";
 
 /** What an account holds today. The opening balance it started from is in the form that sets it. */
-/** The kind, then what the bank calls the account, in one line so the table keeps its columns for figures. */
-function accountDetails(account: BankAccount): string {
-  const bank = account.bank_code ? `${account.bank_code} ${bankName(account.bank_code)}` : null;
-  const branch = account.branch ? `ag. ${account.branch}` : null;
-  const number = account.number ? `conta ${account.number}` : null;
-  return [bankAccountKindLabel(account.kind), bank, branch, number].filter(Boolean).join(" · ");
-}
-
 function BalanceCell({ item }: { item: AccountBalance | undefined }) {
   if (item === undefined) {
     return <td className="num">—</td>;
@@ -135,6 +127,7 @@ export function BankAccountsPage() {
     setItems,
     nextCursor,
     loading,
+    refreshing,
     loadingMore,
     error,
     applied,
@@ -402,6 +395,7 @@ export function BankAccountsPage() {
             noun={["conta", "contas"]}
             hasMore={nextCursor !== null}
             loadingMore={loadingMore}
+            refreshing={refreshing}
             onLoadMore={() => void loadMore()}
           />
         )}

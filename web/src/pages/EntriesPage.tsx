@@ -115,6 +115,7 @@ export function EntriesPage() {
     setItems,
     nextCursor,
     loading,
+    refreshing,
     loadingMore,
     error,
     applied,
@@ -408,6 +409,7 @@ export function EntriesPage() {
               noun={["lançamento", "lançamentos"]}
               hasMore={nextCursor !== null}
               loadingMore={loadingMore}
+              refreshing={refreshing}
               onLoadMore={() => void loadMore()}
             />
           )}

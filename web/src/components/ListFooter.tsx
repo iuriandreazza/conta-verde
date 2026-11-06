@@ -7,13 +7,15 @@ interface ListFooterProps {
   noun: [string, string];
   hasMore: boolean;
   loadingMore: boolean;
+  /** The rows are being replaced: what the footer says (is there more?) is not known until they arrive. */
+  refreshing?: boolean;
   onLoadMore: () => void;
 }
 
 /** Under a list: how many rows are on screen, and the way to bring more when the server has them. */
-export function ListFooter({ count, noun, hasMore, loadingMore, onLoadMore }: ListFooterProps) {
+export function ListFooter({ count, noun, hasMore, loadingMore, refreshing = false, onLoadMore }: ListFooterProps) {
   return (
-    <div className="list-footer">
+    <div className="list-footer" aria-hidden={refreshing || undefined} data-refreshing={refreshing || undefined}>
       <p className="muted" role="status">
         Mostrando {count} {count === 1 ? noun[0] : noun[1]}
         {hasMore && ", e há mais"}
