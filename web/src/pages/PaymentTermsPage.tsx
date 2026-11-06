@@ -21,6 +21,8 @@ import { HistoryIcon } from "../components/icons/history";
 import { describeInstallments } from "../lib/installments";
 import { usePagedList } from "../lib/usePagedList";
 import { useCanWrite } from "../lib/useCanWrite";
+import { SquarePenIcon } from "../components/icons/square-pen";
+import { StatusBadge } from "../components/StatusBadge";
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one
 // instance: the old list is dropped and a reply still in flight for another company lands on an
@@ -173,13 +175,14 @@ export function PaymentTermsPage() {
                       <ListRow index={index} highlighted={term.id === highlightedId}>
                         <td>{term.name}</td>
                         <td>{describeInstallments(term.installments)}</td>
-                        <td>{term.active ? "Ativo" : "Inativo"}</td>
-                        <td>
+                        <td><StatusBadge active={term.active} /></td>
+                        <td className="row-actions">
                           {canWrite && (
                             <Button
+                              iconOnly
+                              icon={SquarePenIcon}
                               type="button"
                               variant="ghost"
-                              className="btn-small"
                               aria-label={`Alterar ${term.name}`}
                               disabled={saving}
                               onClick={() => {
@@ -192,9 +195,9 @@ export function PaymentTermsPage() {
                             </Button>
                           )}
                           <Button
+                            iconOnly
                             type="button"
                             variant="ghost"
-                            className="btn-small"
                             aria-label={`Histórico de ${term.name}`}
                             aria-expanded={historyOpenFor === term.id}
                             aria-controls={`history-${term.id}`}

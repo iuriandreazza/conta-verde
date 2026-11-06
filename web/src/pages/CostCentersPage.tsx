@@ -20,6 +20,8 @@ import { HistoryIcon } from "../components/icons/history";
 import { PlusIcon } from "../components/icons/plus";
 import { usePagedList } from "../lib/usePagedList";
 import { useCanWrite } from "../lib/useCanWrite";
+import { SquarePenIcon } from "../components/icons/square-pen";
+import { StatusBadge } from "../components/StatusBadge";
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one
 // instance: the old list is dropped and a reply still in flight for another company lands on an
@@ -173,13 +175,14 @@ export function CostCentersPage() {
                   <Fragment key={costCenter.id}>
                     <ListRow index={index} highlighted={costCenter.id === highlightedId}>
                       <td>{costCenter.name}</td>
-                      <td>{costCenter.active ? "Ativo" : "Inativo"}</td>
-                      <td>
+                      <td><StatusBadge active={costCenter.active} /></td>
+                      <td className="row-actions">
                         {canWrite && (
                           <Button
+                            iconOnly
+                            icon={SquarePenIcon}
                             type="button"
                             variant="ghost"
-                            className="btn-small"
                             aria-label={`Alterar ${costCenter.name}`}
                             disabled={saving}
                             onClick={() => {
@@ -192,9 +195,9 @@ export function CostCentersPage() {
                           </Button>
                         )}
                         <Button
+                          iconOnly
                           type="button"
                           variant="ghost"
-                          className="btn-small"
                           aria-label={`Histórico de ${costCenter.name}`}
                           aria-expanded={historyOpenFor === costCenter.id}
                           aria-controls={`history-${costCenter.id}`}

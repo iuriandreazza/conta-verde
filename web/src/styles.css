@@ -217,9 +217,10 @@ a {
 main {
   flex: 1;
   width: 100%;
-  max-width: 76rem;
+  /* The page uses the screen; the cap only keeps a very wide monitor from stretching a row past reading. */
+  max-width: 120rem;
   margin: 0 auto;
-  padding: 2rem 2rem 1rem;
+  padding: 2rem clamp(1rem, 2.5vw, 3rem) 1rem;
 }
 
 .page-header {
@@ -341,7 +342,7 @@ main {
 
 .split {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 22rem;
+  grid-template-columns: minmax(0, 1fr) 24rem;
   gap: 1.25rem;
   align-items: start;
 }
@@ -603,6 +604,25 @@ legend {
   font-size: 0.8125rem;
 }
 
+/* Icon-only: the action that repeats on every row. Its name is the tooltip and the accessible label. */
+.btn.btn-icon {
+  width: 2rem;
+  min-height: 2rem;
+  padding: 0;
+  margin-left: 0.25rem;
+}
+
+.btn-icon.btn-ghost {
+  border-color: transparent;
+  color: var(--ink-2);
+}
+
+.btn-icon.btn-ghost:hover:not(:disabled),
+.btn-icon.btn-ghost:focus-visible {
+  background: var(--green-soft);
+  color: var(--green-dark);
+}
+
 .btn-ghost {
   background: transparent;
   color: var(--green-dark);
@@ -719,6 +739,15 @@ form .notice {
 
 td > .badge:first-child {
   margin-left: 0;
+}
+
+/* A shape before the word, so a state is never only a color. */
+.badge-dot::before {
+  content: "";
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: currentColor;
 }
 
 .alert-glyph {
@@ -856,6 +885,41 @@ tbody tr:last-child td {
   text-align: right;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.row-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.cell-title {
+  font-weight: 600;
+}
+
+.account-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.kind-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.6rem;
+  background: var(--green-soft);
+  color: var(--green-dark);
+}
+
+.kind-icon.is-inactive {
+  background: #eceff1;
+  color: var(--muted);
 }
 
 .sku {

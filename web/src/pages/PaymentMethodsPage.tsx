@@ -22,6 +22,8 @@ import { PlusIcon } from "../components/icons/plus";
 import { PAYMENT_METHOD_KINDS, paymentMethodKindLabel } from "../lib/kinds";
 import { usePagedList } from "../lib/usePagedList";
 import { useCanWrite } from "../lib/useCanWrite";
+import { SquarePenIcon } from "../components/icons/square-pen";
+import { StatusBadge } from "../components/StatusBadge";
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one
 // instance: the old list is dropped and a reply still in flight for another company lands on an
@@ -197,13 +199,14 @@ export function PaymentMethodsPage() {
                     <ListRow index={index} highlighted={method.id === highlightedId}>
                       <td>{method.name}</td>
                       <td>{paymentMethodKindLabel(method.kind)}</td>
-                      <td>{method.active ? "Ativa" : "Inativa"}</td>
-                      <td>
+                      <td><StatusBadge active={method.active} feminine /></td>
+                      <td className="row-actions">
                         {canWrite && (
                           <Button
+                            iconOnly
+                            icon={SquarePenIcon}
                             type="button"
                             variant="ghost"
-                            className="btn-small"
                             aria-label={`Alterar ${method.name}`}
                             disabled={saving}
                             onClick={() => {
@@ -216,9 +219,9 @@ export function PaymentMethodsPage() {
                           </Button>
                         )}
                         <Button
+                          iconOnly
                           type="button"
                           variant="ghost"
-                          className="btn-small"
                           aria-label={`Histórico de ${method.name}`}
                           aria-expanded={historyOpenFor === method.id}
                           aria-controls={`history-${method.id}`}
