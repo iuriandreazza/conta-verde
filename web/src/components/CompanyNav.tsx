@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useState } from "react";
-import { NavLink } from "react-router-dom";
+import { Link, NavLink, useLocation } from "react-router-dom";
 import type { AnimatedIcon } from "./Button";
 import { BoxIcon } from "./icons/box";
 import { BadgeAlertIcon } from "./icons/badge-alert";
@@ -23,6 +23,8 @@ import { WavesIcon } from "./icons/waves";
 
 interface NavItem {
   path: string;
+  /** Which kind of entry the item shows: the receivables and the payables are the same page with `?tipo=`. */
+  kind?: "receivable" | "payable";
   label: string;
   icon: AnimatedIcon;
 }
@@ -35,6 +37,18 @@ interface NavSection {
 
 function NavItemLink({ base, item }: { base: string; item: NavItem }) {
   const Icon = item.icon;
+  const location = useLocation();
+  if (item.path === "/entries") {
+    // Three links to one page: the one that is current is told by the kind in the address.
+    const to = `${base}${item.path}${item.kind ? `?tipo=${item.kind}` : ""}`;
+    const current = location.pathname === `${base}${item.path}` && new URLSearchParams(location.search).get("tipo") === (item.kind ?? null);
+    return (
+      <Link to={to} aria-current={current ? "page" : undefined}>
+        <Icon size={18} aria-hidden />
+        {item.label}
+      </Link>
+    );
+  }
   return (
     <NavLink to={`${base}${item.path}`} end={item.path === ""}>
       <Icon size={18} aria-hidden />
@@ -69,7 +83,7 @@ function NavGroup({ base, section }: { base: string; section: NavSection }) {
             transition={{ duration: 0.18, ease: "easeOut" }}
           >
             {section.items.map((item) => (
-              <NavItemLink key={item.path} base={base} item={item} />
+              <NavItemLink key={`${item.path}${item.kind ?? ""}`} base={base} item={item} />
             ))}
           </motion.div>
         )}
@@ -96,6 +110,8 @@ const SECTIONS: NavSection[] = [
     key: "finance",
     label: "Financeiro",
     items: [
+      { path: "/entries", kind: "receivable", label: "Contas a receber", icon: HandCoinsIcon },
+      { path: "/entries", kind: "payable", label: "Contas a pagar", icon: CreditCardIcon },
       { path: "/entries", label: "Lançamentos", icon: CircleDollarSignIcon },
       { path: "/cash-flow", label: "Fluxo de caixa", icon: WavesIcon },
       { path: "/transfers", label: "Transferências", icon: SendIcon },
