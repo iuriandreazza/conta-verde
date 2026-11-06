@@ -2,11 +2,11 @@ use std::collections::HashMap;
 use std::future::Future;
 
 use conta_verde_domain::{
-    Actor, AuditAction, CalendarDate, CompanyId, Decimal, DomainError, Product, ProductId,
-    ProductKind, PurchaseOrder, PurchaseReceipt, Sale, SaleId, SaleReturn, StockBalance,
-    StockMovement, StockMovementDraft, StockMovementId, StockMovementKind, StockOrigin,
-    StockOriginKind, StockSettings, round_to_cents, stock_movement_creation_changes,
-    stock_settings_changes, stock_settings_creation_changes,
+    Actor, AuditAction, CalendarDate, CompanyId, Decimal, DomainError, InventoryCount,
+    InventoryCountId, Product, ProductId, ProductKind, PurchaseOrder, PurchaseReceipt, Sale,
+    SaleId, SaleReturn, StockBalance, StockMovement, StockMovementDraft, StockMovementId,
+    StockMovementKind, StockOrigin, StockOriginKind, StockSettings, round_to_cents,
+    stock_movement_creation_changes, stock_settings_changes, stock_settings_creation_changes,
 };
 use uuid::Uuid;
 
@@ -20,6 +20,39 @@ use conta_verde_domain::AuditRecord;
 
 /// How many times a write is valued again when another one changed the stock under it.
 const ATTEMPTS: usize = 5;
+
+/// What a count of the stock asks of it ([ADR 0056]).
+pub trait CountStock: Send + Sync {
+    /// The product is one that has stock.
+    fn ensure_stocked(
+        &self,
+        company_id: CompanyId,
+        product_id: ProductId,
+    ) -> impl Future<Output = Result<(), ApplicationError>> + Send;
+
+    /// What each product holds now, in the order asked.
+    fn quantities(
+        &self,
+        company_id: CompanyId,
+        products: &[ProductId],
+    ) -> impl Future<Output = Result<Vec<(ProductId, Decimal)>, ApplicationError>> + Send;
+
+    /// What a count adjusted, as `(line, quantity)`; a line that agreed with the stock has none.
+    fn adjusted_by(
+        &self,
+        company_id: CompanyId,
+        count_id: InventoryCountId,
+    ) -> impl Future<Output = Result<Vec<(u16, Decimal)>, ApplicationError>> + Send;
+
+    /// Writes the adjustments of a count, all or none, on the day of the count. A count that has its adjustments
+    /// writes none again, so it is safe to ask twice.
+    fn apply_count(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        count: &InventoryCount,
+    ) -> impl Future<Output = Result<(), ApplicationError>> + Send;
+}
 
 /// What sales and purchases ask of the stock ([ADR 0054]). Every step is idempotent: asking again writes only what
 /// is missing, so a failure between a document and its stock is finished by asking again.
@@ -100,6 +133,9 @@ pub struct StockAlert {
 struct NewMovement {
     draft: StockMovementDraft,
     origin: Option<StockOrigin>,
+    /// When it is a count: what the product is found to hold, and the quantity of the draft is worked out against
+    /// the balance read for the write (0 apart: nothing to write).
+    counted: Option<Decimal>,
 }
 
 /// What a reversal undoes.
@@ -227,6 +263,7 @@ where
                 vec![NewMovement {
                     draft,
                     origin: None,
+                    counted: None,
                 }],
                 StockFloor::Zero,
             )
@@ -432,10 +469,19 @@ where
                     continue;
                 }
                 let balance = books.entry(item.draft.product_id).or_default();
+                let mut draft = item.draft.clone();
+                if let Some(counted) = item.counted {
+                    // A count adjusts to what was found: nothing is written when the stock already holds it.
+                    let difference = counted - balance.quantity();
+                    if difference.is_zero() {
+                        continue;
+                    }
+                    draft.quantity = difference.normalize().to_string();
+                }
                 let movement = StockMovement::new(
                     StockMovementId::generate(),
                     company_id,
-                    item.draft.clone(),
+                    draft,
                     item.origin,
                     balance,
                 )?;
@@ -638,6 +684,7 @@ where
                     id: sale.id().as_uuid(),
                     line: u16::try_from(index + 1).unwrap_or(u16::MAX),
                 }),
+                counted: None,
             });
         }
         let floor = if self
@@ -721,6 +768,7 @@ where
                     id: sale_return.id().as_uuid(),
                     line: *line,
                 }),
+                counted: None,
             });
         }
         self.write(company_id, actor, items, StockFloor::Open)
@@ -761,8 +809,95 @@ where
                     id: receipt.id().as_uuid(),
                     line: item.line,
                 }),
+                counted: None,
             });
         }
+        self.write(company_id, actor, items, StockFloor::Open)
+            .await
+            .map(drop)
+    }
+}
+
+impl<M, P, S> CountStock for StockService<M, P, S>
+where
+    M: StockMovementRepository,
+    P: ProductRepository,
+    S: StockSettingsRepository,
+{
+    async fn ensure_stocked(
+        &self,
+        company_id: CompanyId,
+        product_id: ProductId,
+    ) -> Result<(), ApplicationError> {
+        self.stocked(company_id, product_id).await.map(drop)
+    }
+
+    async fn quantities(
+        &self,
+        company_id: CompanyId,
+        products: &[ProductId],
+    ) -> Result<Vec<(ProductId, Decimal)>, ApplicationError> {
+        Ok(self
+            .movements
+            .balances(company_id, products, None)
+            .await?
+            .into_iter()
+            .map(|(product, balance)| (product, balance.quantity()))
+            .collect())
+    }
+
+    async fn adjusted_by(
+        &self,
+        company_id: CompanyId,
+        count_id: InventoryCountId,
+    ) -> Result<Vec<(u16, Decimal)>, ApplicationError> {
+        Ok(self
+            .movements
+            .of_origin(
+                company_id,
+                StockOriginKind::InventoryCount,
+                count_id.as_uuid(),
+            )
+            .await?
+            .into_iter()
+            .filter(|movement| movement.reverses().is_none())
+            .filter_map(|movement| {
+                movement
+                    .origin()
+                    .map(|origin| (origin.line, movement.quantity()))
+            })
+            .collect())
+    }
+
+    async fn apply_count(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        count: &InventoryCount,
+    ) -> Result<(), ApplicationError> {
+        let items = count
+            .lines()
+            .iter()
+            .enumerate()
+            .map(|(index, line)| NewMovement {
+                draft: StockMovementDraft {
+                    product_id: line.product_id(),
+                    kind: StockMovementKind::Adjustment,
+                    // Replaced by the difference to what the stock holds when the write is valued.
+                    quantity: "1".to_owned(),
+                    value: None,
+                    unit_cost: None,
+                    occurred_on: count.counted_on().to_string(),
+                    note: Some(format!("Inventário nº {}", count.number())),
+                },
+                origin: Some(StockOrigin {
+                    kind: StockOriginKind::InventoryCount,
+                    id: count.id().as_uuid(),
+                    line: u16::try_from(index + 1).unwrap_or(u16::MAX),
+                }),
+                counted: Some(line.counted().as_decimal()),
+            })
+            .collect();
         self.write(company_id, actor, items, StockFloor::Open)
             .await
             .map(drop)

@@ -3,10 +3,11 @@ use std::time::Duration;
 use conta_verde_api::{ApiConfig, Ports, Services, router};
 use conta_verde_application::{
     AttachmentService, AuthService, BalanceService, BankAccountService, CategoryService,
-    CommissionService, ContractService, CostCenterService, FinancialEntryService, MemberService,
-    PartyService, PaymentMethodService, PaymentTermService, PostalCodeService, PriceListService,
-    ProductService, PurchaseService, QuoteService, ReconciliationService, RecurrenceService,
-    SaleService, SalesReportService, StockService, TransferService,
+    CommissionService, ContractService, CostCenterService, FinancialEntryService,
+    InventoryCountService, MemberService, PartyService, PaymentMethodService, PaymentTermService,
+    PostalCodeService, PriceListService, ProductService, PurchaseService, QuoteService,
+    ReconciliationService, RecurrenceService, SaleService, SalesReportService, StockService,
+    TransferService,
 };
 use conta_verde_application::{
     ChargeService, CollectionService, DunningService, EmailError, EmailMessage, EmailSender,
@@ -19,12 +20,13 @@ use conta_verde_infrastructure::{
     LocalBlobStore, LogEmailSender, PostgresAttachmentRepository, PostgresBankAccountRepository,
     PostgresCategoryRepository, PostgresCommissionRuleRepository, PostgresContractRepository,
     PostgresCostCenterRepository, PostgresFinancialEntryRepository, PostgresIdentityRepository,
-    PostgresInvitationRepository, PostgresOpeningRepository, PostgresPartyRepository,
-    PostgresPaymentMethodRepository, PostgresPaymentTermRepository, PostgresPriceListRepository,
-    PostgresProductRepository, PostgresPurchaseOrderRepository, PostgresQuoteRepository,
-    PostgresRecurrenceRepository, PostgresSaleRepository, PostgresStatementLineRepository,
-    PostgresStockMovementRepository, PostgresStockSettingsRepository, PostgresTransferRepository,
-    RegisterDocumentReferences, RegisterReferences, SmtpEmailSender, connect_and_migrate,
+    PostgresInventoryCountRepository, PostgresInvitationRepository, PostgresOpeningRepository,
+    PostgresPartyRepository, PostgresPaymentMethodRepository, PostgresPaymentTermRepository,
+    PostgresPriceListRepository, PostgresProductRepository, PostgresPurchaseOrderRepository,
+    PostgresQuoteRepository, PostgresRecurrenceRepository, PostgresSaleRepository,
+    PostgresStatementLineRepository, PostgresStockMovementRepository,
+    PostgresStockSettingsRepository, PostgresTransferRepository, RegisterDocumentReferences,
+    RegisterReferences, SmtpEmailSender, connect_and_migrate,
 };
 use conta_verde_infrastructure::{
     AsaasProvider, NoMessageSender, PostgresDunningPlanRepository, PostgresNotificationRepository,
@@ -83,6 +85,7 @@ impl Ports for PostgresPorts {
     type Purchases = PostgresPurchaseOrderRepository;
     type StockMovements = PostgresStockMovementRepository;
     type StockSettings = PostgresStockSettingsRepository;
+    type Counts = PostgresInventoryCountRepository;
     type Contracts = PostgresContractRepository;
     type CommissionRules = PostgresCommissionRuleRepository;
     type Statements = PostgresStatementLineRepository;
@@ -297,6 +300,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         stock_service(),
     );
     let stock = stock_service();
+    let counts = InventoryCountService::new(
+        PostgresInventoryCountRepository::new(pool.clone()),
+        stock_service(),
+    );
     let sales = sale_service();
     let contracts = contract_service();
     tokio::spawn(bill_contracts(contract_service()));
@@ -341,6 +348,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 sales,
                 purchases,
                 stock,
+                counts,
                 contracts,
                 commissions,
                 reconciliation,

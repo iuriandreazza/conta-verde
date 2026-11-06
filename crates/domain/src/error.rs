@@ -120,6 +120,11 @@ pub enum DomainError {
     StockCostNotAllowed,
     StockMovementIsAReversal,
     NotStocked,
+    CountIsLocked,
+    NoCountLines,
+    TooManyCountLines,
+    DuplicateCountLine,
+    InvalidCountQuantity,
 }
 
 impl fmt::Display for DomainError {
@@ -364,6 +369,15 @@ impl fmt::Display for DomainError {
                 f.write_str("a movement that undoes another is not itself undone")
             }
             Self::NotStocked => f.write_str("a service has no stock"),
+            Self::CountIsLocked => {
+                f.write_str("only a count that is open can change, be applied or be cancelled")
+            }
+            Self::NoCountLines => f.write_str("a count needs at least one product"),
+            Self::TooManyCountLines => f.write_str("a count has at most 500 products"),
+            Self::DuplicateCountLine => f.write_str("a product is counted once in a count"),
+            Self::InvalidCountQuantity => f.write_str(
+                "a counted quantity is 0 or more, with at most 3 decimals, written like 1.5",
+            ),
             Self::ReceiptExceedsOrdered => {
                 f.write_str("a receipt cannot be of more than was ordered and not received yet")
             }

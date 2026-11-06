@@ -13663,3 +13663,315 @@ pub async fn blocks_a_sale_without_balance_when_the_company_says_so<S, Q, E, F, 
             .blocks_sales_without_balance()
     );
 }
+
+fn count_draft(lines: &[(ProductId, &str)]) -> conta_verde_domain::InventoryCountDraft {
+    conta_verde_domain::InventoryCountDraft {
+        counted_on: "2026-11-30".into(),
+        notes: Some("Fim do mês".into()),
+        lines: lines
+            .iter()
+            .map(|(product, counted)| conta_verde_domain::CountLineDraft {
+                product_id: *product,
+                counted: (*counted).into(),
+            })
+            .collect(),
+    }
+}
+
+/// An inventory count from its writing to its application ([ADR 0056]): looked at against what the stock holds
+/// now, applied once as adjustments valued at the average, and fixed after that.
+#[allow(clippy::too_many_lines)]
+pub async fn runs_the_inventory_count<C, M, P, St>(
+    counts: &conta_verde_application::InventoryCountService<C, StockService<M, P, St>>,
+    stock: &StockService<M, P, St>,
+    company: CompanyId,
+    other_company: CompanyId,
+    seed: &SalesSeed,
+) where
+    C: conta_verde_application::InventoryCountRepository,
+    M: StockMovementRepository,
+    P: ProductRepository,
+    St: StockSettingsRepository,
+{
+    use conta_verde_application::InventoryCountQuery;
+    use conta_verde_domain::{CountStatus, StockMovementKind::In};
+    let ana = actor();
+    let (coffee, bread) = (seed.product, seed.other_product);
+    let entered = |product: ProductId, quantity: &str, unit_cost: &str| {
+        let mut draft = stock_draft(product, In, quantity, "2026-11-01");
+        draft.unit_cost = Some(unit_cost.into());
+        draft
+    };
+    stock
+        .record(company, &ana, entered(coffee, "10", "5"))
+        .await
+        .unwrap();
+    stock
+        .record(company, &ana, entered(bread, "2", "3"))
+        .await
+        .unwrap();
+    let figures = |view: &conta_verde_application::CountView| -> Vec<(String, String, String)> {
+        view.lines
+            .iter()
+            .map(|line| {
+                (
+                    line.counted.to_string(),
+                    line.expected.map_or("-".into(), |value| value.to_string()),
+                    line.difference
+                        .map_or("-".into(), |value| value.to_string()),
+                )
+            })
+            .collect()
+    };
+
+    // Written open and numbered per company; what cannot be counted is refused.
+    let first = counts
+        .register(company, &ana, count_draft(&[(coffee, "8"), (bread, "2")]))
+        .await
+        .unwrap();
+    assert_eq!((first.number(), first.status()), (1, CountStatus::Open));
+    for (lines, error) in [
+        (
+            vec![(seed.service, "1")],
+            ApplicationError::Domain(DomainError::NotStocked),
+        ),
+        (
+            vec![(ProductId::generate(), "1")],
+            ApplicationError::ProductNotFound,
+        ),
+        (
+            vec![(coffee, "1"), (coffee, "2")],
+            ApplicationError::Domain(DomainError::DuplicateCountLine),
+        ),
+        (vec![], ApplicationError::Domain(DomainError::NoCountLines)),
+    ] {
+        assert_eq!(
+            counts
+                .register(company, &ana, count_draft(&lines))
+                .await
+                .unwrap_err(),
+            error
+        );
+    }
+    assert_eq!(
+        counts.view(other_company, first.id()).await.unwrap_err(),
+        ApplicationError::CountNotFound
+    );
+    assert_eq!(
+        counts
+            .list(company, &InventoryCountQuery::default(), None, None)
+            .await
+            .unwrap()
+            .items
+            .len(),
+        1
+    );
+
+    // While it is open it says what the stock holds now, and the difference to what was found.
+    let view = counts.view(company, first.id()).await.unwrap();
+    assert_eq!(
+        figures(&view),
+        [
+            ("8".into(), "10".into(), "-2".into()),
+            ("2".into(), "2".into(), "0".into())
+        ]
+    );
+    let changed = counts
+        .update(
+            company,
+            &ana,
+            first.id(),
+            count_draft(&[(coffee, "8"), (bread, "3")]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(changed.number(), 1);
+    counts
+        .update(
+            company,
+            &ana,
+            first.id(),
+            count_draft(&[(coffee, "8"), (bread, "3")]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(counts.history(company, first.id()).await.unwrap().len(), 2);
+    stock
+        .record(
+            company,
+            &ana,
+            stock_draft(
+                coffee,
+                conta_verde_domain::StockMovementKind::Out,
+                "1",
+                "2026-11-20",
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        figures(&counts.view(company, first.id()).await.unwrap()),
+        [
+            ("8".into(), "9".into(), "-1".into()),
+            ("3".into(), "2".into(), "1".into())
+        ]
+    );
+
+    // Applied: the differences are written once as adjustments on the day of the count, at the average cost
+    // (9 coffees worth 45 lose one: -5; 2 breads worth 6 gain one: +3).
+    let applied = counts.apply(company, &ana, first.id()).await.unwrap();
+    assert_eq!(applied.status(), CountStatus::Applied);
+    let adjustments = stock
+        .list(
+            company,
+            &StockMovementQuery::default()
+                .of_kind(conta_verde_domain::StockMovementKind::Adjustment),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    let mut seen: Vec<(String, String, String)> = adjustments
+        .items
+        .iter()
+        .map(|movement| {
+            (
+                movement.quantity().to_string(),
+                movement.value().to_string(),
+                movement.occurred_on().to_string(),
+            )
+        })
+        .collect();
+    seen.sort();
+    assert_eq!(
+        seen,
+        [
+            ("-1".into(), "-5".into(), "2026-11-30".into()),
+            ("1".into(), "3".into(), "2026-11-30".into())
+        ]
+    );
+    assert_eq!(
+        stock
+            .balance_of(company, coffee)
+            .await
+            .unwrap()
+            .quantity()
+            .to_string(),
+        "8"
+    );
+    assert_eq!(
+        stock
+            .balance_of(company, bread)
+            .await
+            .unwrap()
+            .quantity()
+            .to_string(),
+        "3"
+    );
+    assert_eq!(
+        figures(&counts.view(company, first.id()).await.unwrap()),
+        [
+            ("8".into(), "9".into(), "-1".into()),
+            ("3".into(), "2".into(), "1".into())
+        ]
+    );
+    // Applying again writes nothing, and an applied count is fixed.
+    counts.apply(company, &ana, first.id()).await.unwrap();
+    assert_eq!(
+        stock
+            .list(
+                company,
+                &StockMovementQuery::default()
+                    .of_kind(conta_verde_domain::StockMovementKind::Adjustment),
+                None,
+                None
+            )
+            .await
+            .unwrap()
+            .items
+            .len(),
+        2
+    );
+    for error in [
+        counts.cancel(company, &ana, first.id()).await.unwrap_err(),
+        counts
+            .update(company, &ana, first.id(), count_draft(&[(coffee, "1")]))
+            .await
+            .unwrap_err(),
+    ] {
+        assert_eq!(error, ApplicationError::Domain(DomainError::CountIsLocked));
+    }
+    assert_eq!(counts.history(company, first.id()).await.unwrap().len(), 3);
+
+    // A cancelled count writes nothing and is not applied.
+    let second = counts
+        .register(company, &ana, count_draft(&[(coffee, "1")]))
+        .await
+        .unwrap();
+    assert_eq!(second.number(), 2);
+    assert_eq!(
+        counts
+            .cancel(company, &ana, second.id())
+            .await
+            .unwrap()
+            .status(),
+        CountStatus::Cancelled
+    );
+    assert_eq!(
+        counts.apply(company, &ana, second.id()).await.unwrap_err(),
+        ApplicationError::Domain(DomainError::CountIsLocked)
+    );
+    assert_eq!(
+        figures(&counts.view(company, second.id()).await.unwrap()),
+        [("1".into(), "-".into(), "-".into())]
+    );
+    assert_eq!(
+        counts
+            .list(
+                company,
+                &InventoryCountQuery::default().with_status(CountStatus::Cancelled),
+                None,
+                None
+            )
+            .await
+            .unwrap()
+            .items
+            .len(),
+        1
+    );
+
+    // Two applications at once write the adjustments once.
+    let third = counts
+        .register(company, &ana, count_draft(&[(coffee, "1")]))
+        .await
+        .unwrap();
+    let (a, b) = tokio::join!(
+        counts.apply(company, &ana, third.id()),
+        counts.apply(company, &ana, third.id())
+    );
+    assert!(a.is_ok() && b.is_ok(), "{a:?} {b:?}");
+    assert_eq!(
+        stock
+            .balance_of(company, coffee)
+            .await
+            .unwrap()
+            .quantity()
+            .to_string(),
+        "1"
+    );
+    assert_eq!(
+        stock
+            .list(
+                company,
+                &StockMovementQuery::default()
+                    .of_kind(conta_verde_domain::StockMovementKind::Adjustment),
+                None,
+                None
+            )
+            .await
+            .unwrap()
+            .items
+            .len(),
+        3
+    );
+}
