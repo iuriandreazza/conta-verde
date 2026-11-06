@@ -205,6 +205,11 @@ a {
   display: inline-flex;
 }
 
+/* The group clips its links while it folds, so their focus ring is drawn inside. */
+.side-nav a:focus-visible {
+  outline-offset: -2px;
+}
+
 .nav-group-items {
   display: grid;
   gap: 0.15rem;
@@ -642,8 +647,11 @@ legend {
   min-width: 9rem;
 }
 
-.period-step {
+/* The icon button rules come later in the file: this keeps the step the size of the fields beside it. */
+.btn.btn-icon.period-step {
   width: 2.75rem;
+  height: 2.75rem;
+  margin-left: 0;
   padding: 0;
   border-color: var(--line-strong);
 }
