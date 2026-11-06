@@ -57,6 +57,11 @@ The two series colors are slots 1 and 2 of the dataviz palette and passed `valid
 [`screens-review-2026-11.md`](screens-review-2026-11.md) compares the screens with the structure of a reference
 overview page and checks charts and accessibility; it lists what each phase should pick up.
 
+## Screen anatomy
+
+[`screen-anatomy.md`](screen-anatomy.md) says where the menu, the page actions, the filters, the list and its buttons
+go on every screen, so pages look and behave alike; new pages are built to it.
+
 ## Not yet designed
 
 Dark mode, a date-range picker with a custom range, print styles for exports, and the screens of Phase 2 onward.
