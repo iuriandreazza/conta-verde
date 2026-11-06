@@ -4,7 +4,7 @@ use conta_verde_api::{ApiConfig, Ports, Services, router};
 use conta_verde_application::{
     AuthService, BalanceService, BankAccountService, CategoryService, CostCenterService,
     FinancialEntryService, MemberService, PartyService, PaymentMethodService, PaymentTermService,
-    PostalCodeService, ProductService, RecurrenceService, TransferService,
+    PostalCodeService, ProductService, ReconciliationService, RecurrenceService, TransferService,
 };
 use conta_verde_application::{EmailError, EmailMessage, EmailSender};
 use conta_verde_infrastructure::{
@@ -13,8 +13,8 @@ use conta_verde_infrastructure::{
     PostgresCostCenterRepository, PostgresFinancialEntryRepository, PostgresIdentityRepository,
     PostgresInvitationRepository, PostgresOpeningRepository, PostgresPartyRepository,
     PostgresPaymentMethodRepository, PostgresPaymentTermRepository, PostgresProductRepository,
-    PostgresRecurrenceRepository, PostgresTransferRepository, RegisterReferences, SmtpEmailSender,
-    connect_and_migrate,
+    PostgresRecurrenceRepository, PostgresStatementLineRepository, PostgresTransferRepository,
+    RegisterReferences, SmtpEmailSender, connect_and_migrate,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -43,6 +43,7 @@ impl Ports for PostgresPorts {
     type Transfers = PostgresTransferRepository;
     type Openings = PostgresOpeningRepository;
     type Recurrences = PostgresRecurrenceRepository;
+    type Statements = PostgresStatementLineRepository;
     type PostalCodes = Option<BrasilApiPostalCodeDirectory>;
     type Invitations = PostgresInvitationRepository;
     type Emails = ConfiguredEmailSender;
@@ -105,6 +106,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
     let recurrences = recurrence_service();
     tokio::spawn(generate_recurring_entries(recurrence_service()));
+    let reconciliation = ReconciliationService::new(
+        PostgresStatementLineRepository::new(pool.clone()),
+        FinancialEntryService::new(
+            PostgresFinancialEntryRepository::new(pool.clone()),
+            references(),
+        ),
+        TransferService::new(PostgresTransferRepository::new(pool.clone()), references()),
+        references(),
+    );
     let balances = BalanceService::new(
         PostgresBankAccountRepository::new(pool.clone()),
         PostgresFinancialEntryRepository::new(pool.clone()),
@@ -148,6 +158,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 entries,
                 transfers,
                 recurrences,
+                reconciliation,
                 balances,
                 postal_codes,
                 members,

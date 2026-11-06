@@ -184,6 +184,19 @@ pub trait FinancialEntryRepository: Send + Sync {
         until: CalendarDate,
     ) -> impl Future<Output = Result<AccountMovement, RepositoryError>> + Send;
 
+    /// The settlements of the account that are not reversed, of entries of this `kind`, whose **cash**
+    /// is exactly `cash`, settled from `since` through `until`: what a bank statement line of that
+    /// amount may be ([ADR 0034]). Oldest day first, then by id.
+    fn settlement_candidates(
+        &self,
+        company_id: CompanyId,
+        account: BankAccountId,
+        kind: EntryKind,
+        cash: Decimal,
+        since: CalendarDate,
+        until: CalendarDate,
+    ) -> impl Future<Output = Result<Vec<Settlement>, RepositoryError>> + Send;
+
     /// The same, on each day from `since` through `until` that had any, oldest day first.
     fn cash_by_day(
         &self,

@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, vi } from "vitest";
 import { App } from "./App";
-import type { AccountBalance, CashFlow, CashFlowPeriod, Recurrence, Entry, Transfer, PaymentTerm, BankAccount, Category, CostCenter, PaymentMethod, DocumentCheck, HistoryEntry, Party, Product, Profile } from "./api";
+import type { AccountBalance, CashFlow, CashFlowPeriod, Recurrence, StatementLine, Entry, Transfer, PaymentTerm, BankAccount, Category, CostCenter, PaymentMethod, DocumentCheck, HistoryEntry, Party, Product, Profile } from "./api";
 import { AuthProvider } from "./auth";
 import { SOURCE_URL } from "./components/Footer";
 import { defaultSpan } from "./lib/cashFlow";
@@ -4172,4 +4172,228 @@ describe("recurrences", () => {
       recurrence_id: null,
     };
   }
+});
+
+describe("reconciliation", () => {
+  const caixa: BankAccount = { id: "b1", company_id: "c1", kind: "cash", name: "Caixa", bank_code: null, branch: null, number: null, active: true };
+  const closed: BankAccount = { ...caixa, id: "b2", name: "Caixa antigo", active: false };
+  const despesas = { id: "cat2", company_id: "c1", parent_id: null, name: "Despesas", dre_group: "operating_expenses", cash_flow_group: "operating", level: 1, active: true };
+  const transfersCategory = { ...despesas, id: "cat3", name: "Transferências", dre_group: "transfers", cash_flow_group: "transfer" };
+  const income: StatementLine = {
+    id: "l1",
+    company_id: "c1",
+    account_id: "b1",
+    posted_on: "2026-11-05",
+    amount: "1250.5",
+    description: "PIX RECEBIDO Maria",
+    bank_ref: "F1",
+    status: "pending",
+    matched_settlement_id: null,
+    matched_transfer_id: null,
+  };
+  const fee: StatementLine = { ...income, id: "l2", posted_on: "2026-11-06", amount: "-30", description: "TARIFA", bank_ref: null };
+  const settlement = {
+    id: "s1",
+    entry_id: "e1",
+    installment: 1,
+    settled_on: "2026-11-04",
+    applied: "1250.5",
+    interest: "0",
+    fine: "0",
+    discount: "0",
+    cash: "1250.5",
+    bank_account_id: "b1",
+    payment_method_id: null,
+    reversed: false,
+  };
+
+  const sent = (fetchMock: ReturnType<typeof mockApi>, method: string) =>
+    fetchMock.mock.calls.filter(([, init]) => init?.method === method);
+
+  const answer =
+    (lines: StatementLine[], extra: (url: string, init?: RequestInit) => Reply | undefined = () => undefined) =>
+    (url: string, init?: RequestInit): Reply => {
+      const special = extra(url, init);
+      if (special) return special;
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (url.endsWith("/categories")) return { status: 200, body: { items: [despesas, transfersCategory] } };
+      if (url.includes("/bank-accounts")) return { status: 200, body: { items: [caixa, closed], next_cursor: null } };
+      if (url.includes("/statement-lines")) return { status: 200, body: { items: lines, next_cursor: null } };
+      return { status: 404, body: { error: "not found" } };
+    };
+
+  it("lists the pending lines of the statement with their account, what moved and where they stand", async () => {
+    const fetchMock = mockApi(answer([fee, income]));
+    renderAt("/companies/c1/reconciliation");
+
+    const row = await screen.findByRole("row", { name: /PIX RECEBIDO Maria/ });
+    expect(row).toHaveTextContent("05/11/2026");
+    expect(row).toHaveTextContent("Caixa");
+    expect(row).toHaveTextContent("R$ 1.250,50");
+    expect(row).toHaveTextContent("Pendente");
+    const outgoing = screen.getByRole("row", { name: /TARIFA/ });
+    expect(within(outgoing).getByText("R$ -30,00")).toHaveClass("negative");
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toContain("/api/companies/c1/statement-lines?status=pending");
+  });
+
+  it("sends the OFX file as it is to the chosen account, and says what was imported", async () => {
+    const fetchMock = mockApi(
+      answer([], (url, init) =>
+        url.endsWith("/bank-accounts/b1/statement-import") && init?.method === "POST"
+          ? { status: 200, body: { dry_run: false, valid: 2, created: 2, skipped: [], refused: [] } }
+          : undefined,
+      ),
+    );
+    renderAt("/companies/c1/reconciliation");
+    const file = new File(["<OFX></OFX>"], "extrato.ofx", { type: "application/x-ofx" });
+    const picker = await screen.findByLabelText("Arquivo OFX do banco");
+
+    // Until an account is chosen there is nothing to send it to; a closed account is not offered.
+    await userEvent.upload(picker, file);
+    expect(screen.getByRole("button", { name: "Importar" })).toBeDisabled();
+    expect(within(screen.getByLabelText("Conta do extrato")).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Escolha a conta",
+      "Caixa",
+    ]);
+    await userEvent.selectOptions(screen.getByLabelText("Conta do extrato"), "b1");
+    await userEvent.click(screen.getByRole("button", { name: "Importar" }));
+
+    expect(await screen.findByText("2 linhas importadas.")).toBeInTheDocument();
+    const [call] = sent(fetchMock, "POST");
+    expect(String(call[0])).toBe("/api/companies/c1/bank-accounts/b1/statement-import");
+    expect(new Headers(call[1]?.headers).get("Content-Type")).toBe("application/x-ofx");
+  });
+
+  it("suggests what is already in the books and matches the line to the one chosen", async () => {
+    const fetchMock = mockApi(
+      answer([income], (url, init) => {
+        if (url.endsWith("/statement-lines/l1/suggestions")) {
+          return { status: 200, body: [{ kind: "settlement", settlement, entry_description: "Venda da Maria" }] };
+        }
+        if (url.endsWith("/statement-lines/l1/match") && init?.method === "POST") {
+          return { status: 200, body: { ...income, status: "matched", matched_settlement_id: "s1" } };
+        }
+        return undefined;
+      }),
+    );
+    renderAt("/companies/c1/reconciliation");
+    await userEvent.click(await screen.findByRole("button", { name: "Sugestões para PIX RECEBIDO Maria" }));
+    const panel = within(await screen.findByRole("region", { name: "Sugestões para PIX RECEBIDO Maria" }));
+    expect(await panel.findByText(/Baixa de Venda da Maria em 04\/11\/2026, R\$ 1\.250,50 na conta Caixa/)).toBeInTheDocument();
+
+    await userEvent.click(panel.getByRole("button", { name: "Conciliar com a baixa de Venda da Maria" }));
+
+    expect(await screen.findByText("Linha conciliada.")).toBeInTheDocument();
+    expect(JSON.parse(String(sent(fetchMock, "POST")[0][1]?.body))).toEqual({ settlement_id: "s1" });
+  });
+
+  it("matches a transfer the same way, and says when nothing fits", async () => {
+    const transfer = { id: "t1", company_id: "c1", from_account_id: "b2", to_account_id: "b1", amount: "1250.5", occurred_on: "2026-11-05", note: "Reforço", reversed: false };
+    let found: unknown[] = [{ kind: "transfer", transfer }];
+    const fetchMock = mockApi(
+      answer([income], (url, init) => {
+        if (url.endsWith("/statement-lines/l1/suggestions")) return { status: 200, body: found };
+        if (url.endsWith("/statement-lines/l1/match") && init?.method === "POST") {
+          return { status: 200, body: { ...income, status: "matched", matched_transfer_id: "t1" } };
+        }
+        return undefined;
+      }),
+    );
+    renderAt("/companies/c1/reconciliation");
+    await userEvent.click(await screen.findByRole("button", { name: "Sugestões para PIX RECEBIDO Maria" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Conciliar com a transferência de R$ 1.250,50" }));
+    await waitFor(() => expect(sent(fetchMock, "POST")).toHaveLength(1));
+    expect(JSON.parse(String(sent(fetchMock, "POST")[0][1]?.body))).toEqual({ transfer_id: "t1" });
+
+    found = [];
+    await userEvent.click(await screen.findByRole("button", { name: "Sugestões para PIX RECEBIDO Maria" }));
+    expect(await screen.findByText(/Nada lançado com esse valor/)).toBeInTheDocument();
+  });
+
+  it("makes an entry of the line with a category that can be used, settled on its day", async () => {
+    const fetchMock = mockApi(
+      answer([fee], (url, init) =>
+        url.endsWith("/statement-lines/l2/create-entry") && init?.method === "POST"
+          ? { status: 201, body: { line: { ...fee, status: "matched" }, entry_id: "e9", settlement_id: "s9" } }
+          : undefined,
+      ),
+    );
+    renderAt("/companies/c1/reconciliation");
+    await userEvent.click(await screen.findByRole("button", { name: "Criar lançamento para TARIFA" }));
+    const form = within(await screen.findByRole("region", { name: "Lançamento para TARIFA" }));
+    expect(form.getByText("Lançar como conta a pagar, já paga")).toBeInTheDocument();
+    expect(form.getByText(/Vence e é baixado em 06\/11\/2026, por R\$ 30,00/)).toBeInTheDocument();
+    // The category for transfers is not offered.
+    expect(within(form.getByLabelText("Categoria")).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Escolha uma categoria",
+      "Despesas",
+    ]);
+    await userEvent.selectOptions(form.getByLabelText("Categoria"), "cat2");
+    await userEvent.clear(form.getByLabelText("Descrição"));
+    await userEvent.type(form.getByLabelText("Descrição"), "Tarifa do banco");
+    await userEvent.click(form.getByRole("button", { name: "Criar lançamento" }));
+
+    expect(await screen.findByText("Lançamento criado e baixado.")).toBeInTheDocument();
+    expect(JSON.parse(String(sent(fetchMock, "POST")[0][1]?.body))).toEqual({ category_id: "cat2", description: "Tarifa do banco" });
+  });
+
+  it("ignores a line, restores it and takes a match back", async () => {
+    const matched: StatementLine = { ...income, id: "l3", description: "TED", status: "matched", matched_transfer_id: "t1" };
+    const ignored: StatementLine = { ...fee, id: "l4", description: "ESTORNO", status: "ignored" };
+    const fetchMock = mockApi(
+      answer([fee, matched, ignored], (_url, init) =>
+        init?.method === "POST" ? { status: 200, body: { ...fee, status: "pending" } } : undefined,
+      ),
+    );
+    renderAt("/companies/c1/reconciliation");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Ignorar TARIFA" }));
+    expect(await screen.findByText("Linha ignorada.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Desfazer a conciliação de TED" }));
+    expect(await screen.findByText("Conciliação desfeita.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Restaurar ESTORNO" }));
+    expect(await screen.findByText("Linha restaurada.")).toBeInTheDocument();
+    expect(sent(fetchMock, "POST").map(([url]) => String(url).split("/").slice(-1)[0])).toEqual(["ignore", "unmatch", "restore"]);
+  });
+
+  it("shows what the API refused and keeps the line where it was", async () => {
+    mockApi(
+      answer([fee], (_url, init) =>
+        init?.method === "POST" ? { status: 422, body: { error: "the statement line is not pending" } } : undefined,
+      ),
+    );
+    renderAt("/companies/c1/reconciliation");
+    await userEvent.click(await screen.findByRole("button", { name: "Ignorar TARIFA" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("the statement line is not pending");
+    expect(screen.getByRole("row", { name: /TARIFA/ })).toBeInTheDocument();
+  });
+
+  it("narrows the list by account and situation", async () => {
+    const fetchMock = mockApi(answer([income]));
+    renderAt("/companies/c1/reconciliation");
+    await screen.findByRole("table");
+
+    await userEvent.selectOptions(screen.getByLabelText("Situação"), "matched");
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.map(([url]) => String(url))).toContain("/api/companies/c1/statement-lines?status=matched"),
+    );
+    await userEvent.selectOptions(screen.getByLabelText("Conta"), "b1");
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.map(([url]) => String(url))).toContain("/api/companies/c1/statement-lines?account=b1&status=matched"),
+    );
+  });
+
+  it("offers a role that only reads finance the list, and nothing to change", async () => {
+    const reader: Profile = {
+      ...profile,
+      companies: [{ id: "c1", name: "Padaria", role: "viewer", permissions: { ...OWNER_PERMISSIONS, finance: "read" } }],
+    };
+    mockApi((url, init) => (url === "/api/auth/me" ? { status: 200, body: reader } : answer([income])(url, init)));
+    renderAt("/companies/c1/reconciliation");
+
+    await screen.findByRole("row", { name: /PIX RECEBIDO Maria/ });
+    expect(screen.queryByLabelText("Arquivo OFX do banco")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Sugestões para/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Ignorar/ })).not.toBeInTheDocument();
+  });
 });

@@ -22,6 +22,7 @@ mod products;
 mod products_import;
 mod recurrences;
 mod session;
+mod statements;
 mod transfers;
 
 use std::sync::Arc;
@@ -35,7 +36,8 @@ use conta_verde_application::{
     InvitationRepository, MemberService, OpeningRepository, PartyRepository, PartyService,
     PaymentMethodRepository, PaymentMethodService, PaymentTermRepository, PaymentTermService,
     PostalCodeDirectory, PostalCodeService, ProductRepository, ProductService,
-    RecurrenceRepository, RecurrenceService, SecretService, TransferRepository, TransferService,
+    ReconciliationService, RecurrenceRepository, RecurrenceService, SecretService,
+    StatementLineRepository, TransferRepository, TransferService,
 };
 use serde::Serialize;
 
@@ -65,6 +67,7 @@ pub trait Ports: 'static {
     type Transfers: TransferRepository + 'static;
     type Openings: OpeningRepository + 'static;
     type Recurrences: RecurrenceRepository + 'static;
+    type Statements: StatementLineRepository + 'static;
     type PostalCodes: PostalCodeDirectory + 'static;
     type Invitations: InvitationRepository + 'static;
     type Emails: EmailSender + 'static;
@@ -82,6 +85,8 @@ pub struct Services<X: Ports> {
     pub entries: FinancialEntryService<X::Entries, X::EntryReferences>,
     pub transfers: TransferService<X::Transfers, X::EntryReferences>,
     pub recurrences: RecurrenceService<X::Recurrences, X::Entries, X::EntryReferences>,
+    pub reconciliation:
+        ReconciliationService<X::Statements, X::Entries, X::Transfers, X::EntryReferences>,
     pub balances: BalanceService<X::BankAccounts, X::Entries, X::Transfers, X::Openings>,
     pub postal_codes: PostalCodeService<X::PostalCodes>,
     pub members: MemberService<X::Invitations, X::Identity, X::Emails, X::Secrets>,
@@ -99,6 +104,8 @@ pub(crate) struct AppState<X: Ports> {
     entries: FinancialEntryService<X::Entries, X::EntryReferences>,
     transfers: TransferService<X::Transfers, X::EntryReferences>,
     recurrences: RecurrenceService<X::Recurrences, X::Entries, X::EntryReferences>,
+    reconciliation:
+        ReconciliationService<X::Statements, X::Entries, X::Transfers, X::EntryReferences>,
     balances: BalanceService<X::BankAccounts, X::Entries, X::Transfers, X::Openings>,
     postal_codes: PostalCodeService<X::PostalCodes>,
     members: MemberService<X::Invitations, X::Identity, X::Emails, X::Secrets>,
@@ -121,6 +128,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         entries: services.entries,
         transfers: services.transfers,
         recurrences: services.recurrences,
+        reconciliation: services.reconciliation,
         balances: services.balances,
         postal_codes: services.postal_codes,
         members: services.members,
@@ -257,6 +265,42 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
             delete(entries::reverse_settlement::<X>),
         )
         .route(
+            "/companies/{company_id}/bank-accounts/{bank_account_id}/statement-import",
+            post(statements::import_statement::<X>),
+        )
+        .route(
+            "/companies/{company_id}/statement-lines",
+            get(statements::list_statement_lines::<X>),
+        )
+        .route(
+            "/companies/{company_id}/statement-lines/{line_id}/suggestions",
+            get(statements::statement_line_suggestions::<X>),
+        )
+        .route(
+            "/companies/{company_id}/statement-lines/{line_id}/match",
+            post(statements::match_statement_line::<X>),
+        )
+        .route(
+            "/companies/{company_id}/statement-lines/{line_id}/unmatch",
+            post(statements::unmatch_statement_line::<X>),
+        )
+        .route(
+            "/companies/{company_id}/statement-lines/{line_id}/ignore",
+            post(statements::ignore_statement_line::<X>),
+        )
+        .route(
+            "/companies/{company_id}/statement-lines/{line_id}/restore",
+            post(statements::restore_statement_line::<X>),
+        )
+        .route(
+            "/companies/{company_id}/statement-lines/{line_id}/create-entry",
+            post(statements::create_entry_from_statement_line::<X>),
+        )
+        .route(
+            "/companies/{company_id}/statement-lines/{line_id}/history",
+            get(statements::statement_line_history::<X>),
+        )
+        .route(
             "/companies/{company_id}/recurrences",
             get(recurrences::list_recurrences::<X>).post(recurrences::register_recurrence::<X>),
         )
@@ -341,7 +385,8 @@ mod tests {
         InMemoryFinancialEntryRepository, InMemoryIdentityRepository, InMemoryInvitationRepository,
         InMemoryOpeningRepository, InMemoryPartyRepository, InMemoryPaymentMethodRepository,
         InMemoryPaymentTermRepository, InMemoryPostalCodeDirectory, InMemoryProductRepository,
-        InMemoryRecurrenceRepository, InMemoryTransferRepository, RegisterReferences,
+        InMemoryRecurrenceRepository, InMemoryStatementLineRepository, InMemoryTransferRepository,
+        RegisterReferences,
     };
     use http_body_util::BodyExt;
     use serde_json::{Value, json};
@@ -410,6 +455,7 @@ mod tests {
         type Transfers = InMemoryTransferRepository;
         type Openings = InMemoryOpeningRepository;
         type Recurrences = InMemoryRecurrenceRepository;
+        type Statements = InMemoryStatementLineRepository;
         type PostalCodes = InMemoryPostalCodeDirectory;
         type Invitations = InMemoryInvitationRepository;
         type Emails = InMemoryEmailSender;
@@ -434,6 +480,7 @@ mod tests {
         type Transfers = InMemoryTransferRepository;
         type Openings = InMemoryOpeningRepository;
         type Recurrences = InMemoryRecurrenceRepository;
+        type Statements = InMemoryStatementLineRepository;
         type PostalCodes = Option<InMemoryPostalCodeDirectory>;
         type Invitations = InMemoryInvitationRepository;
         type Emails = InMemoryEmailSender;
@@ -520,6 +567,60 @@ mod tests {
                 &InMemoryBankAccountRepository::default(),
                 &InMemoryPaymentMethodRepository::default(),
             ),
+        )
+    }
+
+    type TestReconciliation = ReconciliationService<
+        InMemoryStatementLineRepository,
+        InMemoryFinancialEntryRepository,
+        InMemoryTransferRepository,
+        TestReferences,
+    >;
+
+    /// Reconciliation over registers that the app's own services do not share.
+    fn standalone_reconciliation() -> TestReconciliation {
+        let registers = (
+            InMemoryCategoryRepository::default(),
+            InMemoryCostCenterRepository::default(),
+            InMemoryPartyRepository::default(),
+            InMemoryBankAccountRepository::default(),
+            InMemoryPaymentMethodRepository::default(),
+        );
+        reconciliation_over(
+            InMemoryFinancialEntryRepository::default(),
+            InMemoryTransferRepository::default(),
+            &registers.0,
+            &registers.1,
+            &registers.2,
+            &registers.3,
+            &registers.4,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn reconciliation_over(
+        entries: InMemoryFinancialEntryRepository,
+        transfers: InMemoryTransferRepository,
+        categories: &InMemoryCategoryRepository,
+        cost_centers: &InMemoryCostCenterRepository,
+        parties: &InMemoryPartyRepository,
+        bank_accounts: &InMemoryBankAccountRepository,
+        payment_methods: &InMemoryPaymentMethodRepository,
+    ) -> TestReconciliation {
+        let references = || {
+            references_over(
+                categories,
+                cost_centers,
+                parties,
+                bank_accounts,
+                payment_methods,
+            )
+        };
+        ReconciliationService::new(
+            InMemoryStatementLineRepository::default(),
+            FinancialEntryService::new(entries, references()),
+            TransferService::new(transfers, references()),
+            references(),
         )
     }
 
@@ -653,6 +754,7 @@ mod tests {
                 entries: standalone_entries(),
                 transfers: standalone_transfers(),
                 recurrences: standalone_recurrences(),
+                reconciliation: standalone_reconciliation(),
                 balances: standalone_balances(),
                 postal_codes: PostalCodeService::new(postal_codes),
                 members,
@@ -1288,6 +1390,7 @@ mod tests {
                 entries: standalone_entries(),
                 transfers: standalone_transfers(),
                 recurrences: standalone_recurrences(),
+                reconciliation: standalone_reconciliation(),
                 balances: standalone_balances(),
                 postal_codes: PostalCodeService::new(None),
                 members: standalone_members(),
@@ -2765,6 +2868,7 @@ mod tests {
                 entries: standalone_entries(),
                 transfers: standalone_transfers(),
                 recurrences: standalone_recurrences(),
+                reconciliation: standalone_reconciliation(),
                 balances: standalone_balances(),
                 postal_codes: PostalCodeService::new(None),
                 members: standalone_members(),
@@ -4281,6 +4385,15 @@ mod tests {
                         &bank_accounts,
                         &payment_methods,
                     ),
+                ),
+                reconciliation: reconciliation_over(
+                    entry_store.clone(),
+                    transfer_store.clone(),
+                    &categories,
+                    &cost_centers,
+                    &parties,
+                    &bank_accounts,
+                    &payment_methods,
                 ),
                 recurrences: recurrences_over(
                     entry_store.clone(),
@@ -6042,6 +6155,307 @@ mod tests {
                 StatusCode::FORBIDDEN
             };
             assert_eq!(write.status, expected, "{role:?} writes");
+        }
+    }
+
+    const STATEMENT: &str = "OFXHEADER:100\nDATA:OFXSGML\nVERSION:102\nCHARSET:1252\n\n<OFX><BANKMSGSRSV1><STMTTRNRS><STMTRS><BANKTRANLIST>\n\
+<STMTTRN>\n<TRNTYPE>CREDIT\n<DTPOSTED>20261105120000[-3:BRT]\n<TRNAMT>1250.50\n<FITID>0001\n<MEMO>PIX RECEBIDO Maria\n</STMTTRN>\n\
+<STMTTRN>\n<TRNTYPE>DEBIT\n<DTPOSTED>20261106\n<TRNAMT>-30.00\n<FITID>0002\n<NAME>TARIFA\n</STMTTRN>\n\
+</BANKTRANLIST></STMTRS></STMTTRNRS></BANKMSGSRSV1></OFX>";
+
+    fn statement_request(uri: &str, cookie: Option<&str>, body: impl Into<Body>) -> Request<Body> {
+        let mut builder = Request::post(uri).header(header::CONTENT_TYPE, "application/x-ofx");
+        if let Some(cookie) = cookie {
+            builder = builder.header(header::COOKIE, cookie);
+        }
+        builder.body(body.into()).unwrap()
+    }
+
+    fn lines_uri(company_id: Uuid) -> String {
+        format!("/companies/{company_id}/statement-lines")
+    }
+
+    #[tokio::test]
+    async fn imports_an_ofx_statement_once_and_reconciles_its_lines_through_the_api() {
+        let app = entry_app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let targets = entry_targets(&app, &cookie, company_id).await;
+        let account = registered_account(&app, &cookie, company_id, "Caixa").await;
+        let import = format!("/companies/{company_id}/bank-accounts/{account}/statement-import");
+
+        // A dry run writes nothing; the file goes in once and sending it again adds nothing.
+        let dry = send(
+            &app,
+            statement_request(&format!("{import}?dry_run=true"), Some(&cookie), STATEMENT),
+        )
+        .await;
+        assert_eq!(dry.status, StatusCode::OK, "{}", dry.body);
+        assert_eq!(
+            (dry.body["valid"].as_u64(), dry.body["created"].as_u64()),
+            (Some(2), Some(0))
+        );
+        assert_eq!(
+            send(&app, get_request(&lines_uri(company_id), Some(&cookie)))
+                .await
+                .body["items"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        let done = send(&app, statement_request(&import, Some(&cookie), STATEMENT)).await;
+        assert_eq!(done.body["created"], 2, "{}", done.body);
+        let again = send(&app, statement_request(&import, Some(&cookie), STATEMENT)).await;
+        assert_eq!(
+            (
+                again.body["created"].as_u64(),
+                again.body["skipped"].as_array().unwrap().len()
+            ),
+            (Some(0), 2)
+        );
+        // The same statement as the Latin-1 a bank may send.
+        let latin1 = STATEMENT
+            .replace("PIX RECEBIDO Maria", "RECEBIMENTO ação")
+            .into_bytes();
+        let ok = send(&app, statement_request(&import, Some(&cookie), latin1)).await;
+        assert_eq!(ok.status, StatusCode::OK);
+
+        let listed = send(
+            &app,
+            get_request(
+                &format!("{}?status=pending&account={account}", lines_uri(company_id)),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        let items = listed.body["items"].as_array().unwrap();
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0]["posted_on"], "2026-11-06");
+        assert_eq!(items[0]["amount"], "-30");
+        assert_eq!(items[0]["description"], "TARIFA");
+        assert_eq!(items[0]["status"], "pending");
+        let pix = items
+            .iter()
+            .find(|item| item["description"] == "PIX RECEBIDO Maria")
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let fee = items[0]["id"].as_str().unwrap().to_owned();
+
+        // A sale settled near the line is what is suggested; matching it moves the line.
+        let sale = send(
+            &app,
+            json_request(
+                "POST",
+                &entries_uri(company_id),
+                Some(&cookie),
+                entry_body(&targets, "Venda", &[("2026-11-04", "1250.50")]),
+            ),
+        )
+        .await;
+        let sale_uri = format!(
+            "{}/{}/settlements",
+            entries_uri(company_id),
+            sale.body["id"].as_str().unwrap()
+        );
+        let settled = send(
+            &app,
+            json_request(
+                "POST",
+                &sale_uri,
+                Some(&cookie),
+                json!({ "installment": 1, "settled_on": "2026-11-04", "applied": "1250.50", "bank_account_id": account }),
+            ),
+        )
+        .await;
+        assert_eq!(settled.status, StatusCode::CREATED, "{}", settled.body);
+        let suggestions = send(
+            &app,
+            get_request(
+                &format!("{}/{pix}/suggestions", lines_uri(company_id)),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(suggestions.body[0]["kind"], "settlement");
+        assert_eq!(suggestions.body[0]["entry_description"], "Venda");
+        assert_eq!(suggestions.body[0]["settlement"]["id"], settled.body["id"]);
+        let line = |id: &str, action: &str| format!("{}/{id}/{action}", lines_uri(company_id));
+        let matched = send(
+            &app,
+            json_request(
+                "POST",
+                &line(&pix, "match"),
+                Some(&cookie),
+                json!({ "settlement_id": settled.body["id"] }),
+            ),
+        )
+        .await;
+        assert_eq!(matched.status, StatusCode::OK, "{}", matched.body);
+        assert_eq!(matched.body["status"], "matched");
+        assert_eq!(matched.body["matched_settlement_id"], settled.body["id"]);
+        let history = send(&app, get_request(&line(&pix, "history"), Some(&cookie))).await;
+        assert_eq!(history.body.as_array().unwrap().len(), 2);
+
+        // What does not fit, and what says neither or both, is refused in JSON.
+        for body in [
+            json!({}),
+            json!({ "settlement_id": Uuid::new_v4(), "transfer_id": Uuid::new_v4() }),
+        ] {
+            let reply = send(
+                &app,
+                json_request("POST", &line(&fee, "match"), Some(&cookie), body),
+            )
+            .await;
+            assert_eq!(
+                reply.status,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "{}",
+                reply.body
+            );
+        }
+        let misfit = send(
+            &app,
+            json_request(
+                "POST",
+                &line(&fee, "match"),
+                Some(&cookie),
+                json!({ "settlement_id": settled.body["id"] }),
+            ),
+        )
+        .await;
+        assert_eq!(
+            misfit.status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{}",
+            misfit.body
+        );
+        assert!(
+            misfit.body["error"]
+                .as_str()
+                .unwrap()
+                .contains("does not fit")
+        );
+
+        // Unmatched, ignored and restored; each answer is the line; a move that is not one is refused.
+        let post = |action: &str, id: &str| {
+            send(
+                &app,
+                json_request("POST", &line(id, action), Some(&cookie), Value::Null),
+            )
+        };
+        assert_eq!(post("unmatch", &pix).await.body["status"], "pending");
+        assert_eq!(post("ignore", &fee).await.body["status"], "ignored");
+        assert_eq!(
+            post("ignore", &fee).await.status,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        assert_eq!(post("restore", &fee).await.body["status"], "pending");
+
+        // An entry made of a line is settled on the day, in the account, and the line is matched to it.
+        let made = send(
+            &app,
+            json_request(
+                "POST",
+                &line(&fee, "create-entry"),
+                Some(&cookie),
+                json!({ "category_id": targets.other_category, "description": "Tarifa do banco" }),
+            ),
+        )
+        .await;
+        assert_eq!(made.status, StatusCode::CREATED, "{}", made.body);
+        assert_eq!(made.body["line"]["status"], "matched");
+        let entry = send(
+            &app,
+            get_request(
+                &format!(
+                    "{}/{}",
+                    entries_uri(company_id),
+                    made.body["entry_id"].as_str().unwrap()
+                ),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(entry.body["kind"], "payable");
+        assert_eq!(entry.body["total"], "30");
+        assert_eq!(entry.body["installments"][0]["settled"], "30");
+
+        // What is not a statement, not an id, not a status, and not a company's is refused in JSON.
+        let not_ofx = send(
+            &app,
+            statement_request(&import, Some(&cookie), "a;b;c\n1;2;3"),
+        )
+        .await;
+        assert_eq!(
+            not_ofx.status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{}",
+            not_ofx.body
+        );
+        assert!(not_ofx.body["error"].as_str().unwrap().contains("OFX"));
+        for query in ["status=done", "account=abc", "after=garbage"] {
+            let reply = send(
+                &app,
+                get_request(&format!("{}?{query}", lines_uri(company_id)), Some(&cookie)),
+            )
+            .await;
+            assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{query}");
+        }
+        assert_eq!(
+            post("ignore", "not-an-id").await.status,
+            StatusCode::NOT_FOUND
+        );
+        let (stranger, _) = sign_up(&app, "bia@example.com").await;
+        for request in [
+            get_request(&lines_uri(company_id), Some(&stranger)),
+            statement_request(&import, Some(&stranger), STATEMENT),
+            json_request("POST", &line(&pix, "ignore"), Some(&stranger), Value::Null),
+        ] {
+            assert_eq!(send(&app, request).await.status, StatusCode::NOT_FOUND);
+        }
+        assert_eq!(
+            send(&app, get_request(&lines_uri(company_id), None))
+                .await
+                .status,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn statement_lines_follow_the_finance_role() {
+        use conta_verde_domain::Role;
+
+        let (app, identities, _) = app_with_mailbox();
+        let (_, company_id) = sign_up(&app, "dona@example.com").await;
+        for (role, may_write) in [
+            (Role::Admin, true),
+            (Role::Financial, true),
+            (Role::Sales, false),
+            (Role::Stock, false),
+            (Role::Accountant, false),
+            (Role::Viewer, false),
+        ] {
+            let cookie = member_with_role(&app, &identities, company_id, role).await;
+            assert_eq!(
+                send(&app, get_request(&lines_uri(company_id), Some(&cookie)))
+                    .await
+                    .status,
+                StatusCode::OK,
+                "{role:?} reads"
+            );
+            let import = format!(
+                "/companies/{company_id}/bank-accounts/{}/statement-import",
+                Uuid::new_v4()
+            );
+            let write = send(&app, statement_request(&import, Some(&cookie), STATEMENT)).await;
+            let expected = if may_write {
+                StatusCode::UNPROCESSABLE_ENTITY
+            } else {
+                StatusCode::FORBIDDEN
+            };
+            assert_eq!(write.status, expected, "{role:?} imports");
         }
     }
 }

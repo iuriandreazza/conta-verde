@@ -220,6 +220,37 @@ impl FinancialEntryRepository for InMemoryFinancialEntryRepository {
         Ok(movement)
     }
 
+    async fn settlement_candidates(
+        &self,
+        company_id: CompanyId,
+        account: BankAccountId,
+        kind: EntryKind,
+        cash: Decimal,
+        since: CalendarDate,
+        until: CalendarDate,
+    ) -> Result<Vec<Settlement>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        let mut found: Vec<Settlement> = state
+            .settlements
+            .iter()
+            .filter(|settlement| {
+                settlement.company_id() == company_id
+                    && settlement.bank_account_id() == account
+                    && !settlement.is_reversed()
+                    && settlement.cash() == cash.normalize()
+                    && (since..=until).contains(&settlement.settled_on())
+                    && state.entries.iter().any(|entry| {
+                        entry.company_id() == company_id
+                            && entry.id() == settlement.entry_id()
+                            && entry.kind() == kind
+                    })
+            })
+            .cloned()
+            .collect();
+        found.sort_by_key(|settlement| (settlement.settled_on(), settlement.id().as_uuid()));
+        Ok(found)
+    }
+
     async fn cash_by_day(
         &self,
         company_id: CompanyId,

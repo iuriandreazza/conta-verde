@@ -68,6 +68,9 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
             | RepositoryError::Overpaid
             | RepositoryError::EntrySettled
             | RepositoryError::DuplicateOccurrence
+            | RepositoryError::DuplicateLine
+            | RepositoryError::AlreadyMatched
+            | RepositoryError::LineChanged
             | RepositoryError::DuplicateInvitation),
         ) => (StatusCode::CONFLICT, error.to_string()),
         ApplicationError::Auth(error) => {
@@ -103,11 +106,18 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
             (StatusCode::CONFLICT, error.to_string())
         }
         ApplicationError::EntryNotFound
+        | ApplicationError::StatementLineNotFound
         | ApplicationError::RecurrenceNotFound
         | ApplicationError::SettlementNotFound
         | ApplicationError::TransferNotFound => (StatusCode::NOT_FOUND, error.to_string()),
         ApplicationError::SettlementExceedsBalance | ApplicationError::EntryIsSettled => {
             (StatusCode::CONFLICT, error.to_string())
+        }
+        ApplicationError::AlreadyMatched | ApplicationError::LineChanged => {
+            (StatusCode::CONFLICT, error.to_string())
+        }
+        ApplicationError::MatchDoesNotFit | ApplicationError::TooManyImportRows => {
+            (StatusCode::UNPROCESSABLE_ENTITY, error.to_string())
         }
         ApplicationError::InvalidSpan(_) => (StatusCode::BAD_REQUEST, error.to_string()),
         ApplicationError::UnusableReference(_) => {

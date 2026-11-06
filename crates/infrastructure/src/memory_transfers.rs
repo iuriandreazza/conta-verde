@@ -7,7 +7,7 @@ use conta_verde_application::{
 };
 use conta_verde_domain::{
     AccountOpening, AuditEntity, AuditEntry, AuditRecord, BankAccountId, CalendarDate, CompanyId,
-    Transfer, TransferId,
+    Decimal, Transfer, TransferId,
 };
 
 use crate::memory_audit::AuditLog;
@@ -99,6 +99,36 @@ impl TransferRepository for InMemoryTransferRepository {
         Ok(state
             .audit
             .history(company_id, AuditEntity::Transfer, id.as_uuid()))
+    }
+
+    async fn transfer_candidates(
+        &self,
+        company_id: CompanyId,
+        account: BankAccountId,
+        incoming: bool,
+        amount: Decimal,
+        since: CalendarDate,
+        until: CalendarDate,
+    ) -> Result<Vec<Transfer>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        let mut found: Vec<Transfer> = state
+            .transfers
+            .iter()
+            .filter(|transfer| {
+                transfer.company_id() == company_id
+                    && !transfer.is_reversed()
+                    && (if incoming {
+                        transfer.to()
+                    } else {
+                        transfer.from()
+                    }) == account
+                    && transfer.amount().as_decimal() == amount.normalize()
+                    && (since..=until).contains(&transfer.occurred_on())
+            })
+            .cloned()
+            .collect();
+        found.sort_by_key(|transfer| (transfer.occurred_on(), transfer.id().as_uuid()));
+        Ok(found)
     }
 
     async fn movement_by_day(

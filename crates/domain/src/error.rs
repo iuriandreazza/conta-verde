@@ -46,6 +46,11 @@ pub enum DomainError {
     TransferToTheSameAccount,
     InvalidNote,
     InvalidOpeningBalance,
+    InvalidStatementAmount,
+    InvalidStatementDescription,
+    LineIsNotPending,
+    LineIsNotMatched,
+    LineIsNotIgnored,
     InvalidRecurrenceAmount,
     RecurrenceEndsBeforeItStarts,
     TooManyEntryInstallments,
@@ -159,6 +164,15 @@ impl fmt::Display for DomainError {
             Self::RecurrenceEndsBeforeItStarts => {
                 f.write_str("ends_on must not be before starts_on")
             }
+            Self::InvalidStatementAmount => f.write_str(
+                "amount must be more than 0 or less than 0, in cents (at most two decimals)",
+            ),
+            Self::InvalidStatementDescription => f.write_str(
+                "a statement line has a description of one line and at most 200 characters, and a reference of at most 100",
+            ),
+            Self::LineIsNotPending => f.write_str("the statement line is not pending"),
+            Self::LineIsNotMatched => f.write_str("the statement line is not matched"),
+            Self::LineIsNotIgnored => f.write_str("the statement line is not ignored"),
             Self::InvalidOpeningBalance => f.write_str(
                 "balance must be a number in cents (at most two decimals), negative if the account starts in debt",
             ),

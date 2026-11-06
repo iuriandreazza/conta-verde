@@ -7195,3 +7195,612 @@ pub async fn generates_recurring_entries_ahead<R, E, F, C>(
             .is_empty()
     );
 }
+
+// ---------- statement lines and reconciliation ----------
+
+use conta_verde_application::{
+    EntryFromLine, ReconciliationService, StatementLineQuery, StatementLineRepository, Suggestion,
+};
+use conta_verde_domain::{LineMatch, LineStatus, StatementLineDraft};
+
+fn line_draft(
+    day: &str,
+    amount: &str,
+    description: &str,
+    bank_ref: Option<&str>,
+) -> StatementLineDraft {
+    StatementLineDraft {
+        posted_on: day.into(),
+        amount: amount.into(),
+        description: description.into(),
+        bank_ref: bank_ref.map(Into::into),
+    }
+}
+
+fn file_of(lines: Vec<StatementLineDraft>) -> Vec<ImportRow<StatementLineDraft>> {
+    lines
+        .into_iter()
+        .enumerate()
+        .map(|(index, draft)| ImportRow {
+            row: index + 1,
+            draft,
+        })
+        .collect()
+}
+
+/// What can be matched to a line, as text: `settlement:<description>` or `transfer`.
+fn suggested(suggestions: &[Suggestion]) -> Vec<String> {
+    suggestions
+        .iter()
+        .map(|suggestion| match suggestion {
+            Suggestion::Settlement {
+                entry_description, ..
+            } => format!("settlement:{entry_description}"),
+            Suggestion::Transfer(_) => "transfer".to_owned(),
+        })
+        .collect()
+}
+
+/// A statement is imported once however often it is sent, to an active account of the company; lines are
+/// suggested the settlements and transfers that fit them by account, amount, direction and day, matched
+/// to at most one of them each (and each of them to at most one line), unmatched, ignored and restored,
+/// and made into entries that are settled on the day; nothing of another company's shows, and what is
+/// refused leaves nothing behind.
+#[allow(clippy::too_many_arguments)]
+pub async fn reconciles_statement_lines<S, E, T, F>(
+    service: &ReconciliationService<S, E, T, F>,
+    store: &S,
+    entries: &FinancialEntryService<E, F>,
+    transfers: &TransferService<T, F>,
+    company: CompanyId,
+    other_company: CompanyId,
+    seed: &EntrySeed,
+) where
+    S: StatementLineRepository,
+    E: FinancialEntryRepository,
+    T: TransferRepository,
+    F: EntryReferences,
+{
+    let ana = actor();
+    let (main, reserve) = (seed.bank_account, seed.other_bank_account);
+    let statement = || {
+        vec![
+            line_draft("2026-11-05", "1250.50", "PIX  RECEBIDO Maria", Some("F1")),
+            line_draft("2026-11-06", "-30", "TARIFA", Some("F2")),
+            line_draft("2026-11-07", "-5.5", "CAFE", None),
+            line_draft("2026-11-07", "-5.5", "CAFE", None),
+            line_draft("2026-11-08", "200", "TED", Some("F4")),
+        ]
+    };
+    let all = StatementLineQuery::default();
+    let listed = |query: StatementLineQuery| async move {
+        service
+            .list(company, &query, None, Some(100))
+            .await
+            .unwrap()
+            .items
+    };
+
+    // Nothing is written by a dry run, or by a file that has a line that is refused; a closed account and
+    // another company's are refused outright.
+    let dry = service
+        .import(company, &ana, main, file_of(statement()), true)
+        .await
+        .unwrap();
+    assert_eq!((dry.valid, dry.created), (5, 0));
+    assert!(listed(all.clone()).await.is_empty());
+    let mut broken = statement();
+    broken.push(line_draft("2026-11-09", "0", "NADA", None));
+    let refused = service
+        .import(company, &ana, main, file_of(broken), false)
+        .await
+        .unwrap();
+    assert_eq!((refused.created, refused.refused.len()), (0, 1));
+    assert_eq!(refused.refused[0].row, 6);
+    assert!(listed(all.clone()).await.is_empty());
+    assert_eq!(
+        service
+            .import(
+                company,
+                &ana,
+                seed.inactive_bank_account,
+                file_of(statement()),
+                false
+            )
+            .await
+            .unwrap_err(),
+        ApplicationError::UnusableReference("account")
+    );
+    assert_eq!(
+        service
+            .import(other_company, &ana, main, file_of(statement()), false)
+            .await
+            .unwrap_err(),
+        ApplicationError::UnusableReference("account")
+    );
+
+    // Sent once, all of it is in; sent again, none is added, and two identical lines stay two.
+    let imported = service
+        .import(company, &ana, main, file_of(statement()), false)
+        .await
+        .unwrap();
+    assert_eq!((imported.created, imported.skipped.len()), (5, 0));
+    let again = service
+        .import(company, &ana, main, file_of(statement()), false)
+        .await
+        .unwrap();
+    assert_eq!((again.created, again.skipped.len()), (0, 5));
+    let mut overlapping = vec![line_draft(
+        "2026-11-05",
+        "1250.50",
+        "PIX RECEBIDO Maria",
+        Some("F1"),
+    )];
+    overlapping.push(line_draft("2026-11-05", "1250.50", "OUTRO", Some("F5")));
+    let overlap = service
+        .import(company, &ana, main, file_of(overlapping), false)
+        .await
+        .unwrap();
+    assert_eq!((overlap.created, overlap.skipped.len()), (1, 1));
+    let lines = listed(all.clone()).await;
+    assert_eq!(lines.len(), 6);
+    // Newest day first; the description is as the bank wrote it, white space collapsed.
+    assert_eq!(lines[0].posted_on().to_string(), "2026-11-08");
+    let by = |description: &str| {
+        lines
+            .iter()
+            .filter(|line| line.description() == description)
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(by("PIX RECEBIDO Maria").len(), 1);
+    assert_eq!(by("CAFE").len(), 2);
+    let (pix, fee, ted, other) = (
+        by("PIX RECEBIDO Maria").remove(0),
+        by("TARIFA").remove(0),
+        by("TED").remove(0),
+        by("OUTRO").remove(0),
+    );
+    assert_eq!(
+        (pix.status(), pix.amount().to_string()),
+        (LineStatus::Pending, "1250.5".to_owned())
+    );
+    assert_eq!(store.history(company, pix.id()).await.unwrap().len(), 1);
+
+    // The books: a sale and a bill settled near the lines, ones that do not fit, and a transfer.
+    let register = |kind: EntryKind, description: &str, amount: &str| {
+        entries.register(
+            company,
+            &ana,
+            FinancialEntryDraft {
+                kind,
+                ..entry_draft(seed, description, "2026-11-01", &[("2026-11-04", amount)])
+            },
+        )
+    };
+    let settle = |entry: EntryId, day: &str, account: BankAccountId, amount: &str| {
+        entries.settle(
+            company,
+            &ana,
+            entry,
+            SettlementDraft {
+                settled_on: day.into(),
+                bank_account_id: account,
+                ..settlement_draft(seed, 1, amount)
+            },
+        )
+    };
+    let sale = register(EntryKind::Receivable, "Venda da Maria", "1250.50")
+        .await
+        .unwrap();
+    let sale_settled = settle(sale.id(), "2026-11-04", main, "1250.50")
+        .await
+        .unwrap();
+    let late_sale = register(EntryKind::Receivable, "Venda tardia", "1250.50")
+        .await
+        .unwrap();
+    settle(late_sale.id(), "2026-11-20", main, "1250.50")
+        .await
+        .unwrap();
+    let elsewhere = register(
+        EntryKind::Receivable,
+        "Venda no caixa da reserva",
+        "1250.50",
+    )
+    .await
+    .unwrap();
+    settle(elsewhere.id(), "2026-11-05", reserve, "1250.50")
+        .await
+        .unwrap();
+    let fee_entry = register(EntryKind::Payable, "Tarifa do banco", "30")
+        .await
+        .unwrap();
+    let fee_settled = settle(fee_entry.id(), "2026-11-06", main, "30")
+        .await
+        .unwrap();
+    let wrong_way = register(EntryKind::Receivable, "Recebimento de 30", "30")
+        .await
+        .unwrap();
+    let wrong_way_settled = settle(wrong_way.id(), "2026-11-06", main, "30")
+        .await
+        .unwrap();
+    let moved = transfers
+        .register(
+            company,
+            &ana,
+            transfer_draft(reserve, main, "200", "2026-11-08"),
+        )
+        .await
+        .unwrap();
+
+    // What is suggested fits the account, the amount, the direction and five days; nearest first.
+    assert_eq!(
+        suggested(&service.suggestions(company, pix.id()).await.unwrap()),
+        ["settlement:Venda da Maria"]
+    );
+    assert_eq!(
+        suggested(&service.suggestions(company, fee.id()).await.unwrap()),
+        ["settlement:Tarifa do banco"]
+    );
+    assert_eq!(
+        suggested(&service.suggestions(company, ted.id()).await.unwrap()),
+        ["transfer"]
+    );
+    assert!(
+        service
+            .suggestions(company, by("CAFE")[0].id())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // A line is matched to what fits, not to what does not, and to one thing; a thing, to one line.
+    assert_eq!(
+        service
+            .match_line(
+                company,
+                &ana,
+                fee.id(),
+                LineMatch::Settlement(wrong_way_settled.id())
+            )
+            .await
+            .unwrap_err(),
+        ApplicationError::MatchDoesNotFit
+    );
+    assert_eq!(
+        service
+            .match_line(company, &ana, pix.id(), LineMatch::Transfer(moved.id()))
+            .await
+            .unwrap_err(),
+        ApplicationError::MatchDoesNotFit
+    );
+    assert_eq!(
+        service.get(company, pix.id()).await.unwrap().status(),
+        LineStatus::Pending
+    );
+    let matched = service
+        .match_line(
+            company,
+            &ana,
+            pix.id(),
+            LineMatch::Settlement(sale_settled.id()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        (matched.status(), matched.matched()),
+        (
+            LineStatus::Matched,
+            Some(LineMatch::Settlement(sale_settled.id()))
+        )
+    );
+    assert_eq!(
+        service
+            .match_line(
+                company,
+                &ana,
+                pix.id(),
+                LineMatch::Settlement(sale_settled.id())
+            )
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::LineIsNotPending)
+    );
+    assert_eq!(
+        service
+            .match_line(
+                company,
+                &ana,
+                other.id(),
+                LineMatch::Settlement(sale_settled.id())
+            )
+            .await
+            .unwrap_err(),
+        ApplicationError::AlreadyMatched
+    );
+    assert!(
+        service
+            .suggestions(company, other.id())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        service
+            .suggestions(company, pix.id())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    service
+        .match_line(
+            company,
+            &ana,
+            fee.id(),
+            LineMatch::Settlement(fee_settled.id()),
+        )
+        .await
+        .unwrap();
+    service
+        .match_line(company, &ana, ted.id(), LineMatch::Transfer(moved.id()))
+        .await
+        .unwrap();
+
+    // Unmatching frees both: the line is pending and the settlement is suggested again, and every move is
+    // in the trail.
+    let freed = service.unmatch(company, &ana, pix.id()).await.unwrap();
+    assert_eq!(
+        (freed.status(), freed.matched()),
+        (LineStatus::Pending, None)
+    );
+    assert_eq!(
+        suggested(&service.suggestions(company, other.id()).await.unwrap()),
+        ["settlement:Venda da Maria"]
+    );
+    assert_eq!(
+        service.unmatch(company, &ana, pix.id()).await.unwrap_err(),
+        ApplicationError::Domain(DomainError::LineIsNotMatched)
+    );
+    service
+        .match_line(
+            company,
+            &ana,
+            pix.id(),
+            LineMatch::Settlement(sale_settled.id()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(service.history(company, pix.id()).await.unwrap().len(), 4);
+
+    // Ignored lines leave the reconciliation, and come back.
+    let coffees = by("CAFE");
+    let ignored = service
+        .ignore(company, &ana, coffees[0].id())
+        .await
+        .unwrap();
+    assert_eq!(ignored.status(), LineStatus::Ignored);
+    assert_eq!(
+        service
+            .ignore(company, &ana, coffees[0].id())
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::LineIsNotPending)
+    );
+    assert_eq!(
+        service
+            .restore(company, &ana, coffees[1].id())
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::LineIsNotIgnored)
+    );
+    assert_eq!(
+        listed(StatementLineQuery::default().with_status(LineStatus::Ignored))
+            .await
+            .len(),
+        1
+    );
+    assert_eq!(
+        listed(StatementLineQuery::default().with_status(LineStatus::Matched))
+            .await
+            .len(),
+        3
+    );
+    assert_eq!(
+        listed(StatementLineQuery::default().of_account(reserve))
+            .await
+            .len(),
+        0
+    );
+    assert_eq!(
+        service
+            .restore(company, &ana, coffees[0].id())
+            .await
+            .unwrap()
+            .status(),
+        LineStatus::Pending
+    );
+    let page = service.list(company, &all, None, Some(4)).await.unwrap();
+    assert_eq!(page.items.len(), 4);
+    let rest = service
+        .list(company, &all, page.next.as_ref(), Some(4))
+        .await
+        .unwrap();
+    assert_eq!(rest.items.len(), 2);
+    assert!(rest.next.is_none());
+
+    // An entry made out of a line is settled on the day in its account, and the line is matched to it; a
+    // category that cannot be used stops it before anything is written.
+    let choice = |category| EntryFromLine {
+        category_id: category,
+        party_id: None,
+        cost_center_id: None,
+        payment_method_id: None,
+        description: None,
+    };
+    assert_eq!(
+        service
+            .create_entry(
+                company,
+                &ana,
+                coffees[1].id(),
+                choice(seed.inactive_category)
+            )
+            .await
+            .unwrap_err(),
+        ApplicationError::UnusableReference("category")
+    );
+    assert_eq!(
+        service
+            .get(company, coffees[1].id())
+            .await
+            .unwrap()
+            .status(),
+        LineStatus::Pending
+    );
+    let (made, settlement) = service
+        .create_entry(
+            company,
+            &ana,
+            coffees[1].id(),
+            EntryFromLine {
+                description: Some("Café da manhã".into()),
+                ..choice(seed.category)
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(made.matched(), Some(LineMatch::Settlement(settlement.id())));
+    assert_eq!(settlement.cash().to_string(), "5.5");
+    assert_eq!(settlement.settled_on().to_string(), "2026-11-07");
+    assert_eq!(settlement.bank_account_id(), main);
+    let created = entries.get(company, settlement.entry_id()).await.unwrap();
+    assert_eq!(
+        (
+            created.kind(),
+            created.description(),
+            created.total().to_string()
+        ),
+        (EntryKind::Payable, "Café da manhã", "5.5".to_owned())
+    );
+    assert_eq!(
+        service
+            .create_entry(company, &ana, coffees[1].id(), choice(seed.category))
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::LineIsNotPending)
+    );
+
+    // A transfer is a line in each of two statements: matched once in each account, and not twice in one.
+    let reserve_file = vec![
+        line_draft("2026-11-08", "-200", "TED ENVIADO", Some("R1")),
+        line_draft("2026-11-08", "-200", "TED DE NOVO", Some("R2")),
+    ];
+    let reserve_import = service
+        .import(company, &ana, reserve, file_of(reserve_file), false)
+        .await
+        .unwrap();
+    assert_eq!(reserve_import.created, 2);
+    let reserve_lines = listed(StatementLineQuery::default().of_account(reserve)).await;
+    let sent_line = reserve_lines
+        .iter()
+        .find(|line| line.description() == "TED ENVIADO")
+        .unwrap();
+    let repeated = reserve_lines
+        .iter()
+        .find(|line| line.description() == "TED DE NOVO")
+        .unwrap();
+    assert_eq!(
+        suggested(&service.suggestions(company, sent_line.id()).await.unwrap()),
+        ["transfer"]
+    );
+    service
+        .match_line(
+            company,
+            &ana,
+            sent_line.id(),
+            LineMatch::Transfer(moved.id()),
+        )
+        .await
+        .unwrap();
+    assert!(
+        service
+            .suggestions(company, repeated.id())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        service
+            .match_line(
+                company,
+                &ana,
+                repeated.id(),
+                LineMatch::Transfer(moved.id())
+            )
+            .await
+            .unwrap_err(),
+        ApplicationError::AlreadyMatched
+    );
+    // The line in the other account is still matched to it.
+    assert_eq!(
+        service.get(company, ted.id()).await.unwrap().matched(),
+        Some(LineMatch::Transfer(moved.id()))
+    );
+
+    // A move made from a line that someone else has moved since is refused by the store.
+    let stale = service.get(company, other.id()).await.unwrap();
+    let moved_on = stale.ignored().unwrap();
+    let audit = AuditEntry {
+        company_id: company,
+        actor: ana.clone(),
+        entity: AuditEntity::StatementLine,
+        entity_id: stale.id().as_uuid(),
+        action: AuditAction::Updated,
+        changes: conta_verde_domain::statement_line_changes(&stale, &moved_on),
+    };
+    assert_eq!(
+        store
+            .update(&moved_on, LineStatus::Matched, &audit)
+            .await
+            .unwrap_err(),
+        RepositoryError::LineChanged
+    );
+    assert_eq!(
+        service.get(company, other.id()).await.unwrap().status(),
+        LineStatus::Pending
+    );
+    store
+        .update(&moved_on, LineStatus::Pending, &audit)
+        .await
+        .unwrap();
+    assert_eq!(
+        service.get(company, other.id()).await.unwrap().status(),
+        LineStatus::Ignored
+    );
+
+    // Nothing of another company's.
+    assert_eq!(
+        service.get(other_company, pix.id()).await.unwrap_err(),
+        ApplicationError::StatementLineNotFound
+    );
+    assert_eq!(
+        service.history(other_company, pix.id()).await.unwrap_err(),
+        ApplicationError::StatementLineNotFound
+    );
+    assert_eq!(
+        service
+            .ignore(other_company, &ana, coffees[0].id())
+            .await
+            .unwrap_err(),
+        ApplicationError::StatementLineNotFound
+    );
+    assert!(
+        service
+            .list(other_company, &all, None, Some(100))
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
+    assert_eq!(store.find(other_company, pix.id()).await.unwrap(), None);
+}

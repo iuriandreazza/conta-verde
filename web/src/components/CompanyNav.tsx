@@ -1,6 +1,7 @@
 import { NavLink } from "react-router-dom";
 import { BoxIcon } from "./icons/box";
 import { CalendarDaysIcon } from "./icons/calendar-days";
+import { CheckIcon } from "./icons/check";
 import { CircleDollarSignIcon } from "./icons/circle-dollar-sign";
 import { ChartLineIcon } from "./icons/chart-line";
 import { CreditCardIcon } from "./icons/credit-card";
@@ -32,6 +33,10 @@ export function CompanyNav({
       <NavLink to={`${base}/entries`}>
         <CircleDollarSignIcon size={18} aria-hidden />
         Lançamentos
+      </NavLink>
+      <NavLink to={`${base}/reconciliation`}>
+        <CheckIcon size={18} aria-hidden />
+        Conciliação
       </NavLink>
       <NavLink to={`${base}/recurrences`}>
         <RotateCCWIcon size={18} aria-hidden />
