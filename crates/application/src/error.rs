@@ -38,6 +38,8 @@ pub enum RepositoryError {
     SaleChanged,
     /// The purchase order is no longer in the status the write was made from.
     PurchaseChanged,
+    /// The count is no longer in the status the write was made from.
+    CountChanged,
     /// A receipt would take in more of a line than was ordered.
     ReceiptTooMuch,
     /// A product has another balance than the one the movements were valued against.
@@ -160,6 +162,10 @@ pub enum ApplicationError {
     },
     /// A movement a document made is undone through the document.
     StockMovementFollowsADocument,
+    /// No inventory count with this id in the company (another company's looks the same).
+    CountNotFound,
+    /// The count was changed while this was being done.
+    CountChanged,
     /// No purchase order with this id in the company (another company's looks the same).
     PurchaseNotFound,
     /// No receipt with this id in the purchase order.
@@ -286,6 +292,7 @@ impl fmt::Display for RepositoryError {
             Self::EntryVoided => f.write_str("the entry was cancelled"),
             Self::SaleChanged => f.write_str("the sale was changed meanwhile"),
             Self::PurchaseChanged => f.write_str("the purchase order was changed meanwhile"),
+            Self::CountChanged => f.write_str("the count was changed meanwhile"),
             Self::ReceiptTooMuch => f.write_str("a receipt cannot be of more than was ordered"),
             Self::StockChanged => f.write_str("the stock changed meanwhile"),
             Self::StockInsufficient => f.write_str("not enough stock"),
@@ -358,6 +365,8 @@ impl fmt::Display for ApplicationError {
             Self::ContractChanged => f.write_str("the contract was changed meanwhile: read it again"),
             Self::SaleChanged => f.write_str("the sale was changed meanwhile: read it again"),
             Self::PurchaseNotFound => f.write_str("purchase order not found"),
+            Self::CountNotFound => f.write_str("count not found"),
+            Self::CountChanged => f.write_str("the count was changed meanwhile: read it again"),
             Self::StockMovementNotFound => f.write_str("stock movement not found"),
             Self::StockChanged => f.write_str("the stock changed meanwhile: try again"),
             Self::StockInsufficient { product, available } => {

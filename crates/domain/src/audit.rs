@@ -3,10 +3,10 @@ use uuid::Uuid;
 use crate::line::lines_text;
 use crate::{
     AccountOpening, Attachment, BankAccount, Category, Charge, CollectionSettings, CommissionRule,
-    CompanyId, Contract, CostCenter, DocumentCheck, DunningPlan, FinancialEntry, LineMatch, Party,
-    PaymentMethod, PaymentTerm, PriceList, Product, PurchaseOrder, PurchaseReceipt, Quote,
-    Recurrence, Sale, SaleReturn, Settlement, StatementLine, StockMovement, StockSettings, Tag,
-    Transfer, UserId,
+    CompanyId, Contract, CostCenter, DocumentCheck, DunningPlan, FinancialEntry, InventoryCount,
+    LineMatch, Party, PaymentMethod, PaymentTerm, PriceList, Product, PurchaseOrder,
+    PurchaseReceipt, Quote, Recurrence, Sale, SaleReturn, Settlement, StatementLine, StockMovement,
+    StockSettings, Tag, Transfer, UserId,
 };
 
 /// Who made a change. The name is a snapshot: history must keep reading the same after the user is
@@ -50,6 +50,7 @@ pub enum AuditEntity {
     StockMovement,
     /// One per company: the audit id is the company's.
     StockSettings,
+    InventoryCount,
 }
 
 impl AuditEntity {
@@ -79,6 +80,7 @@ impl AuditEntity {
             Self::PurchaseReceipt => "purchase_receipt",
             Self::StockMovement => "stock_movement",
             Self::StockSettings => "stock_settings",
+            Self::InventoryCount => "inventory_count",
             Self::Settlement => "settlement",
             Self::Transfer => "transfer",
             Self::AccountOpening => "account_opening",
@@ -455,6 +457,20 @@ impl Audited for StockSettings {
 
     fn audit_id(&self) -> Uuid {
         self.company_id().as_uuid()
+    }
+}
+
+impl Audited for InventoryCount {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::InventoryCount
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.id().as_uuid()
     }
 }
 
@@ -1229,6 +1245,40 @@ pub fn stock_settings_creation_changes(settings: &StockSettings) -> Vec<FieldCha
 
 pub fn stock_settings_changes(before: &StockSettings, after: &StockSettings) -> Vec<FieldChange> {
     changes_between(stock_settings_fields(before), stock_settings_fields(after))
+}
+
+fn inventory_count_fields(count: &InventoryCount) -> Fields {
+    vec![
+        ("counted_on", Some(count.counted_on().to_string())),
+        ("notes", count.notes().map(str::to_owned)),
+        (
+            "lines",
+            Some(
+                count
+                    .lines()
+                    .iter()
+                    .map(|line| format!("{}:{}", line.product_id().as_uuid(), line.counted()))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
+        ),
+        ("status", Some(count.status().as_str().to_owned())),
+    ]
+}
+
+/// Every field a new count has set.
+pub fn inventory_count_creation_changes(count: &InventoryCount) -> Vec<FieldChange> {
+    creation_from(inventory_count_fields(count))
+}
+
+pub fn inventory_count_changes(
+    before: &InventoryCount,
+    after: &InventoryCount,
+) -> Vec<FieldChange> {
+    changes_between(
+        inventory_count_fields(before),
+        inventory_count_fields(after),
+    )
 }
 
 fn dunning_plan_fields(plan: &DunningPlan) -> Fields {

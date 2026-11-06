@@ -28,6 +28,8 @@ mod error;
 mod financial_entry_service;
 mod identity_repository;
 mod import;
+mod inventory_count_repository;
+mod inventory_count_service;
 mod invitation_repository;
 mod list_query;
 mod member_service;
@@ -107,6 +109,10 @@ pub use identity_repository::{
     CompanyMembership, IdentityRepository, NewAccount, NewUser, StoredCredentials,
 };
 pub use import::{ImportReport, ImportRow, MAX_IMPORT_ROWS, RowNote};
+pub use inventory_count_repository::{InventoryCountQuery, InventoryCountRepository};
+pub use inventory_count_service::{
+    CountLineView, CountView, InventoryCountPage, InventoryCountService,
+};
 pub use invitation_repository::{
     InvitationRepository, InvitationState, NewInvitation, StoredInvitation,
 };
@@ -153,7 +159,8 @@ pub use secret_service::{SecretError, SecretService};
 pub use statement_line_repository::{MatchedTargets, StatementLineQuery, StatementLineRepository};
 pub use stock_repository::{StockFloor, StockMovementQuery, StockMovementRepository};
 pub use stock_service::{
-    DocumentStock, StockAlert, StockMovementPage, StockPosition, StockPositionPage, StockService,
+    CountStock, DocumentStock, StockAlert, StockMovementPage, StockPosition, StockPositionPage,
+    StockService,
 };
 pub use stock_settings_repository::StockSettingsRepository;
 pub use transfer_repository::{

@@ -100,7 +100,7 @@ payment link (`sends_reminders_on_schedule`).
 - [ ] Purchase entry from NF-e XML (parsing and validation only, no SEFAZ calls): supplier, items, taxes, payables
 - [x] Stock movements: in, out, adjustment; balances and average cost per product ([ADR 0054](adr/0054-stock-movements.md)) — a ledger never edited (reversed instead), the weighted average cost with one rounding rule held in the domain, receipts, completed sales, returns and cancellations move it; one stock, so no transfer ([ADR 0052](adr/0052-purchases-and-inventory-plan.md))
 - [x] Minimum stock alerts; block sale without balance (configurable) ([ADR 0055](adr/0055-minimum-stock-and-the-sale-block.md)) — `GET /stock/alerts` lists the active products below their minimum; `PUT /stock/settings` turns on the per-company block, which refuses completing a sale the stock cannot cover with a `409` naming the product
-- [ ] Inventory count and adjustment
+- [x] Inventory count and adjustment ([ADR 0056](adr/0056-inventory-count.md)) — an open count holds what was found and shows the difference to the stock now; applying writes the adjustments once, valued at the average, on the day of the count
 - [ ] Reports: stock position, movements, valuation
 
 Exit criteria: a purchase XML creates payables and stock; a sale reduces stock and the

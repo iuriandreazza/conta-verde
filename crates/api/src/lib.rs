@@ -16,6 +16,7 @@ mod dunning;
 mod entries;
 mod error;
 mod history;
+mod inventory_counts;
 mod json;
 mod list_params;
 mod members;
@@ -49,12 +50,13 @@ use conta_verde_application::{
     ChargeService, CnpjRegistry, CommissionRuleRepository, CommissionService, ContractRepository,
     ContractService, CostCenterRepository, CostCenterService, DocumentReferences, EmailSender,
     EntryReferences, FinancialEntryRepository, FinancialEntryService, IdentityRepository,
-    InvitationRepository, MemberService, OpeningRepository, PartyRepository, PartyService,
-    PaymentMethodRepository, PaymentMethodService, PaymentProvider, PaymentTermRepository,
-    PaymentTermService, PostalCodeDirectory, PostalCodeService, PriceListRepository,
-    PriceListService, ProductRepository, ProductService, PurchaseOrderRepository, PurchaseService,
-    QuoteRepository, QuoteService, ReconciliationService, RecurrenceRepository, RecurrenceService,
-    SaleRepository, SaleService, SalesReportService, SecretService, StatementLineRepository,
+    InventoryCountRepository, InventoryCountService, InvitationRepository, MemberService,
+    OpeningRepository, PartyRepository, PartyService, PaymentMethodRepository,
+    PaymentMethodService, PaymentProvider, PaymentTermRepository, PaymentTermService,
+    PostalCodeDirectory, PostalCodeService, PriceListRepository, PriceListService,
+    ProductRepository, ProductService, PurchaseOrderRepository, PurchaseService, QuoteRepository,
+    QuoteService, ReconciliationService, RecurrenceRepository, RecurrenceService, SaleRepository,
+    SaleService, SalesReportService, SecretService, StatementLineRepository,
     StockMovementRepository, StockService, StockSettingsRepository, TransferRepository,
     TransferService,
 };
@@ -108,6 +110,7 @@ pub trait Ports: 'static {
     type Purchases: PurchaseOrderRepository + 'static;
     type StockMovements: StockMovementRepository + 'static;
     type StockSettings: StockSettingsRepository + 'static;
+    type Counts: InventoryCountRepository + 'static;
     type Contracts: ContractRepository + 'static;
     type CommissionRules: CommissionRuleRepository + 'static;
     type Statements: StatementLineRepository + 'static;
@@ -158,6 +161,9 @@ type WebhooksOf<X> = PaymentWebhookService<
 /// The stock use case over the adapters of `X`.
 type StockOf<X> =
     StockService<<X as Ports>::StockMovements, <X as Ports>::Products, <X as Ports>::StockSettings>;
+
+/// The inventory counts use case over the adapters of `X`.
+type CountsOf<X> = InventoryCountService<<X as Ports>::Counts, StockOf<X>>;
 
 /// The sales use case over the adapters of `X`.
 type SalesOf<X> = SaleService<
@@ -226,6 +232,7 @@ pub struct Services<X: Ports> {
     pub sales: SalesOf<X>,
     pub purchases: PurchasesOf<X>,
     pub stock: StockOf<X>,
+    pub counts: CountsOf<X>,
     pub contracts: ContractsOf<X>,
     pub commissions: CommissionsOf<X>,
     pub reconciliation:
@@ -259,6 +266,7 @@ pub(crate) struct AppState<X: Ports> {
     sales: SalesOf<X>,
     purchases: PurchasesOf<X>,
     stock: StockOf<X>,
+    counts: CountsOf<X>,
     contracts: ContractsOf<X>,
     commissions: CommissionsOf<X>,
     reconciliation:
@@ -297,6 +305,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         sales: services.sales,
         purchases: services.purchases,
         stock: services.stock,
+        counts: services.counts,
         contracts: services.contracts,
         commissions: services.commissions,
         reconciliation: services.reconciliation,
@@ -713,6 +722,26 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
             get(stock::settings_history::<X>),
         )
         .route(
+            "/companies/{company_id}/inventory-counts",
+            get(inventory_counts::list_counts::<X>).post(inventory_counts::register_count::<X>),
+        )
+        .route(
+            "/companies/{company_id}/inventory-counts/{count_id}",
+            get(inventory_counts::get_count::<X>).put(inventory_counts::update_count::<X>),
+        )
+        .route(
+            "/companies/{company_id}/inventory-counts/{count_id}/history",
+            get(inventory_counts::count_history::<X>),
+        )
+        .route(
+            "/companies/{company_id}/inventory-counts/{count_id}/apply",
+            post(inventory_counts::apply_count::<X>),
+        )
+        .route(
+            "/companies/{company_id}/inventory-counts/{count_id}/cancel",
+            post(inventory_counts::cancel_count::<X>),
+        )
+        .route(
             "/companies/{company_id}/purchase-orders",
             get(purchase_orders::list_purchase_orders::<X>)
                 .post(purchase_orders::register_purchase_order::<X>),
@@ -801,9 +830,9 @@ mod tests {
         InMemoryChargeRepository, InMemoryCnpjRegistry, InMemoryCollectionSettingsRepository,
         InMemoryCommissionRuleRepository, InMemoryContractRepository, InMemoryCostCenterRepository,
         InMemoryDunningPlanRepository, InMemoryEmailSender, InMemoryFinancialEntryRepository,
-        InMemoryIdentityRepository, InMemoryInvitationRepository, InMemoryMessageSender,
-        InMemoryNotificationRepository, InMemoryOpeningRepository, InMemoryPartyRepository,
-        InMemoryPaymentEventRepository, InMemoryPaymentLinkRepository,
+        InMemoryIdentityRepository, InMemoryInventoryCountRepository, InMemoryInvitationRepository,
+        InMemoryMessageSender, InMemoryNotificationRepository, InMemoryOpeningRepository,
+        InMemoryPartyRepository, InMemoryPaymentEventRepository, InMemoryPaymentLinkRepository,
         InMemoryPaymentMethodRepository, InMemoryPaymentTermRepository,
         InMemoryPostalCodeDirectory, InMemoryPriceListRepository, InMemoryProductRepository,
         InMemoryPurchaseOrderRepository, InMemoryQuoteRepository, InMemoryRecurrenceRepository,
@@ -895,6 +924,7 @@ mod tests {
         type Purchases = InMemoryPurchaseOrderRepository;
         type StockMovements = InMemoryStockMovementRepository;
         type StockSettings = InMemoryStockSettingsRepository;
+        type Counts = InMemoryInventoryCountRepository;
         type Contracts = InMemoryContractRepository;
         type CommissionRules = InMemoryCommissionRuleRepository;
         type Statements = InMemoryStatementLineRepository;
@@ -939,6 +969,7 @@ mod tests {
         type Purchases = InMemoryPurchaseOrderRepository;
         type StockMovements = InMemoryStockMovementRepository;
         type StockSettings = InMemoryStockSettingsRepository;
+        type Counts = InMemoryInventoryCountRepository;
         type Contracts = InMemoryContractRepository;
         type CommissionRules = InMemoryCommissionRuleRepository;
         type Statements = InMemoryStatementLineRepository;
@@ -1435,6 +1466,18 @@ mod tests {
         )
     }
 
+    type TestCounts = InventoryCountService<InMemoryInventoryCountRepository, TestStock>;
+
+    /// Inventory counts over the stock a test keeps a handle to.
+    fn counts_over(stock: TestStock) -> TestCounts {
+        InventoryCountService::new(InMemoryInventoryCountRepository::default(), stock)
+    }
+
+    /// Inventory counts over a stock that the app's own services do not share.
+    fn standalone_counts() -> TestCounts {
+        counts_over(standalone_stock())
+    }
+
     /// The stock over registers that the app's own services do not share.
     fn standalone_stock() -> TestStock {
         StockService::new(
@@ -1587,6 +1630,7 @@ mod tests {
                 sales: standalone_sales(),
                 purchases: standalone_purchases(),
                 stock: standalone_stock(),
+                counts: standalone_counts(),
                 contracts: ContractService::new(
                     InMemoryContractRepository::default(),
                     standalone_sales(),
@@ -2240,6 +2284,7 @@ mod tests {
                 sales: standalone_sales(),
                 purchases: standalone_purchases(),
                 stock: standalone_stock(),
+                counts: standalone_counts(),
                 contracts: ContractService::new(
                     InMemoryContractRepository::default(),
                     standalone_sales(),
@@ -3735,6 +3780,7 @@ mod tests {
                 sales: standalone_sales(),
                 purchases: standalone_purchases(),
                 stock: standalone_stock(),
+                counts: standalone_counts(),
                 contracts: ContractService::new(
                     InMemoryContractRepository::default(),
                     standalone_sales(),
@@ -5354,6 +5400,11 @@ mod tests {
                     stock_settings.clone(),
                 ),
                 stock: StockService::new(ledger.clone(), products.clone(), stock_settings.clone()),
+                counts: counts_over(StockService::new(
+                    ledger.clone(),
+                    products.clone(),
+                    stock_settings.clone(),
+                )),
                 contracts: ContractService::new(InMemoryContractRepository::default(), sales()),
                 commissions: commissions_over(
                     sale_store.clone(),
@@ -9654,6 +9705,199 @@ mod tests {
         assert_eq!(
             send(&app, get_request(&movements, None)).await.status,
             StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn a_count_is_looked_at_against_the_stock_and_applied_as_adjustments() {
+        let app = entry_app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let targets = sales_targets(&app, &cookie, company_id).await;
+        let movements = format!("{}/movements", stock_uri(company_id));
+        let counts = format!("/companies/{company_id}/inventory-counts");
+        let entered = send(
+            &app,
+            json_request(
+                "POST",
+                &movements,
+                Some(&cookie),
+                json!({ "product_id": targets.product, "kind": "in", "quantity": "10",
+                        "unit_cost": "5", "occurred_on": "2026-11-01" }),
+            ),
+        )
+        .await;
+        assert_eq!(entered.status, StatusCode::CREATED, "{}", entered.body);
+
+        // Written open; a product that has no stock cannot be counted and a quantity is not negative.
+        let body = json!({
+            "counted_on": "2026-11-30",
+            "notes": "Fim do mês",
+            "lines": [{ "product_id": targets.product, "counted": "8" }],
+        });
+        let created = send(
+            &app,
+            json_request("POST", &counts, Some(&cookie), body.clone()),
+        )
+        .await;
+        assert_eq!(created.status, StatusCode::CREATED, "{}", created.body);
+        assert_eq!(created.body["status"], "open");
+        assert_eq!(created.body["number"], 1);
+        for (bad, status) in [
+            (
+                json!({ "counted_on": "2026-11-30", "lines": [] }),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                json!({ "counted_on": "2026-11-30",
+                        "lines": [{ "product_id": targets.product, "counted": "-1" }] }),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                json!({ "counted_on": "2026-11-30",
+                        "lines": [{ "product_id": Uuid::new_v4(), "counted": "1" }] }),
+                StatusCode::NOT_FOUND,
+            ),
+        ] {
+            assert_eq!(
+                send(&app, json_request("POST", &counts, Some(&cookie), bad))
+                    .await
+                    .status,
+                status
+            );
+        }
+        let one = format!("{counts}/{}", created.body["id"].as_str().unwrap());
+        let seen = send(&app, get_request(&one, Some(&cookie))).await;
+        assert_eq!(
+            (
+                &seen.body["lines"][0]["counted"],
+                &seen.body["lines"][0]["expected"],
+                &seen.body["lines"][0]["difference"]
+            ),
+            (&json!("8"), &json!("10"), &json!("-2"))
+        );
+
+        // Applied: the coffees are adjusted at the average (-2 of 10 worth 50 is -10), once.
+        let applied = send(
+            &app,
+            json_request("POST", &format!("{one}/apply"), Some(&cookie), Value::Null),
+        )
+        .await;
+        assert_eq!(applied.status, StatusCode::OK, "{}", applied.body);
+        assert_eq!(applied.body["status"], "applied");
+        assert_eq!(applied.body["lines"][0]["difference"], "-2");
+        let ledger = send(
+            &app,
+            get_request(&format!("{movements}?kind=adjustment"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(ledger.body["items"].as_array().unwrap().len(), 1);
+        assert_eq!(ledger.body["items"][0]["value"], "-10");
+        assert_eq!(ledger.body["items"][0]["origin"]["kind"], "inventory_count");
+        let again = send(
+            &app,
+            json_request("POST", &format!("{one}/apply"), Some(&cookie), Value::Null),
+        )
+        .await;
+        assert_eq!(again.status, StatusCode::OK);
+        let ledger = send(
+            &app,
+            get_request(&format!("{movements}?kind=adjustment"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(ledger.body["items"].as_array().unwrap().len(), 1);
+        // It is fixed, and what is not open cannot be cancelled.
+        for reply in [
+            send(&app, json_request("PUT", &one, Some(&cookie), body)).await,
+            send(
+                &app,
+                json_request("POST", &format!("{one}/cancel"), Some(&cookie), Value::Null),
+            )
+            .await,
+        ] {
+            assert_eq!(reply.status, StatusCode::CONFLICT);
+        }
+        let positions = send(
+            &app,
+            get_request(
+                &format!("{}/positions", stock_uri(company_id)),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        let coffee = positions.body["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["product_id"] == targets.product)
+            .unwrap();
+        assert_eq!(
+            (&coffee["quantity"], &coffee["value"]),
+            (&json!("8"), &json!("40"))
+        );
+        let history = send(&app, get_request(&format!("{one}/history"), Some(&cookie))).await;
+        assert_eq!(history.body.as_array().unwrap().len(), 2);
+        let listed = send(
+            &app,
+            get_request(&format!("{counts}?status=applied&q=fim"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(listed.body["items"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            send(
+                &app,
+                get_request(&format!("{counts}?status=done"), Some(&cookie))
+            )
+            .await
+            .status,
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn counts_follow_the_purchases_role_and_stay_private_to_the_company() {
+        use conta_verde_domain::Role;
+
+        let (app, identities, _) = app_with_mailbox();
+        let (_, company_id) = sign_up(&app, "dona@example.com").await;
+        let uri = format!("/companies/{company_id}/inventory-counts");
+        for (role, may_write) in [
+            (Role::Admin, true),
+            (Role::Stock, true),
+            (Role::Financial, false),
+            (Role::Sales, false),
+            (Role::Accountant, false),
+            (Role::Viewer, false),
+        ] {
+            let cookie = member_with_role(&app, &identities, company_id, role).await;
+            assert_eq!(
+                send(&app, get_request(&uri, Some(&cookie))).await.status,
+                StatusCode::OK,
+                "{role:?} reads"
+            );
+            let write = send(&app, json_request("POST", &uri, Some(&cookie), json!({}))).await;
+            let expected = if may_write {
+                StatusCode::UNPROCESSABLE_ENTITY
+            } else {
+                StatusCode::FORBIDDEN
+            };
+            assert_eq!(write.status, expected, "{role:?} writes");
+        }
+        let (other, other_company) = sign_up(&app, "outra@example.com").await;
+        let id = Uuid::new_v4();
+        for path in ["", "/history"] {
+            let reply = send(
+                &app,
+                get_request(
+                    &format!("/companies/{other_company}/inventory-counts/{id}{path}"),
+                    Some(&other),
+                ),
+            )
+            .await;
+            assert_eq!(reply.status, StatusCode::NOT_FOUND, "{path}");
+        }
+        assert_eq!(
+            send(&app, get_request(&uri, Some(&other))).await.status,
+            StatusCode::NOT_FOUND
         );
     }
 
