@@ -2917,6 +2917,9 @@ describe("financial entries", () => {
     ],
     total: "201",
     recurrence_id: null,
+    sale_id: null,
+    sale_return_id: null,
+    voided: false,
   };
   const rent: Entry = {
     ...entry,
@@ -2927,6 +2930,9 @@ describe("financial entries", () => {
     installments: [{ number: 1, due_date: "2026-11-10", amount: "2500", settled: "0" }],
     total: "2500",
     recurrence_id: null,
+    sale_id: null,
+    sale_return_id: null,
+    voided: false,
   };
 
   const sent = (fetchMock: ReturnType<typeof mockApi>, method: string) =>
@@ -4313,6 +4319,9 @@ describe("recurrences", () => {
       installments: [{ number: 1, due_date: "2026-11-05", amount: "2500", settled: "0" }],
       total: "2500",
       recurrence_id: null,
+      sale_id: null,
+      sale_return_id: null,
+      voided: false,
     };
   }
 });

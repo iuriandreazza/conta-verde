@@ -36,6 +36,8 @@ mod quote_service;
 mod reconciliation_service;
 mod recurrence_repository;
 mod recurrence_service;
+mod sale_repository;
+mod sale_service;
 mod sales_references;
 mod secret_service;
 mod statement_line_repository;
@@ -91,6 +93,8 @@ pub use recurrence_repository::{RecurrenceQuery, RecurrenceRepository};
 pub use recurrence_service::{
     GENERATION_HORIZON_DAYS, GenerationReport, RecurrencePage, RecurrenceService,
 };
+pub use sale_repository::{SaleQuery, SaleRepository};
+pub use sale_service::{Conversion, Refund, ReturnRecord, SalePage, SaleService};
 pub use sales_references::SalesReferences;
 pub use secret_service::{SecretError, SecretService};
 pub use statement_line_repository::{MatchedTargets, StatementLineQuery, StatementLineRepository};

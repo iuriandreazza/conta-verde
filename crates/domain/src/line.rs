@@ -59,6 +59,17 @@ impl Line {
         Ok(line)
     }
 
+    /// The line as it would be asked for again, to copy it into another document.
+    pub fn to_draft(&self) -> LineDraft {
+        LineDraft {
+            product_id: self.product_id,
+            description: self.description.clone(),
+            quantity: self.quantity.to_string(),
+            unit_price: self.unit_price.to_string(),
+            discount: self.discount.to_string(),
+        }
+    }
+
     pub fn product_id(&self) -> ProductId {
         self.product_id
     }
@@ -113,9 +124,9 @@ pub fn lines_total(lines: &[Line]) -> Decimal {
     lines.iter().map(Line::total).sum::<Decimal>().normalize()
 }
 
-/// The lines in one canonical text, `product:quantity:unit_price:discount:description` separated by commas
-/// (the description, which may hold anything, comes last and is read to the end of its entry by the page that
-/// shows the trail), which is what the audit trail records: the same lines always read the same.
+/// The lines in one canonical text, `product:quantity:unit_price:discount:description` one per row (the
+/// description, which may hold anything but a line break, comes last and is read to the end of its row by the
+/// page that shows the trail), which is what the audit trail records: the same lines always read the same.
 pub(crate) fn lines_text(lines: &[Line]) -> String {
     lines
         .iter()
@@ -130,7 +141,7 @@ pub(crate) fn lines_text(lines: &[Line]) -> String {
             )
         })
         .collect::<Vec<_>>()
-        .join(",")
+        .join("\n")
 }
 
 #[cfg(test)]

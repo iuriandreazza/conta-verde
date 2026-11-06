@@ -39,6 +39,7 @@ const coffee: Product = {
 const bread: Product = { ...coffee, id: "pr2", name: "Pão francês", sku: "pao", sale_price: "3.33" };
 const retired: Product = { ...coffee, id: "pr3", name: "Descontinuado", active: false };
 const term = { id: "t1", company_id: "c1", name: "30/60", installments: [], active: true };
+const revenue = { id: "cat1", company_id: "c1", parent_id: null, name: "Vendas", dre_group: "gross_revenue", cash_flow_group: "operating", level: 1, active: true };
 
 const quote: Quote = {
   id: "q1",
@@ -71,6 +72,8 @@ const answer =
     if (url.includes("/parties")) return { status: 200, body: { items: [customer], next_cursor: null } };
     if (url.includes("/products")) return { status: 200, body: { items: [coffee, bread, retired], next_cursor: null } };
     if (url.includes("/payment-terms")) return { status: 200, body: { items: [term], next_cursor: null } };
+    if (url.endsWith("/categories")) return { status: 200, body: { items: [revenue] } };
+    if (url.includes("/cost-centers")) return { status: 200, body: { items: [], next_cursor: null } };
     if (url.includes("/quotes")) return { status: 200, body: { items, next_cursor: null } };
     return { status: 404, body: { error: "not found" } };
   };
@@ -215,12 +218,42 @@ describe("quotes", () => {
     expect(await screen.findByRole("row", { name: /Mercado Boa Compra.*Enviado/ })).toBeInTheDocument();
   });
 
+  it("turns a quote into an open order, with the category of the receivable, and points to the sales", async () => {
+    const fetchMock = mockApi(
+      answer([{ ...quote, status: "approved" }], (url, init) =>
+        url.endsWith("/quotes/q1/convert") && init?.method === "POST"
+          ? {
+              status: 201,
+              body: { id: "s1", company_id: "c1", number: 4, quote_id: "q1", status: "open", lines: [], total: "35" },
+            }
+          : undefined,
+      ),
+    );
+    renderAt("/companies/c1/quotes");
+    await userEvent.click(await screen.findByRole("button", { name: "Converter o orçamento 7 em venda" }));
+    const region = within(screen.getByRole("region", { name: "Conversão do orçamento 7" }));
+
+    await userEvent.selectOptions(region.getByLabelText("Categoria da receita"), "cat1");
+    fireEvent.change(region.getByLabelText("Data da venda"), { target: { value: "2026-11-07" } });
+    await userEvent.click(region.getByRole("button", { name: "Criar pedido" }));
+
+    expect(await region.findByText(/Pedido nº 4 criado a partir deste orçamento/)).toBeInTheDocument();
+    expect(region.getByRole("link", { name: "Ir para as vendas" })).toHaveAttribute("href", "/companies/c1/sales");
+    expect(JSON.parse(String(sentCalls(fetchMock, "POST")[0][1]?.body))).toEqual({
+      sold_on: "2026-11-07",
+      category_id: "cat1",
+    });
+    expect(await screen.findByRole("row", { name: /Mercado Boa Compra.*Virou venda/ })).toBeInTheDocument();
+  });
+
   it("offers no way to change or send a quote that was answered, and nothing to write to a role that cannot", async () => {
     mockApi(answer([approvedQuote]));
     renderAt("/companies/c1/quotes");
     await screen.findByRole("row", { name: /Mercado Boa Compra/ });
     expect(screen.queryByRole("button", { name: /Alterar o orçamento/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Enviar o orçamento/ })).not.toBeInTheDocument();
+    // An answered quote may still become a sale; a declined one may not.
+    expect(screen.getByRole("button", { name: "Converter o orçamento 9 em venda" })).toBeInTheDocument();
   });
 
   it("shows the list and no form to a role that only reads sales", async () => {
@@ -260,7 +293,7 @@ describe("quotes", () => {
                   changes: [
                     { field: "customer_id", from: null, to: "p1" },
                     { field: "status", from: null, to: "draft" },
-                    { field: "lines", from: null, to: "pr1:3:10.1:0.3:Café: o torrado" },
+                    { field: "lines", from: null, to: "pr1:3:10.1:0.3:Café: o torrado\npr2:1:5:0:Cabo, 2 m" },
                   ],
                 },
               ],
@@ -273,7 +306,7 @@ describe("quotes", () => {
     const history = within(await screen.findByRole("region", { name: "Histórico do orçamento 7" }));
     expect(await history.findByText("Mercado Boa Compra")).toBeInTheDocument();
     expect(history.getByText("Rascunho")).toBeInTheDocument();
-    expect(history.getByText("Café: o torrado × 3 a R$ 10,10 (− R$ 0,30)")).toBeInTheDocument();
+    expect(history.getByText(/Café: o torrado × 3 a R\$ 10,10 \(− R\$ 0,30\); Cabo, 2 m × 1 a R\$ 5,00/)).toBeInTheDocument();
   });
 });
 

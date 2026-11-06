@@ -1,7 +1,7 @@
 use conta_verde_application::{
     PartyRepository, PaymentTermRepository, ProductRepository, RepositoryError, SalesReferences,
 };
-use conta_verde_domain::{CompanyId, PartyId, PaymentTermId, ProductId};
+use conta_verde_domain::{CompanyId, PartyId, PaymentTerm, PaymentTermId, ProductId};
 
 /// Answers what a quote, a sale or a contract may point at by asking the registers themselves, so one
 /// implementation serves every adapter, like `RegisterReferences` does for entries. A record of
@@ -58,5 +58,25 @@ where
             .find(company_id, id)
             .await?
             .is_some_and(|term| term.is_active()))
+    }
+
+    async fn seller_is_usable(
+        &self,
+        company_id: CompanyId,
+        id: PartyId,
+    ) -> Result<bool, RepositoryError> {
+        Ok(self
+            .parties
+            .find(company_id, id)
+            .await?
+            .is_some_and(|party| party.is_seller()))
+    }
+
+    async fn payment_term(
+        &self,
+        company_id: CompanyId,
+        id: PaymentTermId,
+    ) -> Result<Option<PaymentTerm>, RepositoryError> {
+        self.payment_terms.find(company_id, id).await
     }
 }

@@ -5,7 +5,7 @@ use conta_verde_application::{
     AttachmentService, AuthService, BalanceService, BankAccountService, CategoryService,
     CostCenterService, FinancialEntryService, MemberService, PartyService, PaymentMethodService,
     PaymentTermService, PostalCodeService, ProductService, QuoteService, ReconciliationService,
-    RecurrenceService, TransferService,
+    RecurrenceService, SaleService, TransferService,
 };
 use conta_verde_application::{EmailError, EmailMessage, EmailSender};
 use conta_verde_infrastructure::{
@@ -15,8 +15,8 @@ use conta_verde_infrastructure::{
     PostgresIdentityRepository, PostgresInvitationRepository, PostgresOpeningRepository,
     PostgresPartyRepository, PostgresPaymentMethodRepository, PostgresPaymentTermRepository,
     PostgresProductRepository, PostgresQuoteRepository, PostgresRecurrenceRepository,
-    PostgresStatementLineRepository, PostgresTransferRepository, RegisterReferences,
-    RegisterSalesReferences, SmtpEmailSender, connect_and_migrate,
+    PostgresSaleRepository, PostgresStatementLineRepository, PostgresTransferRepository,
+    RegisterReferences, RegisterSalesReferences, SmtpEmailSender, connect_and_migrate,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -53,6 +53,7 @@ impl Ports for PostgresPorts {
         PostgresPaymentTermRepository,
     >;
     type Quotes = PostgresQuoteRepository;
+    type Sales = PostgresSaleRepository;
     type Statements = PostgresStatementLineRepository;
     type PostalCodes = Option<BrasilApiPostalCodeDirectory>;
     type Invitations = PostgresInvitationRepository;
@@ -155,6 +156,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Argon2SecretService::new()?,
         &public_url,
     );
+    let sales = SaleService::new(
+        PostgresSaleRepository::new(pool.clone()),
+        PostgresQuoteRepository::new(pool.clone()),
+        FinancialEntryService::new(
+            PostgresFinancialEntryRepository::new(pool.clone()),
+            references(),
+        ),
+        references(),
+        RegisterSalesReferences::new(
+            PostgresPartyRepository::new(pool.clone()),
+            PostgresProductRepository::new(pool.clone()),
+            PostgresPaymentTermRepository::new(pool.clone()),
+        ),
+    );
     let members = MemberService::new(
         PostgresInvitationRepository::new(pool.clone()),
         PostgresIdentityRepository::new(pool.clone()),
@@ -186,6 +201,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 transfers,
                 recurrences,
                 quotes,
+                sales,
                 reconciliation,
                 balances,
                 postal_codes,

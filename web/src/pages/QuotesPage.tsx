@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import {
   NO_FILTERS,
   NO_PAYMENT_TERM_FILTERS,
@@ -7,7 +7,10 @@ import {
   NO_QUOTE_FILTERS,
   api,
   errorMessage,
+  type Category,
+  type CostCenter,
   type Party,
+  type Sale,
   type PaymentTerm,
   type Product,
   type Quote,
@@ -23,6 +26,7 @@ import { ChevronDownIcon } from "../components/icons/chevron-down";
 import { FileTextIcon } from "../components/icons/file-text";
 import { HistoryIcon } from "../components/icons/history";
 import { PlusIcon } from "../components/icons/plus";
+import { HandCoinsIcon } from "../components/icons/hand-coins";
 import { SendIcon } from "../components/icons/send";
 import { SquarePenIcon } from "../components/icons/square-pen";
 import { LinesEditor, linesProblem, linesToInput, newLine, rowsFromLines, type LineRow } from "../components/LinesEditor";
@@ -30,6 +34,7 @@ import { ListRow } from "../components/ListRow";
 import { Notice } from "../components/Notice";
 import { PageHeader } from "../components/PageHeader";
 import { Spinner } from "../components/Spinner";
+import { treeRows } from "../lib/categoryTree";
 import { formatMoney } from "../lib/decimal";
 import { formatDate, isIsoDate } from "../lib/entryInstallments";
 import { QUOTE_STATUS_LABELS } from "../lib/quoteStatus";
@@ -80,6 +85,12 @@ export function QuotesPage() {
   const [parties, setParties] = useState<Party[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [terms, setTerms] = useState<PaymentTerm[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [costCenters, setCostCenters] = useState<CostCenter[]>([]);
+  const [convertingFor, setConvertingFor] = useState<string | null>(null);
+  const [converting, setConverting] = useState(false);
+  const [convertError, setConvertError] = useState<string | null>(null);
+  const [converted, setConverted] = useState<Sale | null>(null);
   const [targetsError, setTargetsError] = useState<string | null>(null);
   const [targetsLoaded, setTargetsLoaded] = useState(false);
 
@@ -90,12 +101,16 @@ export function QuotesPage() {
       readUpTo((after) => api.listParties(companyId, NO_FILTERS, after)),
       readUpTo((after) => api.listProducts(companyId, NO_PRODUCT_FILTERS, after)),
       readUpTo((after) => api.listPaymentTerms(companyId, NO_PAYMENT_TERM_FILTERS, after)),
+      api.listCategories(companyId),
+      readUpTo((after) => api.listCostCenters(companyId, { q: "", active: "", sort: "name" }, after)),
     ])
-      .then(([partyList, productList, termList]) => {
+      .then(([partyList, productList, termList, categoryList, centerList]) => {
         if (current) {
           setParties(partyList);
           setProducts(productList);
           setTerms(termList);
+          setCategories(categoryList.items);
+          setCostCenters(centerList);
           setTargetsLoaded(true);
         }
       })
@@ -184,6 +199,35 @@ export function QuotesPage() {
       setFormError(errorMessage(failure));
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleConvert(event: FormEvent<HTMLFormElement>, quote: Quote) {
+    event.preventDefault();
+    if (converting) {
+      return;
+    }
+    const form = new FormData(event.currentTarget);
+    const field = (name: string) => String(form.get(name) ?? "").trim();
+    if (!isIsoDate(field("sold_on"))) {
+      setConvertError("Informe a data da venda.");
+      return;
+    }
+    setConverting(true);
+    setConvertError(null);
+    try {
+      const sale = await api.convertQuote(companyId, quote.id, {
+        sold_on: field("sold_on"),
+        category_id: field("category_id"),
+        cost_center_id: field("cost_center_id") || undefined,
+        seller_id: field("seller_id") || undefined,
+      });
+      setItems((current) => current.map((item) => (item.id === quote.id ? { ...item, status: "converted" } : item)));
+      setConverted(sale);
+    } catch (failure) {
+      setConvertError(errorMessage(failure));
+    } finally {
+      setConverting(false);
     }
   }
 
@@ -309,6 +353,23 @@ export function QuotesPage() {
                           >
                             <FileTextIcon size={16} aria-hidden />
                           </a>
+                          {canWrite && quote.status !== "declined" && quote.status !== "converted" && (
+                            <Button
+                              iconOnly
+                              icon={HandCoinsIcon}
+                              type="button"
+                              variant="ghost"
+                              aria-label={`Converter o orçamento ${quote.number} em venda`}
+                              aria-expanded={convertingFor === quote.id}
+                              onClick={() => {
+                                setConvertingFor(convertingFor === quote.id ? null : quote.id);
+                                setConvertError(null);
+                                setConverted(null);
+                              }}
+                            >
+                              Converter em venda
+                            </Button>
+                          )}
                           {canWrite && isOpen(quote) && (
                             <>
                               <Button
@@ -353,6 +414,76 @@ export function QuotesPage() {
                           </Button>
                         </td>
                       </ListRow>
+                      {convertingFor === quote.id && (
+                        <tr>
+                          <td colSpan={6} role="region" aria-label={`Conversão do orçamento ${quote.number}`}>
+                            {converted !== null && converted.quote_id === quote.id ? (
+                              <Notice
+                                tone="success"
+                                message={`Pedido nº ${converted.number} criado a partir deste orçamento. Conclua-o em Vendas para gerar a conta a receber.`}
+                              />
+                            ) : (
+                              <form className="opening-form" onSubmit={(event) => void handleConvert(event, quote)}>
+                                <label>
+                                  Data da venda
+                                  <input name="sold_on" type="date" required defaultValue={todayIso()} />
+                                </label>
+                                <label>
+                                  Categoria da receita
+                                  <select name="category_id" required defaultValue="">
+                                    <option value="" disabled>
+                                      Escolha
+                                    </option>
+                                    {treeRows(categories)
+                                      .filter(({ category }) => category.active && category.dre_group !== "transfers")
+                                      .map(({ category, depth }) => (
+                                        <option key={category.id} value={category.id}>
+                                          {"— ".repeat(depth)}
+                                          {category.name}
+                                        </option>
+                                      ))}
+                                  </select>
+                                </label>
+                                <label>
+                                  Centro de custo
+                                  <select name="cost_center_id" defaultValue="">
+                                    <option value="">Nenhum</option>
+                                    {costCenters
+                                      .filter((center) => center.active)
+                                      .map((center) => (
+                                        <option key={center.id} value={center.id}>
+                                          {center.name}
+                                        </option>
+                                      ))}
+                                  </select>
+                                </label>
+                                <label>
+                                  Vendedor
+                                  <select name="seller_id" defaultValue="">
+                                    <option value="">Nenhum</option>
+                                    {parties
+                                      .filter((party) => party.is_seller)
+                                      .map((party) => (
+                                        <option key={party.id} value={party.id}>
+                                          {party.name}
+                                        </option>
+                                      ))}
+                                  </select>
+                                </label>
+                                <Button type="submit" icon={HandCoinsIcon} pending={converting}>
+                                  Criar pedido
+                                </Button>
+                                <Notice message={convertError} />
+                              </form>
+                            )}
+                            {converted !== null && converted.quote_id === quote.id && (
+                              <p>
+                                <Link to={`/companies/${companyId}/sales`}>Ir para as vendas</Link>
+                              </p>
+                            )}
+                          </td>
+                        </tr>
+                      )}
                       {sendingFor === quote.id && (
                         <tr>
                           <td colSpan={6} role="region" aria-label={`Envio do orçamento ${quote.number}`}>
@@ -511,7 +642,7 @@ function displayValue(field: string, value: string | null, names: Map<string, st
   if (field === "issued_on" || field === "valid_until") return formatDate(value);
   if (field === "lines") {
     return value
-      .split(",")
+      .split("\n")
       .map((line) => {
         // The description comes last and may hold colons of its own.
         const [product, quantity, price, discount, ...description] = line.split(":");

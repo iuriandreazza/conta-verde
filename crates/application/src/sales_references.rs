@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use conta_verde_domain::{CompanyId, PartyId, PaymentTermId, ProductId};
+use conta_verde_domain::{CompanyId, PartyId, PaymentTerm, PaymentTermId, ProductId};
 
 use crate::RepositoryError;
 
@@ -27,4 +27,18 @@ pub trait SalesReferences: Send + Sync {
         company_id: CompanyId,
         id: PaymentTermId,
     ) -> impl Future<Output = Result<bool, RepositoryError>> + Send;
+
+    /// The party exists in the company and is a seller.
+    fn seller_is_usable(
+        &self,
+        company_id: CompanyId,
+        id: PartyId,
+    ) -> impl Future<Output = Result<bool, RepositoryError>> + Send;
+
+    /// The payment term, active or not: a sale that was agreed on one is billed by it.
+    fn payment_term(
+        &self,
+        company_id: CompanyId,
+        id: PaymentTermId,
+    ) -> impl Future<Output = Result<Option<PaymentTerm>, RepositoryError>> + Send;
 }

@@ -282,17 +282,23 @@ export function EntriesPage() {
                         <td>
                           <div className="cell-title">{entry.description}</div>
                           <div className="muted">
-                            <span className={STATUS_BADGES[status]}>{STATUS_LABELS[status]}</span>{" "}
+                            {entry.voided ? (
+                              <span className="badge badge-dot badge-critical">Cancelado</span>
+                            ) : (
+                              <span className={STATUS_BADGES[status]}>{STATUS_LABELS[status]}</span>
+                            )}{" "}
                             {entry.kind === "receivable" ? "A receber" : "A pagar"} ·{" "}
                             {names.get(entry.category_id) ?? ""}
                             {entry.recurrence_id !== null && " · Recorrente"}
+                            {entry.sale_id !== null && " · De uma venda"}
+                            {entry.sale_return_id !== null && " · Devolução"}
                           </div>
                         </td>
                         <td className="tabular">{formatDate(entry.competence_date)}</td>
                         <td className="tabular">{describeDue(entry)}</td>
                         <td className="num">{formatMoney(entry.total)}</td>
                         <td className="row-actions">
-                          {canWrite && (
+                          {canWrite && !entry.voided && entry.sale_id === null && entry.sale_return_id === null && (
                             <Button
                               iconOnly
                               icon={SquarePenIcon}
@@ -309,20 +315,22 @@ export function EntriesPage() {
                               Alterar
                             </Button>
                           )}
-                          <Button
-                            iconOnly
-                            icon={CircleDollarSignIcon}
-                            type="button"
-                            variant="ghost"
-                            aria-label={`Baixas de ${entry.description}`}
-                            aria-expanded={settlementsOpenFor === entry.id}
-                            aria-controls={`settlements-${entry.id}`}
-                            onClick={() =>
-                              setSettlementsOpenFor(settlementsOpenFor === entry.id ? null : entry.id)
-                            }
-                          >
-                            Baixas
-                          </Button>
+                          {!entry.voided && (
+                            <Button
+                              iconOnly
+                              icon={CircleDollarSignIcon}
+                              type="button"
+                              variant="ghost"
+                              aria-label={`Baixas de ${entry.description}`}
+                              aria-expanded={settlementsOpenFor === entry.id}
+                              aria-controls={`settlements-${entry.id}`}
+                              onClick={() =>
+                                setSettlementsOpenFor(settlementsOpenFor === entry.id ? null : entry.id)
+                              }
+                            >
+                              Baixas
+                            </Button>
+                          )}
                           <Button
                             iconOnly
                             icon={FileTextIcon}

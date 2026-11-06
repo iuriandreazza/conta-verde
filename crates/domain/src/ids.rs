@@ -34,6 +34,8 @@ uuid_id!(PaymentTermId);
 uuid_id!(ProductId);
 uuid_id!(QuoteId);
 uuid_id!(RecurrenceId);
+uuid_id!(SaleId);
+uuid_id!(SaleReturnId);
 uuid_id!(SettlementId);
 uuid_id!(StatementLineId);
 uuid_id!(TransferId);
