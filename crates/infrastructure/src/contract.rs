@@ -12298,3 +12298,132 @@ pub async fn retries_a_failed_reminder_a_few_times<D, E, P, K, N, I, M, W, F>(
     assert_eq!(reminders[0].attempts(), 3);
     assert_eq!(reminders[0].note(), Some("the message was not sent"));
 }
+
+/// Who owes what late ([ADR 0051]): the installments of receivables that fell due before the day and still owe,
+/// by customer and by how late; nothing that is paid, cancelled, a payable, due on the day or after it, or of
+/// another company.
+pub async fn reports_delinquency<R, F, P>(
+    entries: &FinancialEntryService<R, F>,
+    parties: &P,
+    company: CompanyId,
+    other_company: CompanyId,
+    seed: &EntrySeed,
+) where
+    R: FinancialEntryRepository,
+    F: EntryReferences,
+    P: PartyRepository,
+{
+    use conta_verde_domain::EntryKind;
+    let ana = actor();
+    let day = |text: &str| CalendarDate::parse(text).unwrap();
+    let (a, _, _) = reachable_customer(parties, company).await;
+    let (b, _, _) = reachable_customer(parties, company).await;
+    let entry = |kind: EntryKind, party: Option<PartyId>, due: &str, amount: &str| {
+        let mut draft = entry_draft(seed, "Venda", "2026-09-01", &[(due, amount)]);
+        draft.kind = kind;
+        draft.party_id = party;
+        entries.register(company, &ana, draft)
+    };
+    let on = day("2027-01-31");
+
+    // Nothing is late before anything is registered, and a day with nothing before it is an empty report.
+    assert_eq!(
+        entries
+            .delinquency(company, on)
+            .await
+            .unwrap()
+            .owed
+            .to_string(),
+        "0"
+    );
+    assert_eq!(
+        entries
+            .delinquency(company, CalendarDate::EARLIEST)
+            .await
+            .unwrap()
+            .installments,
+        0
+    );
+
+    entry(EntryKind::Receivable, Some(a), "2027-01-20", "100")
+        .await
+        .unwrap();
+    let part_paid = entry(EntryKind::Receivable, Some(a), "2026-12-20", "50")
+        .await
+        .unwrap();
+    entries
+        .settle(
+            company,
+            &ana,
+            part_paid.id(),
+            settlement_draft(seed, 1, "20"),
+        )
+        .await
+        .unwrap();
+    entry(EntryKind::Receivable, Some(a), "2026-10-01", "10")
+        .await
+        .unwrap();
+    entry(EntryKind::Receivable, Some(b), "2027-01-30", "5")
+        .await
+        .unwrap();
+    entry(EntryKind::Receivable, None, "2027-01-01", "7")
+        .await
+        .unwrap();
+    // Left out: due on the day and after it, paid, a payable, cancelled, and another company's.
+    entry(EntryKind::Receivable, Some(b), "2027-01-31", "99")
+        .await
+        .unwrap();
+    entry(EntryKind::Receivable, Some(b), "2027-02-10", "99")
+        .await
+        .unwrap();
+    let paid = entry(EntryKind::Receivable, Some(b), "2027-01-01", "40")
+        .await
+        .unwrap();
+    entries
+        .settle(company, &ana, paid.id(), settlement_draft(seed, 1, "40"))
+        .await
+        .unwrap();
+    entry(EntryKind::Payable, Some(b), "2027-01-01", "1000")
+        .await
+        .unwrap();
+    let cancelled = entry(EntryKind::Receivable, Some(b), "2027-01-01", "500")
+        .await
+        .unwrap();
+    entries.void(company, &ana, cancelled.id()).await.unwrap();
+    assert_eq!(
+        entries
+            .delinquency(other_company, on)
+            .await
+            .unwrap()
+            .installments,
+        0
+    );
+
+    let report = entries.delinquency(company, on).await.unwrap();
+    assert_eq!(report.on, on);
+    assert_eq!(report.owed.to_string(), "152");
+    assert_eq!(report.installments, 5);
+    assert_eq!(
+        report.by_bucket.map(|amount| amount.to_string()),
+        ["112", "30", "0", "10"]
+    );
+    assert_eq!(report.installments_by_bucket, [3, 1, 0, 1]);
+    let owed: Vec<String> = report
+        .customers
+        .iter()
+        .map(|c| c.owed.to_string())
+        .collect();
+    assert_eq!(owed, ["140", "7", "5"]);
+    assert_eq!(report.customers[0].party_id, Some(a));
+    assert_eq!(report.customers[0].oldest_due, day("2026-10-01"));
+    assert_eq!(report.customers[1].party_id, None);
+    assert_eq!(report.customers[2].party_id, Some(b));
+
+    // Ten days earlier the installment due on the 30th is not late yet, and what is, is less late.
+    let earlier = entries
+        .delinquency(company, day("2027-01-21"))
+        .await
+        .unwrap();
+    assert_eq!(earlier.installments, 4);
+    assert_eq!(earlier.owed.to_string(), "147");
+}

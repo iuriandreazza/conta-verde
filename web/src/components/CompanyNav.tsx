@@ -3,6 +3,7 @@ import { useState } from "react";
 import { NavLink } from "react-router-dom";
 import type { AnimatedIcon } from "./Button";
 import { BoxIcon } from "./icons/box";
+import { BadgeAlertIcon } from "./icons/badge-alert";
 import { CalendarDaysIcon } from "./icons/calendar-days";
 import { ChartLineIcon } from "./icons/chart-line";
 import { CheckIcon } from "./icons/check";
@@ -101,6 +102,7 @@ const SECTIONS: NavSection[] = [
       { path: "/reconciliation", label: "Conciliação", icon: CheckIcon },
       { path: "/recurrences", label: "Recorrências", icon: RotateCCWIcon },
       { path: "/collection", label: "Cobrança", icon: CreditCardIcon },
+      { path: "/delinquency", label: "Inadimplência", icon: BadgeAlertIcon },
     ],
   },
   {

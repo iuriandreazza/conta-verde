@@ -1171,6 +1171,27 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires DATABASE_URL"]
+    async fn reports_delinquency() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let other_company = contract::create_company(&pool).await;
+        let seed = seed(&pool, company).await;
+        let service = FinancialEntryService::new(
+            PostgresFinancialEntryRepository::new(pool.clone()),
+            references(&pool),
+        );
+        contract::reports_delinquency(
+            &service,
+            &PostgresPartyRepository::new(pool.clone()),
+            company,
+            other_company,
+            &seed,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
     async fn reports_the_entries() {
         let pool = contract::test_pool().await;
         let company = contract::create_company(&pool).await;

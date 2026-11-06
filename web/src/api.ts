@@ -558,6 +558,35 @@ export interface CollectionSettings {
   fee_category_id: string | null;
 }
 
+/** One range of lateness of the delinquency report (ADR 0051). */
+export interface DelinquencyBucket {
+  from_days: number;
+  /** `null` for the last range, which has no end. */
+  to_days: number | null;
+  owed: string;
+  installments: number;
+}
+
+export interface DelinquentCustomer {
+  /** `null` for what has no customer. */
+  party_id: string | null;
+  owed: string;
+  installments: number;
+  /** `YYYY-MM-DD`. */
+  oldest_due: string;
+  /** What is owed in each range, in the order of `buckets`. */
+  by_bucket: string[];
+}
+
+/** Who owes what late on a day, and how late (ADR 0051). */
+export interface Delinquency {
+  on: string;
+  owed: string;
+  installments: number;
+  buckets: DelinquencyBucket[];
+  customers: DelinquentCustomer[];
+}
+
 export type DunningChannel = "email" | "whatsapp";
 
 /** One reminder: on the due date moved by `days` (negative before it, 0 on it, positive after it) (ADR 0048). */
@@ -1512,6 +1541,8 @@ export const api = {
       { method: "POST" },
     ),
   publicCharge: (token: string) => request<PublicCharge>(`/public/charges/${token}`),
+  getDelinquency: (companyId: string, on: string) =>
+    request<Delinquency>(`/companies/${companyId}/delinquency?on=${on}`),
   getDunningPlan: (companyId: string) =>
     request<DunningPlan>(`/companies/${companyId}/collection/dunning`),
   replaceDunningPlan: (companyId: string, plan: { enabled: boolean; rules: DunningRule[] }) =>
