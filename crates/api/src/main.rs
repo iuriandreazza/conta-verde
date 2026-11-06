@@ -9,9 +9,10 @@ use conta_verde_application::{
     SalesReportService, TransferService,
 };
 use conta_verde_application::{
-    ChargeService, CollectionService, EmailError, EmailMessage, EmailSender, PaymentPageService,
-    PaymentProvider, PaymentWebhookService, ProviderCharge, ProviderChargeRequest, ProviderError,
-    ProviderEvent, WebhookError, WebhookHeaders,
+    ChargeService, CollectionService, DunningService, EmailError, EmailMessage, EmailSender,
+    MessageError, MessageSender, PaymentPageService, PaymentProvider, PaymentWebhookService,
+    ProviderCharge, ProviderChargeRequest, ProviderError, ProviderEvent, TextMessage, WebhookError,
+    WebhookHeaders,
 };
 use conta_verde_infrastructure::{
     Argon2SecretService, BrasilApiCnpjRegistry, BrasilApiPostalCodeDirectory, CachedCnpjRegistry,
@@ -28,6 +29,10 @@ use conta_verde_infrastructure::{
     FakePaymentProvider, NoPaymentProvider, PostgresChargeRepository,
     PostgresCollectionSettingsRepository, PostgresPaymentEventRepository,
     PostgresPaymentLinkRepository,
+};
+use conta_verde_infrastructure::{
+    NoMessageSender, PostgresDunningPlanRepository, PostgresNotificationRepository,
+    WhatsAppCloudSender,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -61,6 +66,9 @@ impl Ports for PostgresPorts {
     type CollectionSettings = PostgresCollectionSettingsRepository;
     type PaymentEvents = PostgresPaymentEventRepository;
     type PaymentLinks = PostgresPaymentLinkRepository;
+    type DunningPlans = PostgresDunningPlanRepository;
+    type Notifications = PostgresNotificationRepository;
+    type Messages = ConfiguredMessageSender;
     type Transfers = PostgresTransferRepository;
     type Openings = PostgresOpeningRepository;
     type Recurrences = PostgresRecurrenceRepository;
@@ -197,13 +205,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Argon2SecretService::new()?,
         &public_url,
     );
-    let payment_pages = PaymentPageService::new(
-        PostgresPaymentLinkRepository::new(pool.clone()),
-        PostgresChargeRepository::new(pool.clone()),
-        PostgresFinancialEntryRepository::new(pool.clone()),
-        Argon2SecretService::new()?,
-        &public_url,
-    );
+    let payment_page_service = || {
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(PaymentPageService::new(
+            PostgresPaymentLinkRepository::new(pool.clone()),
+            PostgresChargeRepository::new(pool.clone()),
+            PostgresFinancialEntryRepository::new(pool.clone()),
+            Argon2SecretService::new()?,
+            &public_url,
+        ))
+    };
+    let payment_pages = payment_page_service()?;
+    let dunning_service = || {
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(DunningService::new(
+            PostgresDunningPlanRepository::new(pool.clone()),
+            PostgresFinancialEntryRepository::new(pool.clone()),
+            PostgresPartyRepository::new(pool.clone()),
+            payment_page_service()?,
+            PostgresNotificationRepository::new(pool.clone()),
+            PostgresIdentityRepository::new(pool.clone()),
+            email_sender_from_env()?,
+            message_sender_from_env()?,
+        ))
+    };
+    let dunning = dunning_service()?;
+    tokio::spawn(send_reminders(dunning_service()?));
     let price_lists = PriceListService::new(
         PostgresPriceListRepository::new(pool.clone()),
         RegisterSalesReferences::new(
@@ -280,6 +305,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 charges,
                 webhooks,
                 payment_pages,
+                dunning,
                 collection,
                 transfers,
                 recurrences,
@@ -308,6 +334,33 @@ fn attachments_dir_from_env() -> String {
         tracing::warn!("ATTACHMENTS_DIR is not set: attachments are kept in ./data/attachments");
         "./data/attachments".to_owned()
     })
+}
+
+/// Every hour, sends the reminders the plans of the companies call for ([ADR 0048]): the day is the one the
+/// customers are in, and each reminder is claimed in the store first, so a pass that overlaps another, or a
+/// restart, sends nothing twice.
+async fn send_reminders<D, E, P, K, N, I, M, W>(service: DunningService<D, E, P, K, N, I, M, W>)
+where
+    D: conta_verde_application::DunningPlanRepository,
+    E: conta_verde_application::FinancialEntryRepository,
+    P: conta_verde_application::PartyRepository,
+    K: conta_verde_application::InstallmentLinks,
+    N: conta_verde_application::NotificationRepository,
+    I: conta_verde_application::IdentityRepository,
+    M: EmailSender,
+    W: MessageSender,
+{
+    let mut tick = tokio::time::interval(JOB_INTERVAL);
+    loop {
+        tick.tick().await;
+        match service.send_due(conta_verde_api::customer_today()).await {
+            Ok(report) if report.sent > 0 || report.failed > 0 => {
+                tracing::info!(sent = report.sent, failed = report.failed, "reminders sent");
+            }
+            Ok(_) => {}
+            Err(error) => tracing::error!(%error, "sending reminders failed"),
+        }
+    }
 }
 
 /// The scheduled job of ADR 0033: once an hour, generates the recurring entries that fall due in the
@@ -444,6 +497,56 @@ fn payment_provider_from_env()
             ))
         }
         Some(other) => Err(format!("PAYMENT_PROVIDER={other} is not a known provider").into()),
+    }
+}
+
+/// The WhatsApp provider the operator chose: the Cloud API when its three settings are given, and none
+/// otherwise, in which case reminders by WhatsApp are not tried.
+enum ConfiguredMessageSender {
+    None(NoMessageSender),
+    // Boxed: the client is large next to the unit of the off adapter.
+    WhatsApp(Box<WhatsAppCloudSender>),
+}
+
+impl MessageSender for ConfiguredMessageSender {
+    fn is_enabled(&self) -> bool {
+        match self {
+            Self::None(sender) => sender.is_enabled(),
+            Self::WhatsApp(sender) => sender.is_enabled(),
+        }
+    }
+
+    async fn send(&self, message: &TextMessage) -> Result<(), MessageError> {
+        match self {
+            Self::None(sender) => sender.send(message).await,
+            Self::WhatsApp(sender) => sender.send(message).await,
+        }
+    }
+}
+
+/// `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_TOKEN` and `WHATSAPP_TEMPLATE` together send reminders through the
+/// WhatsApp Business Cloud API; with none of them WhatsApp is off. Some without the others is a mistake, and
+/// stops the server instead of silently sending nothing. The token is never logged.
+fn message_sender_from_env()
+-> Result<ConfiguredMessageSender, Box<dyn std::error::Error + Send + Sync>> {
+    let setting = |name: &str| {
+        std::env::var(name)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+    };
+    match (
+        setting("WHATSAPP_PHONE_NUMBER_ID"),
+        setting("WHATSAPP_TOKEN"),
+        setting("WHATSAPP_TEMPLATE"),
+    ) {
+        (Some(phone), Some(token), Some(template)) => Ok(ConfiguredMessageSender::WhatsApp(
+            Box::new(WhatsAppCloudSender::new(&phone, &token, &template)?),
+        )),
+        (None, None, None) => Ok(ConfiguredMessageSender::None(NoMessageSender)),
+        _ => Err(
+            "WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_TOKEN and WHATSAPP_TEMPLATE must be set together"
+                .into(),
+        ),
     }
 }
 

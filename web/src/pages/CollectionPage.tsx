@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useParams } from "react-router-dom";
-import { api, errorMessage, type CollectionSettings } from "../api";
+import { api, errorMessage, type CollectionSettings, type DunningPlan } from "../api";
+import { DunningPlanForm } from "../components/DunningPlanForm";
 import { Button } from "../components/Button";
 import { CheckIcon } from "../components/icons/check";
 import { Notice } from "../components/Notice";
@@ -16,6 +17,8 @@ export function CollectionPage() {
   const targets = useEntryTargets(companyId);
   const [settings, setSettings] = useState<CollectionSettings | null>(null);
   const [provider, setProvider] = useState<string | null | undefined>(undefined);
+  const [plan, setPlan] = useState<DunningPlan | null>(null);
+  const [planError, setPlanError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -30,6 +33,11 @@ export function CollectionPage() {
         }
       })
       .catch((failure: unknown) => current && setError(errorMessage(failure)));
+    // The reminders are a section of their own: if they cannot be read, the settings above still can.
+    api
+      .getDunningPlan(companyId)
+      .then((dunning) => current && setPlan(dunning))
+      .catch((failure: unknown) => current && setPlanError(errorMessage(failure)));
     return () => {
       current = false;
     };
@@ -150,6 +158,12 @@ export function CollectionPage() {
             </form>
           </section>
         )
+      )}
+      <Notice message={planError} />
+      {ready && plan !== null && (
+        <section className="card">
+          <DunningPlanForm companyId={companyId} plan={plan} canWrite={canWrite} onSaved={setPlan} />
+        </section>
       )}
     </>
   );

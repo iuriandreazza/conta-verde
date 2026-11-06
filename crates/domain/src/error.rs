@@ -56,6 +56,9 @@ pub enum DomainError {
     ChargeIsPaid,
     InvalidChargeNote,
     InvalidPaymentEvent,
+    TooManyDunningRules,
+    InvalidDunningDays,
+    DuplicateDunningRule,
     UnsupportedAttachmentType,
     InvalidAttachmentSize,
     InvalidOpeningBalance,
@@ -220,6 +223,13 @@ impl fmt::Display for DomainError {
             Self::ChargeIsNotOpen => f.write_str("the charge is not open"),
             Self::ChargeIsPaid => f.write_str("the charge is paid already"),
             Self::InvalidChargeNote => f.write_str("a charge's note is one short line"),
+            Self::TooManyDunningRules => f.write_str("a company has at most 20 reminder rules"),
+            Self::InvalidDunningDays => {
+                f.write_str("a reminder goes out from 60 days before to 180 days after the due date")
+            }
+            Self::DuplicateDunningRule => {
+                f.write_str("a reminder rule is for one day and channel once")
+            }
             Self::InvalidPaymentEvent => f.write_str("the provider's notice is not valid"),
             Self::InvalidAttachmentName => f.write_str(
                 "file name must be one line of at most 200 characters, with no slash or control characters",

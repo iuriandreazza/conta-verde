@@ -3,7 +3,7 @@ use uuid::Uuid;
 use crate::line::lines_text;
 use crate::{
     AccountOpening, Attachment, BankAccount, Category, Charge, CollectionSettings, CommissionRule,
-    CompanyId, Contract, CostCenter, DocumentCheck, FinancialEntry, LineMatch, Party,
+    CompanyId, Contract, CostCenter, DocumentCheck, DunningPlan, FinancialEntry, LineMatch, Party,
     PaymentMethod, PaymentTerm, PriceList, Product, Quote, Recurrence, Sale, SaleReturn,
     Settlement, StatementLine, Tag, Transfer, UserId,
 };
@@ -37,6 +37,8 @@ pub enum AuditEntity {
     Charge,
     /// One per company: the audit id is the company's.
     CollectionSettings,
+    /// One per company: the audit id is the company's.
+    DunningPlan,
     Quote,
     Sale,
     SaleReturn,
@@ -61,6 +63,7 @@ impl AuditEntity {
             Self::Attachment => "attachment",
             Self::Charge => "charge",
             Self::CollectionSettings => "collection_settings",
+            Self::DunningPlan => "dunning_plan",
             Self::Quote => "quote",
             Self::Sale => "sale",
             Self::SaleReturn => "sale_return",
@@ -378,6 +381,20 @@ impl Audited for Charge {
 impl Audited for CollectionSettings {
     fn audit_entity(&self) -> AuditEntity {
         AuditEntity::CollectionSettings
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.company_id().as_uuid()
+    }
+}
+
+impl Audited for DunningPlan {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::DunningPlan
     }
 
     fn audit_company(&self) -> CompanyId {
@@ -1044,6 +1061,22 @@ pub fn collection_settings_changes(
         collection_settings_fields(before),
         collection_settings_fields(after),
     )
+}
+
+fn dunning_plan_fields(plan: &DunningPlan) -> Fields {
+    vec![
+        ("enabled", Some(plan.is_enabled().to_string())),
+        ("rules", Some(plan.rules_text())),
+    ]
+}
+
+/// Every field a new plan has set.
+pub fn dunning_plan_creation_changes(plan: &DunningPlan) -> Vec<FieldChange> {
+    creation_from(dunning_plan_fields(plan))
+}
+
+pub fn dunning_plan_changes(before: &DunningPlan, after: &DunningPlan) -> Vec<FieldChange> {
+    changes_between(dunning_plan_fields(before), dunning_plan_fields(after))
 }
 
 fn transfer_fields(transfer: &Transfer) -> Fields {

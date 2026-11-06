@@ -22,6 +22,10 @@ use conta_verde_application::{
     SalesReferences,
 };
 use conta_verde_application::{
+    DunningPlanRepository, DunningService, EmailMessage, InstallmentLinks, MessageSender,
+    NotificationRepository, TextMessage,
+};
+use conta_verde_application::{
     ImportRow, InvitationRepository, InvitationState, Invited, MemberService, NewAccount,
     NewInvitation, NewUser, PaymentTermQuery, PaymentTermRepository, PaymentTermService,
 };
@@ -51,7 +55,9 @@ use conta_verde_domain::{PriceListDraft, PriceListItemDraft};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::{FakePaymentProvider, InMemoryCnpjRegistry, InMemoryEmailSender};
+use crate::{
+    FakePaymentProvider, InMemoryCnpjRegistry, InMemoryEmailSender, InMemoryMessageSender,
+};
 
 pub const ACTIVE_CNPJ: &str = "11.222.333/0001-81";
 pub const CLOSED_ALPHANUMERIC_CNPJ: &str = "12.ABC.345/01DE-35";
@@ -11931,4 +11937,320 @@ pub async fn serves_payment_pages<L, C, E, F, P, S, Sec>(
         pages.page(doomed_token).await.unwrap().state,
         PageState::Unavailable
     );
+}
+
+/// Registers a customer who can be reminded by e-mail and by WhatsApp (a contact with a phone).
+///
+/// The address and the phone are of this one only: the pass reaches **every** company's reminders, and
+/// tests that share a database look at what went to their own customer.
+async fn reachable_customer<P: PartyRepository>(
+    parties: &P,
+    company: CompanyId,
+) -> (PartyId, String, String) {
+    let tag = Uuid::new_v4().as_u128();
+    let address = format!("cliente-{tag:x}@example.com");
+    let phone = format!("5581{:09}", tag % 1_000_000_000);
+    let mut draft = party_draft("Cliente Lembrado", None);
+    draft.email = Some(address.clone());
+    draft.contacts = vec![ContactDraft {
+        name: "Ana".into(),
+        phone: Some(format!("+{phone}")),
+        ..ContactDraft::default()
+    }];
+    let party = Party::new(PartyId::generate(), company, draft).unwrap();
+    parties.save(&party, &created_entry(&party)).await.unwrap();
+    (party.id(), address, phone)
+}
+
+/// The reminders ([ADR 0048]) on a test clock: the plan is audited and replaced as a whole; a rule reaches
+/// the installments of receivables that still owe, once each however often the pass runs; what has nowhere
+/// to go, is paid, is cancelled, is a payable or is not due yet is left alone; the e-mail carries a link to
+/// the open charge, and WhatsApp the phone of a contact.
+#[allow(clippy::too_many_arguments)]
+pub async fn sends_reminders_on_schedule<D, E, P, K, N, I, M, S, F, C>(
+    service: &DunningService<D, E, P, K, N, I, M, InMemoryMessageSender>,
+    entries: &FinancialEntryService<E, F>,
+    parties: &P,
+    charges: &ChargeService<C, E, P, FakePaymentProvider, S>,
+    settings: &CollectionService<S, F>,
+    emails: &InMemoryEmailSender,
+    messages: &InMemoryMessageSender,
+    company: CompanyId,
+    other_company: CompanyId,
+    seed: &EntrySeed,
+) where
+    D: DunningPlanRepository,
+    E: FinancialEntryRepository,
+    P: PartyRepository,
+    K: InstallmentLinks,
+    N: NotificationRepository,
+    I: IdentityRepository,
+    M: EmailSender,
+    S: CollectionSettingsRepository,
+    F: EntryReferences,
+    C: ChargeRepository,
+{
+    use conta_verde_domain::{DunningChannel, DunningRule, EntryKind, NotificationStatus};
+    let ana = actor();
+    let day = |text: &str| CalendarDate::parse(text).unwrap();
+    let (customer, address, phone) = reachable_customer(parties, company).await;
+    let mine = || -> Vec<EmailMessage> {
+        emails
+            .sent()
+            .into_iter()
+            .filter(|message| message.to.as_str() == address)
+            .collect()
+    };
+    let texts = || -> Vec<TextMessage> {
+        messages
+            .sent()
+            .into_iter()
+            .filter(|message| message.to == phone)
+            .collect()
+    };
+    let rule = |days, channel| DunningRule { days, channel };
+    let entry = |kind: EntryKind, party: Option<PartyId>, due: &str, amount: &str| {
+        let mut draft = entry_draft(seed, "Venda 12", "2026-11-10", &[(due, amount)]);
+        draft.kind = kind;
+        draft.party_id = party;
+        entries.register(company, &ana, draft)
+    };
+    settings
+        .replace(company, &ana, seed.bank_account, None)
+        .await
+        .unwrap();
+
+    // Nothing is sent before there is a plan, or while it is off.
+    let due = entry(EntryKind::Receivable, Some(customer), "2026-12-10", "100")
+        .await
+        .unwrap();
+    service.send_due(day("2026-12-07")).await.unwrap();
+    let plan = service
+        .replace_plan(company, &ana, false, vec![rule(0, DunningChannel::Email)])
+        .await
+        .unwrap();
+    assert!(!plan.is_enabled());
+    service.send_due(day("2026-12-10")).await.unwrap();
+    assert!(mine().is_empty());
+    assert!(texts().is_empty());
+
+    // The plan is replaced as a whole and audited; the same plan again writes nothing; the rules come back
+    // in the order they fall.
+    let plan = service
+        .replace_plan(
+            company,
+            &ana,
+            true,
+            vec![
+                rule(3, DunningChannel::Email),
+                rule(0, DunningChannel::Whatsapp),
+                rule(-3, DunningChannel::Email),
+                rule(0, DunningChannel::Email),
+            ],
+        )
+        .await
+        .unwrap();
+    assert_eq!(plan.rules_text(), "-3 email\n0 email\n0 whatsapp\n3 email");
+    assert_eq!(service.plan(company).await.unwrap(), plan);
+    service
+        .replace_plan(company, &ana, true, plan.rules().to_vec())
+        .await
+        .unwrap();
+    let trail = service.plan_history(company).await.unwrap();
+    assert_eq!(
+        trail
+            .iter()
+            .map(|record| record.entry.action)
+            .collect::<Vec<_>>(),
+        [AuditAction::Created, AuditAction::Updated]
+    );
+    assert_eq!(
+        service
+            .replace_plan(
+                company,
+                &ana,
+                true,
+                vec![
+                    rule(0, DunningChannel::Email),
+                    rule(0, DunningChannel::Email)
+                ]
+            )
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::DuplicateDunningRule)
+    );
+    assert!(!service.plan(other_company).await.unwrap().is_enabled());
+
+    // What is left alone: a customer with nowhere to be reached, a payable, a cancelled entry, one that is
+    // paid, one not due yet.
+    let unreachable = entry(EntryKind::Receivable, Some(seed.party), "2026-12-10", "10")
+        .await
+        .unwrap();
+    entry(EntryKind::Payable, Some(customer), "2026-12-10", "10")
+        .await
+        .unwrap();
+    let cancelled = entry(EntryKind::Receivable, Some(customer), "2026-12-10", "10")
+        .await
+        .unwrap();
+    entries.void(company, &ana, cancelled.id()).await.unwrap();
+    let paid = entry(EntryKind::Receivable, Some(customer), "2026-12-10", "10")
+        .await
+        .unwrap();
+    entries
+        .settle(company, &ana, paid.id(), settlement_draft(seed, 1, "10"))
+        .await
+        .unwrap();
+    entry(EntryKind::Receivable, Some(customer), "2026-12-20", "10")
+        .await
+        .unwrap();
+
+    // The open charge of the due installment: its payment page link goes in the e-mail.
+    charges
+        .issue(company, &ana, due.id(), 1, ChargeMethod::Pix, None)
+        .await
+        .unwrap();
+
+    // Three days before the due day: one e-mail, with the link; the customer with no address is counted.
+    service.send_due(day("2026-12-07")).await.unwrap();
+    let sent = mine();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].to.as_str(), address);
+    assert!(
+        sent[0].subject.contains("parcela 1 (vence em 3 dias)"),
+        "{}",
+        sent[0].subject
+    );
+    assert!(sent[0].body.contains("Valor: R$ 100,00"));
+    assert!(sent[0].body.contains("Vencimento: 10/12/2026"));
+    assert!(sent[0].body.contains("https://app.example/pay/"));
+    let reminders = service.notifications(company, due.id()).await.unwrap();
+    assert_eq!(reminders.len(), 1);
+    assert_eq!(reminders[0].days(), -3);
+    assert_eq!(reminders[0].channel(), DunningChannel::Email);
+    assert_eq!(reminders[0].status(), NotificationStatus::Sent);
+    assert_eq!(reminders[0].recipient(), address);
+    assert!(
+        service
+            .notifications(company, unreachable.id())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // Running the pass again, or a day later (still inside what the rule reaches), sends nothing twice.
+    for again in ["2026-12-07", "2026-12-08", "2026-12-09"] {
+        service.send_due(day(again)).await.unwrap();
+    }
+    assert_eq!(mine().len(), 1);
+
+    // On the due day: the e-mail and the WhatsApp message, to the contact's phone with the country code.
+    service.send_due(day("2026-12-10")).await.unwrap();
+    assert_eq!(mine().len(), 2);
+    assert!(mine()[1].subject.contains("vence hoje"));
+    let chats = texts();
+    assert_eq!(chats.len(), 1);
+    assert_eq!(chats[0].to, phone);
+    assert!(chats[0].text.contains("vence hoje"));
+    assert!(!chats[0].text.contains('\n'));
+    assert_eq!(
+        service
+            .notifications(company, due.id())
+            .await
+            .unwrap()
+            .len(),
+        3
+    );
+
+    // Three days late, what is paid in the meantime is no longer reminded of and what is part paid says
+    // what is left.
+    entries
+        .settle(company, &ana, due.id(), settlement_draft(seed, 1, "100"))
+        .await
+        .unwrap();
+    let late = entry(EntryKind::Receivable, Some(customer), "2026-12-10", "50")
+        .await
+        .unwrap();
+    entries
+        .settle(company, &ana, late.id(), settlement_draft(seed, 1, "20"))
+        .await
+        .unwrap();
+    service.send_due(day("2026-12-13")).await.unwrap();
+    assert_eq!(mine().len(), 3);
+    let last = mine().pop().unwrap();
+    assert!(
+        last.subject.contains("venceu há 3 dias"),
+        "{}",
+        last.subject
+    );
+    assert!(last.body.contains("Valor: R$ 30,00"));
+    assert!(!last.body.contains("https://"), "no open charge, no link");
+    assert_eq!(
+        service
+            .notifications(company, due.id())
+            .await
+            .unwrap()
+            .len(),
+        3
+    );
+
+    // Nothing of another company's.
+    assert_eq!(
+        service
+            .notifications(other_company, late.id())
+            .await
+            .unwrap_err(),
+        ApplicationError::EntryNotFound
+    );
+}
+
+/// A reminder that failed is tried again on the next passes, three times in all, and then left; the
+/// customer is never sent one twice.
+pub async fn retries_a_failed_reminder_a_few_times<D, E, P, K, N, I, M, W, F>(
+    service: &DunningService<D, E, P, K, N, I, M, W>,
+    entries: &FinancialEntryService<E, F>,
+    parties: &P,
+    company: CompanyId,
+    seed: &EntrySeed,
+) where
+    D: DunningPlanRepository,
+    E: FinancialEntryRepository,
+    P: PartyRepository,
+    K: InstallmentLinks,
+    N: NotificationRepository,
+    I: IdentityRepository,
+    M: EmailSender,
+    W: MessageSender,
+    F: EntryReferences,
+{
+    use conta_verde_domain::{DunningChannel, DunningRule, NotificationStatus};
+    let ana = actor();
+    let (customer, _, _) = reachable_customer(parties, company).await;
+    let mut draft = entry_draft(seed, "Venda", "2031-11-10", &[("2031-12-10", "100")]);
+    draft.party_id = Some(customer);
+    let sale = entries.register(company, &ana, draft).await.unwrap();
+    service
+        .replace_plan(
+            company,
+            &ana,
+            true,
+            vec![DunningRule {
+                days: 0,
+                channel: DunningChannel::Email,
+            }],
+        )
+        .await
+        .unwrap();
+    // A year no other test uses: the pass reaches every company's reminders.
+    let day = CalendarDate::parse("2031-12-10").unwrap();
+    for (pass, expected_attempts) in [(1, 1), (2, 2), (3, 3), (4, 3), (5, 3)] {
+        service.send_due(day).await.unwrap();
+        let reminders = service.notifications(company, sale.id()).await.unwrap();
+        assert_eq!(reminders.len(), 1, "pass {pass}");
+        assert_eq!(reminders[0].attempts(), expected_attempts, "pass {pass}");
+    }
+    let reminders = service.notifications(company, sale.id()).await.unwrap();
+    assert_eq!(reminders.len(), 1);
+    assert_eq!(reminders[0].status(), NotificationStatus::Failed);
+    assert_eq!(reminders[0].attempts(), 3);
+    assert_eq!(reminders[0].note(), Some("the message was not sent"));
 }
