@@ -64,7 +64,11 @@ impl RecurrenceRepository for InMemoryRecurrenceRepository {
                 stored.company_id() == recurrence.company_id() && stored.id() == recurrence.id()
             })
             .ok_or(RepositoryError::NotFound)?;
-        *stored = recurrence.clone();
+        // What the job generated through in the meantime is not taken back.
+        let through = stored
+            .generated_through()
+            .max(recurrence.generated_through());
+        *stored = recurrence.clone().with_generated_through(through);
         state.audit.record(audit);
         Ok(())
     }
@@ -124,6 +128,7 @@ impl RecurrenceRepository for InMemoryRecurrenceRepository {
     async fn list_to_generate(
         &self,
         until: CalendarDate,
+        after: Option<RecurrenceId>,
         limit: usize,
     ) -> Result<Vec<Recurrence>, RepositoryError> {
         let state = self.state.lock().expect("repository lock poisoned");
@@ -133,6 +138,7 @@ impl RecurrenceRepository for InMemoryRecurrenceRepository {
             .filter(|stored| {
                 let done = stored.generated_through();
                 stored.is_active()
+                    && after.is_none_or(|last| stored.id().as_uuid() > last.as_uuid())
                     && stored.starts_on() <= until
                     && done.is_none_or(|day| day < until)
                     && stored
@@ -141,7 +147,7 @@ impl RecurrenceRepository for InMemoryRecurrenceRepository {
             })
             .cloned()
             .collect();
-        due.sort_by_key(|stored| (stored.generated_through(), stored.id().as_uuid()));
+        due.sort_by_key(|stored| stored.id().as_uuid());
         due.truncate(limit);
         Ok(due)
     }

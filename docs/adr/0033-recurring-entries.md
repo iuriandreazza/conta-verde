@@ -39,13 +39,19 @@ recurrence never touches what was generated.
 
 Occurrences are generated up to **60 days ahead** of today (and never past `ends_on`), at most 120 at a time.
 A recurrence remembers the day through which it was generated (`generated_through`), so each pass only looks
-at what is new; changing its frequency or its first day starts it over, and the unique index keeps the
-entries already there from being doubled. An inactive recurrence generates nothing, and one that starts in
-the past generates what has fallen due since, which is what backfills a recurrence that was missed.
+at what is new. A change of frequency or of first day **applies from that day on** and does not start over:
+the unique index only stops the same occurrence day, and a new schedule has other days, so starting over
+would make the whole history again (two rents a month). An inactive recurrence generates nothing, and one
+that is brought back goes on **from today**: what fell due while it was paused is skipped, not made up. One
+that starts in the past generates what has fallen due since, which is what backfills a recurrence that was
+set up late.
 
 The entries are made **in the name of whoever last saved the recurrence** (the audit trail says who), because
 there is no system user in the trail yet. If an entry cannot be made (the category was deactivated since),
-that recurrence is left as it was and tried again on the next pass; the others go on.
+that recurrence is left as it was and tried again on the next pass; the others go on. A failure while
+saving a recurrence is not shown to the person, since the recurrence is already stored: the hourly pass
+tries again. The pass reads the recurrences in batches by id, so one that keeps failing cannot keep the
+others from being looked at.
 
 ### The scheduled job
 

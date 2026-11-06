@@ -99,7 +99,8 @@ impl RecurrenceRepository for PostgresRecurrenceRepository {
             "UPDATE recurrences SET kind = $3, description = $4, party_id = $5, category_id = $6, \
              cost_center_id = $7, amount = CAST($8 AS NUMERIC), frequency = $9, \
              starts_on = CAST($10 AS DATE), ends_on = CAST($11 AS DATE), active = $12, \
-             generated_through = CAST($13 AS DATE), saved_by_user_id = $14, saved_by_name = $15 \
+             generated_through = GREATEST(generated_through, CAST($13 AS DATE)), \
+             saved_by_user_id = $14, saved_by_name = $15 \
              WHERE id = $1 AND company_id = $2",
         )
         .bind(recurrence.id().as_uuid())
@@ -195,15 +196,18 @@ impl RecurrenceRepository for PostgresRecurrenceRepository {
     async fn list_to_generate(
         &self,
         until: CalendarDate,
+        after: Option<RecurrenceId>,
         limit: usize,
     ) -> Result<Vec<Recurrence>, RepositoryError> {
         let rows = sqlx::query(&format!(
             "{SELECT_RECURRENCES} WHERE active AND starts_on <= CAST($1 AS DATE) \
              AND (generated_through IS NULL OR generated_through < CAST($1 AS DATE)) \
              AND (ends_on IS NULL OR generated_through IS NULL OR generated_through < ends_on) \
-             ORDER BY generated_through NULLS FIRST, id LIMIT $2"
+             AND ($2::uuid IS NULL OR id > $2) \
+             ORDER BY id LIMIT $3"
         ))
         .bind(until.to_string())
+        .bind(after.map(|id| id.as_uuid()))
         .bind(i64::try_from(limit).unwrap_or(i64::MAX))
         .fetch_all(&self.pool)
         .await

@@ -111,17 +111,16 @@ impl Recurrence {
         })
     }
 
-    /// The same recurrence with every editable field replaced by the draft's. It starts generating over
-    /// when the first day or the frequency changes, and keeps where it was otherwise.
+    /// The same recurrence with every editable field replaced by the draft's. It keeps the day it was
+    /// generated through even when the schedule changes: a new schedule has other days, and starting
+    /// over would make the whole history again on them (two bills a month). It applies from there on.
     pub fn replaced_with(
         &self,
         draft: RecurrenceDraft,
         saved_by: Actor,
     ) -> Result<Self, DomainError> {
         let mut replaced = Self::new(self.id, self.company_id, draft, saved_by)?;
-        if replaced.frequency == self.frequency && replaced.starts_on == self.starts_on {
-            replaced.generated_through = self.generated_through;
-        }
+        replaced.generated_through = self.generated_through;
         Ok(replaced)
     }
 
@@ -190,9 +189,7 @@ impl Recurrence {
     /// The day of occurrence number `n` (from 0), or `None` past the last day a date may have.
     fn occurrence(&self, n: u32) -> Option<CalendarDate> {
         match self.frequency {
-            Frequency::Weekly => {
-                (0..n.checked_mul(7)?).try_fold(self.starts_on, |day, _| day.succ())
-            }
+            Frequency::Weekly => self.starts_on.plus_days(n.checked_mul(7)?),
             Frequency::Monthly => self.starts_on.plus_months(n),
             Frequency::Yearly => self.starts_on.plus_months(n.checked_mul(12)?),
         }
@@ -427,7 +424,7 @@ mod tests {
     }
 
     #[test]
-    fn starts_generating_over_only_when_the_first_day_or_the_frequency_changes() {
+    fn a_changed_schedule_keeps_where_it_was_so_the_history_is_not_made_again() {
         let generated = recurrence(Frequency::Monthly, "2026-11-05", None)
             .with_generated_through(Some(day("2027-01-04")));
         let kept = generated
@@ -441,20 +438,29 @@ mod tests {
             .unwrap();
         assert_eq!(kept.generated_through(), Some(day("2027-01-04")));
         assert_eq!(kept.id(), generated.id());
+        // A typo in the first day, or another frequency, applies from where it was generated through.
         for changed in [
             draft(Frequency::Weekly, "2026-11-05", None),
             draft(Frequency::Monthly, "2026-11-06", None),
         ] {
-            assert_eq!(
-                generated
-                    .replaced_with(changed, actor())
-                    .unwrap()
-                    .generated_through(),
-                None
+            let moved = generated.replaced_with(changed, actor()).unwrap();
+            assert_eq!(moved.generated_through(), Some(day("2027-01-04")));
+            assert!(
+                moved
+                    .occurrences_after(moved.generated_through(), day("2027-03-01"), 10)
+                    .iter()
+                    .all(|occurrence| *occurrence > day("2027-01-04"))
             );
         }
     }
 
+    #[test]
+    fn a_weekly_recurrence_from_far_back_is_cheap_to_walk() {
+        let old = recurrence(Frequency::Weekly, "1900-01-01", None);
+        let days = old.occurrences_after(None, day("2026-12-31"), usize::MAX);
+        assert_eq!(days.len(), 6_627);
+        assert_eq!(days[1].to_string(), "1900-01-08");
+    }
     #[test]
     fn frequencies_read_and_write_the_same_key() {
         for frequency in [Frequency::Weekly, Frequency::Monthly, Frequency::Yearly] {

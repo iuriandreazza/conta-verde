@@ -134,11 +134,13 @@ pub trait RecurrenceRepository: Send + Sync {
     ) -> impl Future<Output = Result<Vec<Recurrence>, RepositoryError>> + Send;
 
     /// At most `limit` active recurrences of **any company** that have something left to generate
-    /// up to `until`: not generated through `until` yet, and not through their last day. For the
-    /// scheduled job, which is the one reader that is not about one company.
+    /// up to `until`: not generated through `until` yet, and not through their last day, in order
+    /// of id and starting right after `after`. For the scheduled job, which is the one reader that is
+    /// not about one company.
     fn list_to_generate(
         &self,
         until: CalendarDate,
+        after: Option<RecurrenceId>,
         limit: usize,
     ) -> impl Future<Output = Result<Vec<Recurrence>, RepositoryError>> + Send;
 }

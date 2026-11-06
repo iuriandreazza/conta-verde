@@ -4025,7 +4025,7 @@ describe("recurrences", () => {
     fireEvent.change(form.getByLabelText("Primeiro vencimento"), { target: { value: "2026-11-05" } });
     await userEvent.click(form.getByRole("button", { name: "Adicionar" }));
 
-    expect(await screen.findByText(/Aluguel cadastrada: os lançamentos dos próximos dois meses já foram gerados/)).toBeInTheDocument();
+    expect(await screen.findByText(/Aluguel cadastrada: os lançamentos que vencem nos próximos dois meses já foram gerados/)).toBeInTheDocument();
     expect(JSON.parse(String(sent(fetchMock, "POST")[0][1]?.body))).toEqual({
       kind: "payable",
       description: "Aluguel",

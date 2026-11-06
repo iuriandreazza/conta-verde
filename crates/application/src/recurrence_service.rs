@@ -15,8 +15,8 @@ pub const GENERATION_HORIZON_DAYS: u32 = 60;
 /// The most occurrences one pass makes for one recurrence: a recurrence that starts years back
 /// catches up over a few passes.
 const MAX_PER_PASS: usize = 120;
-/// The most recurrences one pass of the job takes up.
-const MAX_PER_JOB_PASS: usize = 500;
+/// How many recurrences the job reads at a time.
+const JOB_BATCH: usize = 200;
 
 /// What a pass of the scheduled job did.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -90,7 +90,18 @@ where
         today: CalendarDate,
     ) -> Result<Recurrence, ApplicationError> {
         let before = self.find(company_id, id).await?;
-        let after = before.replaced_with(draft, actor.clone())?;
+        let mut after = before.replaced_with(draft, actor.clone())?;
+        // Brought back after a pause, it goes on from today: what fell due while it was paused is
+        // skipped, not made up.
+        if !before.is_active()
+            && after.is_active()
+            && let Some(yesterday) = today.pred()
+            && after
+                .generated_through()
+                .is_none_or(|done| done < yesterday)
+        {
+            after = after.with_generated_through(Some(yesterday));
+        }
         let changes = recurrence_changes(&before, &after);
         if changes.is_empty() {
             return Ok(before);
@@ -151,17 +162,28 @@ where
         today: CalendarDate,
     ) -> Result<GenerationReport, ApplicationError> {
         let mut report = GenerationReport::default();
-        let due = self
-            .repository
-            .list_to_generate(horizon(today), MAX_PER_JOB_PASS)
-            .await?;
-        for recurrence in due {
-            match self.generate(&recurrence, today).await {
-                Ok(count) => report.made += count,
-                Err(_) => report.failed += 1,
+        // In batches by id, so a recurrence that keeps failing cannot fill the batch every hour and
+        // keep the others from being looked at.
+        let mut after = None;
+        loop {
+            let due = self
+                .repository
+                .list_to_generate(horizon(today), after, JOB_BATCH)
+                .await?;
+            let Some(last) = due.last().map(Recurrence::id) else {
+                return Ok(report);
+            };
+            for recurrence in &due {
+                match self.generate(recurrence, today).await {
+                    Ok(count) => report.made += count,
+                    Err(_) => report.failed += 1,
+                }
             }
+            if due.len() < JOB_BATCH {
+                return Ok(report);
+            }
+            after = Some(last);
         }
-        Ok(report)
     }
 
     /// Makes the entries of the occurrences between where the recurrence was generated through and
@@ -215,12 +237,14 @@ where
         Ok(made)
     }
 
+    /// Generates after a write that is already stored. A failure is not the person's to see: the
+    /// recurrence is saved, and the hourly pass tries again and counts it as failed.
     async fn generate_one(
         &self,
         recurrence: Recurrence,
         today: CalendarDate,
     ) -> Result<Recurrence, ApplicationError> {
-        self.generate(&recurrence, today).await?;
+        let _ = self.generate(&recurrence, today).await;
         self.find(recurrence.company_id(), recurrence.id()).await
     }
 

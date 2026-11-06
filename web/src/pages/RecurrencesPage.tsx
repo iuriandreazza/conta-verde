@@ -171,7 +171,11 @@ export function RecurrencesPage() {
       if (editing === null) {
         const created = await api.createRecurrence(companyId, input);
         setHighlightedId(created.id);
-        setSaved(`${created.description} cadastrada: os lançamentos dos próximos dois meses já foram gerados.`);
+        setSaved(
+          created.active
+            ? `${created.description} cadastrada: os lançamentos que vencem nos próximos dois meses já foram gerados.`
+            : `${created.description} cadastrada, pausada: nada será gerado até ativá-la.`,
+        );
         setFormVersion((version) => version + 1);
         await reload();
       } else {

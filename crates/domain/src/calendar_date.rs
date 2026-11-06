@@ -85,6 +85,25 @@ impl CalendarDate {
             .then_some(Self { year, month, day })
     }
 
+    /// How many days after 1970-01-01 this day is (before it when negative): the inverse of
+    /// `from_unix_days`.
+    pub fn to_unix_days(&self) -> i64 {
+        // Days from civil, after Howard Hinnant: the year starts in March, so the leap day is last.
+        let year = i64::from(self.year) - i64::from(self.month <= 2);
+        let era = year.div_euclid(400);
+        let year_of_era = year.rem_euclid(400);
+        let month = i64::from(self.month);
+        let month_index = if month > 2 { month - 3 } else { month + 9 };
+        let day_of_year = (153 * month_index + 2) / 5 + i64::from(self.day) - 1;
+        let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+        era * 146_097 + day_of_era - 719_468
+    }
+
+    /// This day `days` days later, or `None` past the last day a date may have.
+    pub fn plus_days(&self, days: u32) -> Option<Self> {
+        Self::from_unix_days(self.to_unix_days().checked_add(i64::from(days))?)
+    }
+
     /// The next day, or `None` after the last day a date may have.
     pub fn succ(&self) -> Option<Self> {
         let next = if self.day < days_in_month(self.year, self.month) {
@@ -282,6 +301,32 @@ mod tests {
         assert_eq!(from(-25_567).as_deref(), Some("1900-01-01"));
         assert_eq!(from(-25_568), None);
         assert_eq!(from(i64::MAX), None);
+    }
+
+    #[test]
+    fn counts_days_from_1970_both_ways_and_adds_days() {
+        let day = |raw: &str| CalendarDate::parse(raw).unwrap();
+        assert_eq!(day("1970-01-01").to_unix_days(), 0);
+        assert_eq!(day("2026-11-05").to_unix_days(), 20_762);
+        assert_eq!(day("1900-01-01").to_unix_days(), -25_567);
+        for raw in [
+            "1900-01-01",
+            "1969-12-31",
+            "2000-02-29",
+            "2026-11-05",
+            "2100-03-01",
+            "2200-12-31",
+        ] {
+            let date = day(raw);
+            assert_eq!(
+                CalendarDate::from_unix_days(date.to_unix_days()),
+                Some(date),
+                "{raw}"
+            );
+        }
+        assert_eq!(day("2026-12-28").plus_days(7), Some(day("2027-01-04")));
+        assert_eq!(day("2028-02-28").plus_days(2), Some(day("2028-03-01")));
+        assert_eq!(day("2200-12-30").plus_days(2), None);
     }
 
     #[test]
