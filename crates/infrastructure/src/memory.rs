@@ -18,9 +18,9 @@ use conta_verde_domain::{
 /// Keeps parties and their audit trail in process memory. Used by tests and for running the API
 /// without a database. Like the Postgres adapter, it records an audit entry only for a write that
 /// happened: a refused or missed write leaves nothing in the trail.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct InMemoryPartyRepository {
-    state: Mutex<PartyState>,
+    state: Arc<Mutex<PartyState>>,
 }
 
 #[derive(Default)]

@@ -2,16 +2,18 @@ use std::time::Duration;
 
 use conta_verde_api::{ApiConfig, Ports, Services, router};
 use conta_verde_application::{
-    AuthService, BankAccountService, CategoryService, CostCenterService, MemberService,
-    PartyService, PaymentMethodService, PaymentTermService, PostalCodeService, ProductService,
+    AuthService, BankAccountService, CategoryService, CostCenterService, FinancialEntryService,
+    MemberService, PartyService, PaymentMethodService, PaymentTermService, PostalCodeService,
+    ProductService,
 };
 use conta_verde_application::{EmailError, EmailMessage, EmailSender};
 use conta_verde_infrastructure::{
     Argon2SecretService, BrasilApiCnpjRegistry, BrasilApiPostalCodeDirectory, CachedCnpjRegistry,
     LogEmailSender, PostgresBankAccountRepository, PostgresCategoryRepository,
-    PostgresCostCenterRepository, PostgresIdentityRepository, PostgresInvitationRepository,
-    PostgresPartyRepository, PostgresPaymentMethodRepository, PostgresPaymentTermRepository,
-    PostgresProductRepository, SmtpEmailSender, connect_and_migrate,
+    PostgresCostCenterRepository, PostgresFinancialEntryRepository, PostgresIdentityRepository,
+    PostgresInvitationRepository, PostgresPartyRepository, PostgresPaymentMethodRepository,
+    PostgresPaymentTermRepository, PostgresProductRepository, RegisterReferences, SmtpEmailSender,
+    connect_and_migrate,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -29,6 +31,12 @@ impl Ports for PostgresPorts {
     type BankAccounts = PostgresBankAccountRepository;
     type PaymentMethods = PostgresPaymentMethodRepository;
     type PaymentTerms = PostgresPaymentTermRepository;
+    type Entries = PostgresFinancialEntryRepository;
+    type EntryReferences = RegisterReferences<
+        PostgresCategoryRepository,
+        PostgresCostCenterRepository,
+        PostgresPartyRepository,
+    >;
     type PostalCodes = Option<BrasilApiPostalCodeDirectory>;
     type Invitations = PostgresInvitationRepository;
     type Emails = ConfiguredEmailSender;
@@ -63,6 +71,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let payment_methods =
         PaymentMethodService::new(PostgresPaymentMethodRepository::new(pool.clone()));
     let payment_terms = PaymentTermService::new(PostgresPaymentTermRepository::new(pool.clone()));
+    let entries = FinancialEntryService::new(
+        PostgresFinancialEntryRepository::new(pool.clone()),
+        RegisterReferences::new(
+            PostgresCategoryRepository::new(pool.clone()),
+            PostgresCostCenterRepository::new(pool.clone()),
+            PostgresPartyRepository::new(pool.clone()),
+        ),
+    );
     let postal_codes = PostalCodeService::new(postal_code_directory_from_env()?);
     // Invitation links lead to the web app, which is where the person accepts.
     let public_url = std::env::var("PUBLIC_URL").unwrap_or_else(|_| {
@@ -97,6 +113,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 bank_accounts,
                 payment_methods,
                 payment_terms,
+                entries,
                 postal_codes,
                 members,
                 auth,

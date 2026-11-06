@@ -8,7 +8,9 @@ mod cnpj_registry;
 mod cost_center_repository;
 mod cost_center_service;
 mod email_sender;
+mod entry_repository;
 mod error;
+mod financial_entry_service;
 mod identity_repository;
 mod import;
 mod invitation_repository;
@@ -37,7 +39,11 @@ pub use cnpj_registry::{CnpjLookupError, CnpjRegistry, RegistryEntry};
 pub use cost_center_repository::{CostCenterQuery, CostCenterRepository};
 pub use cost_center_service::{CostCenterPage, CostCenterService};
 pub use email_sender::{EmailError, EmailMessage, EmailSender};
+pub use entry_repository::{
+    EntryCursor, EntryReferences, EntrySort, FinancialEntryQuery, FinancialEntryRepository,
+};
 pub use error::{ApplicationError, AuthError, RepositoryError};
+pub use financial_entry_service::{FinancialEntryPage, FinancialEntryService};
 pub use identity_repository::{
     CompanyMembership, IdentityRepository, NewAccount, NewUser, StoredCredentials,
 };

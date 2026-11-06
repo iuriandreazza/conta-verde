@@ -32,6 +32,13 @@ pub enum DomainError {
     CardAccountHasNoNumber,
     NoInstallments,
     TooManyInstallments,
+    InvalidDescription,
+    /// Names the date: an entry has a competence date and a due date for each installment.
+    InvalidDate(&'static str),
+    InvalidInstallmentAmount,
+    InstallmentDatesDecrease,
+    NoEntryInstallments,
+    TooManyEntryInstallments,
     InvalidInstallmentDays,
     InstallmentDaysNotIncreasing,
     InvalidPercent,
@@ -105,6 +112,20 @@ impl fmt::Display for DomainError {
             Self::CardAccountHasNoNumber => f.write_str(
                 "a card account has no branch or account number: a card number is not stored",
             ),
+            Self::InvalidDescription => f.write_str(
+                "description must be one line of 1 to 200 characters, without control characters",
+            ),
+            Self::InvalidDate(field) => {
+                write!(f, "{field} must be a real date written YYYY-MM-DD, from 1900 to 2200")
+            }
+            Self::InvalidInstallmentAmount => f.write_str(
+                "an installment amount must be more than 0, in cents (at most two decimals)",
+            ),
+            Self::InstallmentDatesDecrease => {
+                f.write_str("the due dates must not decrease from one installment to the next")
+            }
+            Self::NoEntryInstallments => f.write_str("an entry needs at least one installment"),
+            Self::TooManyEntryInstallments => f.write_str("an entry has at most 120 installments"),
             Self::NoInstallments => f.write_str("a payment term needs at least one installment"),
             Self::TooManyInstallments => f.write_str("a payment term has at most 24 installments"),
             Self::InvalidInstallmentDays => {
