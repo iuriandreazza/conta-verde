@@ -93,6 +93,15 @@ from the products' port and the movements' `balances`, never one query across ta
 - A sale's stock exits can be refused by the block (ADR 0055) after the sale is marked completed, if the balance changed
   in between: asking again, once there is stock, finishes it.
 
+- Known limits: undoing an `in` whose goods were sold can leave a balance whose value is at or below zero while
+  something is on hand: the ledger stays exact, an exit then takes no value (never a value of the other sign, which
+  the database refuses) and the average cost is not shown until the value is above zero again. A return registered
+  for a sale whose exits were never written (the sale was marked completed and the exits refused, see ADR 0055) puts
+  nothing back, and when the exits are finally made they take the whole sold quantity: put the returned quantity
+  back with a manual entry. A write is valued again at most five times when other writes keep changing the same
+  stock; after that the caller gets `409` and asks again. A stock step that fails after a document was stored is not
+  logged by the use case (the API answer says what is missing, as for the receipt's payable).
+
 ## Revisit when
 
 A company has more than one stock (a location on the ledger), costs must follow FIFO or include freight and taxes, or the

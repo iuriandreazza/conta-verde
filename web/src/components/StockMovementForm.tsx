@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import type { Product, StockMovementInput, StockMovementKind } from "../api";
 import { toApiDecimal } from "../lib/decimal";
+import { isAmbiguousSigned, toSignedDecimal } from "../lib/stock";
 import { isIsoDate } from "../lib/entryInstallments";
 import { todayIso } from "../lib/settlement";
 import { BackButton } from "./BackButton";
@@ -44,8 +45,12 @@ export function StockMovementForm({ products, pending, error, onSubmit, onCancel
     if (pending) return;
     const form = new FormData(event.currentTarget);
     const field = (name: string) => String(form.get(name) ?? "").trim();
-    const quantity = toApiDecimal(field("quantity"));
     const signed = kind === "adjustment";
+    if (isAmbiguousSigned(field("quantity")) || isAmbiguousSigned(field("cost"))) {
+      setFieldError("Use vírgula nas casas decimais: 1.500 pode ser mil e quinhentos ou um e meio. Escreva 1500 ou 1,5.");
+      return;
+    }
+    const quantity = toSignedDecimal(field("quantity"));
     if (quantity === undefined || !(signed ? /^-?\d+(\.\d{1,3})?$/ : /^\d+(\.\d{1,3})?$/).test(quantity)) {
       setFieldError(
         signed
