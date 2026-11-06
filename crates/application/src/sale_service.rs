@@ -1,8 +1,8 @@
 use conta_verde_domain::{
-    Actor, AuditAction, AuditRecord, CategoryId, CompanyId, CostCenterId, Decimal, DomainError,
-    EntryOrigin, FinancialEntry, FinancialEntryDraft, PartyId, PaymentTermId, Quote, QuoteId,
-    QuoteStatus, Sale, SaleDraft, SaleId, SaleReturn, SaleReturnDraft, SaleReturnId, SaleStatus,
-    quote_changes, sale_changes, sale_creation_changes, sale_return_creation_changes,
+    Actor, AuditAction, AuditRecord, CategoryId, CompanyId, ContractCycle, CostCenterId, Decimal,
+    DomainError, EntryOrigin, FinancialEntry, FinancialEntryDraft, PartyId, PaymentTermId, Quote,
+    QuoteId, QuoteStatus, Sale, SaleDraft, SaleId, SaleReturn, SaleReturnDraft, SaleReturnId,
+    SaleStatus, quote_changes, sale_changes, sale_creation_changes, sale_return_creation_changes,
 };
 
 use crate::audit::audit_entry;
@@ -130,6 +130,40 @@ where
             .await
             .map_err(changed_or_missing)?;
         Ok(after)
+    }
+
+    /// The sale of one cycle of a contract, made and completed ([ADR 0040]): a contract has one sale per cycle
+    /// day, so asking again for a cycle finishes whatever a failure left undone (the sale not completed, its
+    /// receivable not made) and changes nothing when it is all there.
+    pub async fn bill_cycle(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        draft: SaleDraft,
+        cycle: ContractCycle,
+    ) -> Result<Sale, ApplicationError> {
+        let sale = match self.sales.find_by_cycle(company_id, cycle).await? {
+            Some(existing) => existing,
+            None => {
+                let sale = Sale::new(SaleId::generate(), company_id, draft)?.billing(cycle);
+                self.check_references(&sale, None).await?;
+                match self.save(actor, sale).await {
+                    Ok(sale) => sale,
+                    Err(ApplicationError::Repository(RepositoryError::DuplicateCycle)) => self
+                        .sales
+                        .find_by_cycle(company_id, cycle)
+                        .await?
+                        .ok_or(ApplicationError::SaleNotFound)?,
+                    Err(error) => return Err(error),
+                }
+            }
+        };
+        // A cycle whose sale was cancelled by a person is consumed: it is not billed again, and it does not stop
+        // the cycles after it.
+        if sale.status() == SaleStatus::Cancelled {
+            return Ok(sale);
+        }
+        self.complete(company_id, actor, sale.id()).await
     }
 
     /// Turns a quote into an order that is open ([ADR 0039]): its customer, term, notes and lines are copied,
@@ -449,7 +483,7 @@ where
 
     /// What the sale points at must be usable in the company, the answer naming the field. When the sale was
     /// already stored, only what the edit **changes** is checked.
-    async fn check_references(
+    pub(crate) async fn check_references(
         &self,
         sale: &Sale,
         before: Option<&Sale>,

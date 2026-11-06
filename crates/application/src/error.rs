@@ -38,6 +38,10 @@ pub enum RepositoryError {
     SaleChanged,
     /// The quote already became a sale.
     DuplicateQuoteSale,
+    /// The contract already has the sale of that cycle.
+    DuplicateCycle,
+    /// The contract was terminated while the write was being made.
+    ContractChanged,
     /// A return would take back more of a line than was sold.
     ReturnTooMuch,
     /// The sale has returns, which stand.
@@ -107,6 +111,10 @@ pub enum ApplicationError {
     RecurrenceNotFound,
     /// No sale with this id in the company (another company's looks the same).
     SaleNotFound,
+    /// No contract with this id in the company (another company's looks the same).
+    ContractNotFound,
+    /// The contract was changed while this was being done.
+    ContractChanged,
     /// The sale was changed while this was being done.
     SaleChanged,
     /// The entry is cancelled: it cannot change or be settled.
@@ -217,6 +225,8 @@ impl fmt::Display for RepositoryError {
             Self::EntryVoided => f.write_str("the entry was cancelled"),
             Self::SaleChanged => f.write_str("the sale was changed meanwhile"),
             Self::DuplicateQuoteSale => f.write_str("the quote already became a sale"),
+            Self::DuplicateCycle => f.write_str("the contract already has the sale of this cycle"),
+            Self::ContractChanged => f.write_str("the contract was changed meanwhile"),
             Self::ReturnTooMuch => f.write_str("a return cannot be of more than was sold"),
             Self::SaleHasReturns => f.write_str("the sale has returns"),
             Self::QuoteChanged => f.write_str("the quote was changed meanwhile"),
@@ -260,6 +270,8 @@ impl fmt::Display for ApplicationError {
             Self::RecurrenceNotFound => f.write_str("recurrence not found"),
             Self::QuoteNotFound => f.write_str("quote not found"),
             Self::SaleNotFound => f.write_str("sale not found"),
+            Self::ContractNotFound => f.write_str("contract not found"),
+            Self::ContractChanged => f.write_str("the contract was changed meanwhile: read it again"),
             Self::SaleChanged => f.write_str("the sale was changed meanwhile: read it again"),
             Self::EntryIsVoided => f.write_str("the entry was cancelled: it cannot change or be settled"),
             Self::SaleHasSettlements => f.write_str(

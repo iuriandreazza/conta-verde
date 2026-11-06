@@ -5,8 +5,8 @@ use conta_verde_application::{
 };
 use conta_verde_domain::{
     Amount, AuditEntity, AuditEntry, AuditRecord, CalendarDate, CategoryId, CompanyId,
-    CostCenterId, LineDraft, PartyId, PaymentTermId, ProductId, QuoteId, Sale, SaleDraft, SaleId,
-    SaleReturn, SaleReturnId, SaleStatus,
+    ContractCycle, ContractId, CostCenterId, LineDraft, PartyId, PaymentTermId, ProductId, QuoteId,
+    Sale, SaleDraft, SaleId, SaleReturn, SaleReturnId, SaleStatus,
 };
 use sqlx::postgres::PgRow;
 use sqlx::{PgConnection, PgPool, Postgres, QueryBuilder, Row};
@@ -16,10 +16,11 @@ use crate::postgres::{next_document_number, snapshot, storage_error};
 use crate::postgres_audit;
 
 const QUOTE_UNIQUE_INDEX: &str = "sales_quote_key";
+const CYCLE_UNIQUE_INDEX: &str = "sales_contract_cycle_key";
 
 const SELECT_SALES: &str = "SELECT id, company_id, number, customer_id, seller_id, \
      to_char(sold_on, 'YYYY-MM-DD') AS sold_on, payment_term_id, category_id, cost_center_id, \
-     notes, status, quote_id FROM sales";
+     notes, status, quote_id, contract_id, to_char(cycle_on, 'YYYY-MM-DD') AS cycle_on FROM sales";
 
 pub struct PostgresSaleRepository {
     pool: PgPool,
@@ -63,8 +64,8 @@ impl SaleRepository for PostgresSaleRepository {
         let number = next_document_number(&mut tx, sale.company_id(), "sale").await?;
         sqlx::query(
             "INSERT INTO sales (id, company_id, number, customer_id, seller_id, sold_on, \
-             payment_term_id, category_id, cost_center_id, notes, status, quote_id) \
-             VALUES ($1, $2, $3, $4, $5, CAST($6 AS DATE), $7, $8, $9, $10, $11, $12)",
+             payment_term_id, category_id, cost_center_id, notes, status, quote_id, contract_id, cycle_on) \
+             VALUES ($1, $2, $3, $4, $5, CAST($6 AS DATE), $7, $8, $9, $10, $11, $12, $13, CAST($14 AS DATE))",
         )
         .bind(sale.id().as_uuid())
         .bind(sale.company_id().as_uuid())
@@ -78,11 +79,16 @@ impl SaleRepository for PostgresSaleRepository {
         .bind(sale.notes())
         .bind(sale.status().as_str())
         .bind(sale.quote_id().map(|id| id.as_uuid()))
+        .bind(sale.cycle().map(|cycle| cycle.contract_id.as_uuid()))
+        .bind(sale.cycle().map(|cycle| cycle.cycle_on.to_string()))
         .execute(&mut *tx)
         .await
         .map_err(|error| match &error {
             sqlx::Error::Database(db) if db.constraint() == Some(QUOTE_UNIQUE_INDEX) => {
                 RepositoryError::DuplicateQuoteSale
+            }
+            sqlx::Error::Database(db) if db.constraint() == Some(CYCLE_UNIQUE_INDEX) => {
+                RepositoryError::DuplicateCycle
             }
             _ => storage_error(error),
         })?;
@@ -99,6 +105,27 @@ impl SaleRepository for PostgresSaleRepository {
     ) -> Result<Option<Sale>, RepositoryError> {
         self.find_where("company_id = $1 AND id = $2", company_id, id.as_uuid())
             .await
+    }
+
+    async fn find_by_cycle(
+        &self,
+        company_id: CompanyId,
+        cycle: ContractCycle,
+    ) -> Result<Option<Sale>, RepositoryError> {
+        let mut tx = snapshot(&self.pool).await?;
+        let row = sqlx::query(&format!(
+            "{SELECT_SALES} WHERE company_id = $1 AND contract_id = $2 AND cycle_on = CAST($3 AS DATE)"
+        ))
+        .bind(company_id.as_uuid())
+        .bind(cycle.contract_id.as_uuid())
+        .bind(cycle.cycle_on.to_string())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(storage_error)?;
+        let Some(row) = row else { return Ok(None) };
+        let mut sales = with_lines(&mut tx, vec![row]).await?;
+        tx.commit().await.map_err(storage_error)?;
+        Ok(sales.pop())
     }
 
     async fn find_by_quote(
@@ -242,6 +269,10 @@ impl SaleRepository for PostgresSaleRepository {
         }
         if let Some(seller) = query.seller() {
             sql.push(" AND seller_id = ").push_bind(seller.as_uuid());
+        }
+        if let Some(contract) = query.contract() {
+            sql.push(" AND contract_id = ")
+                .push_bind(contract.as_uuid());
         }
         if let Some(text) = query.search() {
             // `strpos` instead of `LIKE` so that `%` and `_` in the text mean themselves.
@@ -517,8 +548,19 @@ fn sale_from_row(
         lines: lines.remove(&raw_id).unwrap_or_default(),
     };
     let number: i64 = row.try_get("number").map_err(storage_error)?;
+    let contract: Option<Uuid> = row.try_get("contract_id").map_err(storage_error)?;
+    let cycle_on: Option<String> = row.try_get("cycle_on").map_err(storage_error)?;
+    let cycle = contract
+        .zip(cycle_on.as_deref().and_then(CalendarDate::parse))
+        .map(|(contract_id, cycle_on)| ContractCycle {
+            contract_id: ContractId::from_uuid(contract_id),
+            cycle_on,
+        });
     Sale::new(id, company_id, draft)
-        .map(|sale| sale.restored(number, status, quote.map(QuoteId::from_uuid)))
+        .map(|sale| {
+            sale.restored(number, status, quote.map(QuoteId::from_uuid))
+                .with_cycle(cycle)
+        })
         .map_err(|error| {
             RepositoryError::Storage(format!("stored sale {id:?} is invalid: {error}"))
         })

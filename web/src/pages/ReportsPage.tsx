@@ -13,6 +13,7 @@ import { ChartCard } from "../components/charts/ChartCard";
 import { Legend, type LegendItem } from "../components/charts/Legend";
 import { StatTile } from "../components/charts/StatTile";
 import { Notice } from "../components/Notice";
+import { PeriodFilter } from "../components/PeriodFilter";
 import { PageHeader } from "../components/PageHeader";
 import { Spinner } from "../components/Spinner";
 import { formatMoney } from "../lib/decimal";
@@ -91,10 +92,12 @@ export function ReportsPage() {
 }
 
 function EntriesReportView({ companyId, names }: { companyId: string; names: Map<string, string> }) {
+  // Today where the person is: the usual periods are counted from it.
+  const [today] = useState(() => todayIso());
   const [filters, setFilters] = useState<EntriesReportFilters>(() => ({
     group: "category",
     basis: "competence",
-    ...monthSpan(todayIso()),
+    ...monthSpan(today),
   }));
   const [report, setReport] = useState<EntriesReport | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -143,6 +146,7 @@ function EntriesReportView({ companyId, names }: { companyId: string; names: Map
   return (
     <>
       <section className="card filters-card">
+        <PeriodFilter value={filters} onChange={(span) => setFilters({ ...filters, ...span })} today={today} />
         <div className="filters" role="search">
           <label>
             Agrupar por
@@ -166,14 +170,6 @@ function EntriesReportView({ companyId, names }: { companyId: string; names: Map
               <option value="competence">Competência (o total de cada lançamento)</option>
               <option value="due">Vencimento (as parcelas que vencem)</option>
             </select>
-          </label>
-          <label>
-            De
-            <input type="date" value={filters.from} onChange={(event) => setFilters({ ...filters, from: event.target.value })} />
-          </label>
-          <label>
-            Até
-            <input type="date" value={filters.to} onChange={(event) => setFilters({ ...filters, to: event.target.value })} />
           </label>
         </div>
         <Notice message={spanError} />

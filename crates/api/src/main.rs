@@ -3,20 +3,21 @@ use std::time::Duration;
 use conta_verde_api::{ApiConfig, Ports, Services, router};
 use conta_verde_application::{
     AttachmentService, AuthService, BalanceService, BankAccountService, CategoryService,
-    CostCenterService, FinancialEntryService, MemberService, PartyService, PaymentMethodService,
-    PaymentTermService, PostalCodeService, ProductService, QuoteService, ReconciliationService,
-    RecurrenceService, SaleService, TransferService,
+    ContractService, CostCenterService, FinancialEntryService, MemberService, PartyService,
+    PaymentMethodService, PaymentTermService, PostalCodeService, ProductService, QuoteService,
+    ReconciliationService, RecurrenceService, SaleService, TransferService,
 };
 use conta_verde_application::{EmailError, EmailMessage, EmailSender};
 use conta_verde_infrastructure::{
     Argon2SecretService, BrasilApiCnpjRegistry, BrasilApiPostalCodeDirectory, CachedCnpjRegistry,
     LocalBlobStore, LogEmailSender, PostgresAttachmentRepository, PostgresBankAccountRepository,
-    PostgresCategoryRepository, PostgresCostCenterRepository, PostgresFinancialEntryRepository,
-    PostgresIdentityRepository, PostgresInvitationRepository, PostgresOpeningRepository,
-    PostgresPartyRepository, PostgresPaymentMethodRepository, PostgresPaymentTermRepository,
-    PostgresProductRepository, PostgresQuoteRepository, PostgresRecurrenceRepository,
-    PostgresSaleRepository, PostgresStatementLineRepository, PostgresTransferRepository,
-    RegisterReferences, RegisterSalesReferences, SmtpEmailSender, connect_and_migrate,
+    PostgresCategoryRepository, PostgresContractRepository, PostgresCostCenterRepository,
+    PostgresFinancialEntryRepository, PostgresIdentityRepository, PostgresInvitationRepository,
+    PostgresOpeningRepository, PostgresPartyRepository, PostgresPaymentMethodRepository,
+    PostgresPaymentTermRepository, PostgresProductRepository, PostgresQuoteRepository,
+    PostgresRecurrenceRepository, PostgresSaleRepository, PostgresStatementLineRepository,
+    PostgresTransferRepository, RegisterReferences, RegisterSalesReferences, SmtpEmailSender,
+    connect_and_migrate,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -54,6 +55,7 @@ impl Ports for PostgresPorts {
     >;
     type Quotes = PostgresQuoteRepository;
     type Sales = PostgresSaleRepository;
+    type Contracts = PostgresContractRepository;
     type Statements = PostgresStatementLineRepository;
     type PostalCodes = Option<BrasilApiPostalCodeDirectory>;
     type Invitations = PostgresInvitationRepository;
@@ -62,7 +64,7 @@ impl Ports for PostgresPorts {
 
 const SESSION_LIFETIME: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 const INVITATION_LIFETIME: Duration = Duration::from_secs(7 * 24 * 60 * 60);
-const RECURRENCE_JOB_INTERVAL: Duration = Duration::from_secs(60 * 60);
+const JOB_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const CNPJ_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 
 #[tokio::main]
@@ -156,20 +158,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Argon2SecretService::new()?,
         &public_url,
     );
-    let sales = SaleService::new(
-        PostgresSaleRepository::new(pool.clone()),
-        PostgresQuoteRepository::new(pool.clone()),
-        FinancialEntryService::new(
-            PostgresFinancialEntryRepository::new(pool.clone()),
+    let sale_service = || {
+        SaleService::new(
+            PostgresSaleRepository::new(pool.clone()),
+            PostgresQuoteRepository::new(pool.clone()),
+            FinancialEntryService::new(
+                PostgresFinancialEntryRepository::new(pool.clone()),
+                references(),
+            ),
             references(),
-        ),
-        references(),
-        RegisterSalesReferences::new(
-            PostgresPartyRepository::new(pool.clone()),
-            PostgresProductRepository::new(pool.clone()),
-            PostgresPaymentTermRepository::new(pool.clone()),
-        ),
-    );
+            RegisterSalesReferences::new(
+                PostgresPartyRepository::new(pool.clone()),
+                PostgresProductRepository::new(pool.clone()),
+                PostgresPaymentTermRepository::new(pool.clone()),
+            ),
+        )
+    };
+    let contract_service = || {
+        ContractService::new(
+            PostgresContractRepository::new(pool.clone()),
+            sale_service(),
+        )
+    };
+    let sales = sale_service();
+    let contracts = contract_service();
+    tokio::spawn(bill_contracts(contract_service()));
     let members = MemberService::new(
         PostgresInvitationRepository::new(pool.clone()),
         PostgresIdentityRepository::new(pool.clone()),
@@ -202,6 +215,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 recurrences,
                 quotes,
                 sales,
+                contracts,
                 reconciliation,
                 balances,
                 postal_codes,
@@ -234,7 +248,7 @@ where
     E: conta_verde_application::FinancialEntryRepository,
     F: conta_verde_application::EntryReferences,
 {
-    let mut tick = tokio::time::interval(RECURRENCE_JOB_INTERVAL);
+    let mut tick = tokio::time::interval(JOB_INTERVAL);
     loop {
         tick.tick().await;
         match service.generate_all_due(conta_verde_api::today()).await {
@@ -247,6 +261,37 @@ where
             }
             Ok(_) => {}
             Err(error) => tracing::error!(%error, "generating recurring entries failed"),
+        }
+    }
+}
+
+/// The scheduled job of ADR 0040: once an hour, bills the cycles of the contracts that have fallen due. It is
+/// safe to repeat and to run in several instances, so a failed pass only waits for the next one.
+async fn bill_contracts<C, S, Q, E, F, R>(service: ContractService<C, S, Q, E, F, R>)
+where
+    C: conta_verde_application::ContractRepository,
+    S: conta_verde_application::SaleRepository,
+    Q: conta_verde_application::QuoteRepository,
+    E: conta_verde_application::FinancialEntryRepository,
+    F: conta_verde_application::EntryReferences,
+    R: conta_verde_application::SalesReferences,
+{
+    let mut tick = tokio::time::interval(JOB_INTERVAL);
+    loop {
+        tick.tick().await;
+        match service
+            .bill_all_due(conta_verde_api::customer_today())
+            .await
+        {
+            Ok(report) if report.billed > 0 || report.failed > 0 => {
+                tracing::info!(
+                    billed = report.billed,
+                    failed = report.failed,
+                    "contracts billed"
+                );
+            }
+            Ok(_) => {}
+            Err(error) => tracing::error!(%error, "billing contracts failed"),
         }
     }
 }

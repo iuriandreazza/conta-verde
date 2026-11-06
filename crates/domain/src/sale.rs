@@ -4,9 +4,9 @@ use crate::financial_entry::clean_description;
 use crate::line::{lines_total, validated_lines};
 use crate::name::optional_text;
 use crate::{
-    Amount, CalendarDate, CategoryId, CompanyId, CostCenterId, DomainError, EntryInstallmentDraft,
-    EntryKind, FinancialEntryDraft, Line, LineDraft, PartyId, PaymentTerm, PaymentTermId, QuoteId,
-    SaleId, SaleReturnId, round_to_cents,
+    Amount, CalendarDate, CategoryId, CompanyId, ContractCycle, CostCenterId, DomainError,
+    EntryInstallmentDraft, EntryKind, FinancialEntryDraft, Line, LineDraft, PartyId, PaymentTerm,
+    PaymentTermId, QuoteId, SaleId, SaleReturnId, round_to_cents,
 };
 
 const MAX_NOTES_CHARS: usize = 2000;
@@ -76,6 +76,8 @@ pub struct Sale {
     status: SaleStatus,
     /// The quote it was made from, which never changes.
     quote_id: Option<QuoteId>,
+    /// The cycle of a contract it bills, which never changes.
+    cycle: Option<ContractCycle>,
 }
 
 impl Sale {
@@ -101,6 +103,7 @@ impl Sale {
             lines: validated_lines(&draft.lines)?,
             status: SaleStatus::Open,
             quote_id: None,
+            cycle: None,
         })
     }
 
@@ -117,6 +120,23 @@ impl Sale {
         self
     }
 
+    /// The same sale, said to bill a cycle of a contract.
+    pub fn billing(mut self, cycle: ContractCycle) -> Self {
+        self.cycle = Some(cycle);
+        self
+    }
+
+    /// The sale as it was stored, with the cycle it bills.
+    pub fn with_cycle(mut self, cycle: Option<ContractCycle>) -> Self {
+        self.cycle = cycle;
+        self
+    }
+
+    /// The cycle of a contract the sale bills, if it does.
+    pub fn cycle(&self) -> Option<ContractCycle> {
+        self.cycle
+    }
+
     /// The same sale, said to have been made from a quote.
     pub fn from_quote(mut self, quote_id: QuoteId) -> Self {
         self.quote_id = Some(quote_id);
@@ -129,11 +149,9 @@ impl Sale {
         if self.status != SaleStatus::Open {
             return Err(DomainError::SaleIsLocked);
         }
-        let replaced = Self::new(self.id, self.company_id, draft)?.restored(
-            self.number,
-            self.status,
-            self.quote_id,
-        );
+        let replaced = Self::new(self.id, self.company_id, draft)?
+            .restored(self.number, self.status, self.quote_id)
+            .with_cycle(self.cycle);
         Ok(replaced)
     }
 

@@ -1,7 +1,8 @@
 use std::future::Future;
 
 use conta_verde_domain::{
-    AuditEntry, AuditRecord, CompanyId, PartyId, QuoteId, Sale, SaleId, SaleReturn, SaleStatus,
+    AuditEntry, AuditRecord, CompanyId, ContractCycle, ContractId, PartyId, QuoteId, Sale, SaleId,
+    SaleReturn, SaleStatus,
 };
 
 use crate::list_query::clean_search;
@@ -23,6 +24,7 @@ pub struct SaleQuery {
     status: Option<SaleStatus>,
     customer: Option<PartyId>,
     seller: Option<PartyId>,
+    contract: Option<ContractId>,
     sort: NumberSort,
 }
 
@@ -48,6 +50,11 @@ impl SaleQuery {
         self
     }
 
+    pub fn of_contract(mut self, contract: ContractId) -> Self {
+        self.contract = Some(contract);
+        self
+    }
+
     pub fn sorted(mut self, sort: NumberSort) -> Self {
         self.sort = sort;
         self
@@ -69,6 +76,10 @@ impl SaleQuery {
         self.seller
     }
 
+    pub fn contract(&self) -> Option<ContractId> {
+        self.contract
+    }
+
     pub fn sort(&self) -> NumberSort {
         self.sort
     }
@@ -82,6 +93,10 @@ impl SaleQuery {
             && self
                 .seller
                 .is_none_or(|seller| sale.seller_id() == Some(seller))
+            && self.contract.is_none_or(|contract| {
+                sale.cycle()
+                    .is_some_and(|cycle| cycle.contract_id == contract)
+            })
             && self.search().is_none_or(|text| {
                 let text = text.to_lowercase();
                 sale.number().to_string() == text
@@ -101,7 +116,8 @@ impl SaleQuery {
 /// Every write takes the audit entry that describes it and stores both **atomically** ([ADR 0008]).
 pub trait SaleRepository: Send + Sync {
     /// Stores a new sale, giving it the next number of the company, which it returns. `DuplicateQuoteSale`
-    /// when it says it came from a quote that already has a sale.
+    /// when it says it came from a quote that already has a sale, and `DuplicateCycle` when it bills a cycle
+    /// of a contract that already has one.
     fn save(
         &self,
         sale: &Sale,
@@ -113,6 +129,13 @@ pub trait SaleRepository: Send + Sync {
         &self,
         company_id: CompanyId,
         id: SaleId,
+    ) -> impl Future<Output = Result<Option<Sale>, RepositoryError>> + Send;
+
+    /// The sale of this cycle of a contract, if one was made.
+    fn find_by_cycle(
+        &self,
+        company_id: CompanyId,
+        cycle: ContractCycle,
     ) -> impl Future<Output = Result<Option<Sale>, RepositoryError>> + Send;
 
     /// The sale made from this quote, if one was.

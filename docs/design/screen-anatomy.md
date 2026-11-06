@@ -35,7 +35,7 @@ From top to bottom, in this order:
 1. **Action row.** The primary action is a button with a menu of kinds when there is more than one ("Novo lançamento ▾":
    a receivable, a payable). Next to it, secondary menus and buttons: **Importar** (when the register has an import),
    **Exportar**, **Relatórios**. All are `MenuButton`s or `Button`s and read like buttons, never like links.
-2. **Filter card.** One row: the **period navigator** (previous, the period's name as a menu, next) when the list has a
+2. **Filter card.** One row: the **period filter** (previous, the period as a menu, next, and the dates) when the list has a
    date, a **search box with its button**, the closed-value selects that matter most, and **"Mais filtros"**, a menu that
    adds the rest as fields. The filters are one state object (`usePagedList`) and "Limpar filtros" resets it.
 3. **Summary strip** (lists that have states): clickable tiles with the count and the total of each state: overdue,
@@ -70,7 +70,7 @@ that matter: **overdue** and **due today**. Charts follow the dataviz rules in t
 |-----------|-------|-------|
 | `MenuButton` | built | One accessible menu button (`aria-haspopup`, arrows, Escape, focus back): powers the split button, "Mais filtros", "Ações em lote" and the row "Ações" |
 | `RowActions` | deferred | The row's "Ações" menu over `MenuButton`. Rows keep their one-click icon buttons (each toggles a panel under the row, with `aria-expanded`); a menu would make those two clicks and rewrite most page tests, so it comes with a page that has more than four actions per row |
-| `PeriodNavigator` | to build | Previous, period menu (month, quarter, year, custom range), next; replaces the free `De`/`Até` pair and the 3/6/12 months control |
+| `PeriodFilter` | built (Fluxo de caixa, Relatórios) | Previous, usual periods (month, three months, quarter, year), next, and the two dates; the 3/6/12 months control of the dashboard is the Phase 3 dashboard slice's to replace |
 | `FilterBar`, `SummaryStrip` | to build | Layout of the filter row; the state tiles as a radio group |
 | `Sheet` | built (Lançamentos; the other registers follow) | The bottom sheet for a form; its panel is an `<aside role="dialog">` named by its title |
 | `PageHeader` | exists | Moves its title into the top bar; keeps the description and, for now, the page-level actions |
@@ -80,6 +80,8 @@ that matter: **overdue** and **due today**. Charts follow the dataviz rules in t
 
 1. Accessibility basics (done).
 2. Top bar, `MenuButton` and the grouped sidebar (done).
-3. The action row, the footer count and the status marker on **Lançamentos** and **Contas bancárias** (also fixes the sideways scroll).
-4. `PeriodNavigator` and `FilterBar` on **Fluxo de caixa** and **Relatórios**.
-6. `SummaryStrip` on Lançamentos once the server answers the totals by state.
+3. The footer count and the status marker on **Lançamentos** and **Contas bancárias**, which also fixes the sideways scroll (done).
+4. `PeriodFilter` on **Fluxo de caixa** and **Relatórios** (done).
+5. The registers' forms move into `Sheet`, one page at a time (Lançamentos first).
+6. `FilterBar` for the rest of the filter rows.
+7. `SummaryStrip` on Lançamentos once the server answers the totals by state.

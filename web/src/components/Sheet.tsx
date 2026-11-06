@@ -1,5 +1,6 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useId, useRef, type KeyboardEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 interface SheetProps {
   open: boolean;
@@ -23,12 +24,25 @@ export function Sheet({ open, title, onClose, children }: SheetProps) {
   useEffect(() => {
     if (!open) return;
     opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const panel = panelRef.current;
-    // The first field, not the close button, so the person can type at once.
-    const first = panel?.querySelector(".sheet-body")?.querySelector<HTMLElement>(FOCUSABLE) ?? panel;
-    first?.focus();
-    return () => opener.current?.focus();
+    // The page behind does not scroll under a wheel or a finger on the shade.
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = overflow;
+      opener.current?.focus();
+    };
   }, [open]);
+
+  // The first field takes the focus, also when the form arrives after the sheet (it waits for what it
+  // points at): it only moves the focus while the person has not put it on something inside.
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (!open || !panel) return;
+    const inside = document.activeElement !== panel && panel.contains(document.activeElement);
+    if (inside) return;
+    const field = panel.querySelector(".sheet-body")?.querySelector<HTMLElement>(FOCUSABLE);
+    (field ?? panel).focus();
+  });
 
   function keep(event: KeyboardEvent) {
     if (event.key === "Escape") {
@@ -39,16 +53,19 @@ export function Sheet({ open, title, onClose, children }: SheetProps) {
     if (event.key !== "Tab") return;
     const focusable = Array.from(panelRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? []);
     const [first, last] = [focusable[0], focusable[focusable.length - 1]];
-    if (event.shiftKey && document.activeElement === first) {
+    const onPanel = document.activeElement === panelRef.current;
+    if (event.shiftKey && (document.activeElement === first || onPanel)) {
       event.preventDefault();
       last?.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
+    } else if (!event.shiftKey && (document.activeElement === last || onPanel)) {
       event.preventDefault();
       first?.focus();
     }
   }
 
-  return (
+  // In the body, not in the page: the page enters with a transform, which would make it the box the
+  // sheet is fixed to instead of the screen.
+  return createPortal(
     <AnimatePresence>
       {open && (
         <div className="sheet-root" onKeyDown={keep}>
@@ -82,6 +99,7 @@ export function Sheet({ open, title, onClose, children }: SheetProps) {
           </motion.aside>
         </div>
       )}
-    </AnimatePresence>
+    </AnimatePresence>,
+    document.body,
   );
 }

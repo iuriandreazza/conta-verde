@@ -2,9 +2,9 @@ use uuid::Uuid;
 
 use crate::line::lines_text;
 use crate::{
-    AccountOpening, Attachment, BankAccount, Category, CompanyId, CostCenter, DocumentCheck,
-    FinancialEntry, LineMatch, Party, PaymentMethod, PaymentTerm, Product, Quote, Recurrence, Sale,
-    SaleReturn, Settlement, StatementLine, Tag, Transfer, UserId,
+    AccountOpening, Attachment, BankAccount, Category, CompanyId, Contract, CostCenter,
+    DocumentCheck, FinancialEntry, LineMatch, Party, PaymentMethod, PaymentTerm, Product, Quote,
+    Recurrence, Sale, SaleReturn, Settlement, StatementLine, Tag, Transfer, UserId,
 };
 
 /// Who made a change. The name is a snapshot: history must keep reading the same after the user is
@@ -35,6 +35,7 @@ pub enum AuditEntity {
     Quote,
     Sale,
     SaleReturn,
+    Contract,
 }
 
 impl AuditEntity {
@@ -54,6 +55,7 @@ impl AuditEntity {
             Self::Quote => "quote",
             Self::Sale => "sale",
             Self::SaleReturn => "sale_return",
+            Self::Contract => "contract",
             Self::Settlement => "settlement",
             Self::Transfer => "transfer",
             Self::AccountOpening => "account_opening",
@@ -282,6 +284,20 @@ impl Audited for Sale {
 impl Audited for SaleReturn {
     fn audit_entity(&self) -> AuditEntity {
         AuditEntity::SaleReturn
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.id().as_uuid()
+    }
+}
+
+impl Audited for Contract {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::Contract
     }
 
     fn audit_company(&self) -> CompanyId {
@@ -729,6 +745,49 @@ pub fn sale_return_creation_changes(sale_return: &SaleReturn) -> Vec<FieldChange
         ),
         ("refund", Some(sale_return.refund().to_string())),
     ])
+}
+
+fn contract_fields(contract: &Contract) -> Fields {
+    vec![
+        ("name", Some(contract.name().to_owned())),
+        (
+            "customer_id",
+            Some(contract.customer_id().as_uuid().to_string()),
+        ),
+        (
+            "seller_id",
+            contract.seller_id().map(|id| id.as_uuid().to_string()),
+        ),
+        (
+            "payment_term_id",
+            contract
+                .payment_term_id()
+                .map(|id| id.as_uuid().to_string()),
+        ),
+        (
+            "category_id",
+            Some(contract.category_id().as_uuid().to_string()),
+        ),
+        (
+            "cost_center_id",
+            contract.cost_center_id().map(|id| id.as_uuid().to_string()),
+        ),
+        ("notes", contract.notes().map(str::to_owned)),
+        ("lines", Some(lines_text(contract.lines()))),
+        ("cycle", Some(contract.cycle().as_str().to_owned())),
+        ("starts_on", Some(contract.starts_on().to_string())),
+        ("ends_on", contract.ends_on().map(|day| day.to_string())),
+        ("status", Some(contract.status().as_str().to_owned())),
+    ]
+}
+
+/// Every field a new contract has set.
+pub fn contract_creation_changes(contract: &Contract) -> Vec<FieldChange> {
+    creation_from(contract_fields(contract))
+}
+
+pub fn contract_changes(before: &Contract, after: &Contract) -> Vec<FieldChange> {
+    changes_between(contract_fields(before), contract_fields(after))
 }
 
 fn statement_line_fields(line: &StatementLine) -> Fields {

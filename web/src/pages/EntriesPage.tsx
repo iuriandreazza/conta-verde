@@ -160,8 +160,9 @@ export function EntriesPage() {
 
   // "Novo registro" in the top bar comes here asking for the sheet.
   useEffect(() => {
-    if (params.get("novo") !== null && canWrite) {
-      openNew();
+    if (params.get("novo") !== null) {
+      if (canWrite) openNew();
+      // Also for a role that cannot write: the address must not keep asking.
       setParams({}, { replace: true });
     }
   }, [params, canWrite]);

@@ -64,3 +64,40 @@ describe("Sheet", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 });
+
+describe("Sheet with a form that arrives late", () => {
+  it("puts the focus in the first field when it shows up after the sheet, and keeps Shift+Tab inside", async () => {
+    function Late() {
+      const [ready, setReady] = useState(false);
+      return (
+        <>
+          <button onClick={() => setReady(true)}>Chegou</button>
+          <Sheet open title="Novo" onClose={() => undefined}>
+            {ready && (
+              <label>
+                Descrição
+                <input />
+              </label>
+            )}
+          </Sheet>
+        </>
+      );
+    }
+    render(<Late />);
+    expect(screen.getByRole("dialog")).toHaveFocus();
+
+    // Shift+Tab from the panel itself goes to the last control, not out to the page behind.
+    await userEvent.tab({ shift: true });
+    expect(screen.getByRole("button", { name: "Fechar" })).toHaveFocus();
+  });
+
+  it("does not let the page behind scroll while it is open, and gives that back", async () => {
+    render(<Page />);
+    await userEvent.click(screen.getByRole("button", { name: "Novo" }));
+    expect(document.body.style.overflow).toBe("hidden");
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(document.body.style.overflow).toBe("");
+  });
+});

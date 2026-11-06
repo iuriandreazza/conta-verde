@@ -1,5 +1,6 @@
 import type { CashFlowPeriod } from "../api";
 import { centsToApi, sumCents } from "./entryInstallments";
+import { monthsSpan } from "./period";
 
 const MONTHS = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
 
@@ -8,12 +9,7 @@ const two = (value: number) => String(value).padStart(2, "0");
 /** The span the page opens with: this month and the two after it, as `YYYY-MM-DD`. */
 export function defaultSpan(today: string): { from: string; to: string } {
   const [year, month] = today.split("-").map(Number);
-  // Day 0 of the month after next is the last day of the one before it.
-  const last = new Date(Date.UTC(year, month + 2, 0));
-  return {
-    from: `${year}-${two(month)}-01`,
-    to: `${last.getUTCFullYear()}-${two(last.getUTCMonth() + 1)}-${two(last.getUTCDate())}`,
-  };
+  return monthsSpan(year, month, 3);
 }
 
 /** `2026-12-10` as `10/12/26` (a span of 400 days can repeat a day and month), or `2026-12-01` as `dez/2026` for months. */

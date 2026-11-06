@@ -92,6 +92,8 @@ pub enum DomainError {
     InstallmentTooSmall,
     ReturnExceedsSold,
     EntryFollowsASale,
+    ContractIsTerminated,
+    InvalidAdjustment,
 }
 
 impl fmt::Display for DomainError {
@@ -278,6 +280,10 @@ impl fmt::Display for DomainError {
             Self::ReturnExceedsSold => f.write_str("a return cannot be of more than was sold and not returned yet"),
             Self::EntryFollowsASale => f.write_str(
                 "an entry made by a sale or by a return changes through the sale, not on its own",
+            ),
+            Self::ContractIsTerminated => f.write_str("a terminated contract is fixed"),
+            Self::InvalidAdjustment => f.write_str(
+                "an adjustment is a percentage between -99.99 and 1000, with at most two decimals",
             ),
             Self::KindCannotChange => f.write_str("the kind cannot change once registered"),
         }
