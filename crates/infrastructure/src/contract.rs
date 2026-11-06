@@ -11466,6 +11466,13 @@ pub async fn settles_charges_from_webhooks<C, Ev, S, E, F, P>(
         )
     );
 
+    // A signed notice that changes nothing is acknowledged, and stores nothing.
+    let (headers, body) = FakePaymentProvider::notice("evt_ping", "fake_none", "ping", None);
+    assert_eq!(
+        webhooks.receive(company, "fake", &headers, &body).await,
+        Ok(0)
+    );
+
     // Not signed, not a notice, a charge nobody knows, a provider that is not the one, and another
     // company's address: all refused, and nothing is stored.
     let second = charge_for(&sale, 2).await.unwrap();

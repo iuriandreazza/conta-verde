@@ -24,6 +24,17 @@ pub fn is_valid_signature(secret: &[u8], body: &[u8], signature: &str) -> bool {
     mac.verify_slice(&expected).is_ok()
 }
 
+/// Whether two secrets are equal, in time that does not depend on how much of one is right (the lengths
+/// are not secret).
+pub fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .fold(0u8, |difference, (a, b)| difference | (a ^ b))
+            == 0
+}
+
 fn decode_hex(text: &str) -> Option<Vec<u8>> {
     if !text.len().is_multiple_of(2) || !text.is_ascii() {
         return None;
@@ -45,6 +56,14 @@ mod tests {
             hmac_sha256_hex(b"Jefe", b"what do ya want for nothing?"),
             "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
         );
+    }
+
+    #[test]
+    fn compares_secrets_whole() {
+        assert!(constant_time_eq(b"token", b"token"));
+        assert!(!constant_time_eq(b"token", b"tokeN"));
+        assert!(!constant_time_eq(b"token", b"token2"));
+        assert!(constant_time_eq(b"", b""));
     }
 
     #[test]

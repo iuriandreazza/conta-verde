@@ -108,7 +108,9 @@ where
                 .finish(company_id, event.id(), outcome, note.as_deref())
                 .await?;
         }
-        if taken == 0 {
+        // A notice the provider sends that changes nothing here is acknowledged; one that is all of other
+        // companies' charges is not.
+        if taken == 0 && !notices.is_empty() {
             return Err(ApplicationError::ChargeNotFound);
         }
         Ok(taken)

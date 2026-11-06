@@ -1,3 +1,4 @@
+mod asaas;
 mod brasil_api;
 mod brasil_api_postal_code;
 mod cached_registry;
@@ -61,6 +62,7 @@ mod secrets;
 mod smtp_email_sender;
 mod webhook_signature;
 
+pub use asaas::AsaasProvider;
 pub use brasil_api::BrasilApiCnpjRegistry;
 pub use brasil_api_postal_code::BrasilApiPostalCodeDirectory;
 pub use cached_registry::CachedCnpjRegistry;
