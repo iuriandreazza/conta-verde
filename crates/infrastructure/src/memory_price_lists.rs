@@ -117,7 +117,8 @@ mod tests {
     use super::*;
     use crate::memory_entries::tests::Registers;
     use crate::{
-        InMemoryPaymentTermRepository, InMemoryProductRepository, RegisterSalesReferences, contract,
+        InMemoryPaymentTermRepository, InMemoryProductRepository, RegisterDocumentReferences,
+        contract,
     };
 
     #[tokio::test]
@@ -132,7 +133,7 @@ mod tests {
             contract::seed_sales_records(&registers.parties, &products, &terms, company).await;
         let service = PriceListService::new(
             InMemoryPriceListRepository::default(),
-            RegisterSalesReferences::new(registers.parties.clone(), products, terms),
+            RegisterDocumentReferences::new(registers.parties.clone(), products, terms),
         );
         contract::runs_the_price_list_lifecycle(&service, company, other_company, &seed).await;
     }

@@ -2896,6 +2896,7 @@ describe("financial entries", () => {
     recurrence_id: null,
     sale_id: null,
     sale_return_id: null,
+    purchase_receipt_id: null,
     voided: false,
   };
   const rent: Entry = {
@@ -2909,6 +2910,7 @@ describe("financial entries", () => {
     recurrence_id: null,
     sale_id: null,
     sale_return_id: null,
+    purchase_receipt_id: null,
     voided: false,
   };
 
@@ -4308,6 +4310,7 @@ describe("recurrences", () => {
       recurrence_id: null,
       sale_id: null,
       sale_return_id: null,
+      purchase_receipt_id: null,
       voided: false,
     };
   }

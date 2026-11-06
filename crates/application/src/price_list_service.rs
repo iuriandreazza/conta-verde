@@ -6,8 +6,8 @@ use conta_verde_domain::{
 use crate::audit::audit_entry;
 use crate::list_query::{clamp_limit, split_page};
 use crate::{
-    ApplicationError, NameCursor, PriceListQuery, PriceListRepository, RepositoryError,
-    SalesReferences,
+    ApplicationError, DocumentReferences, NameCursor, PriceListQuery, PriceListRepository,
+    RepositoryError,
 };
 
 #[derive(Debug, Clone)]
@@ -27,7 +27,7 @@ pub struct PriceListService<R, F> {
 impl<R, F> PriceListService<R, F>
 where
     R: PriceListRepository,
-    F: SalesReferences,
+    F: DocumentReferences,
 {
     pub fn new(repository: R, references: F) -> Self {
         Self {

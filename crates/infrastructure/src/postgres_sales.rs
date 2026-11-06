@@ -599,8 +599,8 @@ mod tests {
         Argon2SecretService, InMemoryEmailSender, PostgresBankAccountRepository,
         PostgresCategoryRepository, PostgresCostCenterRepository, PostgresFinancialEntryRepository,
         PostgresPartyRepository, PostgresPaymentMethodRepository, PostgresPaymentTermRepository,
-        PostgresProductRepository, PostgresQuoteRepository, RegisterReferences,
-        RegisterSalesReferences, contract,
+        PostgresProductRepository, PostgresQuoteRepository, RegisterDocumentReferences,
+        RegisterReferences, contract,
     };
 
     fn references(
@@ -621,14 +621,14 @@ mod tests {
         )
     }
 
-    fn sales_references(
+    fn document_references(
         pool: &PgPool,
-    ) -> RegisterSalesReferences<
+    ) -> RegisterDocumentReferences<
         PostgresPartyRepository,
         PostgresProductRepository,
         PostgresPaymentTermRepository,
     > {
-        RegisterSalesReferences::new(
+        RegisterDocumentReferences::new(
             PostgresPartyRepository::new(pool.clone()),
             PostgresProductRepository::new(pool.clone()),
             PostgresPaymentTermRepository::new(pool.clone()),
@@ -688,11 +688,11 @@ mod tests {
                 references(&pool),
             ),
             references(&pool),
-            sales_references(&pool),
+            document_references(&pool),
         );
         let quotes = QuoteService::new(
             PostgresQuoteRepository::new(pool.clone()),
-            sales_references(&pool),
+            document_references(&pool),
             InMemoryEmailSender::default(),
             Argon2SecretService::new().unwrap(),
             "https://erp.example",

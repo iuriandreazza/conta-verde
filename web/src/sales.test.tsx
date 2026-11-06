@@ -284,6 +284,7 @@ describe("entries made by sales", () => {
     recurrence_id: null,
     sale_id: "s2",
     sale_return_id: null,
+    purchase_receipt_id: null,
     voided: false,
     ...patch,
   });

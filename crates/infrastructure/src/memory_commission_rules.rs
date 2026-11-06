@@ -105,7 +105,7 @@ mod tests {
     use crate::memory_entries::tests::Registers;
     use crate::{
         InMemoryFinancialEntryRepository, InMemoryPaymentTermRepository, InMemoryProductRepository,
-        InMemoryQuoteRepository, InMemorySaleRepository, RegisterSalesReferences, contract,
+        InMemoryQuoteRepository, InMemorySaleRepository, RegisterDocumentReferences, contract,
     };
 
     #[tokio::test]
@@ -120,7 +120,11 @@ mod tests {
         let seed =
             contract::seed_sales_records(&registers.parties, &products, &terms, company).await;
         let references = || {
-            RegisterSalesReferences::new(registers.parties.clone(), products.clone(), terms.clone())
+            RegisterDocumentReferences::new(
+                registers.parties.clone(),
+                products.clone(),
+                terms.clone(),
+            )
         };
         let sale_store = InMemorySaleRepository::default();
         let sales = SaleService::new(

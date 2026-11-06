@@ -356,18 +356,18 @@ mod tests {
     use super::*;
     use crate::{
         Argon2SecretService, InMemoryEmailSender, PostgresPartyRepository,
-        PostgresPaymentTermRepository, PostgresProductRepository, RegisterSalesReferences,
+        PostgresPaymentTermRepository, PostgresProductRepository, RegisterDocumentReferences,
         contract,
     };
 
     fn references(
         pool: &PgPool,
-    ) -> RegisterSalesReferences<
+    ) -> RegisterDocumentReferences<
         PostgresPartyRepository,
         PostgresProductRepository,
         PostgresPaymentTermRepository,
     > {
-        RegisterSalesReferences::new(
+        RegisterDocumentReferences::new(
             PostgresPartyRepository::new(pool.clone()),
             PostgresProductRepository::new(pool.clone()),
             PostgresPaymentTermRepository::new(pool.clone()),
@@ -387,7 +387,7 @@ mod tests {
             company,
         )
         .await;
-        contract::sales_references_say_what_is_usable(
+        contract::document_references_say_what_is_usable(
             &references(&pool),
             company,
             other_company,

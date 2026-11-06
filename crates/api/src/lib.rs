@@ -27,6 +27,7 @@ mod postal_codes;
 mod price_lists;
 mod products;
 mod products_import;
+mod purchase_orders;
 mod quote_pdf;
 mod quotes;
 mod recurrences;
@@ -45,15 +46,15 @@ use conta_verde_application::{
     AttachmentRepository, AttachmentService, AuthService, BalanceService, BankAccountRepository,
     BankAccountService, BlobStore, CategoryRepository, CategoryService, ChargeRepository,
     ChargeService, CnpjRegistry, CommissionRuleRepository, CommissionService, ContractRepository,
-    ContractService, CostCenterRepository, CostCenterService, EmailSender, EntryReferences,
-    FinancialEntryRepository, FinancialEntryService, IdentityRepository, InvitationRepository,
-    MemberService, OpeningRepository, PartyRepository, PartyService, PaymentMethodRepository,
-    PaymentMethodService, PaymentProvider, PaymentTermRepository, PaymentTermService,
-    PostalCodeDirectory, PostalCodeService, PriceListRepository, PriceListService,
-    ProductRepository, ProductService, QuoteRepository, QuoteService, ReconciliationService,
-    RecurrenceRepository, RecurrenceService, SaleRepository, SaleService, SalesReferences,
-    SalesReportService, SecretService, StatementLineRepository, TransferRepository,
-    TransferService,
+    ContractService, CostCenterRepository, CostCenterService, DocumentReferences, EmailSender,
+    EntryReferences, FinancialEntryRepository, FinancialEntryService, IdentityRepository,
+    InvitationRepository, MemberService, OpeningRepository, PartyRepository, PartyService,
+    PaymentMethodRepository, PaymentMethodService, PaymentProvider, PaymentTermRepository,
+    PaymentTermService, PostalCodeDirectory, PostalCodeService, PriceListRepository,
+    PriceListService, ProductRepository, ProductService, PurchaseOrderRepository, PurchaseService,
+    QuoteRepository, QuoteService, ReconciliationService, RecurrenceRepository, RecurrenceService,
+    SaleRepository, SaleService, SalesReportService, SecretService, StatementLineRepository,
+    TransferRepository, TransferService,
 };
 use conta_verde_application::{
     CollectionService, CollectionSettingsRepository, DunningPlanRepository, DunningService,
@@ -99,9 +100,10 @@ pub trait Ports: 'static {
     type Transfers: TransferRepository + 'static;
     type Openings: OpeningRepository + 'static;
     type Recurrences: RecurrenceRepository + 'static;
-    type SalesReferences: SalesReferences + 'static;
+    type DocumentReferences: DocumentReferences + 'static;
     type Quotes: QuoteRepository + 'static;
     type Sales: SaleRepository + 'static;
+    type Purchases: PurchaseOrderRepository + 'static;
     type Contracts: ContractRepository + 'static;
     type CommissionRules: CommissionRuleRepository + 'static;
     type Statements: StatementLineRepository + 'static;
@@ -155,7 +157,15 @@ type SalesOf<X> = SaleService<
     <X as Ports>::Quotes,
     <X as Ports>::Entries,
     <X as Ports>::EntryReferences,
-    <X as Ports>::SalesReferences,
+    <X as Ports>::DocumentReferences,
+>;
+
+/// The purchase orders use case over the adapters of `X`.
+type PurchasesOf<X> = PurchaseService<
+    <X as Ports>::Purchases,
+    <X as Ports>::Entries,
+    <X as Ports>::EntryReferences,
+    <X as Ports>::DocumentReferences,
 >;
 
 /// The contracts use case over the adapters of `X`.
@@ -165,18 +175,18 @@ type ContractsOf<X> = ContractService<
     <X as Ports>::Quotes,
     <X as Ports>::Entries,
     <X as Ports>::EntryReferences,
-    <X as Ports>::SalesReferences,
+    <X as Ports>::DocumentReferences,
 >;
 
 /// The commissions use case over the adapters of `X`.
 type CommissionsOf<X> = CommissionService<
     <X as Ports>::CommissionRules,
     <X as Ports>::Sales,
-    <X as Ports>::SalesReferences,
+    <X as Ports>::DocumentReferences,
 >;
 
 /// The price lists use case over the adapters of `X`.
-type PriceListsOf<X> = PriceListService<<X as Ports>::PriceLists, <X as Ports>::SalesReferences>;
+type PriceListsOf<X> = PriceListService<<X as Ports>::PriceLists, <X as Ports>::DocumentReferences>;
 
 /// The sales reports use case over the adapters of `X`.
 type SalesReportsOf<X> = SalesReportService<<X as Ports>::Sales>;
@@ -201,8 +211,9 @@ pub struct Services<X: Ports> {
     pub collection: CollectionService<X::CollectionSettings, X::EntryReferences>,
     pub transfers: TransferService<X::Transfers, X::EntryReferences>,
     pub recurrences: RecurrenceService<X::Recurrences, X::Entries, X::EntryReferences>,
-    pub quotes: QuoteService<X::Quotes, X::SalesReferences, X::Emails, X::Secrets>,
+    pub quotes: QuoteService<X::Quotes, X::DocumentReferences, X::Emails, X::Secrets>,
     pub sales: SalesOf<X>,
+    pub purchases: PurchasesOf<X>,
     pub contracts: ContractsOf<X>,
     pub commissions: CommissionsOf<X>,
     pub reconciliation:
@@ -232,8 +243,9 @@ pub(crate) struct AppState<X: Ports> {
     collection: CollectionService<X::CollectionSettings, X::EntryReferences>,
     transfers: TransferService<X::Transfers, X::EntryReferences>,
     recurrences: RecurrenceService<X::Recurrences, X::Entries, X::EntryReferences>,
-    quotes: QuoteService<X::Quotes, X::SalesReferences, X::Emails, X::Secrets>,
+    quotes: QuoteService<X::Quotes, X::DocumentReferences, X::Emails, X::Secrets>,
     sales: SalesOf<X>,
+    purchases: PurchasesOf<X>,
     contracts: ContractsOf<X>,
     commissions: CommissionsOf<X>,
     reconciliation:
@@ -270,6 +282,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         recurrences: services.recurrences,
         quotes: services.quotes,
         sales: services.sales,
+        purchases: services.purchases,
         contracts: services.contracts,
         commissions: services.commissions,
         reconciliation: services.reconciliation,
@@ -658,6 +671,40 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
             get(sales::list_returns::<X>).post(sales::register_return::<X>),
         )
         .route(
+            "/companies/{company_id}/purchase-orders",
+            get(purchase_orders::list_purchase_orders::<X>)
+                .post(purchase_orders::register_purchase_order::<X>),
+        )
+        .route(
+            "/companies/{company_id}/purchase-orders/{order_id}",
+            get(purchase_orders::get_purchase_order::<X>)
+                .put(purchase_orders::update_purchase_order::<X>),
+        )
+        .route(
+            "/companies/{company_id}/purchase-orders/{order_id}/history",
+            get(purchase_orders::purchase_order_history::<X>),
+        )
+        .route(
+            "/companies/{company_id}/purchase-orders/{order_id}/approve",
+            post(purchase_orders::approve_purchase_order::<X>),
+        )
+        .route(
+            "/companies/{company_id}/purchase-orders/{order_id}/cancel",
+            post(purchase_orders::cancel_purchase_order::<X>),
+        )
+        .route(
+            "/companies/{company_id}/purchase-orders/{order_id}/close",
+            post(purchase_orders::close_purchase_order::<X>),
+        )
+        .route(
+            "/companies/{company_id}/purchase-orders/{order_id}/receipts",
+            get(purchase_orders::list_receipts::<X>).post(purchase_orders::register_receipt::<X>),
+        )
+        .route(
+            "/companies/{company_id}/purchase-orders/{order_id}/receipts/{receipt_id}/finish",
+            post(purchase_orders::finish_receipt::<X>),
+        )
+        .route(
             "/invitations/{token}",
             get(members::preview_invitation::<X>),
         )
@@ -717,9 +764,9 @@ mod tests {
         InMemoryPaymentEventRepository, InMemoryPaymentLinkRepository,
         InMemoryPaymentMethodRepository, InMemoryPaymentTermRepository,
         InMemoryPostalCodeDirectory, InMemoryPriceListRepository, InMemoryProductRepository,
-        InMemoryQuoteRepository, InMemoryRecurrenceRepository, InMemorySaleRepository,
-        InMemoryStatementLineRepository, InMemoryTransferRepository, RegisterReferences,
-        RegisterSalesReferences,
+        InMemoryPurchaseOrderRepository, InMemoryQuoteRepository, InMemoryRecurrenceRepository,
+        InMemorySaleRepository, InMemoryStatementLineRepository, InMemoryTransferRepository,
+        RegisterDocumentReferences, RegisterReferences,
     };
     use http_body_util::BodyExt;
     use serde_json::{Value, json};
@@ -799,9 +846,10 @@ mod tests {
         type Transfers = InMemoryTransferRepository;
         type Openings = InMemoryOpeningRepository;
         type Recurrences = InMemoryRecurrenceRepository;
-        type SalesReferences = TestSalesReferences;
+        type DocumentReferences = TestDocumentReferences;
         type Quotes = InMemoryQuoteRepository;
         type Sales = InMemorySaleRepository;
+        type Purchases = InMemoryPurchaseOrderRepository;
         type Contracts = InMemoryContractRepository;
         type CommissionRules = InMemoryCommissionRuleRepository;
         type Statements = InMemoryStatementLineRepository;
@@ -840,9 +888,10 @@ mod tests {
         type Transfers = InMemoryTransferRepository;
         type Openings = InMemoryOpeningRepository;
         type Recurrences = InMemoryRecurrenceRepository;
-        type SalesReferences = TestSalesReferences;
+        type DocumentReferences = TestDocumentReferences;
         type Quotes = InMemoryQuoteRepository;
         type Sales = InMemorySaleRepository;
+        type Purchases = InMemoryPurchaseOrderRepository;
         type Contracts = InMemoryContractRepository;
         type CommissionRules = InMemoryCommissionRuleRepository;
         type Statements = InMemoryStatementLineRepository;
@@ -1160,7 +1209,7 @@ mod tests {
         )
     }
 
-    type TestSalesReferences = RegisterSalesReferences<
+    type TestDocumentReferences = RegisterDocumentReferences<
         InMemoryPartyRepository,
         InMemoryProductRepository,
         InMemoryPaymentTermRepository,
@@ -1168,7 +1217,7 @@ mod tests {
 
     type TestQuotes = QuoteService<
         InMemoryQuoteRepository,
-        TestSalesReferences,
+        TestDocumentReferences,
         InMemoryEmailSender,
         Argon2SecretService,
     >;
@@ -1182,7 +1231,11 @@ mod tests {
     ) -> TestQuotes {
         QuoteService::new(
             store,
-            RegisterSalesReferences::new(parties.clone(), products.clone(), payment_terms.clone()),
+            RegisterDocumentReferences::new(
+                parties.clone(),
+                products.clone(),
+                payment_terms.clone(),
+            ),
             InMemoryEmailSender::default(),
             Argon2SecretService::new().unwrap(),
             "https://erp.example",
@@ -1204,7 +1257,7 @@ mod tests {
         InMemoryQuoteRepository,
         InMemoryFinancialEntryRepository,
         TestReferences,
-        TestSalesReferences,
+        TestDocumentReferences,
     >;
 
     /// Sales over the registers, the quotes and the entries a test keeps a handle to, so that a quote can be
@@ -1236,7 +1289,11 @@ mod tests {
             quotes,
             FinancialEntryService::new(entries, references()),
             references(),
-            RegisterSalesReferences::new(parties.clone(), products.clone(), payment_terms.clone()),
+            RegisterDocumentReferences::new(
+                parties.clone(),
+                products.clone(),
+                payment_terms.clone(),
+            ),
         )
     }
 
@@ -1256,7 +1313,64 @@ mod tests {
         )
     }
 
-    type TestPriceLists = PriceListService<InMemoryPriceListRepository, TestSalesReferences>;
+    type TestPurchases = PurchaseService<
+        InMemoryPurchaseOrderRepository,
+        InMemoryFinancialEntryRepository,
+        TestReferences,
+        TestDocumentReferences,
+    >;
+
+    /// Purchase orders over the registers and the entries a test keeps a handle to, so that what a receipt
+    /// makes shows in the entries.
+    #[allow(clippy::too_many_arguments)]
+    fn purchases_over(
+        store: InMemoryPurchaseOrderRepository,
+        entries: InMemoryFinancialEntryRepository,
+        categories: &InMemoryCategoryRepository,
+        cost_centers: &InMemoryCostCenterRepository,
+        parties: &InMemoryPartyRepository,
+        bank_accounts: &InMemoryBankAccountRepository,
+        payment_methods: &InMemoryPaymentMethodRepository,
+        products: &InMemoryProductRepository,
+        payment_terms: &InMemoryPaymentTermRepository,
+    ) -> TestPurchases {
+        let references = || {
+            references_over(
+                categories,
+                cost_centers,
+                parties,
+                bank_accounts,
+                payment_methods,
+            )
+        };
+        PurchaseService::new(
+            store,
+            FinancialEntryService::new(entries, references()),
+            references(),
+            RegisterDocumentReferences::new(
+                parties.clone(),
+                products.clone(),
+                payment_terms.clone(),
+            ),
+        )
+    }
+
+    /// Purchase orders over registers that the app's own services do not share.
+    fn standalone_purchases() -> TestPurchases {
+        purchases_over(
+            InMemoryPurchaseOrderRepository::default(),
+            InMemoryFinancialEntryRepository::default(),
+            &InMemoryCategoryRepository::default(),
+            &InMemoryCostCenterRepository::default(),
+            &InMemoryPartyRepository::default(),
+            &InMemoryBankAccountRepository::default(),
+            &InMemoryPaymentMethodRepository::default(),
+            &InMemoryProductRepository::default(),
+            &InMemoryPaymentTermRepository::default(),
+        )
+    }
+
+    type TestPriceLists = PriceListService<InMemoryPriceListRepository, TestDocumentReferences>;
 
     /// Price lists over the registers a test keeps a handle to.
     fn price_lists_over(
@@ -1266,7 +1380,11 @@ mod tests {
     ) -> TestPriceLists {
         PriceListService::new(
             InMemoryPriceListRepository::default(),
-            RegisterSalesReferences::new(parties.clone(), products.clone(), payment_terms.clone()),
+            RegisterDocumentReferences::new(
+                parties.clone(),
+                products.clone(),
+                payment_terms.clone(),
+            ),
         )
     }
 
@@ -1282,7 +1400,7 @@ mod tests {
     type TestCommissions = CommissionService<
         InMemoryCommissionRuleRepository,
         InMemorySaleRepository,
-        TestSalesReferences,
+        TestDocumentReferences,
     >;
 
     /// Commissions over the sales store and the registers a test keeps a handle to.
@@ -1295,7 +1413,11 @@ mod tests {
         CommissionService::new(
             InMemoryCommissionRuleRepository::default(),
             sales,
-            RegisterSalesReferences::new(parties.clone(), products.clone(), payment_terms.clone()),
+            RegisterDocumentReferences::new(
+                parties.clone(),
+                products.clone(),
+                payment_terms.clone(),
+            ),
         )
     }
 
@@ -1389,6 +1511,7 @@ mod tests {
                 recurrences: standalone_recurrences(),
                 quotes: standalone_quotes(),
                 sales: standalone_sales(),
+                purchases: standalone_purchases(),
                 contracts: ContractService::new(
                     InMemoryContractRepository::default(),
                     standalone_sales(),
@@ -2040,6 +2163,7 @@ mod tests {
                 recurrences: standalone_recurrences(),
                 quotes: standalone_quotes(),
                 sales: standalone_sales(),
+                purchases: standalone_purchases(),
                 contracts: ContractService::new(
                     InMemoryContractRepository::default(),
                     standalone_sales(),
@@ -2601,7 +2725,7 @@ mod tests {
         assert_eq!(me.body["companies"][0]["role"], "owner");
         assert_eq!(
             me.body["companies"][0]["permissions"],
-            json!({ "parties": "write", "products": "write", "finance": "write", "sales": "write", "members": "write" })
+            json!({ "parties": "write", "products": "write", "finance": "write", "sales": "write", "purchases": "write", "members": "write" })
         );
 
         let viewer = member_with_role(&app, &identities, company_id, Role::Viewer).await;
@@ -2618,7 +2742,7 @@ mod tests {
         // Members is out of reach, so the area is not there at all.
         assert_eq!(
             theirs["permissions"],
-            json!({ "parties": "read", "products": "read", "finance": "read", "sales": "read" })
+            json!({ "parties": "read", "products": "read", "finance": "read", "sales": "read", "purchases": "read" })
         );
     }
 
@@ -3533,6 +3657,7 @@ mod tests {
                 recurrences: standalone_recurrences(),
                 quotes: standalone_quotes(),
                 sales: standalone_sales(),
+                purchases: standalone_purchases(),
                 contracts: ContractService::new(
                     InMemoryContractRepository::default(),
                     standalone_sales(),
@@ -5134,6 +5259,17 @@ mod tests {
                 ),
                 quotes: quotes_over(quote_store.clone(), &parties, &products, &payment_terms),
                 sales: sales(),
+                purchases: purchases_over(
+                    InMemoryPurchaseOrderRepository::default(),
+                    entry_store.clone(),
+                    &categories,
+                    &cost_centers,
+                    &parties,
+                    &bank_accounts,
+                    &payment_methods,
+                    &products,
+                    &payment_terms,
+                ),
                 contracts: ContractService::new(InMemoryContractRepository::default(), sales()),
                 commissions: commissions_over(
                     sale_store.clone(),
@@ -8666,6 +8802,292 @@ mod tests {
                 &app,
                 get_request(
                     &format!("{}/{id}{path}", sales_uri(other_company)),
+                    Some(&other),
+                ),
+            )
+            .await;
+            assert_eq!(reply.status, StatusCode::NOT_FOUND, "{path}");
+        }
+        assert_eq!(
+            send(&app, get_request(&uri, Some(&other))).await.status,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            send(&app, get_request(&uri, None)).await.status,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    fn purchases_uri(company_id: Uuid) -> String {
+        format!("/companies/{company_id}/purchase-orders")
+    }
+
+    fn purchase_body(targets: &SalesTargets, supplier: &str, category: &str) -> Value {
+        json!({
+            "supplier_id": supplier,
+            "ordered_on": "2026-11-06",
+            "expected_on": "2026-11-20",
+            "payment_term_id": targets.term,
+            "category_id": category,
+            "notes": "Entregar no depósito",
+            "lines": [
+                { "product_id": targets.product, "description": "Café 500g", "quantity": "12",
+                  "unit_price": "8.10", "discount": "0.50" },
+                { "product_id": targets.other_product, "description": "Pão francês", "quantity": "3",
+                  "unit_price": "3.33" }
+            ],
+        })
+    }
+
+    #[tokio::test]
+    async fn a_purchase_order_is_approved_received_in_parts_and_pays_by_its_term() {
+        let app = entry_app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let targets = sales_targets(&app, &cookie, company_id).await;
+        let category = revenue_category(&app, &cookie, company_id).await;
+        let supplier = send(
+            &app,
+            json_request(
+                "POST",
+                &parties_uri(company_id),
+                Some(&cookie),
+                json!({ "name": "Torrefação Boa", "is_customer": false, "is_supplier": true }),
+            ),
+        )
+        .await;
+        let supplier = supplier.body["id"].as_str().unwrap().to_owned();
+        let uri = purchases_uri(company_id);
+
+        let created = send(
+            &app,
+            json_request(
+                "POST",
+                &uri,
+                Some(&cookie),
+                purchase_body(&targets, &supplier, &category),
+            ),
+        )
+        .await;
+        assert_eq!(created.status, StatusCode::CREATED, "{}", created.body);
+        assert_eq!(created.body["status"], "draft");
+        assert_eq!(created.body["number"], 1);
+        assert_eq!(created.body["total"], "106.69");
+        let id = created.body["id"].as_str().unwrap().to_owned();
+        let one = format!("{uri}/{id}");
+
+        // A customer is not a supplier, and the expected day is not before the order.
+        let mut bad = purchase_body(&targets, &targets.customer, &category);
+        assert_eq!(
+            send(&app, json_request("POST", &uri, Some(&cookie), bad.clone()))
+                .await
+                .status,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        bad = purchase_body(&targets, &supplier, &category);
+        bad["expected_on"] = json!("2026-11-05");
+        assert_eq!(
+            send(&app, json_request("POST", &uri, Some(&cookie), bad))
+                .await
+                .status,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let listed = send(
+            &app,
+            get_request(
+                &format!("{uri}?q=franc%C3%AAs&status=draft&supplier={supplier}"),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(listed.body["items"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            send(
+                &app,
+                get_request(&format!("{uri}?status=paid"), Some(&cookie))
+            )
+            .await
+            .status,
+            StatusCode::BAD_REQUEST
+        );
+
+        // Nothing arrives at a draft: the state is the problem, not the request.
+        let receipts_uri = format!("{one}/receipts");
+        let partial = json!({
+            "received_on": "2026-11-10",
+            "items": [{ "line": 1, "quantity": "5" }, { "line": 2, "quantity": "3" }],
+        });
+        assert_eq!(
+            send(
+                &app,
+                json_request("POST", &receipts_uri, Some(&cookie), partial.clone())
+            )
+            .await
+            .status,
+            StatusCode::CONFLICT
+        );
+        let approved = send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{one}/approve"),
+                Some(&cookie),
+                Value::Null,
+            ),
+        )
+        .await;
+        assert_eq!(approved.status, StatusCode::OK, "{}", approved.body);
+        assert_eq!(approved.body["status"], "approved");
+        assert_eq!(
+            send(
+                &app,
+                json_request(
+                    "PUT",
+                    &one,
+                    Some(&cookie),
+                    purchase_body(&targets, &supplier, &category)
+                )
+            )
+            .await
+            .status,
+            StatusCode::CONFLICT
+        );
+
+        // The first receipt: its payable is split by the term (30/60) from the day the goods arrived.
+        let first = send(
+            &app,
+            json_request("POST", &receipts_uri, Some(&cookie), partial),
+        )
+        .await;
+        assert_eq!(first.status, StatusCode::CREATED, "{}", first.body);
+        assert_eq!(first.body["total"], "50.28");
+        assert_eq!(first.body["items"][0]["value"], "40.29");
+        let payable = first.body["payable_id"].as_str().unwrap().to_owned();
+        let entry = send(
+            &app,
+            get_request(
+                &format!("{}/{payable}", entries_uri(company_id)),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(entry.body["kind"], "payable");
+        assert_eq!(entry.body["description"], "Compra nº 1");
+        assert_eq!(entry.body["party_id"], supplier);
+        assert_eq!(entry.body["purchase_receipt_id"], first.body["id"]);
+        assert_eq!(entry.body["total"], "50.28");
+        assert_eq!(entry.body["installments"][0]["due_date"], "2026-12-10");
+        assert_eq!(entry.body["installments"][1]["due_date"], "2027-01-09");
+        assert_eq!(
+            send(&app, get_request(&one, Some(&cookie))).await.body["status"],
+            "partially_received"
+        );
+
+        // More than what is left is refused and leaves nothing; a partly received order is not cancelled.
+        let too_much = json!({
+            "received_on": "2026-11-12",
+            "items": [{ "line": 1, "quantity": "7.001" }],
+        });
+        assert_eq!(
+            send(
+                &app,
+                json_request("POST", &receipts_uri, Some(&cookie), too_much)
+            )
+            .await
+            .status,
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            send(
+                &app,
+                json_request("POST", &format!("{one}/cancel"), Some(&cookie), Value::Null)
+            )
+            .await
+            .status,
+            StatusCode::CONFLICT
+        );
+
+        let rest = send(
+            &app,
+            json_request(
+                "POST",
+                &receipts_uri,
+                Some(&cookie),
+                json!({ "received_on": "2026-11-15", "items": [{ "line": 1, "quantity": "7" }] }),
+            ),
+        )
+        .await;
+        assert_eq!(rest.status, StatusCode::CREATED, "{}", rest.body);
+        assert_eq!(rest.body["total"], "56.41");
+        assert_eq!(
+            send(&app, get_request(&one, Some(&cookie))).await.body["status"],
+            "received"
+        );
+        let receipts = send(&app, get_request(&receipts_uri, Some(&cookie))).await;
+        assert_eq!(receipts.body["items"].as_array().unwrap().len(), 2);
+        let finished = send(
+            &app,
+            json_request(
+                "POST",
+                &format!(
+                    "{receipts_uri}/{}/finish",
+                    first.body["id"].as_str().unwrap()
+                ),
+                Some(&cookie),
+                Value::Null,
+            ),
+        )
+        .await;
+        assert_eq!(finished.status, StatusCode::OK, "{}", finished.body);
+        assert_eq!(finished.body["payable_id"], payable.as_str());
+        let payables = send(
+            &app,
+            get_request(
+                &format!("{}?kind=payable", entries_uri(company_id)),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(payables.body["items"].as_array().unwrap().len(), 2);
+        let history = send(&app, get_request(&format!("{one}/history"), Some(&cookie))).await;
+        assert_eq!(history.body.as_array().unwrap().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn purchases_follow_the_purchases_role_and_stay_private_to_the_company() {
+        use conta_verde_domain::Role;
+
+        let (app, identities, _) = app_with_mailbox();
+        let (_, company_id) = sign_up(&app, "dona@example.com").await;
+        let uri = purchases_uri(company_id);
+        for (role, may_write) in [
+            (Role::Admin, true),
+            (Role::Stock, true),
+            (Role::Financial, false),
+            (Role::Sales, false),
+            (Role::Accountant, false),
+            (Role::Viewer, false),
+        ] {
+            let cookie = member_with_role(&app, &identities, company_id, role).await;
+            assert_eq!(
+                send(&app, get_request(&uri, Some(&cookie))).await.status,
+                StatusCode::OK,
+                "{role:?} reads"
+            );
+            let write = send(&app, json_request("POST", &uri, Some(&cookie), json!({}))).await;
+            let expected = if may_write {
+                StatusCode::UNPROCESSABLE_ENTITY
+            } else {
+                StatusCode::FORBIDDEN
+            };
+            assert_eq!(write.status, expected, "{role:?} writes");
+        }
+        let (other, other_company) = sign_up(&app, "outra@example.com").await;
+        let id = Uuid::new_v4();
+        for path in ["", "/history", "/receipts"] {
+            let reply = send(
+                &app,
+                get_request(
+                    &format!("{}/{id}{path}", purchases_uri(other_company)),
                     Some(&other),
                 ),
             )

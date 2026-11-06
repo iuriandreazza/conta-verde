@@ -146,6 +146,8 @@ pub(crate) struct EntryResponse {
     sale_id: Option<Uuid>,
     /// The return it refunds, if one made it.
     sale_return_id: Option<Uuid>,
+    /// The receipt of goods whose payable it is, if one made it.
+    purchase_receipt_id: Option<Uuid>,
     /// Cancelled: it counts nowhere and takes no edit or settlement.
     voided: bool,
 }
@@ -182,6 +184,10 @@ impl EntryResponse {
             },
             sale_return_id: match entry.origin() {
                 Some(EntryOrigin::SaleReturn(id)) => Some(id.as_uuid()),
+                _ => None,
+            },
+            purchase_receipt_id: match entry.origin() {
+                Some(EntryOrigin::PurchaseReceipt(id)) => Some(id.as_uuid()),
                 _ => None,
             },
             voided: entry.is_voided(),

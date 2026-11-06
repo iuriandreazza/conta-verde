@@ -5,8 +5,8 @@ use conta_verde_application::{
     AttachmentService, AuthService, BalanceService, BankAccountService, CategoryService,
     CommissionService, ContractService, CostCenterService, FinancialEntryService, MemberService,
     PartyService, PaymentMethodService, PaymentTermService, PostalCodeService, PriceListService,
-    ProductService, QuoteService, ReconciliationService, RecurrenceService, SaleService,
-    SalesReportService, TransferService,
+    ProductService, PurchaseService, QuoteService, ReconciliationService, RecurrenceService,
+    SaleService, SalesReportService, TransferService,
 };
 use conta_verde_application::{
     ChargeService, CollectionService, DunningService, EmailError, EmailMessage, EmailSender,
@@ -21,9 +21,10 @@ use conta_verde_infrastructure::{
     PostgresCostCenterRepository, PostgresFinancialEntryRepository, PostgresIdentityRepository,
     PostgresInvitationRepository, PostgresOpeningRepository, PostgresPartyRepository,
     PostgresPaymentMethodRepository, PostgresPaymentTermRepository, PostgresPriceListRepository,
-    PostgresProductRepository, PostgresQuoteRepository, PostgresRecurrenceRepository,
-    PostgresSaleRepository, PostgresStatementLineRepository, PostgresTransferRepository,
-    RegisterReferences, RegisterSalesReferences, SmtpEmailSender, connect_and_migrate,
+    PostgresProductRepository, PostgresPurchaseOrderRepository, PostgresQuoteRepository,
+    PostgresRecurrenceRepository, PostgresSaleRepository, PostgresStatementLineRepository,
+    PostgresTransferRepository, RegisterDocumentReferences, RegisterReferences, SmtpEmailSender,
+    connect_and_migrate,
 };
 use conta_verde_infrastructure::{
     AsaasProvider, NoMessageSender, PostgresDunningPlanRepository, PostgresNotificationRepository,
@@ -72,13 +73,14 @@ impl Ports for PostgresPorts {
     type Transfers = PostgresTransferRepository;
     type Openings = PostgresOpeningRepository;
     type Recurrences = PostgresRecurrenceRepository;
-    type SalesReferences = RegisterSalesReferences<
+    type DocumentReferences = RegisterDocumentReferences<
         PostgresPartyRepository,
         PostgresProductRepository,
         PostgresPaymentTermRepository,
     >;
     type Quotes = PostgresQuoteRepository;
     type Sales = PostgresSaleRepository;
+    type Purchases = PostgresPurchaseOrderRepository;
     type Contracts = PostgresContractRepository;
     type CommissionRules = PostgresCommissionRuleRepository;
     type Statements = PostgresStatementLineRepository;
@@ -197,7 +199,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let postal_codes = PostalCodeService::new(postal_code_directory_from_env()?);
     let quotes = QuoteService::new(
         PostgresQuoteRepository::new(pool.clone()),
-        RegisterSalesReferences::new(
+        RegisterDocumentReferences::new(
             PostgresPartyRepository::new(pool.clone()),
             PostgresProductRepository::new(pool.clone()),
             PostgresPaymentTermRepository::new(pool.clone()),
@@ -232,7 +234,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tokio::spawn(send_reminders(dunning_service()?));
     let price_lists = PriceListService::new(
         PostgresPriceListRepository::new(pool.clone()),
-        RegisterSalesReferences::new(
+        RegisterDocumentReferences::new(
             PostgresPartyRepository::new(pool.clone()),
             PostgresProductRepository::new(pool.clone()),
             PostgresPaymentTermRepository::new(pool.clone()),
@@ -248,7 +250,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 references(),
             ),
             references(),
-            RegisterSalesReferences::new(
+            RegisterDocumentReferences::new(
                 PostgresPartyRepository::new(pool.clone()),
                 PostgresProductRepository::new(pool.clone()),
                 PostgresPaymentTermRepository::new(pool.clone()),
@@ -264,7 +266,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let commissions = CommissionService::new(
         PostgresCommissionRuleRepository::new(pool.clone()),
         PostgresSaleRepository::new(pool.clone()),
-        RegisterSalesReferences::new(
+        RegisterDocumentReferences::new(
+            PostgresPartyRepository::new(pool.clone()),
+            PostgresProductRepository::new(pool.clone()),
+            PostgresPaymentTermRepository::new(pool.clone()),
+        ),
+    );
+    let purchases = PurchaseService::new(
+        PostgresPurchaseOrderRepository::new(pool.clone()),
+        FinancialEntryService::new(
+            PostgresFinancialEntryRepository::new(pool.clone()),
+            references(),
+        ),
+        references(),
+        RegisterDocumentReferences::new(
             PostgresPartyRepository::new(pool.clone()),
             PostgresProductRepository::new(pool.clone()),
             PostgresPaymentTermRepository::new(pool.clone()),
@@ -312,6 +327,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 recurrences,
                 quotes,
                 sales,
+                purchases,
                 contracts,
                 commissions,
                 reconciliation,
@@ -399,7 +415,7 @@ where
     Q: conta_verde_application::QuoteRepository,
     E: conta_verde_application::FinancialEntryRepository,
     F: conta_verde_application::EntryReferences,
-    R: conta_verde_application::SalesReferences,
+    R: conta_verde_application::DocumentReferences,
 {
     let mut tick = tokio::time::interval(JOB_INTERVAL);
     loop {

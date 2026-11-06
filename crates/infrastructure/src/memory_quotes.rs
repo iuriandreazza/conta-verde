@@ -174,7 +174,7 @@ mod tests {
     use super::*;
     use crate::{
         Argon2SecretService, InMemoryEmailSender, InMemoryPartyRepository,
-        InMemoryPaymentTermRepository, InMemoryProductRepository, RegisterSalesReferences,
+        InMemoryPaymentTermRepository, InMemoryProductRepository, RegisterDocumentReferences,
         contract,
     };
 
@@ -188,9 +188,14 @@ mod tests {
         let (company, other_company) = (CompanyId::generate(), CompanyId::generate());
         let seed = contract::seed_sales_records(&parties, &products, &terms, company).await;
         let references =
-            || RegisterSalesReferences::new(parties.clone(), products.clone(), terms.clone());
-        contract::sales_references_say_what_is_usable(&references(), company, other_company, &seed)
-            .await;
+            || RegisterDocumentReferences::new(parties.clone(), products.clone(), terms.clone());
+        contract::document_references_say_what_is_usable(
+            &references(),
+            company,
+            other_company,
+            &seed,
+        )
+        .await;
         let emails = InMemoryEmailSender::default();
         let store = InMemoryQuoteRepository::default();
         let service = QuoteService::new(

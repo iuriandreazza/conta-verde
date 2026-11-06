@@ -10,8 +10,8 @@ use crate::audit::audit_entry;
 use crate::list_query::{clamp_limit, split_page};
 use crate::sale_reading::read_sales;
 use crate::{
-    ApplicationError, CommissionRuleQuery, CommissionRuleRepository, RepositoryError, RuleCursor,
-    SaleQuery, SaleRepository, SalesReferences,
+    ApplicationError, CommissionRuleQuery, CommissionRuleRepository, DocumentReferences,
+    RepositoryError, RuleCursor, SaleQuery, SaleRepository,
 };
 
 const PAGE: usize = 200;
@@ -63,7 +63,7 @@ impl<R, S, F> CommissionService<R, S, F>
 where
     R: CommissionRuleRepository,
     S: SaleRepository,
-    F: SalesReferences,
+    F: DocumentReferences,
 {
     pub fn new(rules: R, sales: S, references: F) -> Self {
         Self {

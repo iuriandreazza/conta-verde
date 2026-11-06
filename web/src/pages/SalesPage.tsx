@@ -35,6 +35,7 @@ import { centsToApi, formatDate, isIsoDate, toCents } from "../lib/entryInstallm
 import { SALE_STATUS_LABELS } from "../lib/saleStatus";
 import { todayIso } from "../lib/settlement";
 import { splitByTerm } from "../lib/termSplit";
+import { linesTrailText } from "../lib/trail";
 import { useCanWrite } from "../lib/useCanWrite";
 import { usePagedList } from "../lib/usePagedList";
 
@@ -620,16 +621,6 @@ function displayValue(field: string, value: string | null, names: Map<string, st
   }
   if (field === "status") return SALE_STATUS_LABELS[value as SaleStatus] ?? value;
   if (field === "sold_on") return formatDate(value);
-  if (field === "lines") {
-    return value
-      .split("\n")
-      .map((line) => {
-        // The description comes last and may hold colons of its own.
-        const [product, quantity, price, discount, ...description] = line.split(":");
-        const name = description.length > 0 ? description.join(":") : (names.get(product) ?? "item");
-        return `${name} × ${quantity.replace(".", ",")} a ${formatMoney(price)}${discount === "0" ? "" : ` (− ${formatMoney(discount)})`}`;
-      })
-      .join("; ");
-  }
+  if (field === "lines") return linesTrailText(value, names);
   return value;
 }

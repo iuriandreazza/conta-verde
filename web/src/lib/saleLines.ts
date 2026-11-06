@@ -63,3 +63,11 @@ export function linesTotalCents(lines: TypedLine[]): bigint | null {
   }
   return total;
 }
+
+/** A quantity in thousandths as the API's decimal text, without trailing zeros. */
+export function quantityToApi(thousandths: bigint): string {
+  const digits = thousandths.toString().padStart(THOUSANDTHS + 1, "0");
+  const integer = digits.slice(0, -THOUSANDTHS);
+  const fraction = digits.slice(-THOUSANDTHS).replace(/0+$/, "");
+  return fraction === "" ? integer : `${integer}.${fraction}`;
+}

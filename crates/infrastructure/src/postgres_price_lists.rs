@@ -238,7 +238,7 @@ mod tests {
     use super::*;
     use crate::{
         PostgresPartyRepository, PostgresPaymentTermRepository, PostgresProductRepository,
-        RegisterSalesReferences, contract,
+        RegisterDocumentReferences, contract,
     };
 
     #[tokio::test]
@@ -256,7 +256,7 @@ mod tests {
         .await;
         let service = PriceListService::new(
             PostgresPriceListRepository::new(pool.clone()),
-            RegisterSalesReferences::new(
+            RegisterDocumentReferences::new(
                 PostgresPartyRepository::new(pool.clone()),
                 PostgresProductRepository::new(pool.clone()),
                 PostgresPaymentTermRepository::new(pool),

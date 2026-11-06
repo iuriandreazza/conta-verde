@@ -1,18 +1,18 @@
 use conta_verde_application::{
-    PartyRepository, PaymentTermRepository, ProductRepository, RepositoryError, SalesReferences,
+    DocumentReferences, PartyRepository, PaymentTermRepository, ProductRepository, RepositoryError,
 };
 use conta_verde_domain::{CompanyId, PartyId, PaymentTerm, PaymentTermId, ProductId};
 
-/// Answers what a quote, a sale or a contract may point at by asking the registers themselves, so one
+/// Answers what a quote, a sale, a contract or a purchase order may point at by asking the registers themselves, so one
 /// implementation serves every adapter, like `RegisterReferences` does for entries. A record of
 /// another company is not found, so it answers like one that does not exist.
-pub struct RegisterSalesReferences<P, R, T> {
+pub struct RegisterDocumentReferences<P, R, T> {
     parties: P,
     products: R,
     payment_terms: T,
 }
 
-impl<P, R, T> RegisterSalesReferences<P, R, T> {
+impl<P, R, T> RegisterDocumentReferences<P, R, T> {
     pub fn new(parties: P, products: R, payment_terms: T) -> Self {
         Self {
             parties,
@@ -22,7 +22,7 @@ impl<P, R, T> RegisterSalesReferences<P, R, T> {
     }
 }
 
-impl<P, R, T> SalesReferences for RegisterSalesReferences<P, R, T>
+impl<P, R, T> DocumentReferences for RegisterDocumentReferences<P, R, T>
 where
     P: PartyRepository,
     R: ProductRepository,
@@ -58,6 +58,18 @@ where
             .find(company_id, id)
             .await?
             .is_some_and(|term| term.is_active()))
+    }
+
+    async fn supplier_is_usable(
+        &self,
+        company_id: CompanyId,
+        id: PartyId,
+    ) -> Result<bool, RepositoryError> {
+        Ok(self
+            .parties
+            .find(company_id, id)
+            .await?
+            .is_some_and(|party| party.is_supplier()))
     }
 
     async fn seller_is_usable(

@@ -26,6 +26,8 @@ pub enum Area {
     Finance,
     /// Quotes, sales, contracts, price lists, commissions and their reports ([ADR 0037]).
     Sales,
+    /// Purchase orders and their receipts, stock and its movements, counts and reports ([ADR 0052]).
+    Purchases,
     /// Who is a member of the company, and their invitations.
     Members,
 }
@@ -66,15 +68,15 @@ impl Role {
 
     /// How far this role reaches into an area, `None` for not at all. The table of [ADR 0026]:
     ///
-    /// | role       | parties | products | finance | sales | members |
-    /// |------------|---------|----------|---------|-------|---------|
-    /// | owner      | write   | write    | write   | write | write   |
-    /// | admin      | write   | write    | write   | write | write   |
-    /// | financial  | write   | read     | write   | read  | -       |
-    /// | sales      | write   | read     | read    | write | -       |
-    /// | stock      | read    | write    | read    | read  | -       |
-    /// | accountant | read    | read     | read    | read  | -       |
-    /// | viewer     | read    | read     | read    | read  | -       |
+    /// | role       | parties | products | finance | sales | purchases | members |
+    /// |------------|---------|----------|---------|-------|-----------|---------|
+    /// | owner      | write   | write    | write   | write | write     | write   |
+    /// | admin      | write   | write    | write   | write | write     | write   |
+    /// | financial  | write   | read     | write   | read  | read      | -       |
+    /// | sales      | write   | read     | read    | write | read      | -       |
+    /// | stock      | read    | write    | read    | read  | write     | -       |
+    /// | accountant | read    | read     | read    | read  | read      | -       |
+    /// | viewer     | read    | read     | read    | read  | read      | -       |
     pub fn access_to(self, area: Area) -> Option<Access> {
         use Access::{Read, Write};
         match (self, area) {
@@ -82,7 +84,7 @@ impl Role {
             (_, Area::Members) => None,
             (Self::Financial, Area::Parties | Area::Finance) => Some(Write),
             (Self::Sales, Area::Parties | Area::Sales) => Some(Write),
-            (Self::Stock, Area::Products) => Some(Write),
+            (Self::Stock, Area::Products | Area::Purchases) => Some(Write),
             _ => Some(Read),
         }
     }
@@ -94,11 +96,12 @@ impl Role {
 }
 
 impl Area {
-    pub const ALL: [Area; 5] = [
+    pub const ALL: [Area; 6] = [
         Self::Parties,
         Self::Products,
         Self::Finance,
         Self::Sales,
+        Self::Purchases,
         Self::Members,
     ];
 
@@ -108,6 +111,7 @@ impl Area {
             Self::Products => "products",
             Self::Finance => "finance",
             Self::Sales => "sales",
+            Self::Purchases => "purchases",
             Self::Members => "members",
         }
     }
@@ -163,6 +167,7 @@ mod tests {
                     Some(Write),
                     Some(Write),
                     Some(Write),
+                    Some(Write),
                 ],
             ),
             (
@@ -173,27 +178,63 @@ mod tests {
                     Some(Write),
                     Some(Write),
                     Some(Write),
+                    Some(Write),
                 ],
             ),
             (
                 Role::Financial,
-                [Some(Write), Some(Read), Some(Write), Some(Read), None],
+                [
+                    Some(Write),
+                    Some(Read),
+                    Some(Write),
+                    Some(Read),
+                    Some(Read),
+                    None,
+                ],
             ),
             (
                 Role::Sales,
-                [Some(Write), Some(Read), Some(Read), Some(Write), None],
+                [
+                    Some(Write),
+                    Some(Read),
+                    Some(Read),
+                    Some(Write),
+                    Some(Read),
+                    None,
+                ],
             ),
             (
                 Role::Stock,
-                [Some(Read), Some(Write), Some(Read), Some(Read), None],
+                [
+                    Some(Read),
+                    Some(Write),
+                    Some(Read),
+                    Some(Read),
+                    Some(Write),
+                    None,
+                ],
             ),
             (
                 Role::Accountant,
-                [Some(Read), Some(Read), Some(Read), Some(Read), None],
+                [
+                    Some(Read),
+                    Some(Read),
+                    Some(Read),
+                    Some(Read),
+                    Some(Read),
+                    None,
+                ],
             ),
             (
                 Role::Viewer,
-                [Some(Read), Some(Read), Some(Read), Some(Read), None],
+                [
+                    Some(Read),
+                    Some(Read),
+                    Some(Read),
+                    Some(Read),
+                    Some(Read),
+                    None,
+                ],
             ),
         ];
         for (role, levels) in expected {
@@ -210,6 +251,8 @@ mod tests {
         assert!(!Role::Sales.can(Area::Products, Access::Write));
         assert!(Role::Sales.can(Area::Sales, Access::Write));
         assert!(!Role::Financial.can(Area::Sales, Access::Write));
+        assert!(Role::Stock.can(Area::Purchases, Access::Write));
+        assert!(!Role::Sales.can(Area::Purchases, Access::Write));
         assert!(!Role::Viewer.can(Area::Members, Access::Read));
         assert!(!Role::Accountant.can(Area::Members, Access::Write));
     }

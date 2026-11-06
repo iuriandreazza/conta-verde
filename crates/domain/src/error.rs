@@ -107,6 +107,14 @@ pub enum DomainError {
     EntryFollowsASale,
     ContractIsTerminated,
     InvalidAdjustment,
+    ExpectedBeforeOrdered,
+    PurchaseIsLocked,
+    PurchaseIsEmpty,
+    PurchaseIsNotReceivable,
+    NoReceiptItems,
+    ReceiptLineUnknown,
+    InvalidReceiptQuantity,
+    ReceiptExceedsOrdered,
 }
 
 impl fmt::Display for DomainError {
@@ -317,8 +325,30 @@ impl fmt::Display for DomainError {
             ),
             Self::ReturnExceedsSold => f.write_str("a return cannot be of more than was sold and not returned yet"),
             Self::EntryFollowsASale => f.write_str(
-                "an entry made by a sale or by a return changes through the sale, not on its own",
+                "an entry made by a sale, a return or a purchase receipt changes through that document, not on its own",
             ),
+            Self::ExpectedBeforeOrdered => {
+                f.write_str("the expected day cannot be before the day of the order")
+            }
+            Self::PurchaseIsLocked => f.write_str(
+                "a purchase order can change only while it is a draft, and be cancelled only before anything arrives",
+            ),
+            Self::PurchaseIsEmpty => {
+                f.write_str("a purchase order to be approved must be worth more than 0")
+            }
+            Self::PurchaseIsNotReceivable => {
+                f.write_str("only an approved or partly received purchase order can receive goods")
+            }
+            Self::NoReceiptItems => f.write_str("a receipt needs at least one item"),
+            Self::ReceiptLineUnknown => {
+                f.write_str("a receipt is of the items the order has, each once")
+            }
+            Self::InvalidReceiptQuantity => f.write_str(
+                "a received quantity must be more than 0, with at most 3 decimals, written like 1.5",
+            ),
+            Self::ReceiptExceedsOrdered => {
+                f.write_str("a receipt cannot be of more than was ordered and not received yet")
+            }
             Self::ContractIsTerminated => f.write_str("a terminated contract is fixed"),
             Self::InvalidAdjustment => f.write_str(
                 "an adjustment is a percentage between -99.99 and 1000, with at most two decimals",

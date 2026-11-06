@@ -22,6 +22,7 @@ import { PaymentPage } from "./pages/PaymentPage";
 import { PaymentMethodsPage } from "./pages/PaymentMethodsPage";
 import { PaymentTermsPage } from "./pages/PaymentTermsPage";
 import { ProductsPage } from "./pages/ProductsPage";
+import { PurchasesPage } from "./pages/PurchasesPage";
 import { QuoteAnswerPage } from "./pages/QuoteAnswerPage";
 import { QuotesPage } from "./pages/QuotesPage";
 import { ReportsPage } from "./pages/ReportsPage";
@@ -46,6 +47,7 @@ export function App() {
           <Route path="/companies/:companyId/products" element={<ProductsPage />} />
           <Route path="/companies/:companyId/quotes" element={<QuotesPage />} />
           <Route path="/companies/:companyId/sales" element={<SalesPage />} />
+          <Route path="/companies/:companyId/purchases" element={<PurchasesPage />} />
           <Route path="/companies/:companyId/contracts" element={<ContractsPage />} />
           <Route path="/companies/:companyId/commissions" element={<CommissionsPage />} />
           <Route path="/companies/:companyId/price-lists" element={<PriceListsPage />} />

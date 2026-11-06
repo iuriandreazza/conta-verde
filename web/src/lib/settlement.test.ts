@@ -23,6 +23,7 @@ const entryOf = (installments: EntryInstallment[]): Entry => ({
   recurrence_id: null,
   sale_id: null,
   sale_return_id: null,
+  purchase_receipt_id: null,
   voided: false,
 });
 

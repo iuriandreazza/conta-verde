@@ -7,8 +7,9 @@ use conta_verde_domain::{
 use crate::audit::audit_entry;
 use crate::list_query::{clamp_limit, split_page};
 use crate::{
-    ApplicationError, ContractQuery, ContractRepository, EntryReferences, FinancialEntryRepository,
-    NameCursor, QuoteRepository, RepositoryError, SaleRepository, SaleService, SalesReferences,
+    ApplicationError, ContractQuery, ContractRepository, DocumentReferences, EntryReferences,
+    FinancialEntryRepository, NameCursor, QuoteRepository, RepositoryError, SaleRepository,
+    SaleService,
 };
 
 /// The most cycles one pass bills for one contract: a contract that starts years back catches up over a few.
@@ -46,7 +47,7 @@ where
     Q: QuoteRepository,
     E: FinancialEntryRepository,
     F: EntryReferences,
-    R: SalesReferences,
+    R: DocumentReferences,
 {
     pub fn new(repository: C, sales: SaleService<S, Q, E, F, R>) -> Self {
         Self { repository, sales }
