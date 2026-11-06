@@ -1,4 +1,4 @@
-import { fireEvent, screen, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Entry } from "./api";
@@ -227,5 +227,32 @@ describe("creating from the top bar", () => {
     await screen.findByRole("heading", { name: "Centros de custo" });
     expect(screen.queryByRole("button", { name: "Novo centro de custo" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Novo registro" })).not.toBeInTheDocument();
+  });
+
+  it("registers a bank account from the top bar and reads the balances again", async () => {
+    const created = { id: "a1", company_id: "c1", kind: "cash", name: "Caixa da loja", bank_code: null, branch: null, number: null, active: true };
+    let balanceReads = 0;
+    mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (url.includes("/balances")) {
+        balanceReads += 1;
+        return { status: 200, body: { on: "2026-11-05", accounts: [], total: "0" } };
+      }
+      if (init?.method === "POST" && url.endsWith("/bank-accounts")) return { status: 201, body: created };
+      return { status: 200, body: { items: [], next_cursor: null } };
+    });
+    renderAt("/companies/c1/bank-accounts");
+    await screen.findByRole("heading", { name: "Contas bancárias" });
+    const before = balanceReads;
+
+    await userEvent.click(await screen.findByRole("button", { name: "Novo registro" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Nova conta bancária" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Nova conta bancária" }));
+    await userEvent.selectOptions(await dialog.findByLabelText("Tipo"), "cash");
+    await userEvent.type(dialog.getByLabelText("Nome"), "Caixa da loja");
+    await userEvent.click(dialog.getByRole("button", { name: "Adicionar" }));
+
+    expect(await screen.findByText("Caixa da loja cadastrada.")).toBeInTheDocument();
+    await waitFor(() => expect(balanceReads).toBeGreaterThan(before));
   });
 });
