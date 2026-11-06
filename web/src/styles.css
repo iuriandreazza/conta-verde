@@ -1402,6 +1402,30 @@ tbody tr:last-child td {
   gap: 0.5rem;
 }
 
+/* The settlement panel under an entry: the installments, what was paid, and the form to pay one. */
+.settlements {
+  display: grid;
+  gap: 1rem;
+  padding: 0.5rem 0 1rem;
+}
+
+.settle-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.75rem 1rem;
+  align-items: end;
+}
+
+.settle-form > h3,
+.settle-form > .notice,
+.settle-form > .btn {
+  grid-column: 1 / -1;
+}
+
+.settle-form > .btn {
+  justify-self: start;
+}
+
 .installments-off {
   color: var(--warning);
   font-weight: 500;

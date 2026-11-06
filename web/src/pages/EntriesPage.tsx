@@ -4,25 +4,30 @@ import {
   NO_ENTRY_FILTERS,
   api,
   errorMessage,
+  type BankAccount,
   type Category,
   type CostCenter,
   type Entry,
   type EntryFilters,
   type EntryInput,
+  type PaymentMethod,
 } from "../api";
 import { Button } from "../components/Button";
 import { EntryForm, type EntryTargets } from "../components/EntryForm";
 import { EntryHistory } from "../components/EntryHistory";
 import { ListRow } from "../components/ListRow";
+import { SettlementPanel } from "../components/SettlementPanel";
 import { Notice } from "../components/Notice";
 import { PageHeader } from "../components/PageHeader";
 import { Spinner } from "../components/Spinner";
 import { BriefcaseBusinessIcon } from "../components/icons/briefcase-business";
 import { ChevronDownIcon } from "../components/icons/chevron-down";
 import { HistoryIcon } from "../components/icons/history";
+import { CircleDollarSignIcon } from "../components/icons/circle-dollar-sign";
 import { SquarePenIcon } from "../components/icons/square-pen";
 import { treeRows } from "../lib/categoryTree";
 import { formatMoney } from "../lib/decimal";
+import { STATUS_LABELS, entryStatus, todayIso, type InstallmentStatus } from "../lib/settlement";
 import { formatDate } from "../lib/entryInstallments";
 import { usePagedList } from "../lib/usePagedList";
 import { useCanWrite } from "../lib/useCanWrite";
@@ -45,6 +50,13 @@ async function readUpTo<T>(
   }
   return items.slice(0, cap);
 }
+
+const STATUS_BADGES: Record<InstallmentStatus, string> = {
+  open: "badge badge-dot badge-muted",
+  partial: "badge badge-dot badge-warning",
+  settled: "badge badge-dot badge-ok",
+  overdue: "badge badge-dot badge-critical",
+};
 
 function describeDue(entry: Entry): string {
   const [first] = entry.installments;
@@ -69,6 +81,9 @@ export function EntriesPage() {
   const [saved, setSaved] = useState<string | null>(null);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const [historyOpenFor, setHistoryOpenFor] = useState<string | null>(null);
+  const [settlementsOpenFor, setSettlementsOpenFor] = useState<string | null>(null);
+  const [banks, setBanks] = useState<BankAccount[]>([]);
+  const [methods, setMethods] = useState<PaymentMethod[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [costCenters, setCostCenters] = useState<CostCenter[]>([]);
   const [parties, setParties] = useState<{ id: string; name: string }[]>([]);
@@ -82,10 +97,14 @@ export function EntriesPage() {
       api.listCategories(companyId),
       readUpTo((after) => api.listCostCenters(companyId, { q: "", active: "", sort: "name" }, after), MAX_CHOICES),
       readUpTo((after) => api.listParties(companyId, undefined, after), MAX_CHOICES),
+      readUpTo((after) => api.listBankAccounts(companyId, undefined, after), MAX_CHOICES),
+      readUpTo((after) => api.listPaymentMethods(companyId, undefined, after), MAX_CHOICES),
     ])
-      .then(([categoryList, costCenterList, partyList]) => {
+      .then(([categoryList, costCenterList, partyList, bankList, methodList]) => {
         if (current) {
           setCategories(categoryList.items);
+          setBanks(bankList);
+          setMethods(methodList);
           setCostCenters(costCenterList);
           setParties(partyList.map(({ id, name }) => ({ id, name })));
           setTargetsLoaded(true);
@@ -119,6 +138,7 @@ export function EntriesPage() {
     (applied, after) => api.listEntries(companyId, applied, after),
     filters,
   );
+  const today = todayIso();
   const isFiltered = applied.q !== "" || applied.kind !== "" || applied.category !== "";
 
   async function handleSubmit(input: EntryInput) {
@@ -261,15 +281,10 @@ export function EntriesPage() {
                         <td>
                           <div className="cell-title">{entry.description}</div>
                           <div className="muted">
-                            <span
-                              className={
-                                entry.kind === "receivable"
-                                  ? "badge badge-dot badge-ok"
-                                  : "badge badge-dot badge-warning"
-                              }
-                            >
-                              {entry.kind === "receivable" ? "A receber" : "A pagar"}
+                            <span className={STATUS_BADGES[entryStatus(entry, today)]}>
+                              {STATUS_LABELS[entryStatus(entry, today)]}
                             </span>{" "}
+                            {entry.kind === "receivable" ? "A receber" : "A pagar"} ·{" "}
                             {names.get(entry.category_id) ?? ""}
                           </div>
                         </td>
@@ -296,6 +311,20 @@ export function EntriesPage() {
                           )}
                           <Button
                             iconOnly
+                            icon={CircleDollarSignIcon}
+                            type="button"
+                            variant="ghost"
+                            aria-label={`Baixas de ${entry.description}`}
+                            aria-expanded={settlementsOpenFor === entry.id}
+                            aria-controls={`settlements-${entry.id}`}
+                            onClick={() =>
+                              setSettlementsOpenFor(settlementsOpenFor === entry.id ? null : entry.id)
+                            }
+                          >
+                            Baixas
+                          </Button>
+                          <Button
+                            iconOnly
                             type="button"
                             variant="ghost"
                             aria-label={`Histórico de ${entry.description}`}
@@ -310,6 +339,20 @@ export function EntriesPage() {
                           </Button>
                         </td>
                       </ListRow>
+                      {settlementsOpenFor === entry.id && (
+                        <tr id={`settlements-${entry.id}`}>
+                          <td colSpan={5} role="region" aria-label={`Baixas de ${entry.description}`}>
+                            <SettlementPanel
+                              companyId={companyId}
+                              entry={entry}
+                              banks={banks}
+                              methods={methods}
+                              canWrite={canWrite}
+                              onChanged={() => void reload()}
+                            />
+                          </td>
+                        </tr>
+                      )}
                       {historyOpenFor === entry.id && (
                         <tr id={`history-${entry.id}`}>
                           <td colSpan={5} role="region" aria-label={`Histórico de ${entry.description}`}>

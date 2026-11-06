@@ -2894,6 +2894,8 @@ describe("financial entries", () => {
   const transfers = { ...vendas, id: "cat2", name: "Transferências", dre_group: "transfers", cash_flow_group: "transfer" };
   const inactive = { ...vendas, id: "cat3", name: "Antiga", active: false };
   const matriz = { id: "cc1", company_id: "c1", name: "Matriz", active: true };
+  const caixa = { id: "b1", company_id: "c1", kind: "cash", name: "Caixa", bank_code: null, branch: null, number: null, active: true };
+  const pix = { id: "m1", company_id: "c1", kind: "pix", name: "Pix", active: true };
   const entry: Entry = {
     id: "e1",
     company_id: "c1",
@@ -2904,8 +2906,8 @@ describe("financial entries", () => {
     cost_center_id: null,
     competence_date: "2026-11-05",
     installments: [
-      { number: 1, due_date: "2026-12-10", amount: "100.5" },
-      { number: 2, due_date: "2027-01-10", amount: "100.5" },
+      { number: 1, due_date: "2026-12-10", amount: "100.5", settled: "0" },
+      { number: 2, due_date: "2027-01-10", amount: "100.5", settled: "0" },
     ],
     total: "201",
   };
@@ -2915,7 +2917,7 @@ describe("financial entries", () => {
     kind: "payable",
     description: "Aluguel",
     competence_date: "2026-11-01",
-    installments: [{ number: 1, due_date: "2026-11-10", amount: "2500" }],
+    installments: [{ number: 1, due_date: "2026-11-10", amount: "2500", settled: "0" }],
     total: "2500",
   };
 
@@ -2940,6 +2942,8 @@ describe("financial entries", () => {
       if (url.endsWith("/categories")) return { status: 200, body: { items: [vendas, transfers, inactive] } };
       if (url.includes("/cost-centers")) return { status: 200, body: { items: [matriz], next_cursor: null } };
       if (url.includes("/parties")) return { status: 200, body: { items: [], next_cursor: null } };
+      if (url.includes("/bank-accounts")) return { status: 200, body: { items: [caixa], next_cursor: null } };
+      if (url.includes("/payment-methods")) return { status: 200, body: { items: [pix], next_cursor: null } };
       if (url.includes("/entries")) return { status: 200, body: { items: entries, next_cursor: null } };
       return { status: 404, body: { error: "not found" } };
     };
@@ -3014,7 +3018,7 @@ describe("financial entries", () => {
     const fetchMock = mockApi(
       answer([entry], (url, init) =>
         url.endsWith("/entries/e1") && init?.method === "PUT"
-          ? { status: 200, body: { ...entry, description: "Venda à vista", installments: [{ number: 1, due_date: "2026-12-10", amount: "201" }], total: "201" } }
+          ? { status: 200, body: { ...entry, description: "Venda à vista", installments: [{ number: 1, due_date: "2026-12-10", amount: "201", settled: "0" }], total: "201" } }
           : undefined,
       ),
     );
@@ -3158,6 +3162,190 @@ describe("financial entries", () => {
     await userEvent.click(form.getByRole("button", { name: "Salvar alterações" }));
 
     await waitFor(() => expect(lists()).toBeGreaterThan(before));
+  });
+
+  describe("settlements", () => {
+    // Dates far from today, so what is late and what is not does not depend on when the test runs.
+    const sale: Entry = {
+      ...entry,
+      installments: [
+        { number: 1, due_date: "2020-01-10", amount: "100", settled: "100" },
+        { number: 2, due_date: "2099-01-10", amount: "100.5", settled: "40" },
+      ],
+      total: "200.5",
+    };
+    const late: Entry = {
+      ...entry,
+      id: "e3",
+      description: "Conta atrasada",
+      installments: [{ number: 1, due_date: "2020-01-10", amount: "80", settled: "0" }],
+      total: "80",
+    };
+    const paid: Entry = {
+      ...entry,
+      id: "e4",
+      description: "Conta paga",
+      installments: [{ number: 1, due_date: "2020-01-10", amount: "80", settled: "80" }],
+      total: "80",
+    };
+    const settlement = {
+      id: "s1",
+      entry_id: "e1",
+      installment: 2,
+      settled_on: "2026-12-10",
+      applied: "40",
+      interest: "0",
+      fine: "0",
+      discount: "0",
+      cash: "40",
+      bank_account_id: "b1",
+      payment_method_id: null,
+      reversed: false,
+    };
+
+    it("says on each entry whether it is paid, partly paid, overdue or open", async () => {
+      const open: Entry = { ...entry, id: "e5", description: "Conta futura", installments: [{ number: 1, due_date: "2099-01-10", amount: "10", settled: "0" }], total: "10" };
+      mockApi(answer([sale, late, paid, open]));
+      renderAt("/companies/c1/entries");
+
+      expect(await screen.findByRole("row", { name: /Venda parcelada/ })).toHaveTextContent("Parcial");
+      expect(screen.getByRole("row", { name: /Conta atrasada/ })).toHaveTextContent("Vencido");
+      expect(screen.getByRole("row", { name: /Conta paga/ })).toHaveTextContent("Pago");
+      expect(screen.getByRole("row", { name: /Conta futura/ })).toHaveTextContent("Em aberto");
+    });
+
+    it("shows what is left of each installment, and settles one with its interest, from an account", async () => {
+      let made = false;
+      const fetchMock = mockApi(
+        answer([sale], (url, init) => {
+          if (url.endsWith("/entries/e1/settlements") && init?.method === "POST") {
+            made = true;
+            return { status: 201, body: { ...settlement, applied: "60.5", cash: "62", interest: "1.5" } };
+          }
+          if (url.endsWith("/entries/e1/settlements")) {
+            return { status: 200, body: made ? [settlement, { ...settlement, id: "s2", applied: "60.5" }] : [settlement] };
+          }
+          return undefined;
+        }),
+      );
+      renderAt("/companies/c1/entries");
+      await userEvent.click(await screen.findByRole("button", { name: "Baixas de Venda parcelada" }));
+
+      const panel = within(await screen.findByRole("region", { name: "Baixas de Venda parcelada" }));
+      const second = (await panel.findAllByRole("row")).find((row) => row.textContent?.includes("R$ 100,50"))!;
+      expect(second).toHaveTextContent("R$ 40,00");
+      expect(second).toHaveTextContent("R$ 60,50");
+      expect(second).toHaveTextContent("Parcial");
+      expect(panel.getByRole("row", { name: /R\$ 100,00/ })).toHaveTextContent("Pago");
+      // Only an installment with something left is offered, and its balance is the default.
+      expect(within(panel.getByLabelText("Parcela")).getAllByRole("option")).toHaveLength(1);
+      expect(panel.getByLabelText("Valor baixado")).toHaveValue("60,5");
+
+      await userEvent.type(panel.getByLabelText("Juros"), "1,5");
+      await userEvent.selectOptions(panel.getByLabelText("Conta"), "b1");
+      await userEvent.selectOptions(panel.getByLabelText("Forma de pagamento"), "m1");
+      await userEvent.click(panel.getByRole("button", { name: "Baixar" }));
+
+      await waitFor(() => expect(sent(fetchMock, "POST")).toHaveLength(1));
+      const call = sent(fetchMock, "POST")[0];
+      expect(String(call[0])).toBe("/api/companies/c1/entries/e1/settlements");
+      expect(JSON.parse(String(call[1]?.body))).toMatchObject({
+        installment: 2,
+        applied: "60.5",
+        interest: "1.5",
+        bank_account_id: "b1",
+        payment_method_id: "m1",
+      });
+      expect(await panel.findByText("Baixa de R$ 62,00 registrada.")).toBeInTheDocument();
+    });
+
+    it("will not send a settlement without an amount in cents, and says which", async () => {
+      const fetchMock = mockApi(answer([sale], (url) => (url.endsWith("/settlements") ? { status: 200, body: [] } : undefined)));
+      renderAt("/companies/c1/entries");
+      await userEvent.click(await screen.findByRole("button", { name: "Baixas de Venda parcelada" }));
+      const panel = within(await screen.findByRole("region", { name: "Baixas de Venda parcelada" }));
+      await userEvent.selectOptions(await panel.findByLabelText("Conta"), "b1");
+
+      for (const [field, typed, message] of [
+        ["Valor baixado", "1.000", "O valor baixado"],
+        ["Valor baixado", "abc", "O valor baixado"],
+        ["Juros", "-1", "Os juros"],
+        ["Multa", "1,005", "A multa"],
+        ["Desconto", "x", "O desconto"],
+      ] as const) {
+        const input = panel.getByLabelText(field);
+        await userEvent.clear(input);
+        await userEvent.type(input, typed);
+        await userEvent.click(panel.getByRole("button", { name: "Baixar" }));
+        expect(await panel.findByRole("alert")).toHaveTextContent(message);
+        await userEvent.clear(input);
+        if (field === "Valor baixado") await userEvent.type(input, "10");
+      }
+      expect(sent(fetchMock, "POST")).toHaveLength(0);
+    });
+
+    it("shows why the API refused a settlement and keeps what was typed", async () => {
+      mockApi(
+        answer([sale], (url, init) => {
+          if (url.endsWith("/settlements") && init?.method === "POST") {
+            return { status: 409, body: { error: "this settles more of the installment than is left of it" } };
+          }
+          return url.endsWith("/settlements") ? { status: 200, body: [] } : undefined;
+        }),
+      );
+      renderAt("/companies/c1/entries");
+      await userEvent.click(await screen.findByRole("button", { name: "Baixas de Venda parcelada" }));
+      const panel = within(await screen.findByRole("region", { name: "Baixas de Venda parcelada" }));
+      await userEvent.selectOptions(await panel.findByLabelText("Conta"), "b1");
+      await userEvent.clear(panel.getByLabelText("Valor baixado"));
+      await userEvent.type(panel.getByLabelText("Valor baixado"), "999");
+      await userEvent.click(panel.getByRole("button", { name: "Baixar" }));
+
+      expect(await panel.findByRole("alert")).toHaveTextContent("more of the installment");
+      expect(panel.getByLabelText("Valor baixado")).toHaveValue("999");
+    });
+
+    it("reverses a settlement and lists it as reversed", async () => {
+      let reversed = false;
+      const fetchMock = mockApi(
+        answer([sale], (url, init) => {
+          if (url.endsWith("/settlements/s1") && init?.method === "DELETE") {
+            reversed = true;
+            return { status: 204 };
+          }
+          if (url.endsWith("/settlements")) return { status: 200, body: [{ ...settlement, reversed }] };
+          return undefined;
+        }),
+      );
+      renderAt("/companies/c1/entries");
+      await userEvent.click(await screen.findByRole("button", { name: "Baixas de Venda parcelada" }));
+      const panel = within(await screen.findByRole("region", { name: "Baixas de Venda parcelada" }));
+      await userEvent.click(await panel.findByRole("button", { name: "Estornar a baixa de R$ 40,00 da parcela 2" }));
+
+      await waitFor(() => expect(sent(fetchMock, "DELETE")).toHaveLength(1));
+      expect(String(sent(fetchMock, "DELETE")[0][0])).toBe("/api/companies/c1/entries/e1/settlements/s1");
+      expect(await panel.findByText("Estornada")).toBeInTheDocument();
+      expect(panel.queryByRole("button", { name: /Estornar/ })).not.toBeInTheDocument();
+    });
+
+    it("lets a role that only reads see the balances and the settlements, not settle or reverse", async () => {
+      const reader: Profile = {
+        ...profile,
+        companies: [{ id: "c1", name: "Padaria", role: "viewer", permissions: { parties: "read", products: "read", finance: "read" } }],
+      };
+      mockApi((url, init) =>
+        url === "/api/auth/me"
+          ? { status: 200, body: reader }
+          : answer([sale], (u) => (u.endsWith("/settlements") ? { status: 200, body: [settlement] } : undefined))(url, init),
+      );
+      renderAt("/companies/c1/entries");
+      await userEvent.click(await screen.findByRole("button", { name: "Baixas de Venda parcelada" }));
+      const panel = within(await screen.findByRole("region", { name: "Baixas de Venda parcelada" }));
+
+      expect(await panel.findByText(/Parcela 2, 10\/12\/2026/)).toBeInTheDocument();
+      expect(panel.queryByRole("button", { name: "Baixar" })).not.toBeInTheDocument();
+      expect(panel.queryByRole("button", { name: /Estornar/ })).not.toBeInTheDocument();
+    });
   });
 
   it("offers every party, not only the first page of them, to point an entry at", async () => {
