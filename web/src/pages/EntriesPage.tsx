@@ -79,7 +79,8 @@ export function EntriesPage() {
   const canWrite = useCanWrite("finance");
   // "Contas a receber" and "Contas a pagar" are this list with the kind in the address, as people expect to find them.
   const [params, setParams] = useSearchParams();
-  const pageKind = params.get("tipo") === "receivable" || params.get("tipo") === "payable" ? (params.get("tipo") as EntryKind) : "";
+  const tipo = params.get("tipo");
+  const pageKind: EntryKind | "" = tipo === "receivable" || tipo === "payable" ? tipo : "";
   const [typedFilters, setFilters] = useState<EntryFilters>(NO_ENTRY_FILTERS);
   const filters: EntryFilters = { ...typedFilters, kind: pageKind };
   const [editing, setEditing] = useState<Entry | null>(null);
