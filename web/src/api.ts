@@ -1054,6 +1054,8 @@ export interface PurchaseOrder {
   cost_center_id: string | null;
   notes: string | null;
   status: PurchaseStatus;
+  /** The access key of the supplier's NF-e it was entered from; `null` for an order made by hand. */
+  invoice_key: string | null;
   lines: DocumentLine[];
   total: string;
 }
@@ -1247,6 +1249,64 @@ export interface InventoryCountFilters {
 }
 
 export const NO_COUNT_FILTERS: InventoryCountFilters = { q: "", status: "", sort: "-number" };
+
+/** One item of a supplier's NF-e as the preview reads it (ADR 0057); every figure is a decimal string. */
+export interface InvoiceItem {
+  number: number;
+  /** The supplier's code for the product. */
+  code: string;
+  ean: string | null;
+  description: string;
+  ncm: string | null;
+  unit: string;
+  quantity: string;
+  unit_value: string;
+  product_value: string;
+  discount: string;
+  /** What the item costs: its products less discount plus the charges on it. */
+  cost: string;
+  ipi: string;
+  icms_st: string;
+  icms: string;
+  /** The product registered with this code as its SKU, if one is. */
+  product_id: string | null;
+}
+
+export interface InvoicePreview {
+  access_key: string;
+  number: string;
+  series: string;
+  issued_on: string;
+  issuer: { document: string; name: string };
+  total: string;
+  /** The supplier registered with the issuer's document; `null` when there is none. */
+  supplier_id: string | null;
+  items: InvoiceItem[];
+  /** What the invoice says is paid; empty when it does not say. */
+  installments: { due_date: string; amount: string }[];
+  /** The purchase the invoice was already entered as. */
+  entered: { purchase_id: string; number: number; status: PurchaseStatus } | null;
+}
+
+/** What the person decides when entering an invoice; the file is sent as the body. */
+export interface InvoiceEntryParams {
+  category_id: string;
+  cost_center_id?: string;
+  payment_term_id?: string;
+  received_on?: string;
+  supplier_id?: string;
+  /** The product of each item in the order of the items. */
+  products: string[];
+}
+
+export interface InvoiceEntry {
+  purchase_id: string;
+  number: number;
+  status: PurchaseStatus;
+  receipt: PurchaseReceipt;
+  /** The invoice had been entered before: nothing was made twice. */
+  already_entered: boolean;
+}
 
 export type BillingCycle = "monthly" | "bimonthly" | "quarterly" | "semiannual" | "yearly";
 export type ContractStatus = "active" | "paused" | "terminated";
@@ -1986,6 +2046,26 @@ export const api = {
     post<InventoryCount>(`/companies/${companyId}/inventory-counts/${id}/cancel`),
   inventoryCountHistory: (companyId: string, id: string) =>
     request<HistoryEntry[]>(`/companies/${companyId}/inventory-counts/${id}/history`),
+  /** The XML goes as it is, as the body: the API reads and checks it. */
+  previewPurchaseImport: (companyId: string, file: File) =>
+    request<InvoicePreview>(`/companies/${companyId}/purchase-imports/preview`, {
+      method: "POST",
+      headers: { "Content-Type": "application/xml" },
+      body: file,
+    }),
+  enterPurchaseImport: (companyId: string, file: File, params: InvoiceEntryParams) => {
+    const query = new URLSearchParams({ category_id: params.category_id });
+    if (params.cost_center_id) query.set("cost_center_id", params.cost_center_id);
+    if (params.payment_term_id) query.set("payment_term_id", params.payment_term_id);
+    if (params.received_on) query.set("received_on", params.received_on);
+    if (params.supplier_id) query.set("supplier_id", params.supplier_id);
+    if (params.products.length > 0) query.set("products", params.products.join(","));
+    return request<InvoiceEntry>(`/companies/${companyId}/purchase-imports?${query}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/xml" },
+      body: file,
+    });
+  },
   /** The OFX file goes as it is, bytes and all: the API reads the charset. */
   importStatement: (companyId: string, accountId: string, file: File, dryRun: boolean) =>
     request<ImportResult>(

@@ -60,6 +60,7 @@ const draft: PurchaseOrder = {
   cost_center_id: null,
   notes: null,
   status: "draft",
+  invoice_key: null,
   lines: [{ product_id: "pr1", description: "Grão de café 1kg", quantity: "10", unit_price: "25.5", discount: "0", total: "255" }],
   total: "255",
 };

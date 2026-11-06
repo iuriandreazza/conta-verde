@@ -108,11 +108,13 @@ export function PurchasesPage() {
   const { openCreate } = useCreation();
   const shown = useLastValue(editing);
   // An order made from the top bar or from here: read the list again and flash the new row.
-  useOnCreated("purchase", (created) => {
+  const showCreated = (created: { id: string }) => {
     setSaved(null);
     setHighlightedId(created.id);
     void reload();
-  });
+  };
+  useOnCreated("purchase", showCreated);
+  useOnCreated("purchaseImport", showCreated);
 
   function closeSheet() {
     // A change on its way finishes first: closing now would hide what a failure has to say.
@@ -190,6 +192,9 @@ export function PurchasesPage() {
         <div className="list-actions">
           <Button type="button" icon={PlusIcon} onClick={() => openCreate("purchase")}>
             Nova compra
+          </Button>
+          <Button type="button" variant="ghost" icon={FileTextIcon} onClick={() => openCreate("purchaseImport")}>
+            Entrar NF-e (XML)
           </Button>
         </div>
       )}
@@ -539,6 +544,7 @@ function DetailsPanel({
         {order.cost_center_id !== null && ` · ${names.get(order.cost_center_id) ?? ""}`}
         {order.notes !== null && ` · ${order.notes}`}
       </p>
+      {order.invoice_key !== null && <p className="muted tabular">NF-e (chave): {order.invoice_key}</p>}
       <Notice message={loadError} />
       <div className="table-wrap">
         <table>
