@@ -60,6 +60,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0042](0042-price-lists.md) | Price lists | accepted | 3 |
 | [0043](0043-sales-reports-and-dashboard.md) | Sales reports and the dashboard | accepted | 3 |
 | [0044](0044-collection-module-plan.md) | The collection module: plan, shared rules and what it changes underneath | accepted | 4 |
+| [0045](0045-charges.md) | Charges for installments, made at a payment provider | accepted | 4 |
 
 ## Template
 

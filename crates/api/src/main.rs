@@ -8,7 +8,10 @@ use conta_verde_application::{
     ProductService, QuoteService, ReconciliationService, RecurrenceService, SaleService,
     SalesReportService, TransferService,
 };
-use conta_verde_application::{EmailError, EmailMessage, EmailSender};
+use conta_verde_application::{
+    ChargeService, EmailError, EmailMessage, EmailSender, PaymentProvider, ProviderCharge,
+    ProviderChargeRequest, ProviderError,
+};
 use conta_verde_infrastructure::{
     Argon2SecretService, BrasilApiCnpjRegistry, BrasilApiPostalCodeDirectory, CachedCnpjRegistry,
     LocalBlobStore, LogEmailSender, PostgresAttachmentRepository, PostgresBankAccountRepository,
@@ -19,6 +22,9 @@ use conta_verde_infrastructure::{
     PostgresProductRepository, PostgresQuoteRepository, PostgresRecurrenceRepository,
     PostgresSaleRepository, PostgresStatementLineRepository, PostgresTransferRepository,
     RegisterReferences, RegisterSalesReferences, SmtpEmailSender, connect_and_migrate,
+};
+use conta_verde_infrastructure::{
+    FakePaymentProvider, NoPaymentProvider, PostgresChargeRepository,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -47,6 +53,8 @@ impl Ports for PostgresPorts {
     >;
     type Attachments = PostgresAttachmentRepository;
     type Blobs = LocalBlobStore;
+    type Charges = PostgresChargeRepository;
+    type Provider = ConfiguredPaymentProvider;
     type Transfers = PostgresTransferRepository;
     type Openings = PostgresOpeningRepository;
     type Recurrences = PostgresRecurrenceRepository;
@@ -112,6 +120,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         PostgresAttachmentRepository::new(pool.clone()),
         LocalBlobStore::new(attachments_dir_from_env()),
         PostgresFinancialEntryRepository::new(pool.clone()),
+    );
+    let charges = ChargeService::new(
+        PostgresChargeRepository::new(pool.clone()),
+        PostgresFinancialEntryRepository::new(pool.clone()),
+        PostgresPartyRepository::new(pool.clone()),
+        payment_provider_from_env()?,
     );
     let transfers =
         TransferService::new(PostgresTransferRepository::new(pool.clone()), references());
@@ -234,6 +248,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 sales_reports,
                 entries,
                 attachments,
+                charges,
                 transfers,
                 recurrences,
                 quotes,
@@ -317,6 +332,64 @@ where
             Ok(_) => {}
             Err(error) => tracing::error!(%error, "billing contracts failed"),
         }
+    }
+}
+
+/// The payment provider the operator chose with `PAYMENT_PROVIDER`: `fake` for development, and off when it
+/// is not set (ADR 0044).
+enum ConfiguredPaymentProvider {
+    Off(NoPaymentProvider),
+    Fake(FakePaymentProvider),
+}
+
+impl PaymentProvider for ConfiguredPaymentProvider {
+    fn key(&self) -> &str {
+        match self {
+            Self::Off(provider) => provider.key(),
+            Self::Fake(provider) => provider.key(),
+        }
+    }
+
+    fn is_enabled(&self) -> bool {
+        match self {
+            Self::Off(provider) => provider.is_enabled(),
+            Self::Fake(provider) => provider.is_enabled(),
+        }
+    }
+
+    async fn create_charge(
+        &self,
+        request: &ProviderChargeRequest,
+    ) -> Result<ProviderCharge, ProviderError> {
+        match self {
+            Self::Off(provider) => provider.create_charge(request).await,
+            Self::Fake(provider) => provider.create_charge(request).await,
+        }
+    }
+
+    async fn cancel_charge(&self, external_id: &str) -> Result<(), ProviderError> {
+        match self {
+            Self::Off(provider) => provider.cancel_charge(external_id).await,
+            Self::Fake(provider) => provider.cancel_charge(external_id).await,
+        }
+    }
+}
+
+fn payment_provider_from_env()
+-> Result<ConfiguredPaymentProvider, Box<dyn std::error::Error + Send + Sync>> {
+    let setting = std::env::var("PAYMENT_PROVIDER").ok();
+    match setting.as_deref().map(str::trim) {
+        None | Some("" | "off") => {
+            tracing::warn!("PAYMENT_PROVIDER is not set: charges are switched off");
+            Ok(ConfiguredPaymentProvider::Off(NoPaymentProvider))
+        }
+        Some("fake") => {
+            tracing::warn!("PAYMENT_PROVIDER=fake: charges are made up and cannot be paid");
+            Ok(ConfiguredPaymentProvider::Fake(
+                FakePaymentProvider::default(),
+            ))
+        }
+        Some(other) => Err(format!("PAYMENT_PROVIDER={other} is not a known provider").into()),
     }
 }
 

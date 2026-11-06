@@ -80,7 +80,7 @@ and settles what the phase changes underneath (installation-wide provider creden
 through the settlement path, the provider fee as a payable, signed public webhooks, the dunning job). One slice
 per pull request, in this order:
 
-- [ ] Payment-provider port with the fake adapter; charges attached to installments: boleto, Pix (dynamic QR), card link
+- [x] Payment-provider port with the fake adapter; charges attached to installments: boleto, Pix (dynamic QR), card link ([ADR 0045](adr/0045-charges.md)) — a `PaymentProvider` port with a fake and an off adapter (`PAYMENT_PROVIDER`), and charges for what is left of an installment: issue a boleto, Pix or card link, see what the customer pays with, cancel, with a history; one open charge per installment
 - [ ] Webhooks settle the installment and record the provider fee
 - [ ] Customer-facing payment page (charge details, boleto, Pix copy-and-paste) behind a token
 - [ ] Notification ports: e-mail (SMTP) first, WhatsApp through a provider ([ADR 0014](adr/0014-notifications.md)); dunning rules with reminders before and after the due date, cadence per company, sent by the hourly job

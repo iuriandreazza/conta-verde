@@ -4,6 +4,7 @@ mod auth;
 mod bank_accounts;
 mod cash_flow;
 mod categories;
+mod charges;
 mod clock;
 mod commissions;
 mod contracts;
@@ -40,16 +41,17 @@ use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
 use conta_verde_application::{
     AttachmentRepository, AttachmentService, AuthService, BalanceService, BankAccountRepository,
-    BankAccountService, BlobStore, CategoryRepository, CategoryService, CnpjRegistry,
-    CommissionRuleRepository, CommissionService, ContractRepository, ContractService,
-    CostCenterRepository, CostCenterService, EmailSender, EntryReferences,
+    BankAccountService, BlobStore, CategoryRepository, CategoryService, ChargeRepository,
+    ChargeService, CnpjRegistry, CommissionRuleRepository, CommissionService, ContractRepository,
+    ContractService, CostCenterRepository, CostCenterService, EmailSender, EntryReferences,
     FinancialEntryRepository, FinancialEntryService, IdentityRepository, InvitationRepository,
     MemberService, OpeningRepository, PartyRepository, PartyService, PaymentMethodRepository,
-    PaymentMethodService, PaymentTermRepository, PaymentTermService, PostalCodeDirectory,
-    PostalCodeService, PriceListRepository, PriceListService, ProductRepository, ProductService,
-    QuoteRepository, QuoteService, ReconciliationService, RecurrenceRepository, RecurrenceService,
-    SaleRepository, SaleService, SalesReferences, SalesReportService, SecretService,
-    StatementLineRepository, TransferRepository, TransferService,
+    PaymentMethodService, PaymentProvider, PaymentTermRepository, PaymentTermService,
+    PostalCodeDirectory, PostalCodeService, PriceListRepository, PriceListService,
+    ProductRepository, ProductService, QuoteRepository, QuoteService, ReconciliationService,
+    RecurrenceRepository, RecurrenceService, SaleRepository, SaleService, SalesReferences,
+    SalesReportService, SecretService, StatementLineRepository, TransferRepository,
+    TransferService,
 };
 use serde::Serialize;
 
@@ -79,6 +81,8 @@ pub trait Ports: 'static {
     type EntryReferences: EntryReferences + 'static;
     type Attachments: AttachmentRepository + 'static;
     type Blobs: BlobStore + 'static;
+    type Charges: ChargeRepository + 'static;
+    type Provider: PaymentProvider + 'static;
     type Transfers: TransferRepository + 'static;
     type Openings: OpeningRepository + 'static;
     type Recurrences: RecurrenceRepository + 'static;
@@ -92,6 +96,14 @@ pub trait Ports: 'static {
     type Invitations: InvitationRepository + 'static;
     type Emails: EmailSender + 'static;
 }
+
+/// The charges use case over the adapters of `X`.
+type ChargesOf<X> = ChargeService<
+    <X as Ports>::Charges,
+    <X as Ports>::Entries,
+    <X as Ports>::Parties,
+    <X as Ports>::Provider,
+>;
 
 /// The sales use case over the adapters of `X`.
 type SalesOf<X> = SaleService<
@@ -138,6 +150,7 @@ pub struct Services<X: Ports> {
     pub sales_reports: SalesReportsOf<X>,
     pub entries: FinancialEntryService<X::Entries, X::EntryReferences>,
     pub attachments: AttachmentService<X::Attachments, X::Blobs, X::Entries>,
+    pub charges: ChargesOf<X>,
     pub transfers: TransferService<X::Transfers, X::EntryReferences>,
     pub recurrences: RecurrenceService<X::Recurrences, X::Entries, X::EntryReferences>,
     pub quotes: QuoteService<X::Quotes, X::SalesReferences, X::Emails, X::Secrets>,
@@ -164,6 +177,7 @@ pub(crate) struct AppState<X: Ports> {
     sales_reports: SalesReportsOf<X>,
     entries: FinancialEntryService<X::Entries, X::EntryReferences>,
     attachments: AttachmentService<X::Attachments, X::Blobs, X::Entries>,
+    charges: ChargesOf<X>,
     transfers: TransferService<X::Transfers, X::EntryReferences>,
     recurrences: RecurrenceService<X::Recurrences, X::Entries, X::EntryReferences>,
     quotes: QuoteService<X::Quotes, X::SalesReferences, X::Emails, X::Secrets>,
@@ -195,6 +209,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         sales_reports: services.sales_reports,
         entries: services.entries,
         attachments: services.attachments,
+        charges: services.charges,
         transfers: services.transfers,
         recurrences: services.recurrences,
         quotes: services.quotes,
@@ -402,6 +417,22 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
             get(attachments::download_attachment::<X>).delete(attachments::remove_attachment::<X>),
         )
         .route(
+            "/companies/{company_id}/entries/{entry_id}/charges",
+            get(charges::list_charges::<X>).post(charges::issue_charge::<X>),
+        )
+        .route(
+            "/companies/{company_id}/entries/{entry_id}/charges/{charge_id}/cancel",
+            post(charges::cancel_charge::<X>),
+        )
+        .route(
+            "/companies/{company_id}/entries/{entry_id}/charges/{charge_id}/history",
+            get(charges::charge_history::<X>),
+        )
+        .route(
+            "/companies/{company_id}/collection",
+            get(charges::collection::<X>),
+        )
+        .route(
             "/companies/{company_id}/recurrences",
             get(recurrences::list_recurrences::<X>).post(recurrences::register_recurrence::<X>),
         )
@@ -586,16 +617,16 @@ mod tests {
     use axum::http::{Request, StatusCode, header};
     use conta_verde_application::PostalCodeEntry;
     use conta_verde_infrastructure::{
-        Argon2SecretService, InMemoryAttachmentRepository, InMemoryBankAccountRepository,
-        InMemoryBlobStore, InMemoryCategoryRepository, InMemoryCnpjRegistry,
-        InMemoryCommissionRuleRepository, InMemoryContractRepository, InMemoryCostCenterRepository,
-        InMemoryEmailSender, InMemoryFinancialEntryRepository, InMemoryIdentityRepository,
-        InMemoryInvitationRepository, InMemoryOpeningRepository, InMemoryPartyRepository,
-        InMemoryPaymentMethodRepository, InMemoryPaymentTermRepository,
-        InMemoryPostalCodeDirectory, InMemoryPriceListRepository, InMemoryProductRepository,
-        InMemoryQuoteRepository, InMemoryRecurrenceRepository, InMemorySaleRepository,
-        InMemoryStatementLineRepository, InMemoryTransferRepository, RegisterReferences,
-        RegisterSalesReferences,
+        Argon2SecretService, FakePaymentProvider, InMemoryAttachmentRepository,
+        InMemoryBankAccountRepository, InMemoryBlobStore, InMemoryCategoryRepository,
+        InMemoryChargeRepository, InMemoryCnpjRegistry, InMemoryCommissionRuleRepository,
+        InMemoryContractRepository, InMemoryCostCenterRepository, InMemoryEmailSender,
+        InMemoryFinancialEntryRepository, InMemoryIdentityRepository, InMemoryInvitationRepository,
+        InMemoryOpeningRepository, InMemoryPartyRepository, InMemoryPaymentMethodRepository,
+        InMemoryPaymentTermRepository, InMemoryPostalCodeDirectory, InMemoryPriceListRepository,
+        InMemoryProductRepository, InMemoryQuoteRepository, InMemoryRecurrenceRepository,
+        InMemorySaleRepository, InMemoryStatementLineRepository, InMemoryTransferRepository,
+        RegisterReferences, RegisterSalesReferences,
     };
     use http_body_util::BodyExt;
     use serde_json::{Value, json};
@@ -664,6 +695,8 @@ mod tests {
         type EntryReferences = TestReferences;
         type Attachments = InMemoryAttachmentRepository;
         type Blobs = InMemoryBlobStore;
+        type Charges = InMemoryChargeRepository;
+        type Provider = FakePaymentProvider;
         type Transfers = InMemoryTransferRepository;
         type Openings = InMemoryOpeningRepository;
         type Recurrences = InMemoryRecurrenceRepository;
@@ -697,6 +730,8 @@ mod tests {
         type EntryReferences = TestReferences;
         type Attachments = InMemoryAttachmentRepository;
         type Blobs = InMemoryBlobStore;
+        type Charges = InMemoryChargeRepository;
+        type Provider = FakePaymentProvider;
         type Transfers = InMemoryTransferRepository;
         type Openings = InMemoryOpeningRepository;
         type Recurrences = InMemoryRecurrenceRepository;
@@ -785,6 +820,18 @@ mod tests {
             InMemoryAttachmentRepository::default(),
             InMemoryBlobStore::default(),
             InMemoryFinancialEntryRepository::default(),
+        )
+    }
+
+    type TestCharges = ChargesOf<MemoryPorts>;
+
+    /// Charges over stores that the app's own services do not share: for the tests that never charge.
+    fn standalone_charges() -> TestCharges {
+        ChargeService::new(
+            InMemoryChargeRepository::default(),
+            InMemoryFinancialEntryRepository::default(),
+            InMemoryPartyRepository::default(),
+            FakePaymentProvider::default(),
         )
     }
 
@@ -1143,6 +1190,7 @@ mod tests {
                 payment_terms: PaymentTermService::new(InMemoryPaymentTermRepository::default()),
                 entries: standalone_entries(),
                 attachments: standalone_attachments(),
+                charges: standalone_charges(),
                 transfers: standalone_transfers(),
                 recurrences: standalone_recurrences(),
                 quotes: standalone_quotes(),
@@ -1789,6 +1837,7 @@ mod tests {
                 payment_terms: PaymentTermService::new(InMemoryPaymentTermRepository::default()),
                 entries: standalone_entries(),
                 attachments: standalone_attachments(),
+                charges: standalone_charges(),
                 transfers: standalone_transfers(),
                 recurrences: standalone_recurrences(),
                 quotes: standalone_quotes(),
@@ -3277,6 +3326,7 @@ mod tests {
                 payment_terms: PaymentTermService::new(InMemoryPaymentTermRepository::default()),
                 entries: standalone_entries(),
                 attachments: standalone_attachments(),
+                charges: standalone_charges(),
                 transfers: standalone_transfers(),
                 recurrences: standalone_recurrences(),
                 quotes: standalone_quotes(),
@@ -4819,6 +4869,12 @@ mod tests {
                     InMemoryBlobStore::default(),
                     entry_store.clone(),
                 ),
+                charges: ChargeService::new(
+                    InMemoryChargeRepository::default(),
+                    entry_store.clone(),
+                    parties.clone(),
+                    FakePaymentProvider::default(),
+                ),
                 transfers: TransferService::new(
                     transfer_store.clone(),
                     references_over(
@@ -5576,6 +5632,196 @@ mod tests {
         }
         assert_eq!(
             send(&app, get_request(&settlements, None)).await.status,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn issues_lists_and_cancels_charges_for_an_installment() {
+        let app = entry_app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let targets = entry_targets(&app, &cookie, company_id).await;
+        let created = send(
+            &app,
+            json_request(
+                "POST",
+                &entries_uri(company_id),
+                Some(&cookie),
+                entry_body(
+                    &targets,
+                    "Venda",
+                    &[("2026-12-10", "100"), ("2027-01-10", "50.50")],
+                ),
+            ),
+        )
+        .await;
+        let entry_id = created.body["id"].as_str().unwrap().to_owned();
+        let uri = format!("/companies/{company_id}/entries/{entry_id}/charges");
+
+        let collection = send(
+            &app,
+            get_request(
+                &format!("/companies/{company_id}/collection"),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(collection.body["provider"], "fake");
+
+        let issued = send(
+            &app,
+            json_request(
+                "POST",
+                &uri,
+                Some(&cookie),
+                json!({ "installment": 1, "method": "pix" }),
+            ),
+        )
+        .await;
+        assert_eq!(issued.status, StatusCode::CREATED, "{}", issued.body);
+        assert_eq!(issued.body["status"], "open");
+        assert_eq!(issued.body["amount"], "100");
+        assert_eq!(issued.body["due_on"], "2026-12-10");
+        assert_eq!(issued.body["provider"], "fake");
+        assert!(issued.body["pix_payload"].as_str().is_some());
+        assert!(issued.body["digitable_line"].is_null());
+        assert_eq!(issued.body["issued_by"], "Ana");
+        let charge_uri = format!("{uri}/{}", issued.body["id"].as_str().unwrap());
+
+        // A second one for the same installment is a conflict; another installment and method are fine.
+        let again = send(
+            &app,
+            json_request(
+                "POST",
+                &uri,
+                Some(&cookie),
+                json!({ "installment": 1, "method": "boleto" }),
+            ),
+        )
+        .await;
+        assert_eq!(again.status, StatusCode::CONFLICT, "{}", again.body);
+        let boleto = send(
+            &app,
+            json_request(
+                "POST",
+                &uri,
+                Some(&cookie),
+                json!({ "installment": 2, "method": "boleto", "due_on": "2027-01-15" }),
+            ),
+        )
+        .await;
+        assert_eq!(boleto.status, StatusCode::CREATED, "{}", boleto.body);
+        assert_eq!(boleto.body["due_on"], "2027-01-15");
+        assert!(boleto.body["digitable_line"].as_str().is_some());
+        let listed = send(&app, get_request(&uri, Some(&cookie))).await;
+        assert_eq!(listed.body["items"].as_array().unwrap().len(), 2);
+
+        // What is refused says why: a method it does not know, a date that is not one, an installment it lacks.
+        for (body, status) in [
+            (
+                json!({ "installment": 1, "method": "cash" }),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                json!({ "installment": 2, "method": "pix", "due_on": "tomorrow" }),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                json!({ "installment": 9, "method": "pix" }),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                json!({ "installment": 1, "method": "pix", "extra": true }),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+        ] {
+            assert_eq!(
+                send(&app, json_request("POST", &uri, Some(&cookie), body))
+                    .await
+                    .status,
+                status
+            );
+        }
+
+        let cancelled = send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{charge_uri}/cancel"),
+                Some(&cookie),
+                Value::Null,
+            ),
+        )
+        .await;
+        assert_eq!(cancelled.status, StatusCode::OK, "{}", cancelled.body);
+        assert_eq!(cancelled.body["status"], "cancelled");
+        let twice = send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{charge_uri}/cancel"),
+                Some(&cookie),
+                Value::Null,
+            ),
+        )
+        .await;
+        assert_eq!(twice.status, StatusCode::CONFLICT);
+        let history = send(
+            &app,
+            get_request(&format!("{charge_uri}/history"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(history.body.as_array().unwrap().len(), 2);
+        assert_eq!(history.body[0]["action"], "created");
+    }
+
+    #[tokio::test]
+    async fn charges_stay_private_to_the_company_and_need_a_session() {
+        let app = entry_app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let targets = entry_targets(&app, &cookie, company_id).await;
+        let created = send(
+            &app,
+            json_request(
+                "POST",
+                &entries_uri(company_id),
+                Some(&cookie),
+                entry_body(&targets, "Venda", &[("2026-12-10", "100")]),
+            ),
+        )
+        .await;
+        let uri = format!(
+            "/companies/{company_id}/entries/{}/charges",
+            created.body["id"].as_str().unwrap()
+        );
+        let body = json!({ "installment": 1, "method": "pix" });
+        let issued = send(
+            &app,
+            json_request("POST", &uri, Some(&cookie), body.clone()),
+        )
+        .await;
+        let one = format!("{uri}/{}", issued.body["id"].as_str().unwrap());
+
+        let (stranger, _) = sign_up(&app, "bia@example.com").await;
+        for request in [
+            get_request(&uri, Some(&stranger)),
+            json_request("POST", &uri, Some(&stranger), body.clone()),
+            json_request(
+                "POST",
+                &format!("{one}/cancel"),
+                Some(&stranger),
+                Value::Null,
+            ),
+            get_request(&format!("{one}/history"), Some(&stranger)),
+            get_request(
+                &format!("/companies/{company_id}/collection"),
+                Some(&stranger),
+            ),
+        ] {
+            assert_eq!(send(&app, request).await.status, StatusCode::NOT_FOUND);
+        }
+        assert_eq!(
+            send(&app, get_request(&uri, None)).await.status,
             StatusCode::UNAUTHORIZED
         );
     }

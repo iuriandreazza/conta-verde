@@ -1,7 +1,7 @@
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use conta_verde_application::{ApplicationError, AuthError, RepositoryError};
+use conta_verde_application::{ApplicationError, AuthError, ProviderError, RepositoryError};
 use conta_verde_domain::DomainError;
 use serde::Serialize;
 
@@ -63,6 +63,7 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
             | DomainError::EntryIsVoided
             | DomainError::ReturnExceedsSold
             | DomainError::EntryFollowsASale
+            | DomainError::ChargeIsNotOpen
             | DomainError::ContractIsTerminated),
         ) => (StatusCode::CONFLICT, error.to_string()),
         ApplicationError::Domain(error) => (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()),
@@ -88,7 +89,8 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
             | RepositoryError::DuplicateCycle
             | RepositoryError::ContractChanged
             | RepositoryError::ReturnTooMuch
-            | RepositoryError::SaleHasReturns),
+            | RepositoryError::SaleHasReturns
+            | RepositoryError::ChargeAlreadyOpen),
         ) => (StatusCode::CONFLICT, error.to_string()),
         ApplicationError::Auth(error) => {
             let status = match error {
@@ -119,6 +121,7 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
         | ApplicationError::PaymentMethodNotFound
         | ApplicationError::PaymentTermNotFound
         | ApplicationError::PriceListNotFound
+        | ApplicationError::ChargeNotFound
         | ApplicationError::CategoryNotFound => (StatusCode::NOT_FOUND, error.to_string()),
         ApplicationError::LookupDisabled | ApplicationError::PostalCodeLookupDisabled => {
             (StatusCode::CONFLICT, error.to_string())
@@ -129,6 +132,7 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
         | ApplicationError::EntryIsVoided
         | ApplicationError::SaleHasSettlements
         | ApplicationError::SaleHasReturns
+        | ApplicationError::ChargeFromAnotherProvider
         | ApplicationError::QuoteAlreadyConverted => (StatusCode::CONFLICT, error.to_string()),
         // It existed and cannot be approved any more: its validity has run out.
         ApplicationError::QuoteExpired => (StatusCode::GONE, error.to_string()),
@@ -162,6 +166,31 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
         // It existed and cannot be used any more: the link was used, withdrawn or has expired.
         ApplicationError::InvitationNoLongerValid => (StatusCode::GONE, error.to_string()),
         ApplicationError::InvitationForAnotherEmail => (StatusCode::FORBIDDEN, error.to_string()),
+        ApplicationError::ChargeNeedsReceivable
+        | ApplicationError::ChargeNeedsParty
+        | ApplicationError::NothingToCharge => {
+            (StatusCode::UNPROCESSABLE_ENTITY, error.to_string())
+        }
+        // The operator has configured none: nothing to ask, like a lookup that is switched off.
+        ApplicationError::Provider(ProviderError::Disabled) => (
+            StatusCode::CONFLICT,
+            "payments are not configured on this installation".to_owned(),
+        ),
+        // What the provider said stays in the log: it can carry what a client should not see.
+        ApplicationError::Provider(ProviderError::Rejected(detail)) => {
+            tracing::warn!(%detail, "the payment provider refused a request");
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "the payment provider refused the charge".to_owned(),
+            )
+        }
+        ApplicationError::Provider(ProviderError::Unavailable(detail)) => {
+            tracing::warn!(%detail, "the payment provider is unavailable");
+            (
+                StatusCode::BAD_GATEWAY,
+                "the payment provider is not reachable".to_owned(),
+            )
+        }
         ApplicationError::PostalCodeNotFound => (StatusCode::NOT_FOUND, error.to_string()),
         ApplicationError::PostalCodeLookupUnavailable => {
             (StatusCode::SERVICE_UNAVAILABLE, error.to_string())

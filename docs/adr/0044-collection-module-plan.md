@@ -95,9 +95,9 @@ was sent, no queue; retries are the next pass. Tests move the clock, as for cont
 
 ### Roles
 
-Charges, collection settings, dunning rules and the delinquency report are in the `finance` area
-([ADR 0026](0026-membership-roles-and-permissions.md)): the segments `charges`, `collection` and `delinquency`
-are added to `area_of` and to its test. The `/public/payments/...` routes are outside `/companies/…`.
+Charges (nested under `entries`, like settlements), collection settings and dunning rules (segment `collection`)
+and the delinquency report are in the `finance` area ([ADR 0026](0026-membership-roles-and-permissions.md)): each
+new segment is added to `area_of` and to its test. The `/public/payments/...` routes are outside `/companies/…`.
 
 ### Tests never reach a provider, a mail server or WhatsApp
 

@@ -49,6 +49,10 @@ pub enum DomainError {
     TransferToTheSameAccount,
     InvalidNote,
     InvalidAttachmentName,
+    InvalidChargeAmount,
+    InvalidChargeProvider,
+    InvalidChargePayment,
+    ChargeIsNotOpen,
     UnsupportedAttachmentType,
     InvalidAttachmentSize,
     InvalidOpeningBalance,
@@ -201,6 +205,16 @@ impl fmt::Display for DomainError {
             Self::LineIsNotPending => f.write_str("the statement line is not pending"),
             Self::LineIsNotMatched => f.write_str("the statement line is not matched"),
             Self::LineIsNotIgnored => f.write_str("the statement line is not ignored"),
+            Self::InvalidChargeAmount => {
+                f.write_str("a charge is for an amount above 0, in cents")
+            }
+            Self::InvalidChargeProvider => {
+                f.write_str("the charge's provider key or id is not valid")
+            }
+            Self::InvalidChargePayment => {
+                f.write_str("the charge's payment details do not fit its method")
+            }
+            Self::ChargeIsNotOpen => f.write_str("the charge is not open"),
             Self::InvalidAttachmentName => f.write_str(
                 "file name must be one line of at most 200 characters, with no slash or control characters",
             ),

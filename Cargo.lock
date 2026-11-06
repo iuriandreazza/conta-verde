@@ -334,6 +334,7 @@ name = "conta-verde-application"
 version = "0.1.0"
 dependencies = [
  "conta-verde-domain",
+ "tracing",
  "uuid",
 ]
 

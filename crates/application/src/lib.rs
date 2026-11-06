@@ -8,6 +8,8 @@ mod blob_store;
 mod cash_flow;
 mod category_repository;
 mod category_service;
+mod charge_repository;
+mod charge_service;
 mod cnpj_registry;
 mod commission_repository;
 mod commission_service;
@@ -29,6 +31,7 @@ mod party_repository;
 mod party_service;
 mod payment_method_repository;
 mod payment_method_service;
+mod payment_provider;
 mod payment_term_repository;
 mod payment_term_service;
 mod postal_code_directory;
@@ -62,6 +65,8 @@ pub use blob_store::BlobStore;
 pub use cash_flow::{CashFlow, CashFlowPeriod, CashFlowQuery, Granularity, PastDue};
 pub use category_repository::{CategoryRepository, MAX_CATEGORIES};
 pub use category_service::{CategoryService, NewCategory};
+pub use charge_repository::ChargeRepository;
+pub use charge_service::ChargeService;
 pub use cnpj_registry::{CnpjLookupError, CnpjRegistry, RegistryEntry};
 pub use commission_repository::{CommissionRuleQuery, CommissionRuleRepository, RuleCursor};
 pub use commission_service::{
@@ -92,6 +97,9 @@ pub use party_repository::{PartyKind, PartyQuery, PartyRepository};
 pub use party_service::{PartyPage, PartyService};
 pub use payment_method_repository::{PaymentMethodQuery, PaymentMethodRepository};
 pub use payment_method_service::{PaymentMethodPage, PaymentMethodService};
+pub use payment_provider::{
+    Payer, PaymentProvider, ProviderCharge, ProviderChargeRequest, ProviderError,
+};
 pub use payment_term_repository::{PaymentTermQuery, PaymentTermRepository};
 pub use payment_term_service::{PaymentTermPage, PaymentTermService};
 pub use postal_code_directory::{PostalCodeDirectory, PostalCodeEntry, PostalCodeLookupError};
