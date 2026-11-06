@@ -9,6 +9,8 @@ mod cash_flow;
 mod category_repository;
 mod category_service;
 mod cnpj_registry;
+mod contract_repository;
+mod contract_service;
 mod cost_center_repository;
 mod cost_center_service;
 mod email_sender;
@@ -55,6 +57,8 @@ pub use cash_flow::{CashFlow, CashFlowPeriod, CashFlowQuery, Granularity, PastDu
 pub use category_repository::{CategoryRepository, MAX_CATEGORIES};
 pub use category_service::{CategoryService, NewCategory};
 pub use cnpj_registry::{CnpjLookupError, CnpjRegistry, RegistryEntry};
+pub use contract_repository::{ContractQuery, ContractRepository};
+pub use contract_service::{BillingReport, ContractPage, ContractService};
 pub use cost_center_repository::{CostCenterQuery, CostCenterRepository};
 pub use cost_center_service::{CostCenterPage, CostCenterService};
 pub use email_sender::{EmailError, EmailMessage, EmailSender};

@@ -799,6 +799,9 @@ export interface Sale {
   notes: string | null;
   status: SaleStatus;
   quote_id: string | null;
+  /** The contract it bills a cycle of, and the day of the cycle (ADR 0040). */
+  contract_id: string | null;
+  cycle_on: string | null;
   lines: DocumentLine[];
   total: string;
   /** Only the answers about one sale say it; the lists leave it out. */
@@ -859,6 +862,60 @@ export interface SaleReturn {
   /** `null` only if the payable's write failed after the return was stored. */
   refund_entry_id: string | null;
 }
+
+export type BillingCycle = "monthly" | "bimonthly" | "quarterly" | "semiannual" | "yearly";
+export type ContractStatus = "active" | "paused" | "terminated";
+
+/** An agreement that bills the same lines every cycle, each as a completed sale (ADR 0040). */
+export interface Contract {
+  id: string;
+  company_id: string;
+  name: string;
+  customer_id: string;
+  seller_id: string | null;
+  payment_term_id: string | null;
+  category_id: string;
+  cost_center_id: string | null;
+  notes: string | null;
+  lines: DocumentLine[];
+  /** What one cycle bills: the sum of the lines. */
+  total: string;
+  cycle: BillingCycle;
+  starts_on: string;
+  ends_on: string | null;
+  status: ContractStatus;
+  /** The day through which the cycles were billed. */
+  billed_through: string | null;
+}
+
+export interface ContractPage {
+  items: Contract[];
+  next_cursor: string | null;
+}
+
+/** Replaces the whole contract; what was billed is not touched. */
+export interface ContractInput {
+  name: string;
+  customer_id: string;
+  seller_id?: string;
+  payment_term_id?: string;
+  category_id: string;
+  cost_center_id?: string;
+  notes?: string;
+  lines: LineInput[];
+  cycle: BillingCycle;
+  starts_on: string;
+  ends_on?: string;
+  active: boolean;
+}
+
+export interface ContractFilters {
+  q: string;
+  status: "" | ContractStatus;
+  sort: "name" | "-name";
+}
+
+export const NO_CONTRACT_FILTERS: ContractFilters = { q: "", status: "", sort: "name" };
 
 export interface EntryInstallment {
   number: number;
@@ -1260,6 +1317,28 @@ export const api = {
   publicQuotePdfUrl: (token: string) => `/api/public/quotes/${token}/pdf`,
   approveQuote: (token: string) => post<PublicQuote>(`/public/quotes/${token}/approve`),
   declineQuote: (token: string) => post<PublicQuote>(`/public/quotes/${token}/decline`),
+  listContracts: (companyId: string, filters: ContractFilters = NO_CONTRACT_FILTERS, after?: string) => {
+    const params = new URLSearchParams();
+    if (filters.q) params.set("q", filters.q);
+    if (filters.status) params.set("status", filters.status);
+    if (filters.sort !== NO_CONTRACT_FILTERS.sort) params.set("sort", filters.sort);
+    if (after) params.set("after", after);
+    const query = params.size > 0 ? `?${params}` : "";
+    return request<ContractPage>(`/companies/${companyId}/contracts${query}`);
+  },
+  createContract: (companyId: string, input: ContractInput) =>
+    post<Contract>(`/companies/${companyId}/contracts`, input),
+  updateContract: (companyId: string, id: string, input: ContractInput) =>
+    request<Contract>(`/companies/${companyId}/contracts/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  adjustContract: (companyId: string, id: string, percent: string) =>
+    post<Contract>(`/companies/${companyId}/contracts/${id}/adjust`, { percent }),
+  terminateContract: (companyId: string, id: string, on: string) =>
+    post<Contract>(`/companies/${companyId}/contracts/${id}/terminate`, { on }),
+  contractHistory: (companyId: string, id: string) =>
+    request<HistoryEntry[]>(`/companies/${companyId}/contracts/${id}/history`),
   convertQuote: (companyId: string, quoteId: string, input: ConversionInput) =>
     post<Sale>(`/companies/${companyId}/quotes/${quoteId}/convert`, input),
   listSales: (companyId: string, filters: SaleFilters = NO_SALE_FILTERS, after?: string) => {

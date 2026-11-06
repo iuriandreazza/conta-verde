@@ -65,6 +65,8 @@ const order: Sale = {
   notes: null,
   status: "open",
   quote_id: null,
+  contract_id: null,
+  cycle_on: null,
   lines: [{ product_id: "pr1", description: "Café 500g", quantity: "3", unit_price: "10.1", discount: "0.3", total: "30" }],
   total: "30",
   receivable_id: null,

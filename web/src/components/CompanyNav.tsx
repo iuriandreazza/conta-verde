@@ -40,6 +40,10 @@ export function CompanyNav({
         <HandCoinsIcon size={18} aria-hidden />
         Vendas
       </NavLink>
+      <NavLink to={`${base}/contracts`}>
+        <RotateCCWIcon size={18} aria-hidden />
+        Contratos
+      </NavLink>
       <NavLink to={`${base}/entries`}>
         <CircleDollarSignIcon size={18} aria-hidden />
         Lançamentos

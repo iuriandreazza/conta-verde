@@ -62,7 +62,8 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
             | DomainError::SaleIsNotCompleted
             | DomainError::EntryIsVoided
             | DomainError::ReturnExceedsSold
-            | DomainError::EntryFollowsASale),
+            | DomainError::EntryFollowsASale
+            | DomainError::ContractIsTerminated),
         ) => (StatusCode::CONFLICT, error.to_string()),
         ApplicationError::Domain(error) => (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()),
         ApplicationError::Repository(
@@ -84,6 +85,8 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
             | RepositoryError::EntryVoided
             | RepositoryError::SaleChanged
             | RepositoryError::DuplicateQuoteSale
+            | RepositoryError::DuplicateCycle
+            | RepositoryError::ContractChanged
             | RepositoryError::ReturnTooMuch
             | RepositoryError::SaleHasReturns),
         ) => (StatusCode::CONFLICT, error.to_string()),
@@ -120,6 +123,7 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
             (StatusCode::CONFLICT, error.to_string())
         }
         ApplicationError::QuoteChanged
+        | ApplicationError::ContractChanged
         | ApplicationError::SaleChanged
         | ApplicationError::EntryIsVoided
         | ApplicationError::SaleHasSettlements
@@ -129,6 +133,7 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
         ApplicationError::QuoteExpired => (StatusCode::GONE, error.to_string()),
         ApplicationError::QuoteNotFound
         | ApplicationError::SaleNotFound
+        | ApplicationError::ContractNotFound
         | ApplicationError::EntryNotFound
         | ApplicationError::StatementLineNotFound
         | ApplicationError::RecurrenceNotFound

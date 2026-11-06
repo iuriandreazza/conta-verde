@@ -299,6 +299,7 @@ export function SalesPage() {
                           <div className="muted">
                             {sale.lines.length} {sale.lines.length === 1 ? "item" : "itens"}
                             {sale.seller_id !== null && ` · ${names.get(sale.seller_id) ?? ""}`}
+                            {sale.contract_id !== null && " · De um contrato"}
                           </div>
                         </td>
                         <td>{formatDate(sale.sold_on)}</td>
