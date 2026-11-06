@@ -1,12 +1,12 @@
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use conta_verde_application::{
-    EntryCursor, EntrySort, FinancialEntryQuery, FinancialEntryRepository, RepositoryError,
-    ensure_audit_describes,
+    AccountMovement, EntryCursor, EntrySort, FinancialEntryQuery, FinancialEntryRepository,
+    RepositoryError, ensure_audit_describes,
 };
 use conta_verde_domain::{
-    AuditEntity, AuditEntry, AuditRecord, CompanyId, EntryId, FinancialEntry, Settlement,
-    SettlementId, settled_of,
+    AuditEntity, AuditEntry, AuditRecord, BankAccountId, CalendarDate, CompanyId, Decimal, EntryId,
+    EntryKind, FinancialEntry, Settlement, SettlementId, settled_of,
 };
 
 use crate::memory_audit::AuditLog;
@@ -15,9 +15,11 @@ use crate::memory_audit::AuditLog;
 /// without a database. Like the Postgres adapter, it records an audit entry only for a write that
 /// happened: a refused or missed write leaves nothing in the trail, and the installments of an entry
 /// it could not change stay as they were.
-#[derive(Default)]
+/// Clones share the same entries, so that a test can hand one handle to the use case that writes and
+/// another to the one that adds balances up.
+#[derive(Default, Clone)]
 pub struct InMemoryFinancialEntryRepository {
-    state: Mutex<EntryState>,
+    state: Arc<Mutex<EntryState>>,
 }
 
 #[derive(Default)]
@@ -174,6 +176,41 @@ impl FinancialEntryRepository for InMemoryFinancialEntryRepository {
         Ok(found)
     }
 
+    async fn cash_of_account(
+        &self,
+        company_id: CompanyId,
+        account: BankAccountId,
+        since: Option<CalendarDate>,
+        until: CalendarDate,
+    ) -> Result<AccountMovement, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        let mut movement = AccountMovement::default();
+        for settlement in state.settlements.iter().filter(|stored| {
+            stored.company_id() == company_id
+                && stored.bank_account_id() == account
+                && !stored.is_reversed()
+                && stored.settled_on() <= until
+                && since.is_none_or(|day| stored.settled_on() >= day)
+        }) {
+            let kind = state
+                .entries
+                .iter()
+                .find(|entry| {
+                    entry.company_id() == company_id && entry.id() == settlement.entry_id()
+                })
+                .map(FinancialEntry::kind);
+            let total: &mut Decimal = match kind {
+                Some(EntryKind::Receivable) => &mut movement.received,
+                Some(EntryKind::Payable) => &mut movement.paid,
+                None => continue,
+            };
+            *total += settlement.cash();
+        }
+        movement.received = movement.received.normalize();
+        movement.paid = movement.paid.normalize();
+        Ok(movement)
+    }
+
     async fn history(
         &self,
         company_id: CompanyId,
@@ -201,7 +238,7 @@ impl FinancialEntryRepository for InMemoryFinancialEntryRepository {
             .filter(|stored| stored.company_id() == company_id && query.matches(stored))
             .filter(|stored| {
                 after.is_none_or(|cursor| {
-                    let after_key = (cursor.competence_date, cursor.id);
+                    let after_key = (cursor.date, cursor.id);
                     if descending {
                         key(stored) < after_key
                     } else {
@@ -221,7 +258,7 @@ impl FinancialEntryRepository for InMemoryFinancialEntryRepository {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use conta_verde_application::FinancialEntryService;
     use conta_verde_domain::CompanyId;
 
@@ -233,16 +270,16 @@ mod tests {
     };
 
     /// The registers an entry points at, shared by handle with the references that read them.
-    struct Registers {
-        categories: InMemoryCategoryRepository,
-        cost_centers: InMemoryCostCenterRepository,
-        parties: InMemoryPartyRepository,
-        bank_accounts: InMemoryBankAccountRepository,
-        payment_methods: InMemoryPaymentMethodRepository,
+    pub(crate) struct Registers {
+        pub(crate) categories: InMemoryCategoryRepository,
+        pub(crate) cost_centers: InMemoryCostCenterRepository,
+        pub(crate) parties: InMemoryPartyRepository,
+        pub(crate) bank_accounts: InMemoryBankAccountRepository,
+        pub(crate) payment_methods: InMemoryPaymentMethodRepository,
     }
 
     impl Registers {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             Self {
                 categories: InMemoryCategoryRepository::default(),
                 cost_centers: InMemoryCostCenterRepository::default(),
@@ -252,7 +289,7 @@ mod tests {
             }
         }
 
-        async fn seed(&self, company: CompanyId) -> EntrySeed {
+        pub(crate) async fn seed(&self, company: CompanyId) -> EntrySeed {
             contract::seed_entry_records(
                 &self.categories,
                 &self.cost_centers,
@@ -264,7 +301,7 @@ mod tests {
             .await
         }
 
-        fn references(
+        pub(crate) fn references(
             &self,
         ) -> RegisterReferences<
             InMemoryCategoryRepository,

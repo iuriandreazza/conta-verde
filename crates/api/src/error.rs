@@ -101,9 +101,9 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
         ApplicationError::LookupDisabled | ApplicationError::PostalCodeLookupDisabled => {
             (StatusCode::CONFLICT, error.to_string())
         }
-        ApplicationError::EntryNotFound | ApplicationError::SettlementNotFound => {
-            (StatusCode::NOT_FOUND, error.to_string())
-        }
+        ApplicationError::EntryNotFound
+        | ApplicationError::SettlementNotFound
+        | ApplicationError::TransferNotFound => (StatusCode::NOT_FOUND, error.to_string()),
         ApplicationError::SettlementExceedsBalance | ApplicationError::EntryIsSettled => {
             (StatusCode::CONFLICT, error.to_string())
         }

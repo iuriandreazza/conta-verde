@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 
 use conta_verde_application::{
-    EntryCursor, EntrySort, FinancialEntryQuery, FinancialEntryRepository, RepositoryError,
-    ensure_audit_describes,
+    AccountMovement, EntryCursor, EntrySort, FinancialEntryQuery, FinancialEntryRepository,
+    RepositoryError, ensure_audit_describes,
 };
 use conta_verde_domain::{
-    Amount, AuditEntity, AuditEntry, AuditRecord, BankAccountId, CategoryId, CompanyId,
-    CostCenterId, EntryId, EntryInstallmentDraft, EntryKind, FinancialEntry, FinancialEntryDraft,
-    PartyId, PaymentMethodId, Settlement, SettlementDraft, SettlementId,
+    Amount, AuditEntity, AuditEntry, AuditRecord, BankAccountId, CalendarDate, CategoryId,
+    CompanyId, CostCenterId, Decimal, EntryId, EntryInstallmentDraft, EntryKind, FinancialEntry,
+    FinancialEntryDraft, PartyId, PaymentMethodId, Settlement, SettlementDraft, SettlementId,
 };
 use sqlx::postgres::PgRow;
 use sqlx::{PgConnection, PgPool, Postgres, QueryBuilder, Row};
@@ -309,6 +309,48 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
         rows.iter().map(settlement_from_row).collect()
     }
 
+    async fn cash_of_account(
+        &self,
+        company_id: CompanyId,
+        account: BankAccountId,
+        since: Option<CalendarDate>,
+        until: CalendarDate,
+    ) -> Result<AccountMovement, RepositoryError> {
+        // The cash of a settlement is added up here and not stored, like everywhere else: the
+        // applied amount, plus interest and fine, less the discount.
+        let row = sqlx::query(
+            "SELECT \
+               COALESCE(SUM(s.applied + s.interest + s.fine - s.discount) \
+                   FILTER (WHERE e.kind = 'receivable'), 0)::text AS received, \
+               COALESCE(SUM(s.applied + s.interest + s.fine - s.discount) \
+                   FILTER (WHERE e.kind = 'payable'), 0)::text AS paid \
+             FROM entry_settlements s \
+             JOIN financial_entries e ON e.company_id = s.company_id AND e.id = s.entry_id \
+             WHERE s.company_id = $1 AND s.bank_account_id = $2 AND NOT s.reversed \
+               AND s.settled_on <= CAST($3 AS DATE) \
+               AND (CAST($4 AS TEXT) IS NULL OR s.settled_on >= CAST($4 AS DATE))",
+        )
+        .bind(company_id.as_uuid())
+        .bind(account.as_uuid())
+        .bind(until.to_string())
+        .bind(since.map(|day| day.to_string()))
+        .fetch_one(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        let sum = |column: &str| -> Result<Decimal, RepositoryError> {
+            row.try_get::<String, _>(column)
+                .map_err(storage_error)?
+                .parse::<Decimal>()
+                .map_err(|error| {
+                    RepositoryError::Storage(format!("a sum that is not a number: {error}"))
+                })
+        };
+        Ok(AccountMovement {
+            received: sum("received")?,
+            paid: sum("paid")?,
+        })
+    }
+
     async fn history(
         &self,
         company_id: CompanyId,
@@ -353,7 +395,7 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
         };
         if let Some(cursor) = after {
             sql.push(format!(" AND (competence_date, id) {comparison} (CAST("))
-                .push_bind(cursor.competence_date.to_string())
+                .push_bind(cursor.date.to_string())
                 .push(" AS DATE), ")
                 .push_bind(cursor.id)
                 .push(")");

@@ -55,6 +55,38 @@ impl fmt::Display for Amount {
     }
 }
 
+/// A decimal that may be negative, in cents: an opening balance, which a card or an account in
+/// overdraft starts below zero. Written without trailing zeros, like [`Amount`]; `-0` is `0`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SignedAmount(Decimal);
+
+impl SignedAmount {
+    pub const ZERO: Self = Self(Decimal::ZERO);
+
+    /// At most two decimals and thirteen digits before the point, with an optional leading `-` and
+    /// nothing else (`+1` and `- 1` are refused).
+    pub fn in_cents(raw: &str) -> Option<Self> {
+        let (negative, digits) = match raw.strip_prefix('-') {
+            Some(rest) => (true, rest),
+            None => (false, raw),
+        };
+        let magnitude = Amount::in_cents(digits)?.0;
+        Some(Self(
+            if negative { -magnitude } else { magnitude }.normalize(),
+        ))
+    }
+
+    pub fn as_decimal(&self) -> Decimal {
+        self.0
+    }
+}
+
+impl fmt::Display for SignedAmount {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

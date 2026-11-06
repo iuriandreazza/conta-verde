@@ -1,16 +1,17 @@
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use conta_verde_application::{ApplicationError, EntryCursor, EntrySort, FinancialEntryQuery};
+use conta_verde_application::{ApplicationError, EntrySort, FinancialEntryQuery};
 use conta_verde_domain::{
-    BankAccountId, CalendarDate, CategoryId, CostCenterId, EntryId, EntryInstallmentDraft,
-    EntryKind, FinancialEntry, FinancialEntryDraft, PartyId, PaymentMethodId, Settlement,
-    SettlementDraft, SettlementId, settled_of,
+    BankAccountId, CategoryId, CostCenterId, EntryId, EntryInstallmentDraft, EntryKind,
+    FinancialEntry, FinancialEntryDraft, PartyId, PaymentMethodId, Settlement, SettlementDraft,
+    SettlementId, settled_of,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::access::CompanyAccess;
+use crate::cursor::{decode_date_cursor, encode_date_cursor};
 use crate::error::ApiError;
 use crate::history::HistoryEntryResponse;
 use crate::json::{ApiJson, ApiQuery};
@@ -174,26 +175,13 @@ fn parse_id(raw: &str) -> Result<EntryId, ApiError> {
         .map_err(|_| ApplicationError::EntryNotFound.into())
 }
 
-// Clients treat the cursor as opaque. The id comes first because it has a fixed shape.
-fn encode_cursor(cursor: &EntryCursor) -> String {
-    format!("{}|{}", cursor.id, cursor.competence_date)
-}
-
-fn decode_cursor(raw: &str) -> Result<EntryCursor, ApiError> {
-    let (id, date) = raw.split_once('|').ok_or(ApiError::InvalidCursor)?;
-    Ok(EntryCursor {
-        id: Uuid::parse_str(id).map_err(|_| ApiError::InvalidCursor)?,
-        competence_date: CalendarDate::parse(date).ok_or(ApiError::InvalidCursor)?,
-    })
-}
-
 pub(crate) async fn list_entries<X: Ports>(
     State(state): State<SharedState<X>>,
     CompanyAccess(company_id, _): CompanyAccess,
     ApiQuery(query): ApiQuery<ListQuery>,
 ) -> Result<Json<EntryPageResponse>, ApiError> {
     let filter = query.entry_query()?;
-    let after = query.after.as_deref().map(decode_cursor).transpose()?;
+    let after = query.after.as_deref().map(decode_date_cursor).transpose()?;
     let page = state
         .entries
         .list(company_id, &filter, after.as_ref(), query.limit)
@@ -206,7 +194,7 @@ pub(crate) async fn list_entries<X: Ports>(
             .iter()
             .map(|entry| EntryResponse::new(entry, &of_entry(&settlements, entry.id())))
             .collect(),
-        next_cursor: page.next.as_ref().map(encode_cursor),
+        next_cursor: page.next.as_ref().map(encode_date_cursor),
     }))
 }
 

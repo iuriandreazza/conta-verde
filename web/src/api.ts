@@ -434,6 +434,66 @@ export interface SettlementInput {
   payment_method_id?: string;
 }
 
+/** Money moved from one account of the company to another (ADR 0031). */
+export interface Transfer {
+  id: string;
+  company_id: string;
+  from_account_id: string;
+  to_account_id: string;
+  /** A decimal string without trailing zeros, in cents at most. */
+  amount: string;
+  /** `YYYY-MM-DD`. */
+  occurred_on: string;
+  note: string | null;
+  /** Undone: it stays listed and counts in no balance. */
+  reversed: boolean;
+}
+
+export interface TransferPage {
+  items: Transfer[];
+  next_cursor: string | null;
+}
+
+export interface TransferInput {
+  from_account_id: string;
+  to_account_id: string;
+  amount: string;
+  occurred_on: string;
+  note?: string;
+}
+
+export interface TransferFilters {
+  /** The id of an account: the transfers that come from it or go to it. Empty for all of them. */
+  account: string;
+}
+
+export const NO_TRANSFER_FILTERS: TransferFilters = { account: "" };
+
+/** What an account held at the start of a day. */
+export interface OpeningBalance {
+  /** A signed decimal string: an account in overdraft starts below zero. */
+  balance: string;
+  on: string;
+}
+
+/** How an account got to its balance on a day (ADR 0031); `opening` is null until one is set. */
+export interface AccountBalance {
+  account: BankAccount;
+  opening: OpeningBalance | null;
+  received: string;
+  paid: string;
+  transfers_in: string;
+  transfers_out: string;
+  balance: string;
+}
+
+export interface Balances {
+  on: string;
+  accounts: AccountBalance[];
+  /** The sum of every account's balance, closed ones included. */
+  total: string;
+}
+
 export type EntryKind = "receivable" | "payable";
 
 export interface EntryInstallment {
@@ -741,6 +801,27 @@ export const api = {
   reverseSettlement: (companyId: string, entryId: string, settlementId: string) =>
     request<void>(`/companies/${companyId}/entries/${entryId}/settlements/${settlementId}`, {
       method: "DELETE",
+    }),
+  /** Newest first; a cursor only continues the list of the same filters. */
+  listTransfers: (companyId: string, filters: TransferFilters = NO_TRANSFER_FILTERS, after?: string) => {
+    const params = new URLSearchParams();
+    if (filters.account) params.set("account", filters.account);
+    if (after) params.set("after", after);
+    const query = params.size > 0 ? `?${params}` : "";
+    return request<TransferPage>(`/companies/${companyId}/transfers${query}`);
+  },
+  createTransfer: (companyId: string, input: TransferInput) =>
+    post<Transfer>(`/companies/${companyId}/transfers`, input),
+  /** Undoes a transfer: it stops counting and stays listed as reversed. */
+  reverseTransfer: (companyId: string, id: string) =>
+    request<void>(`/companies/${companyId}/transfers/${id}`, { method: "DELETE" }),
+  /** `on` is today where the person is: the server does not know their zone (ADR 0031). */
+  getBalances: (companyId: string, on: string) =>
+    request<Balances>(`/companies/${companyId}/balances?on=${on}`),
+  setOpeningBalance: (companyId: string, accountId: string, input: OpeningBalance) =>
+    request<OpeningBalance>(`/companies/${companyId}/bank-accounts/${accountId}/opening-balance`, {
+      method: "PUT",
+      body: JSON.stringify(input),
     }),
   /** The whole tree, flat and unpaged. */
   listCategories: (companyId: string) =>

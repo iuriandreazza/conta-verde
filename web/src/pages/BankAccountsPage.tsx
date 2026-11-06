@@ -1,17 +1,21 @@
-import { Fragment, useState, type FormEvent } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useParams } from "react-router-dom";
 import {
   NO_BANK_ACCOUNT_FILTERS,
   api,
   errorMessage,
+  type AccountBalance,
+  type Balances,
   type BankAccount,
   type BankAccountFilters,
   type BankAccountInput,
   type BankAccountKind,
 } from "../api";
 import { BankAccountHistory } from "../components/BankAccountHistory";
+import { StatTile } from "../components/charts/StatTile";
 import { Button } from "../components/Button";
 import { ListRow } from "../components/ListRow";
+import { OpeningBalanceForm } from "../components/OpeningBalanceForm";
 import { PageHeader } from "../components/PageHeader";
 import { Notice } from "../components/Notice";
 import { Spinner } from "../components/Spinner";
@@ -24,6 +28,9 @@ import { BANK_ACCOUNT_KINDS, bankAccountKindLabel } from "../lib/kinds";
 import { usePagedList } from "../lib/usePagedList";
 import { useCanWrite } from "../lib/useCanWrite";
 import { bankName } from "../lib/banks";
+import { formatMoney } from "../lib/decimal";
+import { formatDate } from "../lib/entryInstallments";
+import { todayIso } from "../lib/settlement";
 import { CircleDollarSignIcon } from "../components/icons/circle-dollar-sign";
 import { CreditCardIcon } from "../components/icons/credit-card";
 import { HandCoinsIcon } from "../components/icons/hand-coins";
@@ -48,6 +55,25 @@ function KindIcon({ kind, active }: { kind: BankAccount["kind"]; active: boolean
 import { SquarePenIcon } from "../components/icons/square-pen";
 import { StatusBadge } from "../components/StatusBadge";
 
+/** What an account holds today. The opening balance it started from is in the form that sets it. */
+function BalanceCell({ item }: { item: AccountBalance | undefined }) {
+  if (item === undefined) {
+    return <td className="num">—</td>;
+  }
+  return (
+    <td
+      className={item.balance.startsWith("-") ? "num negative" : "num"}
+      title={
+        item.opening === null
+          ? "Sem saldo inicial: soma tudo o que foi baixado e transferido."
+          : `Saldo inicial de ${formatMoney(item.opening.balance)} em ${formatDate(item.opening.on)}`
+      }
+    >
+      {formatMoney(item.balance)}
+    </td>
+  );
+}
+
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one
 // instance: the old list is dropped and a reply still in flight for another company lands on an
 // unmounted component.
@@ -65,6 +91,36 @@ export function BankAccountsPage() {
   const [saved, setSaved] = useState<string | null>(null);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const [historyOpenFor, setHistoryOpenFor] = useState<string | null>(null);
+  const [openingOpenFor, setOpeningOpenFor] = useState<string | null>(null);
+  const [balances, setBalances] = useState<Balances | null>(null);
+  const [balancesError, setBalancesError] = useState<string | null>(null);
+  // Counts the reads: only the latest reply is used, so a slow earlier one cannot overwrite a newer.
+  const latestBalances = useRef(0);
+
+  const loadBalances = useCallback(async () => {
+    const read = ++latestBalances.current;
+    try {
+      // Today where the person is, asked each time: the server does not know their zone (ADR 0031).
+      const fresh = await api.getBalances(companyId, todayIso());
+      if (read === latestBalances.current) {
+        setBalances(fresh);
+        setBalancesError(null);
+      }
+    } catch (failure) {
+      if (read === latestBalances.current) {
+        setBalancesError(errorMessage(failure));
+      }
+    }
+  }, [companyId]);
+
+  useEffect(() => {
+    void loadBalances();
+  }, [loadBalances]);
+
+  const balanceOf = useMemo(
+    () => new Map<string, AccountBalance>((balances?.accounts ?? []).map((item) => [item.account.id, item])),
+    [balances],
+  );
 
   const {
     items: accounts,
@@ -111,7 +167,7 @@ export function BankAccountsPage() {
         setHighlightedId(created.id);
         setSaved(`${created.name} cadastrada.`);
         setFormVersion((version) => version + 1);
-        await reload();
+        await Promise.all([reload(), loadBalances()]);
       } else {
         const updated = await api.updateBankAccount(companyId, editing.id, input);
         // In place: the list keeps its page and its filters.
@@ -130,6 +186,16 @@ export function BankAccountsPage() {
   return (
     <>
       <PageHeader title="Contas bancárias" description="Onde o dinheiro da empresa fica e circula: bancos, caixa e cartões." />
+      <Notice message={balancesError} />
+      {balances !== null && (
+        <div className="kpi-row">
+          <StatTile
+            label={`Saldo consolidado em ${formatDate(balances.on)}`}
+            value={formatMoney(balances.total)}
+            note="Soma de todas as contas, inclusive as inativas."
+          />
+        </div>
+      )}
       <div className={canWrite ? "split" : "split split-single"}>
       <section className="card list-card">
         <h2>Cadastradas</h2>
@@ -223,6 +289,7 @@ export function BankAccountsPage() {
                   <th>Banco</th>
                   <th>Agência</th>
                   <th>Conta</th>
+                  <th className="num">Saldo hoje</th>
                   <th>Situação</th>
                   <th>
                     <span className="visually-hidden">Ações</span>
@@ -254,8 +321,26 @@ export function BankAccountsPage() {
                       </td>
                       <td className="tabular">{account.branch ?? "—"}</td>
                       <td className="tabular">{account.number ?? "—"}</td>
+                      <BalanceCell item={balanceOf.get(account.id)} />
                       <td><StatusBadge active={account.active} feminine /></td>
                       <td className="row-actions">
+                        {canWrite && (
+                          <Button
+                            iconOnly
+                            icon={CircleDollarSignIcon}
+                            type="button"
+                            variant="ghost"
+                            aria-label={`Saldo inicial de ${account.name}`}
+                            aria-expanded={openingOpenFor === account.id}
+                            aria-controls={`opening-${account.id}`}
+                            disabled={balances === null}
+                            onClick={() =>
+                              setOpeningOpenFor(openingOpenFor === account.id ? null : account.id)
+                            }
+                          >
+                            Saldo inicial
+                          </Button>
+                        )}
                         {canWrite && (
                           <Button
                             iconOnly
@@ -289,9 +374,20 @@ export function BankAccountsPage() {
                         </Button>
                       </td>
                     </ListRow>
+                    {openingOpenFor === account.id && balanceOf.has(account.id) && (
+                      <tr id={`opening-${account.id}`}>
+                        <td colSpan={7} role="region" aria-label={`Saldo inicial de ${account.name}`}>
+                          <OpeningBalanceForm
+                            companyId={companyId}
+                            item={balanceOf.get(account.id) as AccountBalance}
+                            onSaved={() => void loadBalances()}
+                          />
+                        </td>
+                      </tr>
+                    )}
                     {historyOpenFor === account.id && (
                       <tr id={`history-${account.id}`}>
-                        <td colSpan={6} role="region" aria-label={`Histórico de ${account.name}`}>
+                        <td colSpan={7} role="region" aria-label={`Histórico de ${account.name}`}>
                           <BankAccountHistory
                             // Remounted when the account changes, so an open history follows an edit.
                             key={JSON.stringify(account)}

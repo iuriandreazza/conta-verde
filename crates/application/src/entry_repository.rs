@@ -6,22 +6,25 @@ use conta_verde_domain::{
 };
 use uuid::Uuid;
 
-use crate::RepositoryError;
 use crate::list_query::clean_search;
+use crate::{AccountMovement, RepositoryError};
 
-/// Position of the last row of a list of entries ordered by competence date, then by id (both
-/// reversed for a descending sort): the date and id of the last entry are enough to resume right
-/// after it in either direction.
+/// Position of the last row of a list ordered by a day, then by id (both reversed for a descending
+/// sort): the day and id of the last row are enough to resume right after it in either direction.
+/// Entries are listed by competence date and transfers by the day they occurred.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EntryCursor {
-    pub competence_date: CalendarDate,
+pub struct DateCursor {
+    pub date: CalendarDate,
     pub id: Uuid,
 }
 
-impl From<&FinancialEntry> for EntryCursor {
+/// The name an entry's list uses for it.
+pub type EntryCursor = DateCursor;
+
+impl From<&FinancialEntry> for DateCursor {
     fn from(entry: &FinancialEntry) -> Self {
         Self {
-            competence_date: entry.competence_date(),
+            date: entry.competence_date(),
             id: entry.id().as_uuid(),
         }
     }
@@ -160,6 +163,17 @@ pub trait FinancialEntryRepository: Send + Sync {
         company_id: CompanyId,
         entry_ids: &[EntryId],
     ) -> impl Future<Output = Result<Vec<Settlement>, RepositoryError>> + Send;
+
+    /// What the settlements that are not reversed moved in the account, on the days from `since`
+    /// (every day when `None`) up to and including `until`: `received` by receivables, `paid` by
+    /// payables, each the **cash** of the settlement ([ADR 0030]).
+    fn cash_of_account(
+        &self,
+        company_id: CompanyId,
+        account: BankAccountId,
+        since: Option<CalendarDate>,
+        until: CalendarDate,
+    ) -> impl Future<Output = Result<AccountMovement, RepositoryError>> + Send;
 
     /// What was recorded about the entry, oldest first. Empty for another company's.
     fn history(

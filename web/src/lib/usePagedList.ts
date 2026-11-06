@@ -11,14 +11,14 @@ const SEARCH_DELAY_MS = 300;
 
 /**
  * A list with keyset pagination whose search text, filters and order change while it is on screen
- * (ADR 0018). The search text follows the box once typing pauses; every other filter applies at
+ * (ADR 0018). The search text, when the list has one, follows the box once typing pauses; every other filter applies at
  * once. `fetchPage` is called with the applied filters and, for the next pages, the cursor that
  * the same filters produced.
  *
  * Layout remounts the page whenever the path changes, so what `fetchPage` closes over (the company)
  * never changes within one instance.
  */
-export function usePagedList<T, F extends { q: string }>(
+export function usePagedList<T, F extends object>(
   fetchPage: (filters: F, after?: string) => Promise<Page<T>>,
   filters: F,
 ) {
@@ -30,8 +30,9 @@ export function usePagedList<T, F extends { q: string }>(
 
   // Filters are plain JSON, so their serialization is a stable identity: `applied` only changes
   // when a value does, not on every keystroke in the search box.
-  const searchText = useDebounced(filters.q.trim(), SEARCH_DELAY_MS);
-  const appliedKey = JSON.stringify({ ...filters, q: searchText });
+  const typed = (filters as { q?: unknown }).q;
+  const searchText = useDebounced(typeof typed === "string" ? typed.trim() : "", SEARCH_DELAY_MS);
+  const appliedKey = JSON.stringify("q" in filters ? { ...filters, q: searchText } : filters);
   const applied = useMemo(() => JSON.parse(appliedKey) as F, [appliedKey]);
 
   const fetchRef = useRef(fetchPage);

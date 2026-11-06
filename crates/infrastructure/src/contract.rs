@@ -4778,6 +4778,8 @@ pub struct EntrySeed {
     pub inactive_cost_center: CostCenterId,
     pub party: PartyId,
     pub bank_account: BankAccountId,
+    /// A second active account, for what moves between two of them.
+    pub other_bank_account: BankAccountId,
     pub inactive_bank_account: BankAccountId,
     pub payment_method: PaymentMethodId,
     pub inactive_payment_method: PaymentMethodId,
@@ -4852,7 +4854,8 @@ where
         account_draft(BankAccountKind::Cash, "Caixa antigo", None, false),
     )
     .unwrap();
-    for item in [&account, &closed_account] {
+    let second_account = new_account(company, "Reserva", None);
+    for item in [&account, &second_account, &closed_account] {
         save_account(bank_accounts, item).await.unwrap();
     }
     let method = new_method(company, "Pix");
@@ -4875,6 +4878,7 @@ where
         inactive_cost_center: inactive_cost_center.id(),
         party: party.id(),
         bank_account: account.id(),
+        other_bank_account: second_account.id(),
         inactive_bank_account: closed_account.id(),
         payment_method: method.id(),
         inactive_payment_method: closed_method.id(),
@@ -5767,4 +5771,490 @@ pub async fn settles_installments_and_reverses_them<R, F>(
         .await
         .unwrap();
     assert_eq!(freed.total().to_string(), "150.5");
+}
+
+// ---------- transfers and balances ----------
+
+use conta_verde_application::{
+    AccountBalance, BalanceService, Balances, OpeningRepository, TransferQuery, TransferRepository,
+    TransferService,
+};
+use conta_verde_domain::{CalendarDate, Transfer, TransferDraft};
+
+fn transfer_draft(
+    from: BankAccountId,
+    to: BankAccountId,
+    amount: &str,
+    day: &str,
+) -> TransferDraft {
+    TransferDraft {
+        from,
+        to,
+        amount: amount.into(),
+        occurred_on: day.into(),
+        note: None,
+    }
+}
+
+async fn listed_transfers<T: TransferRepository, F: EntryReferences>(
+    service: &TransferService<T, F>,
+    company: CompanyId,
+    query: &TransferQuery,
+) -> Vec<Transfer> {
+    service
+        .list(company, query, None, Some(100))
+        .await
+        .unwrap()
+        .items
+}
+
+/// A transfer moves money between two accounts of the company that are usable, is never edited, is
+/// undone by reversing it, and leaves one audit entry per write and none for a refused one.
+pub async fn moves_money_between_accounts<T, F>(
+    service: &TransferService<T, F>,
+    store: &T,
+    company: CompanyId,
+    other_company: CompanyId,
+    seed: &EntrySeed,
+) where
+    T: TransferRepository,
+    F: EntryReferences,
+{
+    let ana = actor();
+    let (from, to) = (seed.bank_account, seed.other_bank_account);
+    let everything = TransferQuery::default();
+
+    let first = service
+        .register(
+            company,
+            &ana,
+            TransferDraft {
+                note: Some("Reforço de caixa".into()),
+                ..transfer_draft(from, to, "250.50", "2026-12-10")
+            },
+        )
+        .await
+        .unwrap();
+    let second = service
+        .register(company, &ana, transfer_draft(to, from, "10", "2026-12-12"))
+        .await
+        .unwrap();
+    assert_eq!(first.note(), Some("Reforço de caixa"));
+    assert_eq!(
+        store.find(company, first.id()).await.unwrap(),
+        Some(first.clone())
+    );
+    assert_eq!(store.history(company, first.id()).await.unwrap().len(), 1);
+
+    // Newest first, narrowed by an account on either side, and nothing of another company's.
+    let listed = listed_transfers(service, company, &everything).await;
+    assert_eq!(
+        listed.iter().map(Transfer::id).collect::<Vec<_>>(),
+        vec![second.id(), first.id()]
+    );
+    for account in [from, to] {
+        let query = TransferQuery::default().with_account(account);
+        assert_eq!(listed_transfers(service, company, &query).await.len(), 2);
+    }
+    let unrelated = TransferQuery::default().with_account(seed.inactive_bank_account);
+    assert!(
+        listed_transfers(service, company, &unrelated)
+            .await
+            .is_empty()
+    );
+    assert!(
+        listed_transfers(service, other_company, &everything)
+            .await
+            .is_empty()
+    );
+    assert_eq!(store.find(other_company, first.id()).await.unwrap(), None);
+    assert!(
+        store
+            .history(other_company, first.id())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // Paging: one at a time, newest first, then from the cursor of the last one.
+    let page = service
+        .list(company, &everything, None, Some(1))
+        .await
+        .unwrap();
+    assert_eq!(page.items.len(), 1);
+    let cursor = page.next.expect("there is another one");
+    let rest = service
+        .list(company, &everything, Some(&cursor), Some(1))
+        .await
+        .unwrap();
+    assert_eq!(
+        rest.items.iter().map(Transfer::id).collect::<Vec<_>>(),
+        vec![first.id()]
+    );
+    assert!(rest.next.is_none());
+
+    // What it refuses leaves nothing behind: the same account on both sides, an amount that is not
+    // more than 0 or has more than two decimals, a date that is not one, an account that is closed
+    // or is another company's, a note that is not one line.
+    let refused = [
+        (
+            transfer_draft(from, from, "1", "2026-12-10"),
+            ApplicationError::Domain(DomainError::TransferToTheSameAccount),
+        ),
+        (
+            transfer_draft(from, to, "0", "2026-12-10"),
+            ApplicationError::Domain(DomainError::InvalidTransferAmount),
+        ),
+        (
+            transfer_draft(from, to, "1.005", "2026-12-10"),
+            ApplicationError::Domain(DomainError::InvalidTransferAmount),
+        ),
+        (
+            transfer_draft(from, to, "1", "2026-02-30"),
+            ApplicationError::Domain(DomainError::InvalidDate("occurred_on")),
+        ),
+        (
+            TransferDraft {
+                note: Some("a\nb".into()),
+                ..transfer_draft(from, to, "1", "2026-12-10")
+            },
+            ApplicationError::Domain(DomainError::InvalidNote),
+        ),
+        (
+            transfer_draft(from, seed.inactive_bank_account, "1", "2026-12-10"),
+            ApplicationError::UnusableReference("to"),
+        ),
+        (
+            transfer_draft(seed.inactive_bank_account, to, "1", "2026-12-10"),
+            ApplicationError::UnusableReference("from"),
+        ),
+    ];
+    for (draft, error) in refused {
+        assert_eq!(
+            service.register(company, &ana, draft).await.unwrap_err(),
+            error
+        );
+    }
+    assert_eq!(
+        service
+            .register(
+                other_company,
+                &ana,
+                transfer_draft(from, to, "1", "2026-12-10")
+            )
+            .await
+            .unwrap_err(),
+        ApplicationError::UnusableReference("from")
+    );
+    assert_eq!(
+        listed_transfers(service, company, &everything).await.len(),
+        2
+    );
+
+    // Reversing marks it: it stays listed, with its trail, and cannot be reversed twice. Another
+    // company cannot reverse it.
+    assert_eq!(
+        service
+            .reverse(other_company, &ana, first.id())
+            .await
+            .unwrap_err(),
+        ApplicationError::TransferNotFound
+    );
+    let reversed = service.reverse(company, &ana, first.id()).await.unwrap();
+    assert!(reversed.is_reversed());
+    assert!(
+        store
+            .find(company, first.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .is_reversed()
+    );
+    assert_eq!(
+        listed_transfers(service, company, &everything).await.len(),
+        2
+    );
+    assert_eq!(store.history(company, first.id()).await.unwrap().len(), 2);
+    assert_eq!(
+        service
+            .reverse(company, &ana, first.id())
+            .await
+            .unwrap_err(),
+        ApplicationError::TransferNotFound
+    );
+    assert_eq!(store.history(company, first.id()).await.unwrap().len(), 2);
+    assert_eq!(store.history(company, second.id()).await.unwrap().len(), 1);
+}
+
+fn balance_of(balances: &Balances, account: BankAccountId) -> &AccountBalance {
+    balances
+        .accounts
+        .iter()
+        .find(|item| item.account.id() == account)
+        .expect("the account is listed")
+}
+
+/// Received, paid, transfers in, transfers out and balance, as text.
+fn figures(item: &AccountBalance) -> [String; 5] {
+    [
+        item.received.to_string(),
+        item.paid.to_string(),
+        item.transfers_in.to_string(),
+        item.transfers_out.to_string(),
+        item.balance.to_string(),
+    ]
+}
+
+/// The balance of an account on a day is its opening balance plus what settlements and transfers
+/// moved from the opening day through that day, to the cent; what is reversed does not count; before
+/// the opening day it is 0; every account is listed, closed ones too; the total adds them up; and
+/// another company's accounts and movements never mix in.
+#[allow(clippy::too_many_arguments)]
+pub async fn adds_balances_up<A, E, T, O, F>(
+    balances: &BalanceService<A, E, T, O>,
+    entries: &FinancialEntryService<E, F>,
+    transfers: &TransferService<T, F>,
+    openings: &O,
+    company: CompanyId,
+    other_company: CompanyId,
+    seed: &EntrySeed,
+) where
+    A: BankAccountRepository,
+    E: FinancialEntryRepository,
+    T: TransferRepository,
+    O: OpeningRepository,
+    F: EntryReferences,
+{
+    let ana = actor();
+    let (main, reserve, closed) = (
+        seed.bank_account,
+        seed.other_bank_account,
+        seed.inactive_bank_account,
+    );
+    let day = |text: &str| CalendarDate::parse(text).unwrap();
+
+    // With no opening balance and no movement every account is 0, closed ones included.
+    let empty = balances.balances(company, day("2026-12-31")).await.unwrap();
+    assert_eq!(empty.accounts.len(), 3);
+    assert_eq!(empty.total.to_string(), "0");
+
+    // The opening balance: replaced as a whole, nothing recorded when it does not change, refused
+    // when it is not cents, for an account that is not the company's, or a day that is not one.
+    let opening = balances
+        .set_opening(company, &ana, main, "1000", "2026-12-01")
+        .await
+        .unwrap();
+    assert_eq!(opening.balance().to_string(), "1000");
+    assert_eq!(openings.history(company, main).await.unwrap().len(), 1);
+    balances
+        .set_opening(company, &ana, main, "1000.00", "2026-12-01")
+        .await
+        .unwrap();
+    assert_eq!(openings.history(company, main).await.unwrap().len(), 1);
+    assert_eq!(
+        balances
+            .set_opening(company, &ana, main, "1.001", "2026-12-01")
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::InvalidOpeningBalance)
+    );
+    assert_eq!(
+        balances
+            .set_opening(company, &ana, main, "1", "2026-13-01")
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::InvalidDate("on"))
+    );
+    assert_eq!(
+        balances
+            .set_opening(other_company, &ana, main, "1", "2026-12-01")
+            .await
+            .unwrap_err(),
+        ApplicationError::BankAccountNotFound
+    );
+    assert_eq!(openings.history(company, main).await.unwrap().len(), 1);
+    assert_eq!(openings.find(other_company, main).await.unwrap(), None);
+    assert!(
+        openings
+            .list_by_company(other_company)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        openings.list_by_company(company).await.unwrap(),
+        vec![opening.clone()]
+    );
+
+    // A receivable settled with interest and discount, a payable, and a receivable settled before
+    // the opening day, all in the main account.
+    let sale = entries
+        .register(
+            company,
+            &ana,
+            entry_draft(seed, "Venda", "2026-12-01", &[("2026-12-10", "100")]),
+        )
+        .await
+        .unwrap();
+    entries
+        .settle(
+            company,
+            &ana,
+            sale.id(),
+            SettlementDraft {
+                interest: Some("5".into()),
+                discount: Some("2".into()),
+                ..settlement_draft(seed, 1, "100")
+            },
+        )
+        .await
+        .unwrap();
+    let bill = entries
+        .register(
+            company,
+            &ana,
+            FinancialEntryDraft {
+                kind: EntryKind::Payable,
+                ..entry_draft(seed, "Aluguel", "2026-12-01", &[("2026-12-12", "30")])
+            },
+        )
+        .await
+        .unwrap();
+    let paid = entries
+        .settle(
+            company,
+            &ana,
+            bill.id(),
+            SettlementDraft {
+                settled_on: "2026-12-12".into(),
+                ..settlement_draft(seed, 1, "30")
+            },
+        )
+        .await
+        .unwrap();
+    let early = entries
+        .register(
+            company,
+            &ana,
+            entry_draft(seed, "Venda antiga", "2026-11-20", &[("2026-11-30", "10")]),
+        )
+        .await
+        .unwrap();
+    entries
+        .settle(
+            company,
+            &ana,
+            early.id(),
+            SettlementDraft {
+                settled_on: "2026-11-30".into(),
+                ..settlement_draft(seed, 1, "10")
+            },
+        )
+        .await
+        .unwrap();
+
+    // Transfers both ways, and one that is reversed.
+    transfers
+        .register(
+            company,
+            &ana,
+            transfer_draft(main, reserve, "200", "2026-12-15"),
+        )
+        .await
+        .unwrap();
+    transfers
+        .register(
+            company,
+            &ana,
+            transfer_draft(reserve, main, "50.25", "2026-12-16"),
+        )
+        .await
+        .unwrap();
+    let undone = transfers
+        .register(
+            company,
+            &ana,
+            transfer_draft(main, reserve, "25", "2026-12-14"),
+        )
+        .await
+        .unwrap();
+    transfers.reverse(company, &ana, undone.id()).await.unwrap();
+
+    // Main: 1000 + (100 + 5 - 2) - 30 - 200 + 50.25; the settlement before its opening day and the
+    // reversed transfer do not count. Reserve has no opening balance, so it counts from the start.
+    let at_year_end = balances.balances(company, day("2026-12-31")).await.unwrap();
+    assert_eq!(
+        figures(balance_of(&at_year_end, main)),
+        ["103", "30", "50.25", "200", "923.25"]
+    );
+    assert_eq!(
+        balance_of(&at_year_end, main).opening.as_ref(),
+        Some(&opening)
+    );
+    assert_eq!(
+        figures(balance_of(&at_year_end, reserve)),
+        ["0", "0", "200", "50.25", "149.75"]
+    );
+    assert_eq!(
+        figures(balance_of(&at_year_end, closed)),
+        ["0", "0", "0", "0", "0"]
+    );
+    assert_eq!(at_year_end.total.to_string(), "1073");
+
+    // Earlier days: the day itself counts, and the opening day counts from its start.
+    let on_the_twelfth = balances.balances(company, day("2026-12-12")).await.unwrap();
+    assert_eq!(
+        figures(balance_of(&on_the_twelfth, main)),
+        ["103", "30", "0", "0", "1073"]
+    );
+    let on_the_opening_day = balances.balances(company, day("2026-12-01")).await.unwrap();
+    assert_eq!(
+        balance_of(&on_the_opening_day, main).balance.to_string(),
+        "1000"
+    );
+    let before_the_opening = balances.balances(company, day("2026-11-30")).await.unwrap();
+    assert_eq!(
+        figures(balance_of(&before_the_opening, main)),
+        ["0", "0", "0", "0", "0"]
+    );
+
+    // Another company sees none of it.
+    let alien = balances
+        .balances(other_company, day("2026-12-31"))
+        .await
+        .unwrap();
+    assert!(alien.accounts.is_empty());
+    assert_eq!(alien.total.to_string(), "0");
+
+    // Reversing a settlement takes it out of the balance; a new opening replaces the old one.
+    entries
+        .reverse(company, &ana, bill.id(), paid.id())
+        .await
+        .unwrap();
+    let after_reversal = balances.balances(company, day("2026-12-31")).await.unwrap();
+    assert_eq!(
+        balance_of(&after_reversal, main).balance.to_string(),
+        "953.25"
+    );
+    balances
+        .set_opening(company, &ana, main, "500", "2026-12-01")
+        .await
+        .unwrap();
+    assert_eq!(openings.history(company, main).await.unwrap().len(), 2);
+    let replaced = balances.balances(company, day("2026-12-31")).await.unwrap();
+    assert_eq!(balance_of(&replaced, main).balance.to_string(), "453.25");
+    assert_eq!(openings.list_by_company(company).await.unwrap().len(), 1);
+
+    // A negative opening balance is allowed: an overdraft.
+    balances
+        .set_opening(company, &ana, reserve, "-20.5", "2026-01-01")
+        .await
+        .unwrap();
+    let overdrawn = balances.balances(company, day("2026-12-31")).await.unwrap();
+    assert_eq!(
+        balance_of(&overdrawn, reserve).balance.to_string(),
+        "129.25"
+    );
+    let earlier = balances.balances(company, day("2026-06-30")).await.unwrap();
+    assert_eq!(balance_of(&earlier, reserve).balance.to_string(), "-20.5");
 }

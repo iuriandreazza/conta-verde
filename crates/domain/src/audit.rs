@@ -1,8 +1,8 @@
 use uuid::Uuid;
 
 use crate::{
-    BankAccount, Category, CompanyId, CostCenter, DocumentCheck, FinancialEntry, Party,
-    PaymentMethod, PaymentTerm, Product, Settlement, Tag, UserId,
+    AccountOpening, BankAccount, Category, CompanyId, CostCenter, DocumentCheck, FinancialEntry,
+    Party, PaymentMethod, PaymentTerm, Product, Settlement, Tag, Transfer, UserId,
 };
 
 /// Who made a change. The name is a snapshot: history must keep reading the same after the user is
@@ -24,6 +24,9 @@ pub enum AuditEntity {
     PaymentTerm,
     FinancialEntry,
     Settlement,
+    Transfer,
+    /// One per bank account: the audit id is the account's.
+    AccountOpening,
 }
 
 impl AuditEntity {
@@ -38,6 +41,8 @@ impl AuditEntity {
             Self::PaymentTerm => "payment_term",
             Self::FinancialEntry => "financial_entry",
             Self::Settlement => "settlement",
+            Self::Transfer => "transfer",
+            Self::AccountOpening => "account_opening",
         }
     }
 }
@@ -201,6 +206,34 @@ impl Audited for Settlement {
 
     fn audit_id(&self) -> Uuid {
         self.id().as_uuid()
+    }
+}
+
+impl Audited for Transfer {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::Transfer
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.id().as_uuid()
+    }
+}
+
+impl Audited for AccountOpening {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::AccountOpening
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.account_id().as_uuid()
     }
 }
 
@@ -504,6 +537,43 @@ pub fn settlement_creation_changes(settlement: &Settlement) -> Vec<FieldChange> 
 /// What a reversal changes: only the `reversed` flag.
 pub fn settlement_changes(before: &Settlement, after: &Settlement) -> Vec<FieldChange> {
     changes_between(settlement_fields(before), settlement_fields(after))
+}
+
+fn transfer_fields(transfer: &Transfer) -> Fields {
+    vec![
+        ("from", Some(transfer.from().as_uuid().to_string())),
+        ("to", Some(transfer.to().as_uuid().to_string())),
+        ("amount", Some(transfer.amount().to_string())),
+        ("occurred_on", Some(transfer.occurred_on().to_string())),
+        ("note", transfer.note().map(str::to_owned)),
+        ("reversed", Some(transfer.is_reversed().to_string())),
+    ]
+}
+
+/// Every field a new transfer has set.
+pub fn transfer_creation_changes(transfer: &Transfer) -> Vec<FieldChange> {
+    creation_from(transfer_fields(transfer))
+}
+
+/// What a reversal changes: only the `reversed` flag.
+pub fn transfer_changes(before: &Transfer, after: &Transfer) -> Vec<FieldChange> {
+    changes_between(transfer_fields(before), transfer_fields(after))
+}
+
+fn opening_fields(opening: &AccountOpening) -> Fields {
+    vec![
+        ("balance", Some(opening.balance().to_string())),
+        ("on", Some(opening.on().to_string())),
+    ]
+}
+
+/// Every field a first opening balance has set.
+pub fn opening_creation_changes(opening: &AccountOpening) -> Vec<FieldChange> {
+    creation_from(opening_fields(opening))
+}
+
+pub fn opening_changes(before: &AccountOpening, after: &AccountOpening) -> Vec<FieldChange> {
+    changes_between(opening_fields(before), opening_fields(after))
 }
 
 fn payment_term_fields(term: &PaymentTerm) -> Fields {

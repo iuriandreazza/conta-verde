@@ -46,7 +46,7 @@ register from the browser; no endpoint accepts a `company_id` the caller is not 
 
 - [ ] Financial entries (receivable/payable) with installments, due dates, category, cost center, party, attachments ([ADR 0029](adr/0029-financial-entries.md)) — **first slice done**: register, change and list entries with their installments and history, in the `finance` area; settlement, cancelling and attachments are next
 - [x] Settlement: full and partial, interest, fine and discount, settlement date and bank account ([ADR 0030](adr/0030-settlements.md)) — pay an installment from an account, never for more than is left, reverse a settlement; an entry with settlements keeps its installments and kind; the list says paid, partial, overdue or open
-- [ ] Transfers between accounts; opening balances; balance per account and consolidated
+- [x] Transfers between accounts; opening balances; balance per account and consolidated ([ADR 0031](adr/0031-transfers-and-balances.md)) — move money between two accounts and reverse it, set an account's opening balance (signed), read every account's balance on a day and the total; the bank accounts page shows today's balance
 - [ ] Recurring entries generated ahead by a scheduled job ([ADR 0009](adr/0009-postgres-only-background-jobs.md))
 - [ ] Cash flow: daily and monthly, realized and forecast, per account and consolidated
 - [ ] OFX import and reconciliation: match suggestions, create entry from statement line, ignore line ([ADR 0011](adr/0011-bank-data-ingestion.md))
