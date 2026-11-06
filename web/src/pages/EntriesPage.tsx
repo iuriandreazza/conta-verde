@@ -16,6 +16,7 @@ import { Button } from "../components/Button";
 import { EntryForm, type EntryTargets } from "../components/EntryForm";
 import { EntryHistory } from "../components/EntryHistory";
 import { ListRow } from "../components/ListRow";
+import { AttachmentsPanel } from "../components/AttachmentsPanel";
 import { SettlementPanel } from "../components/SettlementPanel";
 import { Notice } from "../components/Notice";
 import { PageHeader } from "../components/PageHeader";
@@ -24,6 +25,7 @@ import { BriefcaseBusinessIcon } from "../components/icons/briefcase-business";
 import { ChevronDownIcon } from "../components/icons/chevron-down";
 import { HistoryIcon } from "../components/icons/history";
 import { CircleDollarSignIcon } from "../components/icons/circle-dollar-sign";
+import { FileTextIcon } from "../components/icons/file-text";
 import { SquarePenIcon } from "../components/icons/square-pen";
 import { treeRows } from "../lib/categoryTree";
 import { formatMoney } from "../lib/decimal";
@@ -64,6 +66,7 @@ export function EntriesPage() {
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const [historyOpenFor, setHistoryOpenFor] = useState<string | null>(null);
   const [settlementsOpenFor, setSettlementsOpenFor] = useState<string | null>(null);
+  const [attachmentsOpenFor, setAttachmentsOpenFor] = useState<string | null>(null);
   const [banks, setBanks] = useState<BankAccount[]>([]);
   const [methods, setMethods] = useState<PaymentMethod[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -322,6 +325,20 @@ export function EntriesPage() {
                           </Button>
                           <Button
                             iconOnly
+                            icon={FileTextIcon}
+                            type="button"
+                            variant="ghost"
+                            aria-label={`Anexos de ${entry.description}`}
+                            aria-expanded={attachmentsOpenFor === entry.id}
+                            aria-controls={`attachments-${entry.id}`}
+                            onClick={() =>
+                              setAttachmentsOpenFor(attachmentsOpenFor === entry.id ? null : entry.id)
+                            }
+                          >
+                            Anexos
+                          </Button>
+                          <Button
+                            iconOnly
                             type="button"
                             variant="ghost"
                             aria-label={`Histórico de ${entry.description}`}
@@ -347,6 +364,13 @@ export function EntriesPage() {
                               canWrite={canWrite}
                               onChanged={() => void refresh(entry.id)}
                             />
+                          </td>
+                        </tr>
+                      )}
+                      {attachmentsOpenFor === entry.id && (
+                        <tr id={`attachments-${entry.id}`}>
+                          <td colSpan={5} role="region" aria-label={`Anexos de ${entry.description}`}>
+                            <AttachmentsPanel companyId={companyId} entryId={entry.id} canWrite={canWrite} />
                           </td>
                         </tr>
                       )}

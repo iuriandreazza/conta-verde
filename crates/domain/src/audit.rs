@@ -1,9 +1,9 @@
 use uuid::Uuid;
 
 use crate::{
-    AccountOpening, BankAccount, Category, CompanyId, CostCenter, DocumentCheck, FinancialEntry,
-    LineMatch, Party, PaymentMethod, PaymentTerm, Product, Recurrence, Settlement, StatementLine,
-    Tag, Transfer, UserId,
+    AccountOpening, Attachment, BankAccount, Category, CompanyId, CostCenter, DocumentCheck,
+    FinancialEntry, LineMatch, Party, PaymentMethod, PaymentTerm, Product, Recurrence, Settlement,
+    StatementLine, Tag, Transfer, UserId,
 };
 
 /// Who made a change. The name is a snapshot: history must keep reading the same after the user is
@@ -30,6 +30,7 @@ pub enum AuditEntity {
     AccountOpening,
     Recurrence,
     StatementLine,
+    Attachment,
 }
 
 impl AuditEntity {
@@ -45,6 +46,7 @@ impl AuditEntity {
             Self::FinancialEntry => "financial_entry",
             Self::Recurrence => "recurrence",
             Self::StatementLine => "statement_line",
+            Self::Attachment => "attachment",
             Self::Settlement => "settlement",
             Self::Transfer => "transfer",
             Self::AccountOpening => "account_opening",
@@ -231,6 +233,20 @@ impl Audited for StatementLine {
 impl Audited for Settlement {
     fn audit_entity(&self) -> AuditEntity {
         AuditEntity::Settlement
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.id().as_uuid()
+    }
+}
+
+impl Audited for Attachment {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::Attachment
     }
 
     fn audit_company(&self) -> CompanyId {
@@ -636,6 +652,29 @@ pub fn settlement_creation_changes(settlement: &Settlement) -> Vec<FieldChange> 
 /// What a reversal changes: only the `reversed` flag.
 pub fn settlement_changes(before: &Settlement, after: &Settlement) -> Vec<FieldChange> {
     changes_between(settlement_fields(before), settlement_fields(after))
+}
+
+fn attachment_fields(attachment: &Attachment) -> Fields {
+    vec![
+        (
+            "entry_id",
+            Some(attachment.entry_id().as_uuid().to_string()),
+        ),
+        ("file_name", Some(attachment.file_name().to_owned())),
+        ("content_type", Some(attachment.content_type().to_owned())),
+        ("size", Some(attachment.size().to_string())),
+        ("removed", Some(attachment.is_removed().to_string())),
+    ]
+}
+
+/// Every field a new attachment has set.
+pub fn attachment_creation_changes(attachment: &Attachment) -> Vec<FieldChange> {
+    creation_from(attachment_fields(attachment))
+}
+
+/// What a removal changes: only the `removed` flag.
+pub fn attachment_changes(before: &Attachment, after: &Attachment) -> Vec<FieldChange> {
+    changes_between(attachment_fields(before), attachment_fields(after))
 }
 
 fn transfer_fields(transfer: &Transfer) -> Fields {

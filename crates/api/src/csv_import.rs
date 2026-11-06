@@ -31,16 +31,32 @@ impl ImportQuery {
 /// The file of the request, at most [`MAX_FILE_BYTES`]. A `Content-Length` past it is refused before
 /// the body is read, so a browser that is still uploading gets a clean 413, not a dropped line.
 pub(crate) async fn read_file(headers: &HeaderMap, body: Body) -> Result<Bytes, ApiError> {
+    read_body(
+        headers,
+        body,
+        MAX_FILE_BYTES,
+        "the file is larger than 1 MiB: split it",
+    )
+    .await
+}
+
+/// The body of the request, at most `max` bytes; `too_large` is what a refusal says.
+pub(crate) async fn read_body(
+    headers: &HeaderMap,
+    body: Body,
+    max: usize,
+    too_large: &'static str,
+) -> Result<Bytes, ApiError> {
     let announced = headers
         .get(header::CONTENT_LENGTH)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<usize>().ok());
-    if announced.is_some_and(|length| length > MAX_FILE_BYTES) {
-        return Err(ApiError::FileTooLarge);
+    if announced.is_some_and(|length| length > max) {
+        return Err(ApiError::FileTooLarge(too_large));
     }
-    axum::body::to_bytes(body, MAX_FILE_BYTES)
+    axum::body::to_bytes(body, max)
         .await
-        .map_err(|_| ApiError::FileTooLarge)
+        .map_err(|_| ApiError::FileTooLarge(too_large))
 }
 
 /// Why a file as a whole is refused. Each message says what to change.

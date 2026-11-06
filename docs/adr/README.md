@@ -51,6 +51,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0033](0033-recurring-entries.md) | Recurring entries generated ahead by a scheduled job | accepted | 2 |
 | [0034](0034-statement-import-and-reconciliation.md) | Statement import (OFX) and reconciliation | accepted | 2 |
 | [0035](0035-entry-reports.md) | Reports of the entries: by group and the overdue list | accepted | 2 |
+| [0036](0036-entry-attachments.md) | Files attached to entries, and where their bytes are kept | accepted | 2 |
 
 ## Template
 

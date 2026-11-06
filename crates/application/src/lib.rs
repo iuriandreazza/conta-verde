@@ -1,7 +1,10 @@
+mod attachment_repository;
+mod attachment_service;
 mod audit;
 mod auth_service;
 mod bank_account_repository;
 mod bank_account_service;
+mod blob_store;
 mod cash_flow;
 mod category_repository;
 mod category_service;
@@ -36,10 +39,13 @@ mod statement_line_repository;
 mod transfer_repository;
 mod transfer_service;
 
+pub use attachment_repository::AttachmentRepository;
+pub use attachment_service::{AttachedFile, AttachmentService};
 pub use audit::ensure_audit_describes;
 pub use auth_service::{AuthService, Member, Profile, SignedIn};
 pub use bank_account_repository::{BankAccountQuery, BankAccountRepository};
 pub use bank_account_service::{BankAccountPage, BankAccountService};
+pub use blob_store::BlobStore;
 pub use cash_flow::{CashFlow, CashFlowPeriod, CashFlowQuery, Granularity, PastDue};
 pub use category_repository::{CategoryRepository, MAX_CATEGORIES};
 pub use category_service::{CategoryService, NewCategory};

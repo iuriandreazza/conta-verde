@@ -3423,6 +3423,157 @@ describe("financial entries", () => {
     });
   });
 
+  describe("attachments", () => {
+    const invoice = { id: "a1", entry_id: "e1", file_name: "Nota 123.pdf", content_type: "application/pdf", size: 2560 };
+    const receipt = { id: "a2", entry_id: "e1", file_name: "Recibo.png", content_type: "image/png", size: 13 };
+
+    const open = async () => {
+      await userEvent.click(await screen.findByRole("button", { name: "Anexos de Venda parcelada" }));
+      return within(await screen.findByRole("region", { name: "Anexos de Venda parcelada" }));
+    };
+    const fileInput = (panel: ReturnType<typeof within>) => panel.getByLabelText("Arquivo", { selector: "input" });
+
+    it("lists the files with their size and a link that downloads each", async () => {
+      mockApi(answer([entry], (url) => (url.endsWith("/entries/e1/attachments") ? { status: 200, body: { items: [invoice, receipt] } } : undefined)));
+      renderAt("/companies/c1/entries");
+      const panel = await open();
+
+      const link = await panel.findByRole("link", { name: "Nota 123.pdf" });
+      expect(link).toHaveAttribute("href", "/api/companies/c1/entries/e1/attachments/a1");
+      expect(link).toHaveAttribute("download");
+      expect(link.closest("li")).toHaveTextContent("2,5 KB");
+      expect(panel.getByRole("link", { name: "Recibo.png" }).closest("li")).toHaveTextContent("13 B");
+    });
+
+    it("says when nothing is attached", async () => {
+      mockApi(answer([entry], (url) => (url.endsWith("/attachments") ? { status: 200, body: { items: [] } } : undefined)));
+      renderAt("/companies/c1/entries");
+      const panel = await open();
+      expect(await panel.findByText("Nenhum arquivo anexado.")).toBeInTheDocument();
+    });
+
+    it("sends the chosen file as the body, with its own type and its name in the query, and lists it", async () => {
+      let attached = false;
+      const fetchMock = mockApi(
+        answer([entry], (url, init) => {
+          if (!url.includes("/entries/e1/attachments")) return undefined;
+          if (init?.method === "POST") {
+            attached = true;
+            return { status: 201, body: invoice };
+          }
+          return { status: 200, body: { items: attached ? [invoice] : [] } };
+        }),
+      );
+      renderAt("/companies/c1/entries");
+      const panel = await open();
+      await panel.findByText("Nenhum arquivo anexado.");
+
+      const file = new File(["%PDF-1.4"], "Nota 123 ç.pdf", { type: "application/pdf" });
+      await userEvent.upload(fileInput(panel), file);
+
+      await waitFor(() => expect(sent(fetchMock, "POST")).toHaveLength(1));
+      const [url, init] = sent(fetchMock, "POST")[0];
+      expect(String(url)).toBe("/api/companies/c1/entries/e1/attachments?name=Nota%20123%20%C3%A7.pdf");
+      expect(init?.body).toBe(file);
+      expect(new Headers(init?.headers).get("Content-Type")).toBe("application/pdf");
+      expect(await panel.findByRole("link", { name: "Nota 123.pdf" })).toBeInTheDocument();
+      expect(await panel.findByText("Nota 123.pdf anexado.")).toBeInTheDocument();
+    });
+
+    it("will not send a file that is empty or past the limit, and says which", async () => {
+      const fetchMock = mockApi(answer([entry], (url) => (url.endsWith("/attachments") ? { status: 200, body: { items: [] } } : undefined)));
+      renderAt("/companies/c1/entries");
+      const panel = await open();
+      await panel.findByText("Nenhum arquivo anexado.");
+
+      await userEvent.upload(fileInput(panel), new File([], "vazio.pdf", { type: "application/pdf" }));
+      expect(await panel.findByRole("alert")).toHaveTextContent("vazio.pdf está vazio.");
+      await userEvent.upload(fileInput(panel), new File([new Uint8Array(10 * 1024 * 1024 + 1)], "grande.pdf", { type: "application/pdf" }));
+      expect(await panel.findByRole("alert")).toHaveTextContent("grande.pdf passa de 10 MB");
+      expect(sent(fetchMock, "POST")).toHaveLength(0);
+    });
+
+    it("says what the API refused", async () => {
+      mockApi(
+        answer([entry], (url, init) => {
+          if (!url.includes("/attachments")) return undefined;
+          return init?.method === "POST"
+            ? { status: 422, body: { error: "file type must be PDF, PNG, JPEG, WebP, plain text, CSV or XML" } }
+            : { status: 200, body: { items: [] } };
+        }),
+      );
+      renderAt("/companies/c1/entries");
+      const panel = await open();
+      await panel.findByText("Nenhum arquivo anexado.");
+      await userEvent.upload(fileInput(panel), new File(["x"], "a.xml", { type: "application/xml" }));
+
+      expect(await panel.findByRole("alert")).toHaveTextContent("file type must be");
+    });
+
+    it("removes a file and lists what is left", async () => {
+      let removed = false;
+      const fetchMock = mockApi(
+        answer([entry], (url, init) => {
+          if (url.endsWith("/attachments/a1") && init?.method === "DELETE") {
+            removed = true;
+            return { status: 204 };
+          }
+          return url.endsWith("/attachments") ? { status: 200, body: { items: removed ? [receipt] : [invoice, receipt] } } : undefined;
+        }),
+      );
+      renderAt("/companies/c1/entries");
+      const panel = await open();
+      await userEvent.click(await panel.findByRole("button", { name: "Remover Nota 123.pdf" }));
+
+      await waitFor(() => expect(sent(fetchMock, "DELETE")).toHaveLength(1));
+      expect(String(sent(fetchMock, "DELETE")[0][0])).toBe("/api/companies/c1/entries/e1/attachments/a1");
+      await waitFor(() => expect(panel.queryByRole("link", { name: "Nota 123.pdf" })).not.toBeInTheDocument());
+      expect(panel.getByRole("link", { name: "Recibo.png" })).toBeInTheDocument();
+    });
+
+    it("says why a removal failed even though the list is read again", async () => {
+      mockApi(
+        answer([entry], (url, init) => {
+          if (url.endsWith("/attachments/a1") && init?.method === "DELETE") return { status: 404, body: { error: "attachment not found" } };
+          return url.endsWith("/attachments") ? { status: 200, body: { items: [invoice] } } : undefined;
+        }),
+      );
+      renderAt("/companies/c1/entries");
+      const panel = await open();
+      await userEvent.click(await panel.findByRole("button", { name: "Remover Nota 123.pdf" }));
+
+      expect(await panel.findByRole("alert")).toHaveTextContent("attachment not found");
+    });
+
+    it("lets a role that only reads download the files, not attach or remove", async () => {
+      const reader: Profile = {
+        ...profile,
+        companies: [{ id: "c1", name: "Padaria", role: "viewer", permissions: { parties: "read", products: "read", finance: "read" } }],
+      };
+      mockApi((url, init) =>
+        url === "/api/auth/me"
+          ? { status: 200, body: reader }
+          : answer([entry], (u) => (u.endsWith("/attachments") ? { status: 200, body: { items: [invoice] } } : undefined))(url, init),
+      );
+      renderAt("/companies/c1/entries");
+      const panel = await open();
+
+      expect(await panel.findByRole("link", { name: "Nota 123.pdf" })).toBeInTheDocument();
+      expect(panel.queryByRole("button", { name: "Anexar arquivo" })).not.toBeInTheDocument();
+      expect(panel.queryByRole("button", { name: /Remover/ })).not.toBeInTheDocument();
+    });
+
+    it("stops offering to attach once the entry holds twenty files", async () => {
+      const twenty = Array.from({ length: 20 }, (_, index) => ({ ...invoice, id: `a${index}`, file_name: `Arquivo ${index}.pdf` }));
+      mockApi(answer([entry], (url) => (url.endsWith("/attachments") ? { status: 200, body: { items: twenty } } : undefined)));
+      renderAt("/companies/c1/entries");
+      const panel = await open();
+
+      expect(await panel.findByRole("button", { name: "Anexar arquivo" })).toBeDisabled();
+      expect(panel.getByText(/já tem 20 arquivos/)).toBeInTheDocument();
+    });
+  });
+
   it("offers every party, not only the first page of them, to point an entry at", async () => {
     mockApi(
       answer([], (url) => {

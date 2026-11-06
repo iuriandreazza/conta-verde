@@ -1,3 +1,5 @@
+import { contentTypeOf } from "./lib/attachments";
+
 export interface User {
   id: string;
   name: string;
@@ -432,6 +434,16 @@ export interface SettlementInput {
   discount?: string;
   bank_account_id: string;
   payment_method_id?: string;
+}
+
+/** A file attached to an entry (ADR 0036). */
+export interface Attachment {
+  id: string;
+  entry_id: string;
+  file_name: string;
+  content_type: string;
+  /** In bytes. */
+  size: number;
 }
 
 /** Money moved from one account of the company to another (ADR 0031). */
@@ -991,6 +1003,25 @@ export const api = {
   /** Undoes a settlement: it stops counting and stays listed as reversed. */
   reverseSettlement: (companyId: string, entryId: string, settlementId: string) =>
     request<void>(`/companies/${companyId}/entries/${entryId}/settlements/${settlementId}`, {
+      method: "DELETE",
+    }),
+  listAttachments: (companyId: string, entryId: string) =>
+    request<{ items: Attachment[] }>(`/companies/${companyId}/entries/${entryId}/attachments`),
+  /** The file travels as the body of the request, with its own type; its name is in the query. */
+  attachFile: (companyId: string, entryId: string, file: File) =>
+    request<Attachment>(
+      `/companies/${companyId}/entries/${entryId}/attachments?name=${encodeURIComponent(file.name)}`,
+      {
+        method: "POST",
+        body: file,
+        headers: { "Content-Type": contentTypeOf(file) },
+      },
+    ),
+  /** Where the file is downloaded from: the session cookie goes with a plain link. */
+  attachmentUrl: (companyId: string, entryId: string, attachmentId: string) =>
+    `/api/companies/${companyId}/entries/${entryId}/attachments/${attachmentId}`,
+  removeAttachment: (companyId: string, entryId: string, attachmentId: string) =>
+    request<void>(`/companies/${companyId}/entries/${entryId}/attachments/${attachmentId}`, {
       method: "DELETE",
     }),
   listRecurrences: (

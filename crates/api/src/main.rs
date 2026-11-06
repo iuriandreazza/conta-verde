@@ -2,19 +2,20 @@ use std::time::Duration;
 
 use conta_verde_api::{ApiConfig, Ports, Services, router};
 use conta_verde_application::{
-    AuthService, BalanceService, BankAccountService, CategoryService, CostCenterService,
-    FinancialEntryService, MemberService, PartyService, PaymentMethodService, PaymentTermService,
-    PostalCodeService, ProductService, ReconciliationService, RecurrenceService, TransferService,
+    AttachmentService, AuthService, BalanceService, BankAccountService, CategoryService,
+    CostCenterService, FinancialEntryService, MemberService, PartyService, PaymentMethodService,
+    PaymentTermService, PostalCodeService, ProductService, ReconciliationService,
+    RecurrenceService, TransferService,
 };
 use conta_verde_application::{EmailError, EmailMessage, EmailSender};
 use conta_verde_infrastructure::{
     Argon2SecretService, BrasilApiCnpjRegistry, BrasilApiPostalCodeDirectory, CachedCnpjRegistry,
-    LogEmailSender, PostgresBankAccountRepository, PostgresCategoryRepository,
-    PostgresCostCenterRepository, PostgresFinancialEntryRepository, PostgresIdentityRepository,
-    PostgresInvitationRepository, PostgresOpeningRepository, PostgresPartyRepository,
-    PostgresPaymentMethodRepository, PostgresPaymentTermRepository, PostgresProductRepository,
-    PostgresRecurrenceRepository, PostgresStatementLineRepository, PostgresTransferRepository,
-    RegisterReferences, SmtpEmailSender, connect_and_migrate,
+    LocalBlobStore, LogEmailSender, PostgresAttachmentRepository, PostgresBankAccountRepository,
+    PostgresCategoryRepository, PostgresCostCenterRepository, PostgresFinancialEntryRepository,
+    PostgresIdentityRepository, PostgresInvitationRepository, PostgresOpeningRepository,
+    PostgresPartyRepository, PostgresPaymentMethodRepository, PostgresPaymentTermRepository,
+    PostgresProductRepository, PostgresRecurrenceRepository, PostgresStatementLineRepository,
+    PostgresTransferRepository, RegisterReferences, SmtpEmailSender, connect_and_migrate,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -40,6 +41,8 @@ impl Ports for PostgresPorts {
         PostgresBankAccountRepository,
         PostgresPaymentMethodRepository,
     >;
+    type Attachments = PostgresAttachmentRepository;
+    type Blobs = LocalBlobStore;
     type Transfers = PostgresTransferRepository;
     type Openings = PostgresOpeningRepository;
     type Recurrences = PostgresRecurrenceRepository;
@@ -91,6 +94,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let entries = FinancialEntryService::new(
         PostgresFinancialEntryRepository::new(pool.clone()),
         references(),
+    );
+    let attachments = AttachmentService::new(
+        PostgresAttachmentRepository::new(pool.clone()),
+        LocalBlobStore::new(attachments_dir_from_env()),
+        PostgresFinancialEntryRepository::new(pool.clone()),
     );
     let transfers =
         TransferService::new(PostgresTransferRepository::new(pool.clone()), references());
@@ -156,6 +164,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 payment_methods,
                 payment_terms,
                 entries,
+                attachments,
                 transfers,
                 recurrences,
                 reconciliation,
@@ -170,6 +179,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     .with_graceful_shutdown(shutdown_signal())
     .await?;
     Ok(())
+}
+
+/// Where attachments are kept on disk (ADR 0036): `ATTACHMENTS_DIR`, or `./data/attachments`. It holds
+/// the only copy of what people attach, so it belongs in the installation's backups.
+fn attachments_dir_from_env() -> String {
+    std::env::var("ATTACHMENTS_DIR").unwrap_or_else(|_| {
+        tracing::warn!("ATTACHMENTS_DIR is not set: attachments are kept in ./data/attachments");
+        "./data/attachments".to_owned()
+    })
 }
 
 /// The scheduled job of ADR 0033: once an hour, generates the recurring entries that fall due in the

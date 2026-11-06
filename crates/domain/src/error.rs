@@ -45,6 +45,9 @@ pub enum DomainError {
     InvalidTransferAmount,
     TransferToTheSameAccount,
     InvalidNote,
+    InvalidAttachmentName,
+    UnsupportedAttachmentType,
+    InvalidAttachmentSize,
     InvalidOpeningBalance,
     InvalidStatementAmount,
     InvalidStatementDescription,
@@ -173,6 +176,13 @@ impl fmt::Display for DomainError {
             Self::LineIsNotPending => f.write_str("the statement line is not pending"),
             Self::LineIsNotMatched => f.write_str("the statement line is not matched"),
             Self::LineIsNotIgnored => f.write_str("the statement line is not ignored"),
+            Self::InvalidAttachmentName => f.write_str(
+                "file name must be one line of at most 200 characters, with no slash or control characters",
+            ),
+            Self::UnsupportedAttachmentType => f.write_str(
+                "file type must be PDF, PNG, JPEG, WebP, plain text, CSV or XML",
+            ),
+            Self::InvalidAttachmentSize => f.write_str("file must have from 1 byte to 10 MB"),
             Self::InvalidOpeningBalance => f.write_str(
                 "balance must be a number in cents (at most two decimals), negative if the account starts in debt",
             ),

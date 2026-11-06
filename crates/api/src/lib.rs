@@ -1,4 +1,5 @@
 mod access;
+mod attachments;
 mod auth;
 mod bank_accounts;
 mod cash_flow;
@@ -31,14 +32,15 @@ use std::sync::Arc;
 use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
 use conta_verde_application::{
-    AuthService, BalanceService, BankAccountRepository, BankAccountService, CategoryRepository,
-    CategoryService, CnpjRegistry, CostCenterRepository, CostCenterService, EmailSender,
-    EntryReferences, FinancialEntryRepository, FinancialEntryService, IdentityRepository,
-    InvitationRepository, MemberService, OpeningRepository, PartyRepository, PartyService,
-    PaymentMethodRepository, PaymentMethodService, PaymentTermRepository, PaymentTermService,
-    PostalCodeDirectory, PostalCodeService, ProductRepository, ProductService,
-    ReconciliationService, RecurrenceRepository, RecurrenceService, SecretService,
-    StatementLineRepository, TransferRepository, TransferService,
+    AttachmentRepository, AttachmentService, AuthService, BalanceService, BankAccountRepository,
+    BankAccountService, BlobStore, CategoryRepository, CategoryService, CnpjRegistry,
+    CostCenterRepository, CostCenterService, EmailSender, EntryReferences,
+    FinancialEntryRepository, FinancialEntryService, IdentityRepository, InvitationRepository,
+    MemberService, OpeningRepository, PartyRepository, PartyService, PaymentMethodRepository,
+    PaymentMethodService, PaymentTermRepository, PaymentTermService, PostalCodeDirectory,
+    PostalCodeService, ProductRepository, ProductService, ReconciliationService,
+    RecurrenceRepository, RecurrenceService, SecretService, StatementLineRepository,
+    TransferRepository, TransferService,
 };
 use serde::Serialize;
 
@@ -65,6 +67,8 @@ pub trait Ports: 'static {
     type PaymentTerms: PaymentTermRepository + 'static;
     type Entries: FinancialEntryRepository + 'static;
     type EntryReferences: EntryReferences + 'static;
+    type Attachments: AttachmentRepository + 'static;
+    type Blobs: BlobStore + 'static;
     type Transfers: TransferRepository + 'static;
     type Openings: OpeningRepository + 'static;
     type Recurrences: RecurrenceRepository + 'static;
@@ -84,6 +88,7 @@ pub struct Services<X: Ports> {
     pub payment_methods: PaymentMethodService<X::PaymentMethods>,
     pub payment_terms: PaymentTermService<X::PaymentTerms>,
     pub entries: FinancialEntryService<X::Entries, X::EntryReferences>,
+    pub attachments: AttachmentService<X::Attachments, X::Blobs, X::Entries>,
     pub transfers: TransferService<X::Transfers, X::EntryReferences>,
     pub recurrences: RecurrenceService<X::Recurrences, X::Entries, X::EntryReferences>,
     pub reconciliation:
@@ -103,6 +108,7 @@ pub(crate) struct AppState<X: Ports> {
     payment_methods: PaymentMethodService<X::PaymentMethods>,
     payment_terms: PaymentTermService<X::PaymentTerms>,
     entries: FinancialEntryService<X::Entries, X::EntryReferences>,
+    attachments: AttachmentService<X::Attachments, X::Blobs, X::Entries>,
     transfers: TransferService<X::Transfers, X::EntryReferences>,
     recurrences: RecurrenceService<X::Recurrences, X::Entries, X::EntryReferences>,
     reconciliation:
@@ -127,6 +133,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         payment_methods: services.payment_methods,
         payment_terms: services.payment_terms,
         entries: services.entries,
+        attachments: services.attachments,
         transfers: services.transfers,
         recurrences: services.recurrences,
         reconciliation: services.reconciliation,
@@ -310,6 +317,14 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
             get(reports::overdue_report::<X>),
         )
         .route(
+            "/companies/{company_id}/entries/{entry_id}/attachments",
+            get(attachments::list_attachments::<X>).post(attachments::attach::<X>),
+        )
+        .route(
+            "/companies/{company_id}/entries/{entry_id}/attachments/{attachment_id}",
+            get(attachments::download_attachment::<X>).delete(attachments::remove_attachment::<X>),
+        )
+        .route(
             "/companies/{company_id}/recurrences",
             get(recurrences::list_recurrences::<X>).post(recurrences::register_recurrence::<X>),
         )
@@ -389,13 +404,13 @@ mod tests {
     use axum::http::{Request, StatusCode, header};
     use conta_verde_application::PostalCodeEntry;
     use conta_verde_infrastructure::{
-        Argon2SecretService, InMemoryBankAccountRepository, InMemoryCategoryRepository,
-        InMemoryCnpjRegistry, InMemoryCostCenterRepository, InMemoryEmailSender,
-        InMemoryFinancialEntryRepository, InMemoryIdentityRepository, InMemoryInvitationRepository,
-        InMemoryOpeningRepository, InMemoryPartyRepository, InMemoryPaymentMethodRepository,
-        InMemoryPaymentTermRepository, InMemoryPostalCodeDirectory, InMemoryProductRepository,
-        InMemoryRecurrenceRepository, InMemoryStatementLineRepository, InMemoryTransferRepository,
-        RegisterReferences,
+        Argon2SecretService, InMemoryAttachmentRepository, InMemoryBankAccountRepository,
+        InMemoryBlobStore, InMemoryCategoryRepository, InMemoryCnpjRegistry,
+        InMemoryCostCenterRepository, InMemoryEmailSender, InMemoryFinancialEntryRepository,
+        InMemoryIdentityRepository, InMemoryInvitationRepository, InMemoryOpeningRepository,
+        InMemoryPartyRepository, InMemoryPaymentMethodRepository, InMemoryPaymentTermRepository,
+        InMemoryPostalCodeDirectory, InMemoryProductRepository, InMemoryRecurrenceRepository,
+        InMemoryStatementLineRepository, InMemoryTransferRepository, RegisterReferences,
     };
     use http_body_util::BodyExt;
     use serde_json::{Value, json};
@@ -461,6 +476,8 @@ mod tests {
         type PaymentTerms = InMemoryPaymentTermRepository;
         type Entries = InMemoryFinancialEntryRepository;
         type EntryReferences = TestReferences;
+        type Attachments = InMemoryAttachmentRepository;
+        type Blobs = InMemoryBlobStore;
         type Transfers = InMemoryTransferRepository;
         type Openings = InMemoryOpeningRepository;
         type Recurrences = InMemoryRecurrenceRepository;
@@ -486,6 +503,8 @@ mod tests {
         type PaymentTerms = InMemoryPaymentTermRepository;
         type Entries = InMemoryFinancialEntryRepository;
         type EntryReferences = TestReferences;
+        type Attachments = InMemoryAttachmentRepository;
+        type Blobs = InMemoryBlobStore;
         type Transfers = InMemoryTransferRepository;
         type Openings = InMemoryOpeningRepository;
         type Recurrences = InMemoryRecurrenceRepository;
@@ -553,6 +572,22 @@ mod tests {
             parties.clone(),
             bank_accounts.clone(),
             payment_methods.clone(),
+        )
+    }
+
+    type TestAttachments = AttachmentService<
+        InMemoryAttachmentRepository,
+        InMemoryBlobStore,
+        InMemoryFinancialEntryRepository,
+    >;
+
+    /// Attachments over an entry store that the app's own services do not share: for the tests that
+    /// never attach a file. `entry_app` is the one that does.
+    fn standalone_attachments() -> TestAttachments {
+        AttachmentService::new(
+            InMemoryAttachmentRepository::default(),
+            InMemoryBlobStore::default(),
+            InMemoryFinancialEntryRepository::default(),
         )
     }
 
@@ -761,6 +796,7 @@ mod tests {
                 ),
                 payment_terms: PaymentTermService::new(InMemoryPaymentTermRepository::default()),
                 entries: standalone_entries(),
+                attachments: standalone_attachments(),
                 transfers: standalone_transfers(),
                 recurrences: standalone_recurrences(),
                 reconciliation: standalone_reconciliation(),
@@ -1397,6 +1433,7 @@ mod tests {
                 ),
                 payment_terms: PaymentTermService::new(InMemoryPaymentTermRepository::default()),
                 entries: standalone_entries(),
+                attachments: standalone_attachments(),
                 transfers: standalone_transfers(),
                 recurrences: standalone_recurrences(),
                 reconciliation: standalone_reconciliation(),
@@ -2875,6 +2912,7 @@ mod tests {
                 ),
                 payment_terms: PaymentTermService::new(InMemoryPaymentTermRepository::default()),
                 entries: standalone_entries(),
+                attachments: standalone_attachments(),
                 transfers: standalone_transfers(),
                 recurrences: standalone_recurrences(),
                 reconciliation: standalone_reconciliation(),
@@ -4385,6 +4423,11 @@ mod tests {
                     &bank_accounts,
                     &payment_methods,
                 ),
+                attachments: AttachmentService::new(
+                    InMemoryAttachmentRepository::default(),
+                    InMemoryBlobStore::default(),
+                    entry_store.clone(),
+                ),
                 transfers: TransferService::new(
                     transfer_store.clone(),
                     references_over(
@@ -5131,6 +5174,263 @@ mod tests {
         }
         assert_eq!(
             send(&app, get_request(&settlements, None)).await.status,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    fn attachments_uri(company_id: Uuid, entry_id: &str) -> String {
+        format!("/companies/{company_id}/entries/{entry_id}/attachments")
+    }
+
+    fn file_request(
+        method: &str,
+        uri: &str,
+        cookie: Option<&str>,
+        content_type: &str,
+        bytes: Vec<u8>,
+    ) -> Request<Body> {
+        let mut builder = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::CONTENT_TYPE, content_type);
+        if let Some(cookie) = cookie {
+            builder = builder.header(header::COOKIE, cookie);
+        }
+        builder.body(Body::from(bytes)).unwrap()
+    }
+
+    #[tokio::test]
+    async fn attaches_lists_downloads_and_removes_a_file() {
+        let app = entry_app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let targets = entry_targets(&app, &cookie, company_id).await;
+        let created = send(
+            &app,
+            json_request(
+                "POST",
+                &entries_uri(company_id),
+                Some(&cookie),
+                entry_body(&targets, "Venda", &[("2026-12-10", "100")]),
+            ),
+        )
+        .await;
+        let entry_id = created.body["id"].as_str().unwrap().to_owned();
+        let uri = attachments_uri(company_id, &entry_id);
+
+        let attached = send(
+            &app,
+            file_request(
+                "POST",
+                &format!("{uri}?name=Nota%20123%20%C3%A7.pdf"),
+                Some(&cookie),
+                "application/pdf; charset=binary",
+                b"%PDF-1.4 nota".to_vec(),
+            ),
+        )
+        .await;
+        assert_eq!(attached.status, StatusCode::CREATED, "{}", attached.body);
+        assert_eq!(attached.body["file_name"], "Nota 123 ç.pdf");
+        assert_eq!(attached.body["content_type"], "application/pdf");
+        assert_eq!(attached.body["size"], 13);
+        assert_eq!(attached.body["entry_id"], entry_id);
+        let one = format!("{uri}/{}", attached.body["id"].as_str().unwrap());
+
+        let listed = send(&app, get_request(&uri, Some(&cookie))).await;
+        assert_eq!(listed.body["items"].as_array().unwrap().len(), 1);
+        assert_eq!(listed.body["items"][0]["file_name"], "Nota 123 ç.pdf");
+
+        // A download is the bytes, as a download, never sniffed as something else.
+        let response = app
+            .clone()
+            .oneshot(get_request(&one, Some(&cookie)))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let headers = response.headers().clone();
+        assert_eq!(headers[header::CONTENT_TYPE], "application/pdf");
+        assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+        assert_eq!(
+            headers[header::CONTENT_DISPOSITION],
+            "attachment; filename=\"Nota 123 _.pdf\"; filename*=UTF-8''Nota%20123%20%C3%A7.pdf"
+        );
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(&bytes[..], b"%PDF-1.4 nota");
+
+        let removed = send(
+            &app,
+            json_request("DELETE", &one, Some(&cookie), Value::Null),
+        )
+        .await;
+        assert_eq!(removed.status, StatusCode::NO_CONTENT);
+        let after = send(&app, get_request(&uri, Some(&cookie))).await;
+        assert_eq!(after.body["items"], json!([]));
+        assert_eq!(
+            send(&app, get_request(&one, Some(&cookie))).await.status,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            send(
+                &app,
+                json_request("DELETE", &one, Some(&cookie), Value::Null)
+            )
+            .await
+            .status,
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn a_file_that_is_not_taken_is_refused_in_json() {
+        let app = entry_app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let targets = entry_targets(&app, &cookie, company_id).await;
+        let created = send(
+            &app,
+            json_request(
+                "POST",
+                &entries_uri(company_id),
+                Some(&cookie),
+                entry_body(&targets, "Venda", &[("2026-12-10", "100")]),
+            ),
+        )
+        .await;
+        let uri = attachments_uri(company_id, created.body["id"].as_str().unwrap());
+        let attach = |name: &str, kind: &str, bytes: Vec<u8>| {
+            send(
+                &app,
+                file_request(
+                    "POST",
+                    &format!("{uri}?name={name}"),
+                    Some(&cookie),
+                    kind,
+                    bytes,
+                ),
+            )
+        };
+
+        for (name, kind, bytes, status, what) in [
+            (
+                "a.html",
+                "text/html",
+                b"<b>".to_vec(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "file type",
+            ),
+            (
+                "a.pdf",
+                "application/pdf",
+                Vec::new(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "file must have",
+            ),
+            (
+                "a%2Fb.pdf",
+                "application/pdf",
+                b"x".to_vec(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "file name",
+            ),
+            (
+                "big.pdf",
+                "application/pdf",
+                vec![0; 10 * 1024 * 1024 + 1],
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "larger than 10 MB",
+            ),
+        ] {
+            let reply = attach(name, kind, bytes).await;
+            assert_eq!(reply.status, status, "{name}: {}", reply.body);
+            assert!(
+                reply.body["error"].as_str().unwrap().contains(what),
+                "{name}: {}",
+                reply.body
+            );
+        }
+        // The largest file is taken.
+        let largest = attach("max.pdf", "application/pdf", vec![0; 10 * 1024 * 1024]).await;
+        assert_eq!(largest.status, StatusCode::CREATED, "{}", largest.body);
+        // The name is needed, and nothing else is.
+        let nameless = send(
+            &app,
+            file_request(
+                "POST",
+                &uri,
+                Some(&cookie),
+                "application/pdf",
+                b"x".to_vec(),
+            ),
+        )
+        .await;
+        assert_eq!(nameless.status, StatusCode::BAD_REQUEST);
+        let listed = send(&app, get_request(&uri, Some(&cookie))).await;
+        assert_eq!(listed.body["items"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn attachments_stay_private_to_the_company() {
+        let app = entry_app();
+        let (owner, company_id) = sign_up(&app, "dona@example.com").await;
+        let targets = entry_targets(&app, &owner, company_id).await;
+        let created = send(
+            &app,
+            json_request(
+                "POST",
+                &entries_uri(company_id),
+                Some(&owner),
+                entry_body(&targets, "Venda", &[("2026-12-10", "100")]),
+            ),
+        )
+        .await;
+        let entry_id = created.body["id"].as_str().unwrap().to_owned();
+        let uri = attachments_uri(company_id, &entry_id);
+        let attached = send(
+            &app,
+            file_request(
+                "POST",
+                &format!("{uri}?name=Nota.pdf"),
+                Some(&owner),
+                "application/pdf",
+                b"x".to_vec(),
+            ),
+        )
+        .await;
+        let one = format!("{uri}/{}", attached.body["id"].as_str().unwrap());
+
+        // Another company's member does not learn it exists, and a stranger to the entry finds nothing.
+        let (stranger, _) = sign_up(&app, "bia@example.com").await;
+        for request in [
+            get_request(&uri, Some(&stranger)),
+            get_request(&one, Some(&stranger)),
+            file_request(
+                "POST",
+                &format!("{uri}?name=A.pdf"),
+                Some(&stranger),
+                "application/pdf",
+                b"x".to_vec(),
+            ),
+            json_request("DELETE", &one, Some(&stranger), Value::Null),
+        ] {
+            assert_eq!(send(&app, request).await.status, StatusCode::NOT_FOUND);
+        }
+        for request in [
+            get_request(
+                &format!("{}/not-an-id", attachments_uri(company_id, "x")),
+                Some(&owner),
+            ),
+            get_request(&format!("{uri}/not-an-id"), Some(&owner)),
+            get_request(
+                &format!(
+                    "{}/{}",
+                    attachments_uri(company_id, &Uuid::new_v4().to_string()),
+                    Uuid::new_v4()
+                ),
+                Some(&owner),
+            ),
+        ] {
+            assert_eq!(send(&app, request).await.status, StatusCode::NOT_FOUND);
+        }
+        assert_eq!(
+            send(&app, get_request(&one, None)).await.status,
             StatusCode::UNAUTHORIZED
         );
     }
