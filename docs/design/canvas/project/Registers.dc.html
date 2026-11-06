@@ -36,7 +36,8 @@ td{padding:13px 14px;border-top:1px solid #e1e8e4;font-size:15px}
 <div style="flex:1;min-width:0;padding:32px 40px;box-sizing:border-box;display:flex;flex-direction:column;gap:24px">
 <div><h1 style="font-size:28px;letter-spacing:-.015em">Clientes e fornecedores</h1><p style="color:#5d6b64;margin-top:4px">Quem compra de você e de quem você compra.</p></div>
 
-<div style="display:grid;grid-template-columns:minmax(0,1fr) 352px;gap:20px;align-items:start">
+<div style="display:inline-flex;align-items:center;gap:8px;align-self:flex-start;padding:0 18px;height:44px;border-radius:8px;background:#1f7a4d;color:#fff;font-weight:600;font-size:15px">+ Novo cliente ou fornecedor</div>
+<div style="display:grid;grid-template-columns:minmax(0,1fr);gap:20px;align-items:start">
 
 <div class="card" style="overflow:hidden">
 <div style="padding:20px 24px 4px"><h2 style="font-size:17px">Cadastrados</h2></div>
@@ -55,17 +56,10 @@ td{padding:13px 14px;border-top:1px solid #e1e8e4;font-size:15px}
 </table>
 </div>
 
-<div class="card" style="padding:20px 24px;display:flex;flex-direction:column;gap:14px">
-<h2 style="font-size:17px">Novo cliente ou fornecedor</h2>
-<div class="lbl">Nome<div class="in"></div></div>
-<div class="lbl">CPF ou CNPJ<div class="in"></div></div>
-<div class="lbl">E-mail<div class="in"></div></div>
-<div style="border:1px solid #c9d5ce;border-radius:8px;padding:10px 14px;display:flex;gap:20px;font-size:14px"><span>☑ Cliente</span><span>☐ Fornecedor</span></div>
-<div style="min-height:44px;border-radius:8px;background:#1f7a4d;color:#fff;font-weight:600;display:flex;align-items:center;justify-content:center">+ Adicionar</div>
-</div>
+
 
 </div>
-<p style="font-size:13px;color:#5d6b64">A lista vem primeiro e o formulário fica ao lado, fixo ao rolar. Abaixo de 64rem o formulário desce para depois da lista.</p>
+<p style="font-size:13px;color:#5d6b64">A lista ocupa a largura toda. "Novo …", no alto, e o botão "Novo registro" da barra superior levantam o formulário em uma folha (bottom sheet) sobre a tela aberta; alterar uma linha abre a mesma folha.</p>
 </div>
 </div>
 </x-dc>

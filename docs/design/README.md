@@ -17,7 +17,7 @@ The canvas in [`canvas/`](canvas/project/canvas.json) shows the design system an
 |----------|---------------|
 | [`Main.dc.html`](canvas/project/Main.dc.html) | Colors, type, shape, components and chart rules |
 | [`Dashboard.dc.html`](canvas/project/Dashboard.dc.html) | The company dashboard (layout; the page now shows real figures, see ADR 0043) |
-| [`Registers.dc.html`](canvas/project/Registers.dc.html) | Parties list with the form beside it |
+| [`Registers.dc.html`](canvas/project/Registers.dc.html) | Parties list at full width, with the button that raises the form sheet |
 | [`Login.dc.html`](canvas/project/Login.dc.html) | Signed-out split layout |
 
 The artboards are static redraws of the real screens. When a token or a screen changes in the app, change the
@@ -27,7 +27,7 @@ artboard in the same PR; the canvas needs the Claude Design runtime (`support.js
 
 - **Quiet surfaces, one accent.** Neutral green-tinted grays, brand green for the primary action and the current place.
   Data takes blue and orange; red appears only for state, always with an icon and a label.
-- **The list is the page.** Registers show the list first and the form beside it, and the content uses the width of the screen (up to 120rem). A row says what a record is under its name and keeps its columns for the figures: a table never scrolls sideways at 1440px.
+- **The list is the page.** Registers show the list at full width, and a record is created or changed in a bottom sheet over it (see [screen anatomy](screen-anatomy.md)); the content uses the width of the screen (up to 120rem). A row says what a record is under its name and keeps its columns for the figures: a table never scrolls sideways at 1440px.
 - **Know where you are.** The sidebar always names the company and the section.
 - **Numbers are text.** Money is a decimal string printed with `formatMoney`; charts only use numbers to draw.
 - **Nothing relies on hover or color alone.** Each chart has a keyboard tooltip and a table view; states have icon and label.
