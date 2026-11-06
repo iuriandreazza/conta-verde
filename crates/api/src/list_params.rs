@@ -1,6 +1,6 @@
 //! The parameters every list endpoint parses the same way (ADR 0018).
 
-use conta_verde_application::{MAX_SEARCH_CHARS, NameSort};
+use conta_verde_application::{MAX_SEARCH_CHARS, NameSort, NumberSort};
 
 use crate::error::ApiError;
 
@@ -33,6 +33,17 @@ pub(crate) fn active(value: Option<&str>) -> Result<Option<bool>, ApiError> {
         Some("false") => Ok(Some(false)),
         Some(_) => Err(ApiError::InvalidQuery(
             "invalid active: expected true or false",
+        )),
+    }
+}
+
+/// `-number`, the default, or `number` for oldest first.
+pub(crate) fn number_sort(value: Option<&str>) -> Result<NumberSort, ApiError> {
+    match value {
+        None | Some("-number") => Ok(NumberSort::NumberDesc),
+        Some("number") => Ok(NumberSort::NumberAsc),
+        Some(_) => Err(ApiError::InvalidQuery(
+            "invalid sort: expected number or -number",
         )),
     }
 }

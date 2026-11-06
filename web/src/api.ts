@@ -9,7 +9,7 @@ export interface User {
 export type Role = "owner" | "admin" | "financial" | "sales" | "stock" | "accountant" | "viewer";
 
 /** A part of the product a permission is about (ADR 0026). */
-export type Area = "parties" | "products" | "finance" | "members";
+export type Area = "parties" | "products" | "finance" | "sales" | "members";
 
 export interface Company {
   id: string;
@@ -697,6 +697,90 @@ export interface RecurrenceFilters {
 
 export const NO_RECURRENCE_FILTERS: RecurrenceFilters = { q: "", kind: "", active: "", sort: "description" };
 
+export type QuoteStatus = "draft" | "sent" | "approved" | "declined" | "converted";
+
+/** One line of a quote, a sale or a contract; every figure is a decimal string (ADR 0037). */
+export interface DocumentLine {
+  product_id: string;
+  description: string;
+  quantity: string;
+  unit_price: string;
+  discount: string;
+  /** The rounded gross less the discount. */
+  total: string;
+}
+
+/** What the company offers a customer (ADR 0038). */
+export interface Quote {
+  id: string;
+  company_id: string;
+  /** The company's own sequence. */
+  number: number;
+  customer_id: string;
+  issued_on: string;
+  valid_until: string;
+  payment_term_id: string | null;
+  notes: string | null;
+  status: QuoteStatus;
+  lines: DocumentLine[];
+  total: string;
+}
+
+export interface QuotePage {
+  items: Quote[];
+  next_cursor: string | null;
+}
+
+export interface LineInput {
+  product_id: string;
+  description: string;
+  quantity: string;
+  unit_price: string;
+  discount?: string;
+}
+
+/** Replaces the whole quote while it is a draft or sent. */
+export interface QuoteInput {
+  customer_id: string;
+  issued_on: string;
+  valid_until: string;
+  payment_term_id?: string;
+  notes?: string;
+  lines: LineInput[];
+}
+
+export interface QuoteFilters {
+  q: string;
+  status: "" | QuoteStatus;
+  sort: "-number" | "number";
+}
+
+export const NO_QUOTE_FILTERS: QuoteFilters = { q: "", status: "", sort: "-number" };
+
+/** A quote just sent: the link the customer answers through exists only in this answer. */
+export interface SentQuote {
+  quote: Quote;
+  link: string;
+  /** Whether the e-mail went out; the quote is sent either way. */
+  emailed: boolean;
+}
+
+/** What the customer sees at the link. */
+export interface PublicQuote {
+  company_name: string;
+  customer_name: string;
+  number: number;
+  issued_on: string;
+  valid_until: string;
+  /** The validity has run out today: it can no longer be approved. */
+  expired: boolean;
+  payment_term: string | null;
+  notes: string | null;
+  status: QuoteStatus;
+  lines: DocumentLine[];
+  total: string;
+}
+
 export interface EntryInstallment {
   number: number;
   /** `YYYY-MM-DD`. */
@@ -1047,6 +1131,33 @@ export const api = {
     }),
   recurrenceHistory: (companyId: string, id: string) =>
     request<HistoryEntry[]>(`/companies/${companyId}/recurrences/${id}/history`),
+  listQuotes: (companyId: string, filters: QuoteFilters = NO_QUOTE_FILTERS, after?: string) => {
+    const params = new URLSearchParams();
+    if (filters.q) params.set("q", filters.q);
+    if (filters.status) params.set("status", filters.status);
+    if (filters.sort !== NO_QUOTE_FILTERS.sort) params.set("sort", filters.sort);
+    if (after) params.set("after", after);
+    const query = params.size > 0 ? `?${params}` : "";
+    return request<QuotePage>(`/companies/${companyId}/quotes${query}`);
+  },
+  createQuote: (companyId: string, input: QuoteInput) =>
+    post<Quote>(`/companies/${companyId}/quotes`, input),
+  updateQuote: (companyId: string, id: string, input: QuoteInput) =>
+    request<Quote>(`/companies/${companyId}/quotes/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  quoteHistory: (companyId: string, id: string) =>
+    request<HistoryEntry[]>(`/companies/${companyId}/quotes/${id}/history`),
+  sendQuote: (companyId: string, id: string, to: string) =>
+    post<SentQuote>(`/companies/${companyId}/quotes/${id}/send`, { to }),
+  /** Where the PDF is: the session cookie goes with a plain link. */
+  quotePdfUrl: (companyId: string, id: string) => `/api/companies/${companyId}/quotes/${id}/pdf`,
+  /** The three below need no session: the token in the link is the secret. */
+  publicQuote: (token: string) => request<PublicQuote>(`/public/quotes/${token}`),
+  publicQuotePdfUrl: (token: string) => `/api/public/quotes/${token}/pdf`,
+  approveQuote: (token: string) => post<PublicQuote>(`/public/quotes/${token}/approve`),
+  declineQuote: (token: string) => post<PublicQuote>(`/public/quotes/${token}/decline`),
   /** The OFX file goes as it is, bytes and all: the API reads the charset. */
   importStatement: (companyId: string, accountId: string, file: File, dryRun: boolean) =>
     request<ImportResult>(

@@ -9,6 +9,9 @@ use conta_verde_application::{
     SecretService,
 };
 use conta_verde_application::{
+    EmailSender, NumberSort, QuotePage, QuoteQuery, QuoteRepository, QuoteService, SalesReferences,
+};
+use conta_verde_application::{
     ImportRow, InvitationRepository, InvitationState, Invited, MemberService, NewAccount,
     NewInvitation, NewUser, PaymentTermQuery, PaymentTermRepository, PaymentTermService,
 };
@@ -25,6 +28,7 @@ use conta_verde_domain::{
     product_changes, product_creation_changes,
 };
 use conta_verde_domain::{InstallmentDraft, payment_term_changes, payment_term_creation_changes};
+use conta_verde_domain::{LineDraft, QuoteDraft, QuoteStatus};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -8479,4 +8483,559 @@ where
         )
         .await
         .unwrap_err()
+}
+
+/// What the sales contract tests point at: a customer, products (one retired) and payment terms (one
+/// retired), all of one company.
+pub struct SalesSeed {
+    pub customer: PartyId,
+    pub product: ProductId,
+    pub other_product: ProductId,
+    pub inactive_product: ProductId,
+    pub term: PaymentTermId,
+    pub inactive_term: PaymentTermId,
+}
+
+pub async fn seed_sales_records<P, R, T>(
+    parties: &P,
+    products: &R,
+    terms: &T,
+    company: CompanyId,
+) -> SalesSeed
+where
+    P: PartyRepository,
+    R: ProductRepository,
+    T: PaymentTermRepository,
+{
+    let customer = Party::new(
+        PartyId::generate(),
+        company,
+        party_draft("Cliente Exemplo", None),
+    )
+    .unwrap();
+    parties
+        .save(&customer, &created_entry(&customer))
+        .await
+        .unwrap();
+    let mut saved = Vec::new();
+    for (name, active) in [("Café", true), ("Pão", true), ("Descontinuado", false)] {
+        let product = Product::new(
+            ProductId::generate(),
+            company,
+            product_draft(name, ProductKind::Product, None, active),
+        )
+        .unwrap();
+        let entry = product_entry(
+            &product,
+            AuditAction::Created,
+            product_creation_changes(&product),
+        );
+        products.save(&product, &entry).await.unwrap();
+        saved.push(product.id());
+    }
+    let term = new_term(company, "30/60", &[(30, "50"), (60, "50")]);
+    let retired = PaymentTerm::new(
+        PaymentTermId::generate(),
+        company,
+        term_draft("Antigo", &[(0, "100")], false),
+    )
+    .unwrap();
+    for item in [&term, &retired] {
+        save_term(terms, item).await.unwrap();
+    }
+    SalesSeed {
+        customer: customer.id(),
+        product: saved[0],
+        other_product: saved[1],
+        inactive_product: saved[2],
+        term: term.id(),
+        inactive_term: retired.id(),
+    }
+}
+
+pub async fn sales_references_say_what_is_usable<R: SalesReferences>(
+    references: &R,
+    company: CompanyId,
+    other_company: CompanyId,
+    seed: &SalesSeed,
+) {
+    assert!(
+        references
+            .customer_exists(company, seed.customer)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !references
+            .customer_exists(other_company, seed.customer)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !references
+            .customer_exists(company, PartyId::generate())
+            .await
+            .unwrap()
+    );
+    assert!(
+        references
+            .product_is_usable(company, seed.product)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !references
+            .product_is_usable(company, seed.inactive_product)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !references
+            .product_is_usable(other_company, seed.product)
+            .await
+            .unwrap()
+    );
+    assert!(
+        references
+            .payment_term_is_usable(company, seed.term)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !references
+            .payment_term_is_usable(company, seed.inactive_term)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !references
+            .payment_term_is_usable(other_company, seed.term)
+            .await
+            .unwrap()
+    );
+}
+
+pub fn sale_line(
+    product: ProductId,
+    description: &str,
+    quantity: &str,
+    unit_price: &str,
+    discount: &str,
+) -> LineDraft {
+    LineDraft {
+        product_id: product,
+        description: description.into(),
+        quantity: quantity.into(),
+        unit_price: unit_price.into(),
+        discount: discount.into(),
+    }
+}
+
+fn quote_draft(seed: &SalesSeed, valid_until: &str) -> QuoteDraft {
+    QuoteDraft {
+        customer_id: seed.customer,
+        issued_on: "2026-11-06".into(),
+        valid_until: valid_until.into(),
+        payment_term_id: Some(seed.term),
+        notes: Some("Entrega em 5 dias".into()),
+        lines: vec![
+            sale_line(seed.product, "Café 500g", "3", "10.10", "0.30"),
+            sale_line(seed.other_product, "Pão francês", "1.5", "3.33", "0"),
+        ],
+    }
+}
+
+fn token_of(link: &str) -> &str {
+    link.rsplit('/').next().unwrap()
+}
+
+fn quote_numbers(page: &QuotePage) -> Vec<i64> {
+    page.items.iter().map(|quote| quote.number()).collect()
+}
+
+/// A quote is written with the next number of its company and a trail, listed, filtered and paged,
+/// changed while it is a draft or sent, sent with a link of its own that the next send and any change
+/// take back, and answered once through the link, in the name of whoever sent it, never past its
+/// validity. What it points at has to be usable, and nothing of another company's shows.
+pub async fn runs_the_quote_lifecycle<Q, R, E, S>(
+    service: &QuoteService<Q, R, E, S>,
+    emails: &InMemoryEmailSender,
+    company: CompanyId,
+    other_company: CompanyId,
+    seed: &SalesSeed,
+) where
+    Q: QuoteRepository,
+    R: SalesReferences,
+    E: EmailSender,
+    S: SecretService,
+{
+    let ana = actor();
+    let day = |text: &str| CalendarDate::parse(text).unwrap();
+
+    // Written: numbered per company, worth the sum of its rounded lines, with one entry in its trail.
+    let first = service
+        .register(company, &ana, quote_draft(seed, "2026-11-20"))
+        .await
+        .unwrap();
+    assert_eq!(first.number(), 1);
+    assert_eq!(first.status(), QuoteStatus::Draft);
+    // 3 x 10.10 - 0.30 = 30 and 1.5 x 3.33 = 4.995 -> 5.
+    assert_eq!(first.total().to_string(), "35");
+    let stored = service.get(company, first.id()).await.unwrap();
+    assert_eq!(stored, first);
+    let trail = service.history(company, first.id()).await.unwrap();
+    assert_eq!(trail.len(), 1);
+    assert_eq!(trail[0].entry.action, AuditAction::Created);
+    assert_eq!(trail[0].entry.actor, ana);
+    let second = service
+        .register(company, &ana, quote_draft(seed, "2026-12-31"))
+        .await
+        .unwrap();
+    assert_eq!(second.number(), 2);
+    // Four writes at once never share a number.
+    let (a, b, c, d) = tokio::join!(
+        service.register(company, &ana, quote_draft(seed, "2026-11-20")),
+        service.register(company, &ana, quote_draft(seed, "2026-11-20")),
+        service.register(company, &ana, quote_draft(seed, "2026-11-20")),
+        service.register(company, &ana, quote_draft(seed, "2026-11-20")),
+    );
+    let mut numbers: Vec<i64> = [a, b, c, d]
+        .iter()
+        .map(|quote| quote.as_ref().unwrap().number())
+        .collect();
+    numbers.sort_unstable();
+    assert_eq!(numbers, [3, 4, 5, 6]);
+
+    // What is refused leaves no number and no trace; a customer, a product or a term has to be usable.
+    let mut bad = quote_draft(seed, "2026-11-20");
+    bad.customer_id = PartyId::generate();
+    assert_eq!(
+        service.register(company, &ana, bad).await.unwrap_err(),
+        ApplicationError::UnusableReference("customer")
+    );
+    let mut bad = quote_draft(seed, "2026-11-20");
+    bad.lines[1].product_id = seed.inactive_product;
+    assert_eq!(
+        service.register(company, &ana, bad).await.unwrap_err(),
+        ApplicationError::UnusableReference("product")
+    );
+    let mut bad = quote_draft(seed, "2026-11-20");
+    bad.payment_term_id = Some(seed.inactive_term);
+    assert_eq!(
+        service.register(company, &ana, bad).await.unwrap_err(),
+        ApplicationError::UnusableReference("payment term")
+    );
+    let mut bad = quote_draft(seed, "2026-11-20");
+    bad.lines.clear();
+    assert_eq!(
+        service.register(company, &ana, bad).await.unwrap_err(),
+        ApplicationError::Domain(DomainError::NoLines)
+    );
+    let next = service
+        .register(company, &ana, quote_draft(seed, "2026-11-20"))
+        .await
+        .unwrap();
+    assert_eq!(next.number(), 7);
+
+    // Another company has none of it; its own numbers start over.
+    assert_eq!(
+        service.get(other_company, first.id()).await.unwrap_err(),
+        ApplicationError::QuoteNotFound
+    );
+    assert_eq!(
+        service
+            .history(other_company, first.id())
+            .await
+            .unwrap_err(),
+        ApplicationError::QuoteNotFound
+    );
+    let none = service
+        .list(other_company, &QuoteQuery::default(), None, None)
+        .await
+        .unwrap();
+    assert!(none.items.is_empty());
+
+    // Listed newest first, by status, customer and search, and paged.
+    let all = service
+        .list(company, &QuoteQuery::default(), None, None)
+        .await
+        .unwrap();
+    assert_eq!(quote_numbers(&all), [7, 6, 5, 4, 3, 2, 1]);
+    let ascending = service
+        .list(
+            company,
+            &QuoteQuery::default().sorted(NumberSort::NumberAsc),
+            None,
+            Some(3),
+        )
+        .await
+        .unwrap();
+    assert_eq!(quote_numbers(&ascending), [1, 2, 3]);
+    let rest = service
+        .list(
+            company,
+            &QuoteQuery::default().sorted(NumberSort::NumberAsc),
+            ascending.next.as_ref(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(quote_numbers(&rest), [4, 5, 6, 7]);
+    assert!(rest.next.is_none());
+    let by_text = |text: &str| QuoteQuery::default().searching(text);
+    for (text, expected) in [
+        ("pão fran", 7),
+        ("6", 1),
+        ("ENTREGA", 7),
+        ("nada disso", 0),
+        ("%", 0),
+    ] {
+        let found = service
+            .list(company, &by_text(text), None, None)
+            .await
+            .unwrap();
+        assert_eq!(found.items.len(), expected, "{text}");
+    }
+    let drafts = service
+        .list(
+            company,
+            &QuoteQuery::default().with_status(QuoteStatus::Draft),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(drafts.items.len(), 7);
+    let approved = service
+        .list(
+            company,
+            &QuoteQuery::default().with_status(QuoteStatus::Approved),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(approved.items.is_empty());
+    let of_customer = service
+        .list(
+            company,
+            &QuoteQuery::default().with_customer(seed.customer),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(of_customer.items.len(), 7);
+    let of_nobody = service
+        .list(
+            company,
+            &QuoteQuery::default().with_customer(PartyId::generate()),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(of_nobody.items.is_empty());
+
+    // Changed: the trail records the change, a draft that changes nothing records nothing.
+    let mut edit = quote_draft(seed, "2026-11-25");
+    edit.lines[0].quantity = "4".into();
+    let changed = service
+        .update(company, &ana, first.id(), edit.clone())
+        .await
+        .unwrap();
+    assert_eq!(changed.number(), 1);
+    assert_eq!(changed.total().to_string(), "45.1");
+    let trail = service.history(company, first.id()).await.unwrap();
+    assert_eq!(trail.len(), 2);
+    let fields: Vec<&str> = trail[1]
+        .entry
+        .changes
+        .iter()
+        .map(|change| change.field.as_str())
+        .collect();
+    assert_eq!(fields, ["valid_until", "lines"]);
+    service
+        .update(company, &ana, first.id(), edit.clone())
+        .await
+        .unwrap();
+    assert_eq!(service.history(company, first.id()).await.unwrap().len(), 2);
+    let mut bad = edit.clone();
+    bad.lines[0].product_id = seed.inactive_product;
+    assert_eq!(
+        service
+            .update(company, &ana, first.id(), bad)
+            .await
+            .unwrap_err(),
+        ApplicationError::UnusableReference("product")
+    );
+    assert_eq!(
+        service
+            .update(other_company, &ana, first.id(), edit.clone())
+            .await
+            .unwrap_err(),
+        ApplicationError::QuoteNotFound
+    );
+
+    // Sent: a link of its own, e-mailed, that leads to the quote.
+    assert_eq!(
+        service
+            .send(company, &ana, first.id(), "not an address", "Padaria")
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::InvalidEmail)
+    );
+    let sent = service
+        .send(company, &ana, first.id(), "cliente@exemplo.com", "Padaria")
+        .await
+        .unwrap();
+    assert_eq!(sent.quote.status(), QuoteStatus::Sent);
+    assert!(sent.emailed);
+    assert!(sent.link.starts_with("https://erp.example/quote/"));
+    let message = emails.sent().pop().unwrap();
+    assert_eq!(message.to.as_str(), "cliente@exemplo.com");
+    assert!(message.subject.contains("nº 1"));
+    assert!(message.body.contains(&sent.link));
+    assert!(message.body.contains("2026-11-25"));
+    let first_token = token_of(&sent.link).to_owned();
+    assert_eq!(service.by_link(&first_token).await.unwrap(), sent.quote);
+    assert_eq!(
+        service.by_link("not-a-token").await.unwrap_err(),
+        ApplicationError::QuoteNotFound
+    );
+    let trail = service.history(company, first.id()).await.unwrap();
+    assert_eq!(trail.len(), 3);
+    assert!(
+        trail[2]
+            .entry
+            .changes
+            .iter()
+            .any(|change| change.field == "link"
+                && change.to.as_deref() == Some("sent to cliente@exemplo.com"))
+    );
+
+    // Sent again, the earlier link stops working and the new one works.
+    let resent = service
+        .send(company, &ana, first.id(), "cliente@exemplo.com", "Padaria")
+        .await
+        .unwrap();
+    let second_token = token_of(&resent.link).to_owned();
+    assert_ne!(first_token, second_token);
+    assert_eq!(
+        service.by_link(&first_token).await.unwrap_err(),
+        ApplicationError::QuoteNotFound
+    );
+    assert!(service.by_link(&second_token).await.is_ok());
+
+    // A change to a sent quote makes it a draft again and takes its link back; a change of nothing does not.
+    service
+        .update(company, &ana, first.id(), edit.clone())
+        .await
+        .unwrap();
+    assert!(service.by_link(&second_token).await.is_ok());
+    let mut other_edit = edit.clone();
+    other_edit.notes = None;
+    let redone = service
+        .update(company, &ana, first.id(), other_edit)
+        .await
+        .unwrap();
+    assert_eq!(redone.status(), QuoteStatus::Draft);
+    assert_eq!(
+        service.by_link(&second_token).await.unwrap_err(),
+        ApplicationError::QuoteNotFound
+    );
+    assert_eq!(
+        service
+            .answer(&second_token, true, day("2026-11-10"))
+            .await
+            .unwrap_err(),
+        ApplicationError::QuoteNotFound
+    );
+
+    // Answered through the link, once, in the name of whoever sent it, and the quote is then fixed.
+    let resent = service
+        .send(company, &ana, first.id(), "cliente@exemplo.com", "Padaria")
+        .await
+        .unwrap();
+    let token = token_of(&resent.link).to_owned();
+    let answered = service
+        .answer(&token, true, day("2026-11-25"))
+        .await
+        .unwrap();
+    assert_eq!(answered.status(), QuoteStatus::Approved);
+    let trail = service.history(company, first.id()).await.unwrap();
+    let last = trail.last().unwrap();
+    assert_eq!(last.entry.actor, ana);
+    assert!(
+        last.entry
+            .changes
+            .iter()
+            .any(|change| change.field == "status" && change.to.as_deref() == Some("approved"))
+    );
+    assert!(
+        last.entry
+            .changes
+            .iter()
+            .any(|change| change.field == "answered_by")
+    );
+    // The link still shows it, answered; it cannot be answered again, changed or sent again.
+    assert_eq!(
+        service.by_link(&token).await.unwrap().status(),
+        QuoteStatus::Approved
+    );
+    assert_eq!(
+        service
+            .answer(&token, false, day("2026-11-25"))
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::QuoteIsNotSent)
+    );
+    assert_eq!(
+        service
+            .update(company, &ana, first.id(), edit.clone())
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::QuoteIsLocked)
+    );
+    assert_eq!(
+        service
+            .send(company, &ana, first.id(), "cliente@exemplo.com", "Padaria")
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::QuoteIsLocked)
+    );
+
+    // Declined, and one past its validity is not approved (its last day is still good).
+    let declined = service
+        .send(company, &ana, second.id(), "cliente@exemplo.com", "Padaria")
+        .await
+        .unwrap();
+    let declined = service
+        .answer(token_of(&declined.link), false, day("2026-12-31"))
+        .await
+        .unwrap();
+    assert_eq!(declined.status(), QuoteStatus::Declined);
+    let late = service
+        .send(company, &ana, next.id(), "cliente@exemplo.com", "Padaria")
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .answer(token_of(&late.link), true, day("2026-11-21"))
+            .await
+            .unwrap_err(),
+        ApplicationError::QuoteExpired
+    );
+    assert_eq!(
+        service.get(company, next.id()).await.unwrap().status(),
+        QuoteStatus::Sent
+    );
+    assert_eq!(
+        service
+            .answer(token_of(&late.link), true, day("2026-11-20"))
+            .await
+            .unwrap()
+            .status(),
+        QuoteStatus::Approved
+    );
 }

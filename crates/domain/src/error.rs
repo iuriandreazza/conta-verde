@@ -72,6 +72,15 @@ pub enum DomainError {
     InvalidTag,
     TooManyTags,
     OwnerCannotBeInvited,
+    InvalidLineQuantity,
+    NoLines,
+    TooManyLines,
+    DiscountExceedsLine,
+    DocumentTooLarge,
+    InvalidQuoteNotes,
+    QuoteValidityBeforeIssue,
+    QuoteIsLocked,
+    QuoteIsNotSent,
 }
 
 impl fmt::Display for DomainError {
@@ -223,6 +232,25 @@ impl fmt::Display for DomainError {
             Self::OwnerCannotBeInvited => {
                 f.write_str("nobody is invited as an owner: creating a company is what makes one")
             }
+            Self::InvalidLineQuantity => f.write_str(
+                "quantity must be more than 0, with at most 3 decimals, written like 1.5",
+            ),
+            Self::NoLines => f.write_str("a document needs at least one line"),
+            Self::TooManyLines => f.write_str("a document has at most 100 lines"),
+            Self::DiscountExceedsLine => {
+                f.write_str("a discount cannot be more than the value of its line")
+            }
+            Self::DocumentTooLarge => f.write_str("the total is more than the system holds"),
+            Self::InvalidQuoteNotes => f.write_str(
+                "notes must have at most 2000 characters and no null characters",
+            ),
+            Self::QuoteValidityBeforeIssue => {
+                f.write_str("valid_until must not be before issued_on")
+            }
+            Self::QuoteIsLocked => {
+                f.write_str("a quote that was approved, declined or turned into a sale cannot change")
+            }
+            Self::QuoteIsNotSent => f.write_str("only a quote that was sent can be answered"),
             Self::KindCannotChange => f.write_str("the kind cannot change once registered"),
         }
     }

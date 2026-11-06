@@ -267,6 +267,10 @@ impl IdentityRepository for InMemoryIdentityRepository {
             .cloned())
     }
 
+    async fn company_name(&self, company_id: CompanyId) -> Result<Option<String>, RepositoryError> {
+        Ok(InMemoryIdentityRepository::company_name(self, company_id))
+    }
+
     async fn memberships_of(
         &self,
         user_id: UserId,

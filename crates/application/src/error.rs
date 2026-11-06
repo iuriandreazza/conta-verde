@@ -32,6 +32,8 @@ pub enum RepositoryError {
     LineChanged,
     /// The recurrence already has the entry of that occurrence day.
     DuplicateOccurrence,
+    /// The quote is no longer in the status the write was made from.
+    QuoteChanged,
     Storage(String),
 }
 
@@ -93,6 +95,12 @@ pub enum ApplicationError {
     TooManyImportRows,
     /// No recurrence with this id in the company (another company's looks the same).
     RecurrenceNotFound,
+    /// No quote with this id in the company, or no link that leads to one.
+    QuoteNotFound,
+    /// The quote was changed or answered while this was being done.
+    QuoteChanged,
+    /// The quote's validity has run out: it can no longer be approved.
+    QuoteExpired,
     /// No transfer with this id in the company, or it was reversed already.
     TransferNotFound,
     /// No settlement with this id in the entry (another company's looks the same), or it was
@@ -186,6 +194,7 @@ impl fmt::Display for RepositoryError {
             Self::DuplicateOccurrence => {
                 f.write_str("the recurrence already has the entry of this occurrence")
             }
+            Self::QuoteChanged => f.write_str("the quote was changed meanwhile"),
             Self::Storage(message) => write!(f, "storage failure: {message}"),
         }
     }
@@ -224,6 +233,9 @@ impl fmt::Display for ApplicationError {
             Self::SettlementNotFound => f.write_str("settlement not found"),
             Self::TransferNotFound => f.write_str("transfer not found"),
             Self::RecurrenceNotFound => f.write_str("recurrence not found"),
+            Self::QuoteNotFound => f.write_str("quote not found"),
+            Self::QuoteChanged => f.write_str("the quote was changed meanwhile: read it again"),
+            Self::QuoteExpired => f.write_str("the quote is past its validity"),
             Self::StatementLineNotFound => f.write_str("statement line not found"),
             Self::AlreadyMatched => f.write_str("another statement line is already matched to it"),
             Self::LineChanged => f.write_str("the statement line was changed meanwhile: read it again"),

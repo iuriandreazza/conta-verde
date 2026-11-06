@@ -1,4 +1,4 @@
-use conta_verde_application::{DateCursor, NameCursor};
+use conta_verde_application::{DateCursor, NameCursor, NumberCursor};
 use conta_verde_domain::CalendarDate;
 use uuid::Uuid;
 
@@ -36,6 +36,19 @@ pub(crate) fn decode_date_cursor(raw: &str) -> Result<DateCursor, ApiError> {
     })
 }
 
+// The same, for lists of numbered documents.
+pub(crate) fn encode_number_cursor(cursor: &NumberCursor) -> String {
+    format!("{}|{}", cursor.id, cursor.number)
+}
+
+pub(crate) fn decode_number_cursor(raw: &str) -> Result<NumberCursor, ApiError> {
+    let (id, number) = raw.split_once('|').ok_or(ApiError::InvalidCursor)?;
+    Ok(NumberCursor {
+        id: Uuid::parse_str(id).map_err(|_| ApiError::InvalidCursor)?,
+        number: number.parse().map_err(|_| ApiError::InvalidCursor)?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -63,6 +76,20 @@ mod tests {
         assert!(decode_date_cursor("nonsense").is_err());
         assert!(decode_date_cursor(&format!("{}|2026-02-30", Uuid::new_v4())).is_err());
         assert!(decode_date_cursor("not-a-uuid|2026-12-10").is_err());
+    }
+
+    #[test]
+    fn a_number_cursor_survives_a_round_trip_and_rejects_garbage() {
+        let original = NumberCursor {
+            number: 42,
+            id: Uuid::new_v4(),
+        };
+        assert_eq!(
+            decode_number_cursor(&encode_number_cursor(&original)).unwrap(),
+            original
+        );
+        assert!(decode_number_cursor("nonsense").is_err());
+        assert!(decode_number_cursor(&format!("{}|x", Uuid::new_v4())).is_err());
     }
 
     #[test]
