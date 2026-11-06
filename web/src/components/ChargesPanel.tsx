@@ -58,12 +58,7 @@ export function ChargesPanel({ companyId, entry, canWrite }: ChargesPanelProps) 
 
   const load = useCallback(async () => {
     try {
-      const [listed, collection] = await Promise.all([
-        api.listCharges(companyId, entry.id),
-        api.getCollection(companyId),
-      ]);
-      setCharges(listed.items);
-      setProvider(collection.provider);
+      setCharges((await api.listCharges(companyId, entry.id)).items);
       setError(null);
     } catch (failure) {
       setError(errorMessage(failure));
@@ -73,6 +68,14 @@ export function ChargesPanel({ companyId, entry, canWrite }: ChargesPanelProps) 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // The provider is the operator's setting: it does not change while the page is open.
+  useEffect(() => {
+    api
+      .getCollection(companyId)
+      .then((collection) => setProvider(collection.provider))
+      .catch((failure) => setError(errorMessage(failure)));
+  }, [companyId]);
 
   const open = new Set(
     (charges ?? []).filter((charge) => charge.status === "open").map((charge) => charge.installment),

@@ -1,7 +1,7 @@
 use conta_verde_domain::{
     Actor, Amount, AuditAction, AuditRecord, CalendarDate, Charge, ChargeDraft, ChargeId,
     ChargeMethod, CompanyId, Decimal, EntryId, EntryKind, FinancialEntry, charge_changes,
-    charge_creation_changes,
+    charge_creation_changes, settled_of,
 };
 
 use crate::audit::audit_entry;
@@ -149,8 +149,11 @@ where
     ) -> Result<Charge, ApplicationError> {
         let stored = self.get(company_id, entry_id, id).await?;
         let after = stored.cancelled()?;
-        if !self.provider.is_enabled() || self.provider.key() != stored.provider() {
+        if !self.provider.is_enabled() {
             return Err(ProviderError::Disabled.into());
+        }
+        if self.provider.key() != stored.provider() {
+            return Err(ApplicationError::ChargeFromAnotherProvider);
         }
         self.provider.cancel_charge(stored.external_id()).await?;
         let audit = audit_entry(
@@ -223,16 +226,11 @@ where
         installment: u16,
         amount: Decimal,
     ) -> Result<Amount, ApplicationError> {
-        let settled: Decimal = self
+        let settlements = self
             .entries
             .settlements_of(entry.company_id(), &[entry.id()])
-            .await?
-            .iter()
-            .filter(|settlement| {
-                settlement.installment() == installment && !settlement.is_reversed()
-            })
-            .map(|settlement| settlement.applied().as_decimal())
-            .sum();
+            .await?;
+        let settled = settled_of(&settlements, installment);
         Amount::in_cents(&(amount - settled).to_string())
             .filter(|left| !left.as_decimal().is_zero())
             .ok_or(ApplicationError::NothingToCharge)

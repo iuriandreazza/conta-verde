@@ -99,6 +99,8 @@ pub enum ApplicationError {
     ChargeNeedsParty,
     /// The installment is settled: there is nothing left to charge.
     NothingToCharge,
+    /// The charge was made at another provider than the one configured now, which cannot call it off.
+    ChargeFromAnotherProvider,
     /// The payment provider could not make or call off the charge.
     Provider(ProviderError),
     /// No financial entry with this id in the company (another company's looks the same).
@@ -288,6 +290,9 @@ impl fmt::Display for ApplicationError {
             Self::ChargeNeedsReceivable => f.write_str("only a receivable can be charged"),
             Self::ChargeNeedsParty => f.write_str("the entry has no customer to charge"),
             Self::NothingToCharge => f.write_str("the installment has nothing left to charge"),
+            Self::ChargeFromAnotherProvider => {
+                f.write_str("the charge was made at another payment provider than the configured one")
+            }
             Self::Provider(error) => error.fmt(f),
             Self::EntryNotFound => f.write_str("entry not found"),
             Self::AttachmentNotFound => f.write_str("attachment not found"),

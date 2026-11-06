@@ -132,6 +132,7 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
         | ApplicationError::EntryIsVoided
         | ApplicationError::SaleHasSettlements
         | ApplicationError::SaleHasReturns
+        | ApplicationError::ChargeFromAnotherProvider
         | ApplicationError::QuoteAlreadyConverted => (StatusCode::CONFLICT, error.to_string()),
         // It existed and cannot be approved any more: its validity has run out.
         ApplicationError::QuoteExpired => (StatusCode::GONE, error.to_string()),

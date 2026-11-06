@@ -95,14 +95,8 @@ impl PaymentProvider for FakePaymentProvider {
         }
         state.created.push(request.clone());
         let external_id = Self::external_id_of(request.charge_id);
-        let digits: String = request
-            .charge_id
-            .as_uuid()
-            .as_u128()
-            .to_string()
-            .chars()
-            .take(44)
-            .collect();
+        // Zero padded, so the slices below always fit.
+        let digits = format!("{:039}", request.charge_id.as_uuid().as_u128());
         let payment = match request.method {
             ChargeMethod::Boleto => ChargePayment {
                 digitable_line: Some(format!("00190.00009 {} {}", &digits[..5], &digits[5..10])),
