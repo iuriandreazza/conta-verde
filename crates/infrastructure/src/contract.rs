@@ -9,8 +9,9 @@ use conta_verde_application::{
     SecretService,
 };
 use conta_verde_application::{
-    ChargeRepository, ChargeService, CollectionService, CollectionSettingsRepository,
-    PaymentEventRepository, PaymentWebhookService, ProviderError, Recorded, WebhookError,
+    ChargeRepository, ChargeService, CollectionService, CollectionSettingsRepository, PageState,
+    PaymentEventRepository, PaymentLinkRepository, PaymentPageService, PaymentWebhookService,
+    ProviderError, Recorded, WebhookError,
 };
 use conta_verde_application::{
     CommissionRuleQuery, CommissionRuleRepository, CommissionService, ContractRepository,
@@ -11725,4 +11726,209 @@ async fn outcome_of<Ev: PaymentEventRepository>(
         Recorded::Existing(stored) => (stored.outcome(), stored.note().map(str::to_owned)),
         Recorded::New(_) => panic!("the event {event} was not stored"),
     }
+}
+
+/// The payment page of a charge ([ADR 0047]): a link made for an open charge, shown once and kept as a
+/// digest, leading to what the customer pays with while there is something to pay, and to nothing of another
+/// company's.
+#[allow(clippy::too_many_arguments)]
+pub async fn serves_payment_pages<L, C, E, F, P, S, Sec>(
+    pages: &PaymentPageService<L, C, E, Sec>,
+    links: &L,
+    charges: &ChargeService<C, E, P, FakePaymentProvider, S>,
+    entries: &FinancialEntryService<E, F>,
+    settings: &CollectionService<S, F>,
+    company: CompanyId,
+    other_company: CompanyId,
+    seed: &EntrySeed,
+) where
+    L: PaymentLinkRepository,
+    C: ChargeRepository,
+    E: FinancialEntryRepository,
+    F: EntryReferences,
+    P: PartyRepository,
+    S: CollectionSettingsRepository,
+    Sec: SecretService,
+{
+    let ana = actor();
+    settings
+        .replace(company, &ana, seed.bank_account, None)
+        .await
+        .unwrap();
+    let new_entry = |description: &str| {
+        let mut draft = entry_draft(
+            seed,
+            description,
+            "2026-11-10",
+            &[("2026-12-10", "100"), ("2027-01-10", "50.50")],
+        );
+        draft.party_id = Some(seed.party);
+        entries.register(company, &ana, draft)
+    };
+    let sale = new_entry("Venda 12").await.unwrap();
+    let charge = charges
+        .issue(company, &ana, sale.id(), 1, ChargeMethod::Pix, None)
+        .await
+        .unwrap();
+
+    // The address holds the token; the page shows what the customer pays with, and what for.
+    let link = pages
+        .new_link(company, sale.id(), charge.id())
+        .await
+        .unwrap();
+    let token = link
+        .strip_prefix("https://app.example/pay/")
+        .expect("under the public address");
+    assert!(token.len() >= 32);
+    let page = pages.page(token).await.unwrap();
+    assert_eq!(page.state, PageState::Payable);
+    assert_eq!(page.charge.id(), charge.id());
+    assert_eq!(page.description, "Venda 12");
+    assert_eq!(page.installments, 2);
+    assert_eq!(
+        page.charge.payment().pix_payload,
+        charge.payment().pix_payload
+    );
+
+    // Only the digest is kept: the token itself finds nothing in the store, and a made-up one nothing at all.
+    assert_eq!(links.find(token).await.unwrap(), None);
+    for wrong in ["", "nope", &format!("{token}x"), &token[1..]] {
+        assert_eq!(
+            pages.page(wrong).await.unwrap_err(),
+            ApplicationError::ChargeNotFound,
+            "{wrong}"
+        );
+    }
+
+    // A second link leads to the same page, and the first still works.
+    let again = pages
+        .new_link(company, sale.id(), charge.id())
+        .await
+        .unwrap();
+    assert_ne!(again, link);
+    let second = again.strip_prefix("https://app.example/pay/").unwrap();
+    assert_eq!(pages.page(second).await.unwrap().charge.id(), charge.id());
+    assert_eq!(pages.page(token).await.unwrap().state, PageState::Payable);
+
+    // Another company's charge gets no link, and another entry's id does not find it.
+    assert_eq!(
+        pages
+            .new_link(other_company, sale.id(), charge.id())
+            .await
+            .unwrap_err(),
+        ApplicationError::ChargeNotFound
+    );
+    let other_entry = new_entry("Outra venda").await.unwrap();
+    assert_eq!(
+        pages
+            .new_link(company, other_entry.id(), charge.id())
+            .await
+            .unwrap_err(),
+        ApplicationError::ChargeNotFound
+    );
+
+    // Settled by hand while the charge was open: nothing left to pay on the page.
+    entries
+        .settle(company, &ana, sale.id(), settlement_draft(seed, 1, "100"))
+        .await
+        .unwrap();
+    assert_eq!(
+        pages.page(token).await.unwrap().state,
+        PageState::Unavailable
+    );
+
+    // A part settled another way: the old amount would overpay, so the page offers nothing; reversing the part
+    // makes it payable again.
+    let partly = new_entry("Venda parcial").await.unwrap();
+    let partial = charges
+        .issue(company, &ana, partly.id(), 1, ChargeMethod::Pix, None)
+        .await
+        .unwrap();
+    let partial_link = pages
+        .new_link(company, partly.id(), partial.id())
+        .await
+        .unwrap();
+    let partial_token = partial_link
+        .strip_prefix("https://app.example/pay/")
+        .unwrap();
+    let part = entries
+        .settle(company, &ana, partly.id(), settlement_draft(seed, 1, "30"))
+        .await
+        .unwrap();
+    assert_eq!(
+        pages.page(partial_token).await.unwrap().state,
+        PageState::Unavailable
+    );
+    entries
+        .reverse(company, &ana, partly.id(), part.id())
+        .await
+        .unwrap();
+    assert_eq!(
+        pages.page(partial_token).await.unwrap().state,
+        PageState::Payable
+    );
+    // Settled by the charge's own payment, before the webhook marked it paid: the customer is told it was paid.
+    entries
+        .settle_charge(
+            company,
+            &ana,
+            partly.id(),
+            settlement_draft(seed, 1, "100"),
+            partial.id(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        pages.page(partial_token).await.unwrap().state,
+        PageState::Paid
+    );
+
+    // A charge that is called off has nothing to pay, and no new link.
+    let other = charges
+        .issue(company, &ana, sale.id(), 2, ChargeMethod::Boleto, None)
+        .await
+        .unwrap();
+    let other_link = pages
+        .new_link(company, sale.id(), other.id())
+        .await
+        .unwrap();
+    let other_token = other_link.strip_prefix("https://app.example/pay/").unwrap();
+    assert_eq!(
+        pages.page(other_token).await.unwrap().state,
+        PageState::Payable
+    );
+    charges
+        .cancel(company, &ana, sale.id(), other.id())
+        .await
+        .unwrap();
+    assert_eq!(
+        pages.page(other_token).await.unwrap().state,
+        PageState::Unavailable
+    );
+    assert_eq!(
+        pages
+            .new_link(company, sale.id(), other.id())
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::ChargeIsNotOpen)
+    );
+
+    // A cancelled entry's open charge cannot be paid either.
+    let gone = new_entry("Venda cancelada").await.unwrap();
+    let doomed = charges
+        .issue(company, &ana, gone.id(), 1, ChargeMethod::CardLink, None)
+        .await
+        .unwrap();
+    let doomed_link = pages
+        .new_link(company, gone.id(), doomed.id())
+        .await
+        .unwrap();
+    let doomed_token = doomed_link
+        .strip_prefix("https://app.example/pay/")
+        .unwrap();
+    entries.void(company, &ana, gone.id()).await.unwrap();
+    assert_eq!(
+        pages.page(doomed_token).await.unwrap().state,
+        PageState::Unavailable
+    );
 }

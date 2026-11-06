@@ -52,6 +52,7 @@ function serve(options: {
   charges: Charge[];
   onIssue?: (body: unknown) => Reply;
   onCancel?: () => Reply;
+  onLink?: () => Reply;
 }) {
   const charges = [...options.charges];
   return mockApi((url, init) => {
@@ -76,6 +77,7 @@ function serve(options: {
       return reply ?? { status: 500 };
     }
     if (url.endsWith("/entries/e1/charges")) return { status: 200, body: { items: charges } };
+    if (url.endsWith("/link")) return options.onLink?.() ?? { status: 500 };
     if (url.endsWith("/cancel")) {
       const reply = options.onCancel?.() ?? { status: 500 };
       if (reply.status === 200) charges[0] = reply.body as Charge;
@@ -208,4 +210,17 @@ it("asks for the account charges are paid into before offering to issue one", as
   expect(await panel.findByText(/Escolha antes a conta/)).toBeInTheDocument();
   expect(panel.getByRole("link", { name: "Cobrança" })).toHaveAttribute("href", "/companies/c1/collection");
   expect(panel.queryByRole("button", { name: "Emitir cobrança" })).not.toBeInTheDocument();
+});
+
+it("makes a link to the payment page and shows it once, to copy", async () => {
+  const writeText = vi.fn(async () => undefined);
+  vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+  const fetchMock = serve({ charges: [pixCharge], onLink: () => ({ status: 201, body: { url: "https://app.example/pay/tok123" } }) });
+  const panel = await openPanel();
+
+  await userEvent.click(await panel.findByRole("button", { name: "Gerar o link de pagamento da parcela 1" }));
+  expect(await panel.findByText("https://app.example/pay/tok123")).toBeInTheDocument();
+  expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/charges/ch1/link"))).toBe(true);
+  await userEvent.click(panel.getByRole("button", { name: "Copiar o link de pagamento" }));
+  expect(writeText).toHaveBeenCalledWith("https://app.example/pay/tok123");
 });

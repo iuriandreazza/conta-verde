@@ -9,9 +9,9 @@ use conta_verde_application::{
     SalesReportService, TransferService,
 };
 use conta_verde_application::{
-    ChargeService, CollectionService, EmailError, EmailMessage, EmailSender, PaymentProvider,
-    PaymentWebhookService, ProviderCharge, ProviderChargeRequest, ProviderError, ProviderEvent,
-    WebhookError, WebhookHeaders,
+    ChargeService, CollectionService, EmailError, EmailMessage, EmailSender, PaymentPageService,
+    PaymentProvider, PaymentWebhookService, ProviderCharge, ProviderChargeRequest, ProviderError,
+    ProviderEvent, WebhookError, WebhookHeaders,
 };
 use conta_verde_infrastructure::{
     Argon2SecretService, BrasilApiCnpjRegistry, BrasilApiPostalCodeDirectory, CachedCnpjRegistry,
@@ -27,6 +27,7 @@ use conta_verde_infrastructure::{
 use conta_verde_infrastructure::{
     FakePaymentProvider, NoPaymentProvider, PostgresChargeRepository,
     PostgresCollectionSettingsRepository, PostgresPaymentEventRepository,
+    PostgresPaymentLinkRepository,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -59,6 +60,7 @@ impl Ports for PostgresPorts {
     type Provider = ConfiguredPaymentProvider;
     type CollectionSettings = PostgresCollectionSettingsRepository;
     type PaymentEvents = PostgresPaymentEventRepository;
+    type PaymentLinks = PostgresPaymentLinkRepository;
     type Transfers = PostgresTransferRepository;
     type Openings = PostgresOpeningRepository;
     type Recurrences = PostgresRecurrenceRepository;
@@ -195,6 +197,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Argon2SecretService::new()?,
         &public_url,
     );
+    let payment_pages = PaymentPageService::new(
+        PostgresPaymentLinkRepository::new(pool.clone()),
+        PostgresChargeRepository::new(pool.clone()),
+        PostgresFinancialEntryRepository::new(pool.clone()),
+        Argon2SecretService::new()?,
+        &public_url,
+    );
     let price_lists = PriceListService::new(
         PostgresPriceListRepository::new(pool.clone()),
         RegisterSalesReferences::new(
@@ -270,6 +279,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 attachments,
                 charges,
                 webhooks,
+                payment_pages,
                 collection,
                 transfers,
                 recurrences,

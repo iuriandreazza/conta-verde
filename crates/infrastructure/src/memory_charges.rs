@@ -93,6 +93,19 @@ impl ChargeRepository for InMemoryChargeRepository {
         Ok(())
     }
 
+    async fn find_by_id(
+        &self,
+        company_id: CompanyId,
+        id: ChargeId,
+    ) -> Result<Option<Charge>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        Ok(state
+            .charges
+            .iter()
+            .find(|stored| stored.company_id() == company_id && stored.id() == id)
+            .cloned())
+    }
+
     async fn find_by_external(
         &self,
         company_id: CompanyId,
@@ -158,14 +171,16 @@ impl ChargeRepository for InMemoryChargeRepository {
 #[cfg(test)]
 mod tests {
     use conta_verde_application::{
-        ChargeService, CollectionService, FinancialEntryService, PaymentWebhookService,
+        ChargeService, CollectionService, FinancialEntryService, PaymentPageService,
+        PaymentWebhookService,
     };
 
     use super::*;
     use crate::memory_entries::tests::Registers;
     use crate::{
-        FakePaymentProvider, InMemoryCollectionSettingsRepository,
-        InMemoryFinancialEntryRepository, InMemoryPaymentEventRepository, contract,
+        Argon2SecretService, FakePaymentProvider, InMemoryCollectionSettingsRepository,
+        InMemoryFinancialEntryRepository, InMemoryPaymentEventRepository,
+        InMemoryPaymentLinkRepository, contract,
     };
 
     #[tokio::test]
@@ -209,6 +224,45 @@ mod tests {
             registers.references(),
         );
         contract::configures_collection(&settings, company, other_company, &seed).await;
+    }
+
+    #[tokio::test]
+    async fn serves_payment_pages() {
+        let registers = Registers::new();
+        let (company, other_company) = (CompanyId::generate(), CompanyId::generate());
+        let seed = registers.seed(company).await;
+        let entry_store = InMemoryFinancialEntryRepository::default();
+        let store = InMemoryChargeRepository::default();
+        let settings_store = InMemoryCollectionSettingsRepository::default();
+        let links = InMemoryPaymentLinkRepository::default();
+        let provider = FakePaymentProvider::default();
+        let charges = ChargeService::new(
+            store.clone(),
+            entry_store.clone(),
+            registers.parties.clone(),
+            provider,
+            settings_store.clone(),
+        );
+        let pages = PaymentPageService::new(
+            links.clone(),
+            store,
+            entry_store.clone(),
+            Argon2SecretService::new().unwrap(),
+            "https://app.example/",
+        );
+        let entries = FinancialEntryService::new(entry_store, registers.references());
+        let settings = CollectionService::new(settings_store, registers.references());
+        contract::serves_payment_pages(
+            &pages,
+            &links,
+            &charges,
+            &entries,
+            &settings,
+            company,
+            other_company,
+            &seed,
+        )
+        .await;
     }
 
     #[tokio::test]

@@ -17,6 +17,7 @@ import { EntriesPage } from "./pages/EntriesPage";
 import { MembersPage } from "./pages/MembersPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { PartiesPage } from "./pages/PartiesPage";
+import { PaymentPage } from "./pages/PaymentPage";
 import { PaymentMethodsPage } from "./pages/PaymentMethodsPage";
 import { PaymentTermsPage } from "./pages/PaymentTermsPage";
 import { ProductsPage } from "./pages/ProductsPage";
@@ -36,6 +37,7 @@ export function App() {
         <Route path="/register" element={<AuthPage mode="register" />} />
         <Route path="/invitations/:token" element={<AcceptInvitationPage />} />
         <Route path="/quote/:token" element={<QuoteAnswerPage />} />
+        <Route path="/pay/:token" element={<PaymentPage />} />
         <Route element={<RequireAuth />}>
           <Route path="/" element={<CompaniesPage />} />
           <Route path="/companies/:companyId" element={<DashboardPage />} />

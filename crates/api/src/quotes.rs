@@ -454,7 +454,7 @@ pub(crate) async fn decline_quote<X: Ports>(
 }
 
 /// Names are as long as a person typed them; a line of the PDF is not.
-fn clipped(name: &str) -> String {
+pub(crate) fn clipped(name: &str) -> String {
     name.chars().take(70).collect()
 }
 

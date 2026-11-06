@@ -2,7 +2,7 @@ use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
-use conta_verde_application::{ApplicationError, WebhookHeaders};
+use conta_verde_application::{ApplicationError, PageState, WebhookHeaders};
 use conta_verde_domain::{
     Actor, BankAccountId, CalendarDate, CategoryId, Charge, ChargeId, ChargeMethod,
     CollectionSettings, CompanyId, EntryId, MAX_EVENT_BYTES,
@@ -288,4 +288,82 @@ pub(crate) async fn receive_payment_webhook<X: Ports>(
         .receive(company_id, &provider, &headers, &body)
         .await?;
     Ok(Json(WebhookResponse { received }))
+}
+
+#[derive(Serialize)]
+pub(crate) struct PaymentLinkResponse {
+    /// Where to send the customer. It is **shown once**: only its digest is kept.
+    url: String,
+}
+
+/// Makes a link to the charge's payment page, for the person to send the customer.
+pub(crate) async fn new_payment_link<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, _): CompanyAccess,
+    Path((_, entry_id, charge_id)): Path<(Uuid, String, String)>,
+) -> Result<(StatusCode, Json<PaymentLinkResponse>), ApiError> {
+    let url = state
+        .payment_pages
+        .new_link(
+            company_id,
+            parse_entry(&entry_id)?,
+            parse_charge(&charge_id)?,
+        )
+        .await?;
+    Ok((StatusCode::CREATED, Json(PaymentLinkResponse { url })))
+}
+
+/// What the customer sees at the link: the charge and who is charging, nothing of the company's books.
+#[derive(Serialize)]
+pub(crate) struct PublicChargeResponse {
+    company_name: String,
+    /// What it is for, as the company wrote it.
+    description: String,
+    installment: u16,
+    installments: usize,
+    /// `boleto`, `pix` or `card_link`.
+    method: &'static str,
+    /// `payable`, `paid` or `unavailable`: what the page may offer.
+    state: &'static str,
+    amount: String,
+    due_on: String,
+    /// Only while it can be paid: what the customer pays with.
+    digitable_line: Option<String>,
+    pix_payload: Option<String>,
+    payment_url: Option<String>,
+    /// Only once it was paid.
+    paid_on: Option<String>,
+}
+
+/// The payment page a link leads to. It needs no session: the customer has none, and the token is the secret.
+pub(crate) async fn public_charge<X: Ports>(
+    State(state): State<SharedState<X>>,
+    Path(token): Path<String>,
+) -> Result<Json<PublicChargeResponse>, ApiError> {
+    let page = state.payment_pages.page(&token).await?;
+    let payable = page.state == PageState::Payable;
+    let company_name = state.auth.company_name(page.charge.company_id()).await?;
+    let payment = page.charge.payment();
+    Ok(Json(PublicChargeResponse {
+        company_name: crate::quotes::clipped(&company_name),
+        description: page.description,
+        installment: page.charge.installment(),
+        installments: page.installments,
+        method: page.charge.method().as_str(),
+        state: match page.state {
+            PageState::Payable => "payable",
+            PageState::Paid => "paid",
+            PageState::Unavailable => "unavailable",
+        },
+        amount: page.charge.amount().to_string(),
+        due_on: page.charge.due_on().to_string(),
+        digitable_line: payable.then(|| payment.digitable_line.clone()).flatten(),
+        pix_payload: payable.then(|| payment.pix_payload.clone()).flatten(),
+        payment_url: payable.then(|| payment.payment_url.clone()).flatten(),
+        paid_on: page
+            .charge
+            .receipt()
+            .filter(|_| page.state == PageState::Paid)
+            .map(|receipt| receipt.paid_on.to_string()),
+    }))
 }

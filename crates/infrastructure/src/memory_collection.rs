@@ -2,11 +2,11 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use conta_verde_application::{
-    CollectionSettingsRepository, PaymentEventRepository, Recorded, RepositoryError,
-    ensure_audit_describes,
+    CollectionSettingsRepository, LinkTarget, PaymentEventRepository, PaymentLinkRepository,
+    Recorded, RepositoryError, ensure_audit_describes,
 };
 use conta_verde_domain::{
-    AuditEntity, AuditEntry, AuditRecord, CollectionSettings, CompanyId, PaymentEvent,
+    AuditEntity, AuditEntry, AuditRecord, ChargeId, CollectionSettings, CompanyId, PaymentEvent,
     PaymentEventId, PaymentEventOutcome,
 };
 
@@ -93,5 +93,39 @@ impl PaymentEventRepository for InMemoryPaymentEventRepository {
             .ok_or(RepositoryError::NotFound)?;
         *stored = stored.clone().with_outcome(outcome, note);
         Ok(())
+    }
+}
+
+/// Keeps the payment links in process memory, for tests and for running the API without a database.
+/// Clones share the same records.
+#[derive(Default, Clone)]
+pub struct InMemoryPaymentLinkRepository {
+    links: Arc<Mutex<HashMap<String, LinkTarget>>>,
+}
+
+impl PaymentLinkRepository for InMemoryPaymentLinkRepository {
+    async fn save(
+        &self,
+        company_id: CompanyId,
+        charge_id: ChargeId,
+        digest: &str,
+    ) -> Result<(), RepositoryError> {
+        self.links.lock().expect("repository lock poisoned").insert(
+            digest.to_owned(),
+            LinkTarget {
+                company_id,
+                charge_id,
+            },
+        );
+        Ok(())
+    }
+
+    async fn find(&self, digest: &str) -> Result<Option<LinkTarget>, RepositoryError> {
+        Ok(self
+            .links
+            .lock()
+            .expect("repository lock poisoned")
+            .get(digest)
+            .copied())
     }
 }

@@ -12,6 +12,7 @@ import { formatMoney } from "../lib/decimal";
 import { formatDate, isIsoDate } from "../lib/entryInstallments";
 import { balance, balanceCents } from "../lib/settlement";
 import { Button } from "./Button";
+import { CopyButton } from "./CopyButton";
 import { CheckIcon } from "./icons/check";
 import { Notice } from "./Notice";
 import { Spinner } from "./Spinner";
@@ -72,6 +73,9 @@ export function ChargesPanel({ companyId, entry, canWrite }: ChargesPanelProps) 
   const [issuing, setIssuing] = useState(false);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [chosen, setChosen] = useState<number | null>(null);
+  // The link just made, shown once: only its digest is kept.
+  const [link, setLink] = useState<{ chargeId: string; url: string } | null>(null);
+  const [linkingId, setLinkingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -138,6 +142,22 @@ export function ChargesPanel({ companyId, entry, canWrite }: ChargesPanelProps) 
       setFormError(errorMessage(failure));
     } finally {
       setIssuing(false);
+    }
+  }
+
+  async function makeLink(charge: Charge) {
+    if (linkingId !== null) {
+      return;
+    }
+    setLinkingId(charge.id);
+    setError(null);
+    try {
+      const made = await api.newPaymentLink(companyId, entry.id, charge.id);
+      setLink({ chargeId: charge.id, url: made.url });
+    } catch (failure) {
+      setError(errorMessage(failure));
+    } finally {
+      setLinkingId(null);
     }
   }
 
@@ -211,6 +231,26 @@ export function ChargesPanel({ companyId, entry, canWrite }: ChargesPanelProps) 
                             .join(" ")}`
                     }
                   />
+                  {link?.chargeId === charge.id && (
+                    <div className="charge-details">
+                      <span className="muted">Link para o cliente (aparece só agora):</span>
+                      <code className="tabular">{link.url}</code>
+                      <CopyButton text={link.url} label="Copiar o link de pagamento" />
+                    </div>
+                  )}
+                  {canWrite && charge.status === "open" && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="btn-small"
+                      aria-label={`Gerar o link de pagamento da parcela ${charge.installment}`}
+                      pending={linkingId === charge.id}
+                      disabled={linkingId !== null}
+                      onClick={() => void makeLink(charge)}
+                    >
+                      Gerar link
+                    </Button>
+                  )}
                   {canWrite && charge.status === "open" && (
                     <Button
                       type="button"
@@ -288,45 +328,16 @@ export function ChargesPanel({ companyId, entry, canWrite }: ChargesPanelProps) 
 
 /** What the customer pays with: a line, a text to paste or a link, each with what it takes to use it. */
 function PaymentDetails({ charge }: { charge: Charge }) {
-  const [copied, setCopied] = useState(false);
-
-  // "Copiado" goes back to "Copiar" after a moment, so a second copy gives feedback again.
-  useEffect(() => {
-    if (!copied) {
-      return;
-    }
-    const timer = setTimeout(() => setCopied(false), 2000);
-    return () => clearTimeout(timer);
-  }, [copied]);
-
-  async function copy(text: string) {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-    } catch {
-      // No clipboard where this runs (or no permission): the text stays on the page to be selected.
-      setCopied(false);
-    }
-  }
-
   const text = charge.digitable_line ?? charge.pix_payload;
   return (
     <div className="charge-details">
       {text !== null && (
         <>
           <code className="tabular">{text}</code>{" "}
-          <Button
-            type="button"
-            variant="ghost"
-            className="btn-small"
-            aria-label={`Copiar ${charge.method === "boleto" ? "a linha digitável" : "o código Pix"}`}
-            onClick={() => void copy(text)}
-          >
-            Copiar
-          </Button>
-          <span role="status" className="muted">
-            {copied ? "Copiado." : ""}
-          </span>
+          <CopyButton
+            text={text}
+            label={`Copiar ${charge.method === "boleto" ? "a linha digitável" : "o código Pix"}`}
+          />
         </>
       )}
       {charge.payment_url !== null && (
