@@ -29,12 +29,15 @@ export function AttachmentsPanel({ companyId, entryId, canWrite }: AttachmentsPa
   const [removingId, setRemovingId] = useState<string | null>(null);
   const picker = useRef<HTMLInputElement>(null);
 
+  /** Reads the list; says whether it could. */
   const load = useCallback(async () => {
     try {
       setAttachments((await api.listAttachments(companyId, entryId)).items);
       setError(null);
+      return true;
     } catch (failure) {
       setError(errorMessage(failure));
+      return false;
     }
   }, [companyId, entryId]);
 
@@ -45,7 +48,7 @@ export function AttachmentsPanel({ companyId, entryId, canWrite }: AttachmentsPa
   async function attach(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = "";
-    if (file === undefined || sending) {
+    if (file === undefined || sending || removingId !== null) {
       return;
     }
     const problem = fileProblem(file);
@@ -59,8 +62,9 @@ export function AttachmentsPanel({ companyId, entryId, canWrite }: AttachmentsPa
     setSaved(null);
     try {
       const made = await api.attachFile(companyId, entryId, file);
-      await load();
-      setSaved(`${made.file_name} anexado.`);
+      if (await load()) {
+        setSaved(`${made.file_name} anexado.`);
+      }
     } catch (failure) {
       setError(errorMessage(failure));
     } finally {
@@ -98,6 +102,10 @@ export function AttachmentsPanel({ companyId, entryId, canWrite }: AttachmentsPa
         <p role="status" className="status">
           <Spinner /> Carregando…
         </p>
+      ) : attachments === null ? (
+        <Button type="button" variant="ghost" onClick={() => void load()}>
+          Tentar de novo
+        </Button>
       ) : (
         attachments !== null &&
         (attachments.length === 0 ? (
@@ -117,7 +125,7 @@ export function AttachmentsPanel({ companyId, entryId, canWrite }: AttachmentsPa
                     className="btn-small"
                     aria-label={`Remover ${attachment.file_name}`}
                     pending={removingId === attachment.id}
-                    disabled={removingId !== null}
+                    disabled={removingId !== null || sending}
                     onClick={() => void remove(attachment)}
                   >
                     Remover
@@ -142,7 +150,7 @@ export function AttachmentsPanel({ companyId, entryId, canWrite }: AttachmentsPa
             type="button"
             icon={PlusIcon}
             pending={sending}
-            disabled={full}
+            disabled={full || removingId !== null}
             onClick={() => picker.current?.click()}
           >
             Anexar arquivo

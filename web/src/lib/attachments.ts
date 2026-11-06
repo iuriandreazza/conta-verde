@@ -5,6 +5,27 @@ export const MAX_ENTRY_ATTACHMENTS = 20;
 /** What the file picker offers; the API holds the real list of types. */
 export const ATTACHMENT_ACCEPT = ".pdf,.png,.jpg,.jpeg,.webp,.txt,.csv,.xml";
 
+const TYPES_BY_EXTENSION: Record<string, string> = {
+  pdf: "application/pdf",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  webp: "image/webp",
+  txt: "text/plain",
+  csv: "text/csv",
+  xml: "application/xml",
+};
+
+/**
+ * The type to send for a file. The extension decides, since it is what the picker offered: a browser
+ * on Windows with Excel installed calls a `.csv` `application/vnd.ms-excel`, and a file it does not
+ * know has no type at all.
+ */
+export function contentTypeOf(file: { name: string; type: string }): string {
+  const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+  return TYPES_BY_EXTENSION[extension] ?? (file.type || "application/octet-stream");
+}
+
 /** `13 B`, `2,5 KB`, `1,2 MB`: the size as a person reads it. */
 export function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;

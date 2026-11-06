@@ -1,3 +1,5 @@
+import { contentTypeOf } from "./lib/attachments";
+
 export interface User {
   id: string;
   name: string;
@@ -1012,7 +1014,7 @@ export const api = {
       {
         method: "POST",
         body: file,
-        headers: { "Content-Type": file.type || "application/octet-stream" },
+        headers: { "Content-Type": contentTypeOf(file) },
       },
     ),
   /** Where the file is downloaded from: the session cookie goes with a plain link. */

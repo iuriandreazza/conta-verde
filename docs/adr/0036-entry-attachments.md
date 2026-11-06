@@ -50,7 +50,9 @@ A removed attachment is not listed and cannot be downloaded.
 The **bytes go first**, then the record with its audit entry; if the record write fails the bytes are taken
 back, so a record never points at a file that is not there. On removal the **record goes first**, then the
 bytes; bytes that could not be dropped are unreachable clutter and do not fail a removal that has happened. A
-crash between the steps can leave an orphan file, never a dangling record. Nothing sweeps orphans yet.
+crash between the steps can leave an orphan file (or a `.partial` one, when a write is cut short), never a
+dangling record. Nothing sweeps orphans yet. A download that races a removal between reading the record and
+reading the bytes answers `500` instead of `404`; the window is a few milliseconds and the next read is right.
 
 ### What is taken
 
