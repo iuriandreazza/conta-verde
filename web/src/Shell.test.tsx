@@ -20,7 +20,10 @@ const profile: Profile = {
   ],
 };
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  window.localStorage.clear();
+});
 
 function renderAt(path: string) {
   return render(
@@ -113,6 +116,37 @@ describe("page shell", () => {
     expect(finance).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByRole("link", { name: "Fluxo de caixa" })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Contas bancárias" })).toBeInTheDocument();
+  });
+
+  it("shrinks the menu to a rail of icons and expands it again, remembering the choice", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(profile), { status: 200 })));
+    const { unmount } = renderAt("/companies/c1");
+    const toggle = await screen.findByRole("button", { name: "Recolher o menu" });
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+
+    await userEvent.click(toggle);
+
+    expect(screen.getByRole("button", { name: "Expandir o menu" })).toHaveAttribute("aria-expanded", "false");
+    expect(document.querySelector(".app")).toHaveAttribute("data-collapsed");
+    // The names stay for a screen reader and show as a tooltip where the text is out of sight.
+    expect(screen.getByRole("link", { name: "Fluxo de caixa" })).toHaveAttribute("title", "Fluxo de caixa");
+
+    unmount();
+    renderAt("/companies/c1");
+    expect(await screen.findByRole("button", { name: "Expandir o menu" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Expandir o menu" }));
+    expect(screen.getByRole("link", { name: "Fluxo de caixa" })).not.toHaveAttribute("title");
+  });
+
+  it("shows every icon in the rail even when a group was folded before", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(profile), { status: 200 })));
+    renderAt("/companies/c1");
+    await userEvent.click(await screen.findByRole("button", { name: "Financeiro" }));
+    expect(screen.queryByRole("link", { name: "Fluxo de caixa" })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Recolher o menu" }));
+
+    expect(screen.getByRole("link", { name: "Fluxo de caixa" })).toBeInTheDocument();
   });
 
   it("offers to create only what the role may write, from any page", async () => {

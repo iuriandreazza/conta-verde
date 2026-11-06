@@ -6,13 +6,28 @@ import { AppTopbar } from "./AppTopbar";
 import { CreationProvider } from "../creation/CreationProvider";
 import { CompanyNav } from "./CompanyNav";
 import { Footer } from "./Footer";
+import { ChevronLeftIcon } from "./icons/chevron-left";
+import { ChevronRightIcon } from "./icons/chevron-right";
 import { Logo } from "./Logo";
+
+const COLLAPSED_KEY = "conta-verde.sidebar-collapsed";
+
+// Storage can be missing or refuse (a private window): the menu then just starts open.
+function readCollapsed(): boolean {
+  try {
+    return window.localStorage.getItem(COLLAPSED_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
 
 export function Layout() {
   const { session, signOut } = useAuth();
   const [signOutFailed, setSignOutFailed] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
+  // On a wide screen the menu can shrink to a rail of icons; the phone's drawer ignores it.
+  const [collapsed, setCollapsed] = useState(readCollapsed);
   const location = useLocation();
   const mainRef = useRef<HTMLElement>(null);
   // The drawer on a phone covers the page: going somewhere closes it.
@@ -21,6 +36,16 @@ export function Layout() {
   useEffect(() => {
     if (navOpen) document.querySelector<HTMLElement>("#app-sidebar .side-nav a")?.focus();
   }, [navOpen]);
+
+  function toggleCollapsed() {
+    const next = !collapsed;
+    setCollapsed(next);
+    try {
+      window.localStorage.setItem(COLLAPSED_KEY, String(next));
+    } catch {
+      // Not remembered, still collapsed for now.
+    }
+  }
 
   function closeNav() {
     setNavOpen(false);
@@ -108,7 +133,7 @@ export function Layout() {
   return (
     // The provider is in both shells, at the same place: the page keeps its state when the session arrives.
     <CreationProvider companyId={companyId}>
-    <div className="app">
+    <div className="app" data-collapsed={collapsed || undefined}>
       {/* Inside the sidebar, not before it: the sign-in layout and this one put <main> at the same position,
           which keeps the sign-up page mounted (and its outcome) when the session arrives. */}
       <aside
@@ -120,9 +145,24 @@ export function Layout() {
         <a href="#main" className="skip-link" onClick={skipToContent}>
           Ir para o conteúdo
         </a>
-        <Link to="/" className="brand" aria-label="conta-verde, início">
-          <Logo size={30} />
-        </Link>
+        <div className="sidebar-head">
+          <Link to="/" className="brand" aria-label="conta-verde, início">
+            <Logo size={30} />
+          </Link>
+          {companyId && (
+            <button
+              type="button"
+              className="sidebar-toggle"
+              aria-expanded={!collapsed}
+              aria-controls="company-nav"
+              aria-label={collapsed ? "Expandir o menu" : "Recolher o menu"}
+              title={collapsed ? "Expandir o menu" : "Recolher o menu"}
+              onClick={toggleCollapsed}
+            >
+              {collapsed ? <ChevronRightIcon size={18} aria-hidden /> : <ChevronLeftIcon size={18} aria-hidden />}
+            </button>
+          )}
+        </div>
         {company && (
           <div className="company-switch">
             <span className="company-switch-label">Empresa</span>
@@ -131,7 +171,7 @@ export function Layout() {
           </div>
         )}
         {companyId && (
-          <CompanyNav companyId={companyId} canSeeMembers={company?.permissions.members !== undefined} />
+          <CompanyNav companyId={companyId} collapsed={collapsed} canSeeMembers={company?.permissions.members !== undefined} />
         )}
       </aside>
       <div className="app-main">
