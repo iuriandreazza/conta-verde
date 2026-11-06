@@ -26,13 +26,13 @@ use conta_verde_infrastructure::{
     RegisterReferences, RegisterSalesReferences, SmtpEmailSender, connect_and_migrate,
 };
 use conta_verde_infrastructure::{
+    AsaasProvider, NoMessageSender, PostgresDunningPlanRepository, PostgresNotificationRepository,
+    WhatsAppCloudSender,
+};
+use conta_verde_infrastructure::{
     FakePaymentProvider, NoPaymentProvider, PostgresChargeRepository,
     PostgresCollectionSettingsRepository, PostgresPaymentEventRepository,
     PostgresPaymentLinkRepository,
-};
-use conta_verde_infrastructure::{
-    NoMessageSender, PostgresDunningPlanRepository, PostgresNotificationRepository,
-    WhatsAppCloudSender,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -426,6 +426,7 @@ where
 enum ConfiguredPaymentProvider {
     Off(NoPaymentProvider),
     Fake(FakePaymentProvider),
+    Asaas(Box<AsaasProvider>),
 }
 
 impl PaymentProvider for ConfiguredPaymentProvider {
@@ -433,6 +434,7 @@ impl PaymentProvider for ConfiguredPaymentProvider {
         match self {
             Self::Off(provider) => provider.key(),
             Self::Fake(provider) => provider.key(),
+            Self::Asaas(provider) => provider.key(),
         }
     }
 
@@ -440,6 +442,7 @@ impl PaymentProvider for ConfiguredPaymentProvider {
         match self {
             Self::Off(provider) => provider.is_enabled(),
             Self::Fake(provider) => provider.is_enabled(),
+            Self::Asaas(provider) => provider.is_enabled(),
         }
     }
 
@@ -450,6 +453,7 @@ impl PaymentProvider for ConfiguredPaymentProvider {
         match self {
             Self::Off(provider) => provider.create_charge(request).await,
             Self::Fake(provider) => provider.create_charge(request).await,
+            Self::Asaas(provider) => provider.create_charge(request).await,
         }
     }
 
@@ -457,6 +461,7 @@ impl PaymentProvider for ConfiguredPaymentProvider {
         match self {
             Self::Off(provider) => provider.cancel_charge(external_id).await,
             Self::Fake(provider) => provider.cancel_charge(external_id).await,
+            Self::Asaas(provider) => provider.cancel_charge(external_id).await,
         }
     }
 
@@ -468,6 +473,7 @@ impl PaymentProvider for ConfiguredPaymentProvider {
         match self {
             Self::Off(provider) => provider.verify_webhook(headers, body),
             Self::Fake(provider) => provider.verify_webhook(headers, body),
+            Self::Asaas(provider) => provider.verify_webhook(headers, body),
         }
     }
 }
@@ -495,6 +501,29 @@ fn payment_provider_from_env()
             Ok(ConfiguredPaymentProvider::Fake(
                 FakePaymentProvider::with_webhook_secret(secret),
             ))
+        }
+        Some("asaas") => {
+            let setting = |name: &str| {
+                std::env::var(name)
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+            };
+            let (Some(key), Some(token)) =
+                (setting("ASAAS_API_KEY"), setting("ASAAS_WEBHOOK_TOKEN"))
+            else {
+                return Err(
+                    "PAYMENT_PROVIDER=asaas needs ASAAS_API_KEY and ASAAS_WEBHOOK_TOKEN".into(),
+                );
+            };
+            // Asaas itself refuses a shorter one when the webhook is registered; a short one here would be
+            // the only thing between the internet and a forged payment.
+            if token.chars().count() < 32 {
+                return Err("ASAAS_WEBHOOK_TOKEN must have at least 32 characters".into());
+            }
+            tracing::info!("charges are made at Asaas");
+            Ok(ConfiguredPaymentProvider::Asaas(Box::new(
+                AsaasProvider::new(setting("ASAAS_API_URL").as_deref(), &key, &token)?,
+            )))
         }
         Some(other) => Err(format!("PAYMENT_PROVIDER={other} is not a known provider").into()),
     }

@@ -221,6 +221,9 @@ impl PaymentProvider for FakePaymentProvider {
             },
             Some("cancelled") => ProviderEventKind::Cancelled,
             Some("expired") => ProviderEventKind::Expired,
+            // A notice that changes nothing: acknowledged, like the events a real provider sends that no
+            // adapter acts on.
+            Some("ping") => return Ok(Vec::new()),
             _ => return Err(malformed("type")),
         };
         Ok(vec![ProviderEvent {

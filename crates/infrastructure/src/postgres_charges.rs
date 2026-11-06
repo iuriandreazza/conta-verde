@@ -670,7 +670,8 @@ mod tests {
 
         // A link is to the company's own charge and holds a digest, never a short text.
         let links = PostgresPaymentLinkRepository::new(pool.clone());
-        let digest = "d".repeat(40);
+        // A digest is one link's for good, so each run makes its own.
+        let digest = Uuid::new_v4().simple().to_string();
         assert!(
             links
                 .save(other_company, charge.id(), &digest)

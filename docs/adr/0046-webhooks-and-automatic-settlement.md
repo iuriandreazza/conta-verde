@@ -22,9 +22,11 @@ authenticated by a signature and not by a session, and the first write that must
 `POST /public/payments/{company_id}/webhooks/{provider}` needs no session and is outside `/companies/…`. The
 company in the path is the one the provider was told to call (the web app shows the address on the Cobrança
 page). It answers `200 {"received": n}`; `401` for a signature that is missing or not the provider's; `400` for a
-signed body that is not a notice; **`404` for a provider that is not the configured one, a company or a charge
-that does not exist, and for a charge of another company**, which look the same and store nothing. A storage
-failure answers `500`, which is what makes the provider send the notice again.
+signed body that is not a notice; `404` for a provider that is not the configured one; and **`200` with nothing stored
+or applied for a notice of a charge that is not the company's** (unknown, or another company's). A provider account
+also has payments made elsewhere, and one that gets errors for them pauses its queue and stops telling us about the
+ones that were made here (Asaas does after fifteen). A storage failure answers `500`, which is what makes the
+provider send the notice again.
 
 The port gains `verify_webhook(headers, body)`: it checks the signature **over the body as it came, before
 anything of it is parsed** (HMAC-SHA256 with the installation's secret, compared in constant time by the `hmac`
@@ -93,7 +95,7 @@ thing that needs the `notifications` table (next slices).
 - Part of the installment settled by hand, and the customer pays the whole charge: the excess over what is left
   is booked as interest (the cash must match what was paid) and the person is expected to refund it; a charge
   superseded by another one for the same installment is not called off when the other is paid.
-- A body with several notices applies those of the company's charges and is `404` only if none is.
+- A body with several notices applies those of the company's charges and leaves out the others.
 - The exit criterion's first half is a test: a Pix charge settles its installment through a signed webhook (in
   both adapters, and through the API).
 - A provider that retries is safe; one that does not retry a `5xx` loses the payment until someone asks it again.

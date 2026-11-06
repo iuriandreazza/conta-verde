@@ -6169,8 +6169,20 @@ mod tests {
         ] {
             assert_eq!(send(&app, request).await.status, StatusCode::UNAUTHORIZED);
         }
+        // Another company's address: the charge is not its own, so it is left out (and answered, so a provider
+        // account with payments made elsewhere does not pause its queue); nothing is applied.
+        let elsewhere = send(
+            &app,
+            webhook_request(
+                &format!("/public/payments/{}/webhooks/fake", Uuid::new_v4()),
+                Some(&signature),
+                body.clone(),
+            ),
+        )
+        .await;
+        assert_eq!(elsewhere.status, StatusCode::OK);
+        assert_eq!(elsewhere.body["received"], 0);
         for uri in [
-            format!("/public/payments/{}/webhooks/fake", Uuid::new_v4()),
             format!("/public/payments/{company_id}/webhooks/other"),
             "/public/payments/not-an-id/webhooks/fake".to_owned(),
         ] {

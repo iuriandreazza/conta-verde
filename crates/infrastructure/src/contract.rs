@@ -11466,6 +11466,13 @@ pub async fn settles_charges_from_webhooks<C, Ev, S, E, F, P>(
         )
     );
 
+    // A signed notice that changes nothing is acknowledged, and stores nothing.
+    let (headers, body) = FakePaymentProvider::notice("evt_ping", "fake_none", "ping", None);
+    assert_eq!(
+        webhooks.receive(company, "fake", &headers, &body).await,
+        Ok(0)
+    );
+
     // Not signed, not a notice, a charge nobody knows, a provider that is not the one, and another
     // company's address: all refused, and nothing is stored.
     let second = charge_for(&sale, 2).await.unwrap();
@@ -11487,15 +11494,17 @@ pub async fn settles_charges_from_webhooks<C, Ev, S, E, F, P>(
         "paid",
         Some(("1", "2026-12-09", "0")),
     );
-    for (who, provider_key, headers, body) in [
-        (company, "fake", &unknown_headers, &unknown_body),
-        (company, "other", &headers, &body),
-        (other_company, "fake", &headers, &body),
+    // The provider that is not the configured one is not found; a charge that is not the company's is left out
+    // (answered Ok(0), so a provider account that also has payments made elsewhere does not pause its queue).
+    assert_eq!(
+        webhooks.receive(company, "other", &headers, &body).await,
+        Err(ApplicationError::ChargeNotFound)
+    );
+    for (who, headers, body) in [
+        (company, &unknown_headers, &unknown_body),
+        (other_company, &headers, &body),
     ] {
-        assert_eq!(
-            webhooks.receive(who, provider_key, headers, body).await,
-            Err(ApplicationError::ChargeNotFound)
-        );
+        assert_eq!(webhooks.receive(who, "fake", headers, body).await, Ok(0));
     }
     assert_eq!(status_of(&second).await.status(), ChargeStatus::Open);
     for event in ["evt_forged", "evt_unknown"] {
