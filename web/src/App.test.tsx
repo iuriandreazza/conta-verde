@@ -1266,6 +1266,7 @@ describe("bank accounts", () => {
     });
     renderAt("/companies/c1/bank-accounts");
 
+    await userEvent.click(await screen.findByRole("button", { name: "Nova conta bancária" }));
     await userEvent.type(await screen.findByLabelText("Nome"), "Conta da loja");
     await userEvent.type(screen.getByLabelText("Código do banco"), "341");
     await userEvent.type(screen.getByLabelText("Agência"), "12.34");
@@ -1292,6 +1293,7 @@ describe("bank accounts", () => {
     renderAt("/companies/c1/bank-accounts");
 
     // A card is asked for its issuer and never for a number.
+    await userEvent.click(await screen.findByRole("button", { name: "Nova conta bancária" }));
     await userEvent.selectOptions(await screen.findByLabelText("Tipo"), "card");
     expect(screen.getByLabelText("Banco emissor")).toBeInTheDocument();
     expect(screen.queryByLabelText("Agência")).not.toBeInTheDocument();

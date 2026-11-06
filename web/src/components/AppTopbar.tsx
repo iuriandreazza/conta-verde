@@ -10,6 +10,7 @@ import { LogoutIcon } from "./icons/logout";
 import { PlusIcon } from "./icons/plus";
 import { SendIcon } from "./icons/send";
 import { UsersIcon } from "./icons/users";
+import { WalletIcon } from "./icons/wallet";
 import { MenuButton, type MenuItem } from "./MenuButton";
 import type { Area, Company } from "../api";
 import { useCreation, type CreateKind } from "../creation/CreationProvider";
@@ -38,6 +39,7 @@ function creationItems(
     { key: "quote", label: "Novo orçamento", icon: FileTextIcon, to: `${base}/quotes`, area: "sales" },
     { key: "sale", label: "Nova venda", icon: HandCoinsIcon, to: `${base}/sales`, area: "sales" },
     { key: "party", label: "Novo cliente ou fornecedor", icon: UsersIcon, creates: "party", area: "parties" },
+    { key: "bankAccount", label: "Nova conta bancária", icon: WalletIcon, creates: "bankAccount", area: "finance" },
     { key: "costCenter", label: "Novo centro de custo", icon: LayersIcon, creates: "costCenter", area: "finance" },
     { key: "paymentMethod", label: "Nova forma de pagamento", icon: CreditCardIcon, creates: "paymentMethod", area: "finance" },
     { key: "paymentTerm", label: "Novo prazo de pagamento", icon: CalendarDaysIcon, creates: "paymentTerm", area: "finance" },
