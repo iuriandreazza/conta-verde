@@ -516,6 +516,36 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
         Ok(found)
     }
 
+    async fn receivable_installments_due(
+        &self,
+        company_id: CompanyId,
+        since: CalendarDate,
+        until: CalendarDate,
+    ) -> Result<Vec<OverdueItem>, RepositoryError> {
+        let rows = sqlx::query(
+            "SELECT e.id AS entry_id, e.kind, e.description, e.party_id, e.category_id, i.number, \
+               to_char(i.due_date, 'YYYY-MM-DD') AS due_date, i.amount::text AS amount, \
+               COALESCE(s.settled, 0)::text AS settled \
+             FROM financial_entry_installments i \
+             JOIN financial_entries e ON e.company_id = i.company_id AND e.id = i.entry_id \
+             LEFT JOIN LATERAL ( \
+                 SELECT SUM(applied) AS settled FROM entry_settlements \
+                 WHERE company_id = i.company_id AND entry_id = i.entry_id \
+                   AND installment = i.number AND NOT reversed) s ON true \
+             WHERE i.company_id = $1 AND NOT e.voided AND e.kind = 'receivable' \
+               AND i.due_date BETWEEN CAST($2 AS DATE) AND CAST($3 AS DATE) \
+               AND i.amount - COALESCE(s.settled, 0) > 0 \
+             ORDER BY i.due_date, e.id, i.number",
+        )
+        .bind(company_id.as_uuid())
+        .bind(since.to_string())
+        .bind(until.to_string())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        rows.iter().map(overdue_item_from_row).collect()
+    }
+
     async fn overdue_installments(
         &self,
         company_id: CompanyId,
@@ -549,31 +579,7 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
         .map_err(storage_error)?;
         let items = rows
             .iter()
-            .map(|row| {
-                let kind: String = row.try_get("kind").map_err(storage_error)?;
-                let due: String = row.try_get("due_date").map_err(storage_error)?;
-                let party: Option<Uuid> = row.try_get("party_id").map_err(storage_error)?;
-                Ok(OverdueItem {
-                    entry_id: EntryId::from_uuid(row.try_get("entry_id").map_err(storage_error)?),
-                    kind: EntryKind::parse(&kind).ok_or_else(|| {
-                        RepositoryError::Storage(format!("stored entry with kind {kind:?}"))
-                    })?,
-                    description: row.try_get("description").map_err(storage_error)?,
-                    party_id: party.map(PartyId::from_uuid),
-                    category_id: CategoryId::from_uuid(
-                        row.try_get("category_id").map_err(storage_error)?,
-                    ),
-                    installment: u16::try_from(
-                        row.try_get::<i16, _>("number").map_err(storage_error)?,
-                    )
-                    .unwrap_or(0),
-                    due_date: CalendarDate::parse(&due).ok_or_else(|| {
-                        RepositoryError::Storage(format!("stored day {due} is invalid"))
-                    })?,
-                    amount: sum_of(row, "amount")?,
-                    settled: sum_of(row, "settled")?,
-                })
-            })
+            .map(overdue_item_from_row)
             .collect::<Result<Vec<_>, RepositoryError>>()?;
         let totals = sqlx::query(&format!(
             "SELECT COALESCE(SUM(i.amount - COALESCE(s.settled, 0)) FILTER (WHERE e.kind = 'receivable'), 0)::text AS receivable, \
@@ -841,6 +847,26 @@ pub(crate) fn sort_report(rows: &mut [ReportRow]) {
             .then_with(|| a.id.is_none().cmp(&b.id.is_none()))
             .then_with(|| a.id.cmp(&b.id))
     });
+}
+
+fn overdue_item_from_row(row: &PgRow) -> Result<OverdueItem, RepositoryError> {
+    let kind: String = row.try_get("kind").map_err(storage_error)?;
+    let due: String = row.try_get("due_date").map_err(storage_error)?;
+    let party: Option<Uuid> = row.try_get("party_id").map_err(storage_error)?;
+    Ok(OverdueItem {
+        entry_id: EntryId::from_uuid(row.try_get("entry_id").map_err(storage_error)?),
+        kind: EntryKind::parse(&kind)
+            .ok_or_else(|| RepositoryError::Storage(format!("stored entry with kind {kind:?}")))?,
+        description: row.try_get("description").map_err(storage_error)?,
+        party_id: party.map(PartyId::from_uuid),
+        category_id: CategoryId::from_uuid(row.try_get("category_id").map_err(storage_error)?),
+        installment: u16::try_from(row.try_get::<i16, _>("number").map_err(storage_error)?)
+            .unwrap_or(0),
+        due_date: CalendarDate::parse(&due)
+            .ok_or_else(|| RepositoryError::Storage(format!("stored day {due} is invalid")))?,
+        amount: sum_of(row, "amount")?,
+        settled: sum_of(row, "settled")?,
+    })
 }
 
 const SELECT_SETTLEMENTS: &str = "SELECT id, company_id, entry_id, installment, \

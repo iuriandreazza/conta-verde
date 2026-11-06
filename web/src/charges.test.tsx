@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, vi } from "vitest";
-import type { Charge, Entry } from "./api";
+import type { Charge, Entry, Reminder } from "./api";
 import { mockApi, profile, renderAt, type Reply } from "./testSupport";
 
 beforeEach(() => vi.restoreAllMocks());
@@ -53,12 +53,16 @@ function serve(options: {
   onIssue?: (body: unknown) => Reply;
   onCancel?: () => Reply;
   onLink?: () => Reply;
+  reminders?: Reminder[];
 }) {
   const charges = [...options.charges];
   return mockApi((url, init) => {
     if (url === "/api/auth/me") return { status: 200, body: profile };
     if (url.endsWith("/collection")) {
       return { status: 200, body: { provider: options.provider === undefined ? "fake" : options.provider } };
+    }
+    if (url.endsWith("/entries/e1/notifications")) {
+      return { status: 200, body: { items: options.reminders ?? [] } };
     }
     if (url.endsWith("/collection/settings")) {
       return {
@@ -223,4 +227,18 @@ it("makes a link to the payment page and shows it once, to copy", async () => {
   expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/charges/ch1/link"))).toBe(true);
   await userEvent.click(panel.getByRole("button", { name: "Copiar o link de pagamento" }));
   expect(writeText).toHaveBeenCalledWith("https://app.example/pay/tok123");
+});
+
+it("lists the reminders sent about the entry", async () => {
+  serve({
+    charges: [pixCharge],
+    reminders: [
+      { installment: 1, days: -3, channel: "email", recipient: "ana@example.com", status: "sent", attempts: 1, note: null },
+      { installment: 1, days: 0, channel: "whatsapp", recipient: "5581999990000", status: "failed", attempts: 2, note: null },
+    ],
+  });
+  const panel = await openPanel();
+
+  expect(await panel.findByText(/E-mail · 3 dias antes · para ana@example.com · enviado/)).toBeInTheDocument();
+  expect(panel.getByText(/WhatsApp · no vencimento · para 5581999990000 · não enviado \(tentativa 2\)/)).toBeInTheDocument();
 });

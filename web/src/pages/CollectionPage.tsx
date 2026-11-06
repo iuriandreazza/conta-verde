@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useParams } from "react-router-dom";
-import { api, errorMessage, type CollectionSettings } from "../api";
+import { api, errorMessage, type CollectionSettings, type DunningPlan } from "../api";
+import { DunningPlanForm } from "../components/DunningPlanForm";
 import { Button } from "../components/Button";
 import { CheckIcon } from "../components/icons/check";
 import { Notice } from "../components/Notice";
@@ -16,17 +17,23 @@ export function CollectionPage() {
   const targets = useEntryTargets(companyId);
   const [settings, setSettings] = useState<CollectionSettings | null>(null);
   const [provider, setProvider] = useState<string | null | undefined>(undefined);
+  const [plan, setPlan] = useState<DunningPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     let current = true;
-    Promise.all([api.getCollectionSettings(companyId), api.getCollection(companyId)])
-      .then(([stored, collection]) => {
+    Promise.all([
+      api.getCollectionSettings(companyId),
+      api.getCollection(companyId),
+      api.getDunningPlan(companyId),
+    ])
+      .then(([stored, collection, dunning]) => {
         if (current) {
           setSettings(stored);
           setProvider(collection.provider);
+          setPlan(dunning);
         }
       })
       .catch((failure: unknown) => current && setError(errorMessage(failure)));
@@ -65,7 +72,7 @@ export function CollectionPage() {
     }
   }
 
-  const ready = settings !== null && targets.loaded && provider !== undefined;
+  const ready = settings !== null && targets.loaded && provider !== undefined && plan !== null;
   const banks = targets.banks.filter((bank) => bank.active || bank.id === settings?.bank_account_id);
   const categories = targets.categories.filter(
     (category) =>
@@ -150,6 +157,11 @@ export function CollectionPage() {
             </form>
           </section>
         )
+      )}
+      {ready && (
+        <section className="card">
+          <DunningPlanForm companyId={companyId} plan={plan} canWrite={canWrite} onSaved={setPlan} />
+        </section>
       )}
     </>
   );

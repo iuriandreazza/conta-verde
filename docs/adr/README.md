@@ -63,6 +63,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0045](0045-charges.md) | Charges for installments, made at a payment provider | accepted | 4 |
 | [0046](0046-webhooks-and-automatic-settlement.md) | Provider webhooks settle the installment and enter the fee | accepted | 4 |
 | [0047](0047-payment-page.md) | The customer's payment page | accepted | 4 |
+| [0048](0048-notifications-and-dunning.md) | Reminders to customers: the dunning plan and its hourly pass | accepted | 4 |
 
 ## Template
 

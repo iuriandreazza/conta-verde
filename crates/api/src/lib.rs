@@ -11,6 +11,7 @@ mod contracts;
 mod cost_centers;
 mod csv_import;
 mod cursor;
+mod dunning;
 mod entries;
 mod error;
 mod history;
@@ -54,7 +55,8 @@ use conta_verde_application::{
     TransferService,
 };
 use conta_verde_application::{
-    CollectionService, CollectionSettingsRepository, PaymentEventRepository, PaymentLinkRepository,
+    CollectionService, CollectionSettingsRepository, DunningPlanRepository, DunningService,
+    MessageSender, NotificationRepository, PaymentEventRepository, PaymentLinkRepository,
     PaymentPageService, PaymentWebhookService,
 };
 use serde::Serialize;
@@ -89,6 +91,9 @@ pub trait Ports: 'static {
     type CollectionSettings: CollectionSettingsRepository + 'static;
     type PaymentEvents: PaymentEventRepository + 'static;
     type PaymentLinks: PaymentLinkRepository + 'static;
+    type DunningPlans: DunningPlanRepository + 'static;
+    type Notifications: NotificationRepository + 'static;
+    type Messages: MessageSender + 'static;
     type Provider: PaymentProvider + 'static;
     type Transfers: TransferRepository + 'static;
     type Openings: OpeningRepository + 'static;
@@ -111,6 +116,18 @@ type ChargesOf<X> = ChargeService<
     <X as Ports>::Parties,
     <X as Ports>::Provider,
     <X as Ports>::CollectionSettings,
+>;
+
+/// The reminders use case over the adapters of `X`.
+type DunningOf<X> = DunningService<
+    <X as Ports>::DunningPlans,
+    <X as Ports>::Entries,
+    <X as Ports>::Parties,
+    PaymentPagesOf<X>,
+    <X as Ports>::Notifications,
+    <X as Ports>::Identity,
+    <X as Ports>::Emails,
+    <X as Ports>::Messages,
 >;
 
 /// The payment pages use case over the adapters of `X`.
@@ -179,6 +196,7 @@ pub struct Services<X: Ports> {
     pub charges: ChargesOf<X>,
     pub webhooks: WebhooksOf<X>,
     pub payment_pages: PaymentPagesOf<X>,
+    pub dunning: DunningOf<X>,
     pub collection: CollectionService<X::CollectionSettings, X::EntryReferences>,
     pub transfers: TransferService<X::Transfers, X::EntryReferences>,
     pub recurrences: RecurrenceService<X::Recurrences, X::Entries, X::EntryReferences>,
@@ -209,6 +227,7 @@ pub(crate) struct AppState<X: Ports> {
     charges: ChargesOf<X>,
     webhooks: WebhooksOf<X>,
     payment_pages: PaymentPagesOf<X>,
+    dunning: DunningOf<X>,
     collection: CollectionService<X::CollectionSettings, X::EntryReferences>,
     transfers: TransferService<X::Transfers, X::EntryReferences>,
     recurrences: RecurrenceService<X::Recurrences, X::Entries, X::EntryReferences>,
@@ -244,6 +263,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         charges: services.charges,
         webhooks: services.webhooks,
         payment_pages: services.payment_pages,
+        dunning: services.dunning,
         collection: services.collection,
         transfers: services.transfers,
         recurrences: services.recurrences,
@@ -477,6 +497,18 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
                 .put(charges::replace_collection_settings::<X>),
         )
         .route(
+            "/companies/{company_id}/collection/dunning",
+            get(dunning::get_plan::<X>).put(dunning::replace_plan::<X>),
+        )
+        .route(
+            "/companies/{company_id}/collection/dunning/history",
+            get(dunning::plan_history::<X>),
+        )
+        .route(
+            "/companies/{company_id}/entries/{entry_id}/notifications",
+            get(dunning::list_notifications::<X>),
+        )
+        .route(
             "/companies/{company_id}/collection/settings/history",
             get(charges::collection_settings_history::<X>),
         )
@@ -674,8 +706,9 @@ mod tests {
         InMemoryBankAccountRepository, InMemoryBlobStore, InMemoryCategoryRepository,
         InMemoryChargeRepository, InMemoryCnpjRegistry, InMemoryCollectionSettingsRepository,
         InMemoryCommissionRuleRepository, InMemoryContractRepository, InMemoryCostCenterRepository,
-        InMemoryEmailSender, InMemoryFinancialEntryRepository, InMemoryIdentityRepository,
-        InMemoryInvitationRepository, InMemoryOpeningRepository, InMemoryPartyRepository,
+        InMemoryDunningPlanRepository, InMemoryEmailSender, InMemoryFinancialEntryRepository,
+        InMemoryIdentityRepository, InMemoryInvitationRepository, InMemoryMessageSender,
+        InMemoryNotificationRepository, InMemoryOpeningRepository, InMemoryPartyRepository,
         InMemoryPaymentEventRepository, InMemoryPaymentLinkRepository,
         InMemoryPaymentMethodRepository, InMemoryPaymentTermRepository,
         InMemoryPostalCodeDirectory, InMemoryPriceListRepository, InMemoryProductRepository,
@@ -755,6 +788,9 @@ mod tests {
         type CollectionSettings = InMemoryCollectionSettingsRepository;
         type PaymentEvents = InMemoryPaymentEventRepository;
         type PaymentLinks = InMemoryPaymentLinkRepository;
+        type DunningPlans = InMemoryDunningPlanRepository;
+        type Notifications = InMemoryNotificationRepository;
+        type Messages = InMemoryMessageSender;
         type Transfers = InMemoryTransferRepository;
         type Openings = InMemoryOpeningRepository;
         type Recurrences = InMemoryRecurrenceRepository;
@@ -793,6 +829,9 @@ mod tests {
         type CollectionSettings = InMemoryCollectionSettingsRepository;
         type PaymentEvents = InMemoryPaymentEventRepository;
         type PaymentLinks = InMemoryPaymentLinkRepository;
+        type DunningPlans = InMemoryDunningPlanRepository;
+        type Notifications = InMemoryNotificationRepository;
+        type Messages = InMemoryMessageSender;
         type Transfers = InMemoryTransferRepository;
         type Openings = InMemoryOpeningRepository;
         type Recurrences = InMemoryRecurrenceRepository;
@@ -931,6 +970,31 @@ mod tests {
             entries,
             Argon2SecretService::new().unwrap(),
             "https://app.example",
+        )
+    }
+
+    fn dunning_over(
+        entries: InMemoryFinancialEntryRepository,
+        charges: InMemoryChargeRepository,
+        parties: InMemoryPartyRepository,
+    ) -> DunningOf<MemoryPorts> {
+        DunningService::new(
+            InMemoryDunningPlanRepository::default(),
+            entries.clone(),
+            parties,
+            payment_pages_over(charges, entries),
+            InMemoryNotificationRepository::default(),
+            InMemoryIdentityRepository::default(),
+            InMemoryEmailSender::default(),
+            InMemoryMessageSender::default(),
+        )
+    }
+
+    fn standalone_dunning() -> DunningOf<MemoryPorts> {
+        dunning_over(
+            InMemoryFinancialEntryRepository::default(),
+            InMemoryChargeRepository::default(),
+            InMemoryPartyRepository::default(),
         )
     }
 
@@ -1314,6 +1378,7 @@ mod tests {
                 charges: standalone_charges(),
                 webhooks: standalone_webhooks(),
                 payment_pages: standalone_payment_pages(),
+                dunning: standalone_dunning(),
                 collection: standalone_collection(),
                 transfers: standalone_transfers(),
                 recurrences: standalone_recurrences(),
@@ -1964,6 +2029,7 @@ mod tests {
                 charges: standalone_charges(),
                 webhooks: standalone_webhooks(),
                 payment_pages: standalone_payment_pages(),
+                dunning: standalone_dunning(),
                 collection: standalone_collection(),
                 transfers: standalone_transfers(),
                 recurrences: standalone_recurrences(),
@@ -3456,6 +3522,7 @@ mod tests {
                 charges: standalone_charges(),
                 webhooks: standalone_webhooks(),
                 payment_pages: standalone_payment_pages(),
+                dunning: standalone_dunning(),
                 collection: standalone_collection(),
                 transfers: standalone_transfers(),
                 recurrences: standalone_recurrences(),
@@ -5022,6 +5089,7 @@ mod tests {
                     ),
                 ),
                 payment_pages: payment_pages_over(charge_store.clone(), entry_store.clone()),
+                dunning: dunning_over(entry_store.clone(), charge_store.clone(), parties.clone()),
                 collection: CollectionService::new(
                     settings_store.clone(),
                     references_over(
@@ -6303,6 +6371,120 @@ mod tests {
             .status,
             StatusCode::CONFLICT
         );
+    }
+
+    #[tokio::test]
+    async fn the_reminder_plan_is_replaced_as_a_whole_audited_and_private() {
+        let app = entry_app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let uri = format!("/companies/{company_id}/collection/dunning");
+
+        // Never made: off, no rules; WhatsApp is available in these tests.
+        let fresh = send(&app, get_request(&uri, Some(&cookie))).await;
+        assert_eq!(fresh.status, StatusCode::OK);
+        assert_eq!(fresh.body["enabled"], false);
+        assert_eq!(fresh.body["rules"], json!([]));
+        assert_eq!(fresh.body["whatsapp_available"], true);
+
+        // The rules come back in the order they fall.
+        let saved = send(
+            &app,
+            json_request(
+                "PUT",
+                &uri,
+                Some(&cookie),
+                json!({ "enabled": true, "rules": [
+                    { "days": 3, "channel": "email" },
+                    { "days": -3, "channel": "whatsapp" },
+                    { "days": -3, "channel": "email" },
+                ]}),
+            ),
+        )
+        .await;
+        assert_eq!(saved.status, StatusCode::OK, "{}", saved.body);
+        assert_eq!(saved.body["enabled"], true);
+        assert_eq!(
+            saved.body["rules"],
+            json!([
+                { "days": -3, "channel": "email" },
+                { "days": -3, "channel": "whatsapp" },
+                { "days": 3, "channel": "email" },
+            ])
+        );
+        assert_eq!(
+            send(&app, get_request(&uri, Some(&cookie))).await.body,
+            saved.body
+        );
+        let history = send(&app, get_request(&format!("{uri}/history"), Some(&cookie))).await;
+        assert_eq!(history.body.as_array().unwrap().len(), 1);
+
+        // What is refused says why.
+        for body in [
+            json!({ "enabled": true, "rules": [{ "days": 0, "channel": "sms" }] }),
+            json!({ "enabled": true, "rules": [{ "days": 999, "channel": "email" }] }),
+            json!({ "enabled": true, "rules": [
+                { "days": 1, "channel": "email" }, { "days": 1, "channel": "email" }] }),
+            json!({ "rules": [] }),
+        ] {
+            assert_eq!(
+                send(&app, json_request("PUT", &uri, Some(&cookie), body))
+                    .await
+                    .status,
+                StatusCode::UNPROCESSABLE_ENTITY
+            );
+        }
+
+        // Another company's member sees nothing of it, and a session is needed.
+        let (stranger, _) = sign_up(&app, "bia@example.com").await;
+        for request in [
+            get_request(&uri, Some(&stranger)),
+            json_request(
+                "PUT",
+                &uri,
+                Some(&stranger),
+                json!({ "enabled": false, "rules": [] }),
+            ),
+            get_request(&format!("{uri}/history"), Some(&stranger)),
+            get_request(
+                &format!(
+                    "/companies/{company_id}/entries/{}/notifications",
+                    Uuid::new_v4()
+                ),
+                Some(&cookie),
+            ),
+        ] {
+            assert_eq!(send(&app, request).await.status, StatusCode::NOT_FOUND);
+        }
+        assert_eq!(
+            send(&app, get_request(&uri, None)).await.status,
+            StatusCode::UNAUTHORIZED
+        );
+
+        // An entry with no reminders yet lists none.
+        let targets = entry_targets(&app, &cookie, company_id).await;
+        let created = send(
+            &app,
+            json_request(
+                "POST",
+                &entries_uri(company_id),
+                Some(&cookie),
+                entry_body(&targets, "Venda", &[("2026-12-10", "100")]),
+            ),
+        )
+        .await;
+        let reminders = send(
+            &app,
+            get_request(
+                &format!(
+                    "/companies/{company_id}/entries/{}/notifications",
+                    created.body["id"].as_str().unwrap()
+                ),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(reminders.status, StatusCode::OK);
+        assert_eq!(reminders.body["items"], json!([]));
     }
 
     fn attachments_uri(company_id: Uuid, entry_id: &str) -> String {
