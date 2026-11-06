@@ -14,6 +14,7 @@ import { PlusIcon } from "../components/icons/plus";
 import { Sheet } from "../components/Sheet";
 import { useCreation, useOnCreated } from "../creation/CreationProvider";
 import { PageHeader } from "../components/PageHeader";
+import { ListTools } from "../components/ListTools";
 import { ListRow } from "../components/ListRow";
 import { Notice } from "../components/Notice";
 import { ProductForm } from "../components/ProductForm";
@@ -22,12 +23,28 @@ import { Spinner } from "../components/Spinner";
 import { BriefcaseBusinessIcon } from "../components/icons/briefcase-business";
 import { ChevronDownIcon } from "../components/icons/chevron-down";
 import { HistoryIcon } from "../components/icons/history";
-import { formatDecimal, formatMoney } from "../lib/decimal";
+import { formatDecimal, formatMoney, toInputDecimal } from "../lib/decimal";
 import { useLastValue } from "../lib/useLastValue";
 import { usePagedList } from "../lib/usePagedList";
 import { useCanWrite } from "../lib/useCanWrite";
 import { SquarePenIcon } from "../components/icons/square-pen";
 import { StatusBadge } from "../components/StatusBadge";
+
+const PRODUCT_COLUMNS = ["Tipo", "Nome", "SKU", "Unidade", "NCM", "Preço de venda", "Custo", "Estoque mínimo", "Situação"];
+
+function productRow(product: Product): string[] {
+  return [
+    product.kind === "service" ? "Serviço" : "Produto",
+    product.name,
+    product.sku ?? "",
+    product.unit,
+    product.ncm ?? "",
+    toInputDecimal(product.sale_price),
+    toInputDecimal(product.cost_price),
+    toInputDecimal(product.minimum_stock),
+    product.active ? "Ativo" : "Inativo",
+  ];
+}
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one
 // instance: the old list is dropped and a reply still in flight for another company lands on an
@@ -104,13 +121,19 @@ export function ProductsPage() {
   return (
     <>
       <PageHeader title="Produtos e serviços" description="O que você vende e o que custa para vender." />
-      {canWrite && (
-        <div className="list-actions">
+      <div className="list-actions">
+        {canWrite && (
           <Button type="button" icon={PlusIcon} onClick={() => openCreate("product")}>
             Novo produto ou serviço
           </Button>
-        </div>
-      )}
+        )}
+        <ListTools
+          filename="produtos-e-servicos"
+          header={PRODUCT_COLUMNS}
+          fetchPage={(after) => api.listProducts(companyId, applied, after)}
+          toRow={productRow}
+        />
+      </div>
       <Notice message={saved} tone="success" />
       <div>
         <section className="card list-card">

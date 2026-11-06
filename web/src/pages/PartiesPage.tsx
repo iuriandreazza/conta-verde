@@ -13,6 +13,7 @@ import { Sheet } from "../components/Sheet";
 import { useCreation, useOnCreated } from "../creation/CreationProvider";
 import { PageHeader } from "../components/PageHeader";
 import { DocumentBadge } from "../components/DocumentBadge";
+import { ListTools } from "../components/ListTools";
 import { ListRow } from "../components/ListRow";
 import { Notice } from "../components/Notice";
 import { PartyForm } from "../components/PartyForm";
@@ -29,6 +30,18 @@ import { useLastValue } from "../lib/useLastValue";
 import { usePagedList } from "../lib/usePagedList";
 import { useCanWrite } from "../lib/useCanWrite";
 import { SquarePenIcon } from "../components/icons/square-pen";
+
+const PARTY_COLUMNS = ["Nome", "Documento", "E-mail", "Papéis", "Etiquetas"];
+
+function partyRow(party: Party): string[] {
+  const roles = [
+    party.is_customer && "Cliente",
+    party.is_supplier && "Fornecedor",
+    party.is_carrier && "Transportadora",
+    party.is_seller && "Vendedor",
+  ].filter(Boolean);
+  return [party.name, party.document ?? "", party.email ?? "", roles.join(", "), party.tags.join(", ")];
+}
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one
 // instance: the old list is dropped and a reply still in flight for another company lands on an
@@ -132,13 +145,19 @@ export function PartiesPage() {
   return (
     <>
       <PageHeader title="Clientes e fornecedores" description="Quem compra de você e de quem você compra." />
-      {canWrite && (
-        <div className="list-actions">
+      <div className="list-actions">
+        {canWrite && (
           <Button type="button" icon={PlusIcon} onClick={() => openCreate("party")}>
             Novo cliente ou fornecedor
           </Button>
-        </div>
-      )}
+        )}
+        <ListTools
+          filename="clientes-e-fornecedores"
+          header={PARTY_COLUMNS}
+          fetchPage={(after) => api.listParties(companyId, applied, after)}
+          toRow={partyRow}
+        />
+      </div>
       <Notice message={registryNotice?.message ?? null} tone={registryNotice?.tone} />
       <div>
         <section className="card list-card">

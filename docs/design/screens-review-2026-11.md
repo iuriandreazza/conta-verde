@@ -122,8 +122,11 @@ without being taught. Described in our own words; no wording, logo or screen of 
 | Every list has search, filters, an order and "load more" | `usePagedList` pages; filters in one row above the table |
 | Creating on a list page opens the same sheet | `openCreate` from the page's button, `useOnCreated` reloads and flashes the new row |
 | Keyboard shortcuts for the common creations | Alt+letter hints in the New menu (`MenuItem.shortcut`); Alt+R and Alt+D replace the generic entry's Alt+L, and recurrence lost its Alt+R |
+| A menu that shrinks to icons | `Layout`: the toggle in the sidebar head makes a rail of icons (names kept for screen readers and as tooltips, every group shown), remembered in the browser; the phone keeps its drawer |
 | Closing a half-filled form asks first | `SheetGuard`: "Descartar edições?" |
 
 Not matched because they need the API first: a period (month) filter on entries, a strip with the totals by state
-above the list, numbered pages (the API is cursor-paginated), and bulk actions on selected rows. Export, print and
-a reports menu in the action row are the next front-end slice.
+above the list, numbered pages (the API is cursor-paginated), and bulk actions on selected rows. Export and print
+are in the action row of the parties, products and entries lists: the CSV holds every row the filters give (up to 2000,
+said when it stops short), made in the browser; the printed page drops the shell and the controls. A reports menu in
+the action row and the CSV import moved into a sheet are the next front-end slice.

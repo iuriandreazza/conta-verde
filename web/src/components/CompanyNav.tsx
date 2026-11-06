@@ -37,7 +37,7 @@ interface NavSection {
   items: NavItem[];
 }
 
-function NavItemLink({ base, item }: { base: string; item: NavItem }) {
+function NavItemLink({ base, item, collapsed }: { base: string; item: NavItem; collapsed: boolean }) {
   const Icon = item.icon;
   const location = useLocation();
   if (item.path === "/entries") {
@@ -45,23 +45,25 @@ function NavItemLink({ base, item }: { base: string; item: NavItem }) {
     const to = `${base}${item.path}${item.kind ? `?tipo=${item.kind}` : ""}`;
     const current = location.pathname.replace(/\/$/, "") === `${base}${item.path}` && entryKindOf(location.search) === (item.kind ?? "");
     return (
-      <Link to={to} aria-current={current ? "page" : undefined}>
+      <Link to={to} aria-current={current ? "page" : undefined} title={collapsed ? item.label : undefined}>
         <Icon size={18} aria-hidden />
-        {item.label}
+        <span className="nav-label">{item.label}</span>
       </Link>
     );
   }
   return (
-    <NavLink to={`${base}${item.path}`} end={item.path === ""}>
+    <NavLink to={`${base}${item.path}`} end={item.path === ""} title={collapsed ? item.label : undefined}>
       <Icon size={18} aria-hidden />
-      {item.label}
+      <span className="nav-label">{item.label}</span>
     </NavLink>
   );
 }
 
 /** A group of sections the person can fold away; it starts open so nothing is hidden by default. */
-function NavGroup({ base, section }: { base: string; section: NavSection }) {
+function NavGroup({ base, section, collapsed }: { base: string; section: NavSection; collapsed: boolean }) {
   const [open, setOpen] = useState(true);
+  // The narrow menu has no headings to open, so every icon is shown whatever a group was left as.
+  const shown = open || collapsed;
   return (
     <div className="nav-group">
       <button
@@ -76,7 +78,7 @@ function NavGroup({ base, section }: { base: string; section: NavSection }) {
         </motion.span>
       </button>
       <AnimatePresence initial={false}>
-        {open && (
+        {shown && (
           <motion.div
             className="nav-group-items"
             initial={{ height: 0, opacity: 0 }}
@@ -85,7 +87,7 @@ function NavGroup({ base, section }: { base: string; section: NavSection }) {
             transition={{ duration: 0.18, ease: "easeOut" }}
           >
             {section.items.map((item) => (
-              <NavItemLink key={`${item.path}${item.kind ?? ""}`} base={base} item={item} />
+              <NavItemLink key={`${item.path}${item.kind ?? ""}`} base={base} item={item} collapsed={collapsed} />
             ))}
           </motion.div>
         )}
@@ -160,20 +162,23 @@ const MEMBERS: NavSection = {
 export function CompanyNav({
   companyId,
   canSeeMembers,
+  collapsed,
 }: {
   companyId: string;
+  /** Shows the icons alone, as a rail: the names stay for a screen reader and as tooltips. */
+  collapsed: boolean;
   /** The role reaches who belongs to the company: the others are not shown the link. */
   canSeeMembers: boolean;
 }) {
   const base = `/companies/${companyId}`;
   return (
-    <nav className="side-nav" aria-label="Seções da empresa">
-      <NavItemLink base={base} item={HOME} />
+    <nav className="side-nav" id="company-nav" aria-label="Seções da empresa">
+      <NavItemLink base={base} item={HOME} collapsed={collapsed} />
       {SECTIONS.map((section) => (
-        <NavGroup key={section.key} base={base} section={section} />
+        <NavGroup key={section.key} base={base} section={section} collapsed={collapsed} />
       ))}
-      <NavItemLink base={base} item={REPORTS} />
-      {canSeeMembers && <NavGroup base={base} section={MEMBERS} />}
+      <NavItemLink base={base} item={REPORTS} collapsed={collapsed} />
+      {canSeeMembers && <NavGroup base={base} section={MEMBERS} collapsed={collapsed} />}
     </nav>
   );
 }
