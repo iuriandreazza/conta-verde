@@ -4,11 +4,12 @@ import { BadgeAlertIcon } from "../components/icons/badge-alert";
 import { CheckIcon } from "../components/icons/check";
 import { Sheet } from "../components/Sheet";
 import { EntryCreator } from "./EntryCreator";
+import { CostCenterCreator, PaymentMethodCreator, PaymentTermCreator } from "./registers";
 import { PartyCreator } from "./PartyCreator";
 import { ProductCreator } from "./ProductCreator";
 import { TransferCreator } from "./TransferCreator";
 
-export type CreateKind = "entry" | "party" | "product" | "transfer";
+export type CreateKind = "entry" | "party" | "product" | "transfer" | "costCenter" | "paymentMethod" | "paymentTerm";
 
 /** What a creator tells the host when the record exists: the words for the confirmation, and the new id. */
 export interface Created {
@@ -28,6 +29,9 @@ export interface CreatorProps {
 
 const CREATORS: Record<CreateKind, { title: string; Creator: (props: CreatorProps) => ReactNode }> = {
   entry: { title: "Novo lançamento", Creator: EntryCreator },
+  costCenter: { title: "Novo centro de custo", Creator: CostCenterCreator },
+  paymentMethod: { title: "Nova forma de pagamento", Creator: PaymentMethodCreator },
+  paymentTerm: { title: "Novo prazo de pagamento", Creator: PaymentTermCreator },
   party: { title: "Novo cliente ou fornecedor", Creator: PartyCreator },
   product: { title: "Novo produto ou serviço", Creator: ProductCreator },
   transfer: { title: "Nova transferência", Creator: TransferCreator },

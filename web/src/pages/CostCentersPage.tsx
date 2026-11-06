@@ -1,4 +1,4 @@
-import { Fragment, useState, type FormEvent } from "react";
+import { Fragment, useState } from "react";
 import { useParams } from "react-router-dom";
 import {
   NO_COST_CENTER_FILTERS,
@@ -6,18 +6,22 @@ import {
   errorMessage,
   type CostCenter,
   type CostCenterFilters,
+  type CostCenterInput,
 } from "../api";
 import { Button } from "../components/Button";
+import { PlusIcon } from "../components/icons/plus";
+import { Sheet } from "../components/Sheet";
+import { useCreation, useOnCreated } from "../creation/CreationProvider";
+import { useLastValue } from "../lib/useLastValue";
+import { CostCenterForm } from "../components/CostCenterForm";
 import { PageHeader } from "../components/PageHeader";
 import { CostCenterHistory } from "../components/CostCenterHistory";
 import { ListRow } from "../components/ListRow";
 import { Notice } from "../components/Notice";
 import { Spinner } from "../components/Spinner";
 import { BriefcaseBusinessIcon } from "../components/icons/briefcase-business";
-import { CheckIcon } from "../components/icons/check";
 import { ChevronDownIcon } from "../components/icons/chevron-down";
 import { HistoryIcon } from "../components/icons/history";
-import { PlusIcon } from "../components/icons/plus";
 import { usePagedList } from "../lib/usePagedList";
 import { useCanWrite } from "../lib/useCanWrite";
 import { SquarePenIcon } from "../components/icons/square-pen";
@@ -31,8 +35,6 @@ export function CostCentersPage() {
   const canWrite = useCanWrite("finance");
   const [filters, setFilters] = useState<CostCenterFilters>(NO_COST_CENTER_FILTERS);
   const [editing, setEditing] = useState<CostCenter | null>(null);
-  // Bumped after a save so the form starts over, empty or for another cost center.
-  const [formVersion, setFormVersion] = useState(0);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
@@ -55,31 +57,32 @@ export function CostCentersPage() {
   );
   const isFiltered = applied.q !== "" || applied.active !== "";
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (saving) {
-      return;
-    }
-    const form = new FormData(event.currentTarget);
-    const input = { name: String(form.get("name") ?? ""), active: form.get("active") === "on" };
+  const { openCreate } = useCreation();
+  const shown = useLastValue(editing);
+  // A record made from the top bar or from here: read the list again and flash the new row.
+  useOnCreated("costCenter", (created) => {
+    setHighlightedId(created.id);
+    void reload();
+  });
+
+  function closeSheet() {
+    // A change on its way finishes first: closing now would hide what a failure has to say.
+    if (saving) return;
+    setEditing(null);
+    setFormError(null);
+  }
+
+  async function handleSubmit(input: CostCenterInput) {
+    if (editing === null) return;
     setSaving(true);
     setFormError(null);
     setSaved(null);
     try {
-      if (editing === null) {
-        const created = await api.createCostCenter(companyId, input);
-        setHighlightedId(created.id);
-        setSaved(`${created.name} cadastrado.`);
-        setFormVersion((version) => version + 1);
-        await reload();
-      } else {
-        const updated = await api.updateCostCenter(companyId, editing.id, input);
-        // In place: the list keeps its page and its filters.
-        setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)));
-        setEditing(null);
-        setSaved(`${updated.name} atualizado.`);
-        setFormVersion((version) => version + 1);
-      }
+      const updated = await api.updateCostCenter(companyId, editing.id, input);
+      // In place: the list keeps its page and its filters.
+      setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      setEditing(null);
+      setSaved(`${updated.name} atualizado.`);
     } catch (failure) {
       setFormError(errorMessage(failure));
     } finally {
@@ -90,7 +93,15 @@ export function CostCentersPage() {
   return (
     <>
       <PageHeader title="Centros de custo" description="Onde cada gasto e cada receita são lançados." />
-      <div className={canWrite ? "split" : "split split-single"}>
+      {canWrite && (
+        <div className="list-actions">
+          <Button type="button" icon={PlusIcon} onClick={() => openCreate("costCenter")}>
+            Novo centro de custo
+          </Button>
+        </div>
+      )}
+      <Notice message={saved} tone="success" />
+      <div>
         <section className="card list-card">
         <h2>Cadastrados</h2>
         <div className="filters" role="search">
@@ -241,49 +252,18 @@ export function CostCentersPage() {
         )}
       </section>
         {canWrite && (
-          <aside className="card form-card">
-          <h2>{editing === null ? "Novo centro de custo" : `Alterar ${editing.name}`}</h2>
-          <form
-            // A new key starts the form over for another cost center, or an empty one after a save.
-            key={`${editing?.id ?? "new"}-${formVersion}`}
-            onSubmit={(event) => void handleSubmit(event)}
-          >
-            <label>
-              Nome
-              <input
-                name="name"
-                required
-                maxLength={200}
-                autoComplete="off"
-                // After a save or when editing, the person is in the form: put the cursor back in it.
-                autoFocus={editing !== null || formVersion > 0}
-                defaultValue={editing?.name}
+          <Sheet open={editing !== null} title={`Alterar ${shown?.name ?? ""}`} onClose={closeSheet}>
+            {shown !== null && (
+              <CostCenterForm
+                key={shown.id}
+                costCenter={shown}
+                pending={saving}
+                error={formError}
+                onSubmit={(input) => void handleSubmit(input)}
+                onCancel={closeSheet}
               />
-            </label>
-            <label className="inline">
-              <input name="active" type="checkbox" defaultChecked={editing?.active ?? true} /> Ativo
-            </label>
-            <Notice message={formError} />
-            <div className="form-actions">
-              <Button type="submit" icon={editing === null ? PlusIcon : CheckIcon} pending={saving}>
-                {editing === null ? "Adicionar" : "Salvar alterações"}
-              </Button>
-              {editing !== null && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  onClick={() => {
-                    setEditing(null);
-                    setFormError(null);
-                  }}
-                >
-                  Cancelar
-                </Button>
-              )}
-            </div>
-          </form>
-          <Notice message={saved} tone="success" />
-        </aside>
+            )}
+          </Sheet>
         )}
       </div>
     </>

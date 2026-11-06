@@ -11,6 +11,10 @@ import {
 import { Button } from "../components/Button";
 import { ListRow } from "../components/ListRow";
 import { Notice } from "../components/Notice";
+import { PlusIcon } from "../components/icons/plus";
+import { Sheet } from "../components/Sheet";
+import { useCreation, useOnCreated } from "../creation/CreationProvider";
+import { useLastValue } from "../lib/useLastValue";
 import { PageHeader } from "../components/PageHeader";
 import { PaymentTermForm } from "../components/PaymentTermForm";
 import { PaymentTermHistory } from "../components/PaymentTermHistory";
@@ -32,8 +36,6 @@ export function PaymentTermsPage() {
   const canWrite = useCanWrite("finance");
   const [filters, setFilters] = useState<PaymentTermFilters>(NO_PAYMENT_TERM_FILTERS);
   const [editing, setEditing] = useState<PaymentTerm | null>(null);
-  // Bumped after a save so the form starts over, empty or for another term.
-  const [formVersion, setFormVersion] = useState(0);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
@@ -56,25 +58,32 @@ export function PaymentTermsPage() {
   );
   const isFiltered = applied.q !== "" || applied.active !== "";
 
+  const { openCreate } = useCreation();
+  const shown = useLastValue(editing);
+  // A record made from the top bar or from here: read the list again and flash the new row.
+  useOnCreated("paymentTerm", (created) => {
+    setHighlightedId(created.id);
+    void reload();
+  });
+
+  function closeSheet() {
+    // A change on its way finishes first: closing now would hide what a failure has to say.
+    if (saving) return;
+    setEditing(null);
+    setFormError(null);
+  }
+
   async function handleSubmit(input: PaymentTermInput) {
+    if (editing === null) return;
     setSaving(true);
     setFormError(null);
     setSaved(null);
     try {
-      if (editing === null) {
-        const created = await api.createPaymentTerm(companyId, input);
-        setHighlightedId(created.id);
-        setSaved(`${created.name} cadastrado.`);
-        setFormVersion((version) => version + 1);
-        await reload();
-      } else {
-        const updated = await api.updatePaymentTerm(companyId, editing.id, input);
-        // In place: the list keeps its page and its filters.
-        setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)));
-        setEditing(null);
-        setSaved(`${updated.name} atualizado.`);
-        setFormVersion((version) => version + 1);
-      }
+      const updated = await api.updatePaymentTerm(companyId, editing.id, input);
+      // In place: the list keeps its page and its filters.
+      setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      setEditing(null);
+      setSaved(`${updated.name} atualizado.`);
     } catch (failure) {
       setFormError(errorMessage(failure));
     } finally {
@@ -88,7 +97,15 @@ export function PaymentTermsPage() {
         title="Prazos de pagamento"
         description="Como um valor se divide no tempo: à vista, 30/60/90, entrada e saldo."
       />
-      <div className={canWrite ? "split" : "split split-single"}>
+      {canWrite && (
+        <div className="list-actions">
+          <Button type="button" icon={PlusIcon} onClick={() => openCreate("paymentTerm")}>
+            Novo prazo de pagamento
+          </Button>
+        </div>
+      )}
+      <Notice message={saved} tone="success" />
+      <div>
         <section className="card list-card">
           <h2>Cadastrados</h2>
           <div className="filters" role="search">
@@ -241,24 +258,18 @@ export function PaymentTermsPage() {
           )}
         </section>
         {canWrite && (
-          <aside className="card form-card">
-            <h2>{editing === null ? "Novo prazo de pagamento" : `Alterar ${editing.name}`}</h2>
-            <PaymentTermForm
-              // A new key starts the form over for another term, or an empty one after a save.
-              key={`${editing?.id ?? "new"}-${formVersion}`}
-              term={editing}
-              // After a save or when editing, the person is in the form: put the cursor back in it.
-              focusName={editing !== null || formVersion > 0}
-              pending={saving}
-              error={formError}
-              onSubmit={(input) => void handleSubmit(input)}
-              onCancel={() => {
-                setEditing(null);
-                setFormError(null);
-              }}
-            />
-            <Notice message={saved} tone="success" />
-          </aside>
+          <Sheet open={editing !== null} title={`Alterar ${shown?.name ?? ""}`} onClose={closeSheet}>
+            {shown !== null && (
+              <PaymentTermForm
+                key={shown.id}
+                term={shown}
+                pending={saving}
+                error={formError}
+                onSubmit={(input) => void handleSubmit(input)}
+                onCancel={closeSheet}
+              />
+            )}
+          </Sheet>
         )}
       </div>
     </>

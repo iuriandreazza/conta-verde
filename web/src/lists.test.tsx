@@ -160,4 +160,25 @@ describe("creating from the top bar", () => {
 
     expect(screen.getByRole("dialog", { name: "Novo lançamento" })).toBeInTheDocument();
   });
+
+  it("registers a cost center from the top bar over another page, and says so", async () => {
+    const created = { id: "cc1", company_id: "c1", name: "Loja Norte", active: true };
+    mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (init?.method === "POST" && url.endsWith("/cost-centers")) return { status: 201, body: created };
+      return { status: 200, body: { items: [], next_cursor: null } };
+    });
+    renderAt("/companies/c1/parties");
+    await screen.findByRole("heading", { name: "Clientes e fornecedores" });
+
+    await userEvent.click(await screen.findByRole("button", { name: "Novo registro" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Novo centro de custo" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Novo centro de custo" }));
+    await userEvent.type(await dialog.findByLabelText("Nome"), "Loja Norte");
+    await userEvent.click(dialog.getByRole("button", { name: "Adicionar" }));
+
+    expect(await screen.findByText("Loja Norte cadastrado.")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Clientes e fornecedores" })).toBeInTheDocument();
+  });
 });

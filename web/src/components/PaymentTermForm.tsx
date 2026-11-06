@@ -27,7 +27,6 @@ const MAX_INSTALLMENT_DAYS = 3650;
 interface PaymentTermFormProps {
   /** The term being changed, or `null` to register one. */
   term: PaymentTerm | null;
-  focusName: boolean;
   pending: boolean;
   error: string | null;
   onSubmit: (input: PaymentTermInput) => void;
@@ -42,7 +41,6 @@ interface PaymentTermFormProps {
  */
 export function PaymentTermForm({
   term,
-  focusName,
   pending,
   error,
   onSubmit,
@@ -123,7 +121,6 @@ export function PaymentTermForm({
           maxLength={200}
           autoComplete="off"
           placeholder="Por exemplo 30/60/90"
-          autoFocus={focusName}
           defaultValue={term?.name}
         />
       </label>
