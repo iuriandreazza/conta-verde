@@ -434,7 +434,7 @@ select {
 }
 
 input::placeholder {
-  color: #7f8c85;
+  color: var(--muted);
 }
 
 input:not([type="checkbox"], [type="radio"]):focus,
@@ -761,6 +761,28 @@ td > .badge:first-child {
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+}
+
+/* Off screen until a keyboard user reaches it: the first stop of every page. */
+.skip-link {
+  position: absolute;
+  top: 0.5rem;
+  left: 0.5rem;
+  z-index: 10;
+  padding: 0.5rem 0.9rem;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--green-dark);
+  font-weight: 600;
+  transform: translateY(-200%);
+}
+
+.skip-link:focus {
+  transform: none;
+}
+
+main:focus {
+  outline: none;
 }
 
 .status {

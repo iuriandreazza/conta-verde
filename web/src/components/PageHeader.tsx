@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { usePageTitle } from "../lib/usePageTitle";
 
 interface PageHeaderProps {
   title: string;
@@ -7,6 +8,7 @@ interface PageHeaderProps {
 }
 
 export function PageHeader({ title, description, actions }: PageHeaderProps) {
+  usePageTitle(title);
   return (
     <header className="page-header">
       <div>

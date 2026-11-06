@@ -1,5 +1,5 @@
 import { motion } from "motion/react";
-import { useState } from "react";
+import { useRef, useState, type MouseEvent } from "react";
 import { Link, Outlet, useLocation, useMatch } from "react-router-dom";
 import { useAuth } from "../auth";
 import { Button } from "./Button";
@@ -13,6 +13,7 @@ export function Layout() {
   const [signOutFailed, setSignOutFailed] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const location = useLocation();
+  const mainRef = useRef<HTMLElement>(null);
   const companyId = useMatch("/companies/:companyId/*")?.params.companyId;
 
   // The session only ends once the server confirms it, so a failure must stay visible.
@@ -33,6 +34,9 @@ export function Layout() {
   // flight) from the previous page, e.g. the parties of the company the user just left.
   const page = (
     <motion.main
+      id="main"
+      ref={mainRef}
+      tabIndex={-1}
       key={location.pathname}
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
@@ -79,10 +83,20 @@ export function Layout() {
     );
   }
 
+  // The sections come before the content in reading order; this jumps over them. A plain "#main" link
+  // would also write the fragment into the URL the router owns.
+  function skipToContent(event: MouseEvent) {
+    event.preventDefault();
+    mainRef.current?.focus();
+  }
+
   const userName = session.profile.user.name;
   return (
     <div className="app">
       <aside className="sidebar">
+        <a href="#main" className="skip-link" onClick={skipToContent}>
+          Ir para o conteúdo
+        </a>
         <Link to="/" className="brand" aria-label="conta-verde, início">
           <Logo size={30} />
         </Link>
