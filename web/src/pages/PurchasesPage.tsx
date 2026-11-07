@@ -21,6 +21,7 @@ import { HistoryIcon } from "../components/icons/history";
 import { PlusIcon } from "../components/icons/plus";
 import { SendIcon } from "../components/icons/send";
 import { SquarePenIcon } from "../components/icons/square-pen";
+import { ColumnChooser } from "../components/ColumnChooser";
 import { ListRow } from "../components/ListRow";
 import { MailPanel } from "../components/MailPanel";
 import { ListTools } from "../components/ListTools";
@@ -34,6 +35,7 @@ import { Spinner } from "../components/Spinner";
 import { useCreation, useOnCreated } from "../creation/CreationProvider";
 import { formatDecimal, formatMoney, toInputDecimal } from "../lib/decimal";
 import { invoiceNumber } from "../lib/invoice";
+import { useColumns, type ColumnDef } from "../lib/useColumns";
 import { useCounts } from "../lib/useCounts";
 import { formatDate, isIsoDate, wholeDate } from "../lib/entryInstallments";
 import { PURCHASE_STATUS_LABELS, purchaseStatusClass } from "../lib/purchaseStatus";
@@ -89,6 +91,14 @@ const CONFIRMATIONS: Record<Action, { text: (order: PurchaseOrder) => string; bu
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one instance.
 const PURCHASE_COLUMNS = ["Número", "Fornecedor", "Data", "Previsão", "Situação", "Total"];
 
+type PurchaseColumn = "ordered" | "expected" | "invoice" | "total";
+const TABLE_COLUMNS: ColumnDef<PurchaseColumn>[] = [
+  { key: "ordered", label: "Data" },
+  { key: "expected", label: "Previsão" },
+  { key: "invoice", label: "Nº da NF" },
+  { key: "total", label: "Total" },
+];
+
 export function PurchasesPage() {
   const { companyId = "" } = useParams();
   const canWrite = useCanWrite("purchases");
@@ -110,6 +120,7 @@ export function PurchasesPage() {
       (applied, after) => api.listPurchaseOrders(companyId, { ...applied, from: wholeDate(applied.from), to: wholeDate(applied.to) }, after),
       filters,
     );
+  const columns = useColumns("purchases", TABLE_COLUMNS);
   const today = todayIso();
   const isFiltered = applied.q !== "" || applied.status !== "" || applied.from !== "" || applied.to !== "";
   const counts = useCounts(() => api.getPurchaseStatusCounts(companyId, { q: applied.q, from: wholeDate(applied.from), to: wholeDate(applied.to) }), items, !loading);
@@ -220,6 +231,7 @@ export function PurchasesPage() {
             ]}
           />
         )}
+        <ColumnChooser columns={TABLE_COLUMNS} isShown={columns.isShown} onToggle={columns.toggle} onReset={columns.reset} />
         <ListTools
           filename="compras"
           header={PURCHASE_COLUMNS}
@@ -305,10 +317,10 @@ export function PurchasesPage() {
                   <tr>
                     <th>Nº</th>
                     <th>Fornecedor</th>
-                    <th>Data</th>
-                    <th>Previsão</th>
-                    <th>Nº da NF</th>
-                    <th className="num">Total</th>
+                    {columns.isShown("ordered") && <th>Data</th>}
+                    {columns.isShown("expected") && <th>Previsão</th>}
+                    {columns.isShown("invoice") && <th>Nº da NF</th>}
+                    {columns.isShown("total") && <th className="num">Total</th>}
                     <th>Situação</th>
                     <th>
                       <span className="visually-hidden">Ações</span>
@@ -326,10 +338,10 @@ export function PurchasesPage() {
                             {order.lines.length} {order.lines.length === 1 ? "item" : "itens"}
                           </div>
                         </td>
-                        <td>{formatDate(order.ordered_on)}</td>
-                        <td>{order.expected_on === null ? "—" : formatDate(order.expected_on)}</td>
-                        <td>{invoiceNumber(order.invoice_key) || "—"}</td>
-                        <td className="num">{formatMoney(order.total)}</td>
+                        {columns.isShown("ordered") && <td>{formatDate(order.ordered_on)}</td>}
+                        {columns.isShown("expected") && <td>{order.expected_on === null ? "—" : formatDate(order.expected_on)}</td>}
+                        {columns.isShown("invoice") && <td>{invoiceNumber(order.invoice_key) || "—"}</td>}
+                        {columns.isShown("total") && <td className="num">{formatMoney(order.total)}</td>}
                         <td>
                           <span className={purchaseStatusClass(order.status)}>{PURCHASE_STATUS_LABELS[order.status]}</span>
                         </td>
@@ -440,21 +452,21 @@ export function PurchasesPage() {
                       </ListRow>
                       {panel?.id === order.id && panel.kind === "details" && (
                         <tr>
-                          <td colSpan={8} role="region" aria-label={`Detalhes da compra ${order.number}`}>
+                          <td colSpan={8 - columns.hiddenCount} role="region" aria-label={`Detalhes da compra ${order.number}`}>
                             <DetailsPanel companyId={companyId} order={order} names={names} canWrite={canWrite} onBusyChange={setActing} />
                           </td>
                         </tr>
                       )}
                       {panel?.id === order.id && panel.kind === "receive" && (
                         <tr>
-                          <td colSpan={8} role="region" aria-label={`Recebimento da compra ${order.number}`}>
+                          <td colSpan={8 - columns.hiddenCount} role="region" aria-label={`Recebimento da compra ${order.number}`}>
                             <ReceivePanel companyId={companyId} order={order} onBusyChange={setActing} onReceived={(receipt) => void received(order, receipt)} />
                           </td>
                         </tr>
                       )}
                       {panel?.id === order.id && (panel.kind === "approve" || panel.kind === "cancel" || panel.kind === "close") && (
                         <tr>
-                          <td colSpan={8} role="region" aria-label={`Confirmação da compra ${order.number}`}>
+                          <td colSpan={8 - columns.hiddenCount} role="region" aria-label={`Confirmação da compra ${order.number}`}>
                             <div className="settlements">
                               <p>{CONFIRMATIONS[panel.kind].text(order)}</p>
                               <Notice message={actionError} />
@@ -472,7 +484,7 @@ export function PurchasesPage() {
                       )}
                       {panel?.id === order.id && panel.kind === "send" && (
                         <tr>
-                          <td colSpan={8} role="region" aria-label={`Envio da compra ${order.number}`}>
+                          <td colSpan={8 - columns.hiddenCount} role="region" aria-label={`Envio da compra ${order.number}`}>
                             <MailPanel
                               what="o pedido"
                               send={(to) => api.sendPurchaseOrder(companyId, order.id, to)}
@@ -483,7 +495,7 @@ export function PurchasesPage() {
                       )}
                       {panel?.id === order.id && panel.kind === "history" && (
                         <tr>
-                          <td colSpan={8} role="region" aria-label={`Histórico da compra ${order.number}`}>
+                          <td colSpan={8 - columns.hiddenCount} role="region" aria-label={`Histórico da compra ${order.number}`}>
                             <History
                               load={historyLoader(order.id)}
                               fieldLabel={(field) => FIELD_LABELS[field] ?? field}
