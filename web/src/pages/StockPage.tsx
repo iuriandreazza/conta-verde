@@ -21,6 +21,7 @@ import { BoxIcon } from "../components/icons/box";
 import { ChevronDownIcon } from "../components/icons/chevron-down";
 import { PlusIcon } from "../components/icons/plus";
 import { RotateCCWIcon } from "../components/icons/rotate-ccw";
+import { ColumnChooser } from "../components/ColumnChooser";
 import { ListRow } from "../components/ListRow";
 import { ListTools } from "../components/ListTools";
 import { Notice } from "../components/Notice";
@@ -32,6 +33,7 @@ import { formatDate, isIsoDate, wholeDate } from "../lib/entryInstallments";
 import { todayIso } from "../lib/settlement";
 import { isNegative, signedQuantity, trimCost } from "../lib/stock";
 import { useCanWrite } from "../lib/useCanWrite";
+import { useColumns, type ColumnDef } from "../lib/useColumns";
 import { useCounts } from "../lib/useCounts";
 import { usePagedList } from "../lib/usePagedList";
 import { useStockProducts } from "../lib/useStockProducts";
@@ -118,12 +120,20 @@ export function StockPage() {
   );
 }
 
+type PositionColumn = "minimum" | "cost" | "value";
+const POSITION_COLUMNS: ColumnDef<PositionColumn>[] = [
+  { key: "minimum", label: "Estoque mínimo", hiddenByDefault: true },
+  { key: "cost", label: "Custo médio" },
+  { key: "value", label: "Valor" },
+];
+
 function PositionsView({ companyId, lowIds }: { companyId: string; lowIds: Set<string> }) {
   const [filters, setFilters] = useState<StockPositionFilters>(NO_POSITION_FILTERS);
   const { items, nextCursor, loading, loadingMore, error, applied, reload, loadMore } = usePagedList<StockPosition, StockPositionFilters>(
     (applied, after) => api.listStockPositions(companyId, { ...applied, on: wholeDate(applied.on) }, after),
     filters,
   );
+  const columns = useColumns("stock-position", POSITION_COLUMNS);
   useOnCreated("stockMovement", () => void reload());
   const isFiltered = applied.q !== "" || applied.on !== "" || applied.situation !== "";
   const summary = useCounts(
@@ -141,6 +151,7 @@ function PositionsView({ companyId, lowIds }: { companyId: string; lowIds: Set<s
   return (
     <>
       <div className="list-actions">
+        <ColumnChooser columns={POSITION_COLUMNS} isShown={columns.isShown} onToggle={columns.toggle} onReset={columns.reset} />
         <ListTools
           filename="posicao-do-estoque"
           header={["Produto", "SKU", "Unidade", "Quantidade", "Custo médio", "Valor"]}
@@ -208,8 +219,9 @@ function PositionsView({ companyId, lowIds }: { companyId: string; lowIds: Set<s
                 <tr>
                   <th>Produto</th>
                   <th className="num">Quantidade</th>
-                  <th className="num">Custo médio</th>
-                  <th className="num">Valor</th>
+                  {columns.isShown("minimum") && <th className="num">Mínimo</th>}
+                  {columns.isShown("cost") && <th className="num">Custo médio</th>}
+                  {columns.isShown("value") && <th className="num">Valor</th>}
                 </tr>
               </thead>
               <tbody>
@@ -233,8 +245,13 @@ function PositionsView({ companyId, lowIds }: { companyId: string; lowIds: Set<s
                         )
                       )}
                     </td>
-                    <td className="num">{position.average_cost === null ? "—" : formatMoney(trimCost(position.average_cost))}</td>
-                    <td className="num">{formatMoney(position.value)}</td>
+                    {columns.isShown("minimum") && (
+                      <td className="num">{position.minimum_stock === null ? "—" : `${formatDecimal(position.minimum_stock)} ${position.unit}`}</td>
+                    )}
+                    {columns.isShown("cost") && (
+                      <td className="num">{position.average_cost === null ? "—" : formatMoney(trimCost(position.average_cost))}</td>
+                    )}
+                    {columns.isShown("value") && <td className="num">{formatMoney(position.value)}</td>}
                   </ListRow>
                 ))}
               </tbody>
