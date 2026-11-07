@@ -130,6 +130,13 @@ export function PurchasesPage() {
     );
   const columns = useColumns("purchases", TABLE_COLUMNS);
   const selected = items.filter((order) => selectedIds.includes(order.id));
+  // A tick on an order that left the list (another filter, another search) does not wait for it to come back.
+  useEffect(() => {
+    setSelectedIds((ids) => {
+      const kept = ids.filter((id) => items.some((order) => order.id === id));
+      return kept.length === ids.length ? ids : kept;
+    });
+  }, [items]);
   const span = 8 - columns.hiddenCount + (canWrite ? 1 : 0);
   const today = todayIso();
   const isFiltered = applied.q !== "" || applied.status !== "" || applied.from !== "" || applied.to !== "";

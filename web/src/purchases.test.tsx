@@ -230,6 +230,21 @@ describe("purchases", () => {
     expect(screen.queryByRole("region", { name: "Compras selecionadas" })).not.toBeInTheDocument();
   });
 
+  it("forgets the tick of an order that leaves the list when the search changes", async () => {
+    mockApi((url, init) => {
+      const search = new URL(url, "http://x").searchParams.get("q");
+      const orders = search === "outra" ? [approved] : [draft, approved];
+      return answer(orders)(url, init);
+    });
+    renderAt("/companies/c1/purchases");
+    await userEvent.click(await screen.findByLabelText("Selecionar a compra 1"));
+    expect(screen.getByText("1 compra selecionada")).toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText("Buscar"), "outra");
+    await vi.waitFor(() => expect(screen.queryByLabelText("Selecionar a compra 1")).not.toBeInTheDocument());
+    expect(screen.queryByRole("region", { name: "Compras selecionadas" })).not.toBeInTheDocument();
+  });
+
   it("offers no ticking to a role that only reads", async () => {
     mockApi(answer([draft], readOnly));
     renderAt("/companies/c1/purchases");
