@@ -2122,3 +2122,17 @@ tbody tr:last-child td {
 .column-chooser-list input[type="checkbox"] {
   width: auto;
 }
+
+/* What is ticked in a list and what can be done with it, between the filters and the table. */
+.selection-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  margin: 0 1.5rem 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--green-soft);
+  font-size: 0.9rem;
+}

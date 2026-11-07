@@ -69,6 +69,12 @@ const ORDER_LABELS: Record<PurchaseOrderFilters["sort"], string> = {
   number: "Mais antigas primeiro",
 };
 
+/** The statuses a bulk action applies to; the rest of what is ticked is left alone. */
+const BULK_ELIGIBLE: Record<"approve" | "cancel", PurchaseStatus[]> = {
+  approve: ["draft"],
+  cancel: ["draft", "approved"],
+};
+
 const CONFIRMATIONS: Record<Action, { text: (order: PurchaseOrder) => string; button: string; done: (order: PurchaseOrder) => string }> = {
   approve: {
     text: (order) =>
@@ -110,6 +116,8 @@ export function PurchasesPage() {
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const [panel, setPanel] = useState<Panel | null>(null);
   const [acting, setActing] = useState(false);
+  // The orders ticked for a bulk action, by id: what is no longer in the list is not acted on.
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [actionError, setActionError] = useState<string | null>(null);
   // What an order points at is read once: the form needs it, and so do the names in the list.
   const targets = useSalesTargets(companyId);
@@ -121,6 +129,8 @@ export function PurchasesPage() {
       filters,
     );
   const columns = useColumns("purchases", TABLE_COLUMNS);
+  const selected = items.filter((order) => selectedIds.includes(order.id));
+  const span = 8 - columns.hiddenCount + (canWrite ? 1 : 0);
   const today = todayIso();
   const isFiltered = applied.q !== "" || applied.status !== "" || applied.from !== "" || applied.to !== "";
   const counts = useCounts(() => api.getPurchaseStatusCounts(companyId, { q: applied.q, from: wholeDate(applied.from), to: wholeDate(applied.to) }), items, !loading);
@@ -189,6 +199,30 @@ export function PurchasesPage() {
     } finally {
       setActing(false);
     }
+  }
+
+  /** Does one action to every ordered ticked that it applies to, one after the other, and says how it went. */
+  async function actOnSelected(action: "approve" | "cancel") {
+    if (acting) return;
+    const eligible = selected.filter((order) => BULK_ELIGIBLE[action].includes(order.status));
+    setActing(true);
+    setActionError(null);
+    setSaved(null);
+    const failed: string[] = [];
+    let done = 0;
+    for (const order of eligible) {
+      try {
+        const call = action === "approve" ? api.approvePurchaseOrder : api.cancelPurchaseOrder;
+        replace(await call(companyId, order.id));
+        done += 1;
+      } catch (failure) {
+        failed.push(`nº ${order.number} (${errorMessage(failure)})`);
+      }
+    }
+    setSaved(done === 0 ? null : `${done} ${done === 1 ? "compra" : "compras"} ${action === "approve" ? "aprovada" : "cancelada"}${done === 1 ? "" : "s"}.`);
+    if (failed.length > 0) setActionError(`Não foi possível ${action === "approve" ? "aprovar" : "cancelar"}: ${failed.join("; ")}.`);
+    setSelectedIds([]);
+    setActing(false);
   }
 
   /** A receipt changes the order's status, which only the order's own answer tells. */
@@ -288,6 +322,14 @@ export function PurchasesPage() {
             </label>
           </div>
           <Notice message={error ?? targetsError} />
+          {selected.length > 0 && (
+            <SelectionBar
+              selected={selected}
+              busy={acting}
+              onAct={(action) => void actOnSelected(action)}
+              onClear={() => setSelectedIds([])}
+            />
+          )}
           {loading ? (
             <p role="status" className="status">
               <Spinner /> Carregando…
@@ -315,6 +357,16 @@ export function PurchasesPage() {
               <table>
                 <thead>
                   <tr>
+                    {canWrite && (
+                      <th>
+                        <input
+                          type="checkbox"
+                          aria-label="Selecionar todas as compras da lista"
+                          checked={items.length > 0 && selected.length === items.length}
+                          onChange={(event) => setSelectedIds(event.target.checked ? items.map((order) => order.id) : [])}
+                        />
+                      </th>
+                    )}
                     <th>Nº</th>
                     <th>Fornecedor</th>
                     {columns.isShown("ordered") && <th>Data</th>}
@@ -331,6 +383,18 @@ export function PurchasesPage() {
                   {items.map((order, index) => (
                     <Fragment key={order.id}>
                       <ListRow index={index} highlighted={order.id === highlightedId}>
+                        {canWrite && (
+                          <td>
+                            <input
+                              type="checkbox"
+                              aria-label={`Selecionar a compra ${order.number}`}
+                              checked={selectedIds.includes(order.id)}
+                              onChange={(event) =>
+                                setSelectedIds(event.target.checked ? [...selectedIds, order.id] : selectedIds.filter((id) => id !== order.id))
+                              }
+                            />
+                          </td>
+                        )}
                         <td>{order.number}</td>
                         <td>
                           <div className="cell-title">{names.get(order.supplier_id) ?? ""}</div>
@@ -452,21 +516,21 @@ export function PurchasesPage() {
                       </ListRow>
                       {panel?.id === order.id && panel.kind === "details" && (
                         <tr>
-                          <td colSpan={8 - columns.hiddenCount} role="region" aria-label={`Detalhes da compra ${order.number}`}>
+                          <td colSpan={span} role="region" aria-label={`Detalhes da compra ${order.number}`}>
                             <DetailsPanel companyId={companyId} order={order} names={names} canWrite={canWrite} onBusyChange={setActing} />
                           </td>
                         </tr>
                       )}
                       {panel?.id === order.id && panel.kind === "receive" && (
                         <tr>
-                          <td colSpan={8 - columns.hiddenCount} role="region" aria-label={`Recebimento da compra ${order.number}`}>
+                          <td colSpan={span} role="region" aria-label={`Recebimento da compra ${order.number}`}>
                             <ReceivePanel companyId={companyId} order={order} onBusyChange={setActing} onReceived={(receipt) => void received(order, receipt)} />
                           </td>
                         </tr>
                       )}
                       {panel?.id === order.id && (panel.kind === "approve" || panel.kind === "cancel" || panel.kind === "close") && (
                         <tr>
-                          <td colSpan={8 - columns.hiddenCount} role="region" aria-label={`Confirmação da compra ${order.number}`}>
+                          <td colSpan={span} role="region" aria-label={`Confirmação da compra ${order.number}`}>
                             <div className="settlements">
                               <p>{CONFIRMATIONS[panel.kind].text(order)}</p>
                               <Notice message={actionError} />
@@ -484,7 +548,7 @@ export function PurchasesPage() {
                       )}
                       {panel?.id === order.id && panel.kind === "send" && (
                         <tr>
-                          <td colSpan={8 - columns.hiddenCount} role="region" aria-label={`Envio da compra ${order.number}`}>
+                          <td colSpan={span} role="region" aria-label={`Envio da compra ${order.number}`}>
                             <MailPanel
                               what="o pedido"
                               send={(to) => api.sendPurchaseOrder(companyId, order.id, to)}
@@ -495,7 +559,7 @@ export function PurchasesPage() {
                       )}
                       {panel?.id === order.id && panel.kind === "history" && (
                         <tr>
-                          <td colSpan={8 - columns.hiddenCount} role="region" aria-label={`Histórico da compra ${order.number}`}>
+                          <td colSpan={span} role="region" aria-label={`Histórico da compra ${order.number}`}>
                             <History
                               load={historyLoader(order.id)}
                               fieldLabel={(field) => FIELD_LABELS[field] ?? field}
@@ -817,4 +881,62 @@ function displayValue(field: string, value: string | null, names: Map<string, st
   if (field === "ordered_on" || field === "expected_on") return formatDate(value);
   if (field === "lines") return linesTrailText(value, names);
   return value;
+}
+
+/** What the ticked orders can be given in one go: how many each action reaches, and a confirmation before it is made. */
+function SelectionBar({
+  selected,
+  busy,
+  onAct,
+  onClear,
+}: {
+  selected: PurchaseOrder[];
+  busy: boolean;
+  onAct: (action: "approve" | "cancel") => void;
+  onClear: () => void;
+}) {
+  const [asking, setAsking] = useState<"approve" | "cancel" | null>(null);
+  const reach = (action: "approve" | "cancel") => selected.filter((order) => BULK_ELIGIBLE[action].includes(order.status)).length;
+  const label = { approve: "aprovar", cancel: "cancelar" } as const;
+
+  return (
+    <div className="selection-bar" role="region" aria-label="Compras selecionadas">
+      <span>
+        {selected.length} {selected.length === 1 ? "compra selecionada" : "compras selecionadas"}
+      </span>
+      {asking === null ? (
+        <>
+          {(["approve", "cancel"] as const).map((action) => (
+            <Button key={action} type="button" variant="ghost" disabled={busy || reach(action) === 0} onClick={() => setAsking(action)}>
+              {action === "approve" ? "Aprovar" : "Cancelar"} ({reach(action)})
+            </Button>
+          ))}
+          <Button type="button" variant="ghost" disabled={busy} onClick={onClear}>
+            Limpar seleção
+          </Button>
+        </>
+      ) : (
+        <>
+          <span>
+            Vai {label[asking]} {reach(asking)} {reach(asking) === 1 ? "compra" : "compras"}
+            {reach(asking) < selected.length && "; as outras não se aplicam e ficam como estão"}.{" "}
+            {asking === "cancel" ? "Um pedido cancelado não é reaberto." : "Depois de aprovado, os itens não mudam."}
+          </span>
+          <Button
+            type="button"
+            pending={busy}
+            onClick={() => {
+              onAct(asking);
+              setAsking(null);
+            }}
+          >
+            Confirmar
+          </Button>
+          <Button type="button" variant="ghost" disabled={busy} onClick={() => setAsking(null)}>
+            Voltar
+          </Button>
+        </>
+      )}
+    </div>
+  );
 }
