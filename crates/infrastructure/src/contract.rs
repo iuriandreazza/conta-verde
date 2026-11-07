@@ -14525,3 +14525,69 @@ pub async fn reports_the_stock_valuation_and_its_movements<M, P, St>(
         ));
     }
 }
+
+/// How the queue of jobs hands out work ([ADR 0059]): the order, what is not yet due, the lease that lets a job be taken
+/// again, the wait before a retry, the end of a job given up on, and two workers racing for it.
+pub async fn runs_the_job_queue<Q: conta_verde_application::JobQueue>(queue: &Q) {
+    use conta_verde_domain::{JobKind, NewJob};
+
+    let job = |tag: &str, run_at: i64| {
+        NewJob::new(
+            JobKind::SendEmail,
+            vec![
+                format!("{tag}@example.com"),
+                tag.to_owned(),
+                "body".to_owned(),
+            ],
+            run_at,
+        )
+        .unwrap()
+    };
+    // A shared database may hold what an earlier run left behind.
+    while let Some(left) = queue.claim_next(i64::MAX / 2, 1).await.unwrap() {
+        queue.complete(left.id).await.unwrap();
+    }
+
+    // Due jobs come oldest first, and one that is not due yet waits.
+    let a = queue.enqueue(&job("a", 100)).await.unwrap();
+    let b = queue.enqueue(&job("b", 50)).await.unwrap();
+    let c = queue.enqueue(&job("c", 1000)).await.unwrap();
+    assert!(queue.claim_next(10, 300).await.unwrap().is_none());
+    let first = queue.claim_next(100, 300).await.unwrap().unwrap();
+    assert_eq!(
+        (first.id, first.attempts, first.args[1].as_str()),
+        (b, 1, "b")
+    );
+    let second = queue.claim_next(100, 300).await.unwrap().unwrap();
+    assert_eq!((second.id, second.attempts), (a, 1));
+    assert!(queue.claim_next(100, 300).await.unwrap().is_none());
+
+    // A job held by a worker is not given to another until its lease ends, and then it is counted as another try.
+    assert!(queue.claim_next(399, 300).await.unwrap().is_none());
+    let again = queue.claim_next(400, 300).await.unwrap().unwrap();
+    assert_eq!((again.id, again.attempts), (b, 2));
+    queue.complete(b).await.unwrap();
+    let again = queue.claim_next(400, 300).await.unwrap().unwrap();
+    assert_eq!((again.id, again.attempts), (a, 2));
+    queue.complete(a).await.unwrap();
+
+    // A failed try waits for its time; a job given up on is never taken again.
+    let tried = queue.claim_next(1000, 300).await.unwrap().unwrap();
+    assert_eq!((tried.id, tried.attempts), (c, 1));
+    queue.fail(c, "boom", Some(2000)).await.unwrap();
+    assert!(queue.claim_next(1999, 300).await.unwrap().is_none());
+    let tried = queue.claim_next(2000, 300).await.unwrap().unwrap();
+    assert_eq!((tried.id, tried.attempts), (c, 2));
+    queue.fail(c, "boom", None).await.unwrap();
+    assert!(queue.claim_next(i64::MAX / 2, 300).await.unwrap().is_none());
+
+    // Two workers asking at once get two different jobs.
+    let d = queue.enqueue(&job("d", 0)).await.unwrap();
+    let e = queue.enqueue(&job("e", 0)).await.unwrap();
+    let (x, y) = tokio::join!(queue.claim_next(5, 60), queue.claim_next(5, 60));
+    let (x, y) = (x.unwrap().unwrap(), y.unwrap().unwrap());
+    assert_ne!(x.id, y.id);
+    assert!([d, e].contains(&x.id) && [d, e].contains(&y.id));
+    queue.complete(d).await.unwrap();
+    queue.complete(e).await.unwrap();
+}

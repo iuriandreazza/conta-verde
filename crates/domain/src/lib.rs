@@ -23,6 +23,7 @@ mod ids;
 mod inventory_count;
 mod invitation;
 mod invoice;
+mod job;
 mod line;
 mod name;
 mod notification;
@@ -93,10 +94,10 @@ pub use financial_entry::{
 };
 pub use ids::{
     AttachmentId, BankAccountId, CategoryId, ChargeId, CommissionRuleId, CompanyId, ContractId,
-    CostCenterId, EntryId, InventoryCountId, InvitationId, NotificationId, PartyId, PaymentEventId,
-    PaymentMethodId, PaymentTermId, PriceListId, ProductId, PurchaseOrderId, PurchaseReceiptId,
-    QuoteId, RecurrenceId, SaleId, SaleReturnId, SettlementId, StatementLineId, StockMovementId,
-    TransferId, UserId,
+    CostCenterId, EntryId, InventoryCountId, InvitationId, JobId, NotificationId, PartyId,
+    PaymentEventId, PaymentMethodId, PaymentTermId, PriceListId, ProductId, PurchaseOrderId,
+    PurchaseReceiptId, QuoteId, RecurrenceId, SaleId, SaleReturnId, SettlementId, StatementLineId,
+    StockMovementId, TransferId, UserId,
 };
 pub use inventory_count::{
     CountLine, CountLineDraft, CountStatus, InventoryCount, InventoryCountDraft, MAX_COUNT_LINES,
@@ -106,6 +107,7 @@ pub use invoice::{
     AccessKey, Invoice, InvoiceDraft, InvoiceInstallmentDraft, InvoiceItem, InvoiceItemDraft,
     InvoiceTotalsDraft,
 };
+pub use job::{Job, JobKind, MAX_ATTEMPTS, NewJob};
 pub use line::{Line, LineDraft, MAX_LINES, lines_total};
 pub use notification::{MAX_NOTIFICATION_ATTEMPTS, Notification, NotificationStatus};
 pub use party::{Party, PartyDraft};
