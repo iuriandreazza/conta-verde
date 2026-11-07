@@ -52,17 +52,17 @@ use conta_verde_application::{
     AttachmentRepository, AttachmentService, AuthService, BalanceService, BankAccountRepository,
     BankAccountService, BlobStore, CategoryRepository, CategoryService, ChargeRepository,
     ChargeService, CnpjRegistry, CommissionRuleRepository, CommissionService, ContractRepository,
-    ContractService, CostCenterRepository, CostCenterService, DocumentMailService,
-    DocumentReferences, EmailSender, EntryLookups, EntryReferences, FinancialEntryRepository,
-    FinancialEntryService, IdentityRepository, InventoryCountRepository, InventoryCountService,
-    InvitationRepository, MemberService, OpeningRepository, PartyRepository, PartyService,
-    PaymentMethodRepository, PaymentMethodService, PaymentProvider, PaymentTermRepository,
-    PaymentTermService, PostalCodeDirectory, PostalCodeService, PriceListRepository,
-    PriceListService, ProductRepository, ProductService, PurchaseOrderRepository, PurchaseService,
-    QuoteRepository, QuoteService, ReconciliationService, RecurrenceRepository, RecurrenceService,
-    SaleRepository, SaleService, SalesReportService, SecretService, StatementLineRepository,
-    StockMovementRepository, StockService, StockSettingsRepository, TransferRepository,
-    TransferService,
+    ContractService, CostCenterRepository, CostCenterService, DocumentMailRepository,
+    DocumentMailService, DocumentReferences, EmailSender, EntryLookups, EntryReferences,
+    FinancialEntryRepository, FinancialEntryService, IdentityRepository, InventoryCountRepository,
+    InventoryCountService, InvitationRepository, MemberService, OpeningRepository, PartyRepository,
+    PartyService, PaymentMethodRepository, PaymentMethodService, PaymentProvider,
+    PaymentTermRepository, PaymentTermService, PostalCodeDirectory, PostalCodeService,
+    PriceListRepository, PriceListService, ProductRepository, ProductService,
+    PurchaseOrderRepository, PurchaseService, QuoteRepository, QuoteService, ReconciliationService,
+    RecurrenceRepository, RecurrenceService, SaleRepository, SaleService, SalesReportService,
+    SecretService, StatementLineRepository, StockMovementRepository, StockService,
+    StockSettingsRepository, TransferRepository, TransferService,
 };
 use conta_verde_application::{
     CollectionService, CollectionSettingsRepository, DunningPlanRepository, DunningService,
@@ -121,6 +121,7 @@ pub trait Ports: 'static {
     type PostalCodes: PostalCodeDirectory + 'static;
     type Invitations: InvitationRepository + 'static;
     type Emails: EmailSender + 'static;
+    type DocumentMails: DocumentMailRepository + 'static;
 }
 
 /// The charges use case over the adapters of `X`.
@@ -180,6 +181,15 @@ type SalesOf<X> = SaleService<
 >;
 
 /// The purchase orders use case over the adapters of `X`.
+/// The e-mailing of documents over the adapters of `X`.
+type DocumentsOf<X> = DocumentMailService<
+    <X as Ports>::Purchases,
+    <X as Ports>::Entries,
+    <X as Ports>::Parties,
+    <X as Ports>::Emails,
+    <X as Ports>::DocumentMails,
+>;
+
 type PurchasesOf<X> = PurchaseService<
     <X as Ports>::Purchases,
     <X as Ports>::Entries,
@@ -244,7 +254,7 @@ pub struct Services<X: Ports> {
     pub balances: BalanceService<X::BankAccounts, X::Entries, X::Transfers, X::Openings>,
     pub postal_codes: PostalCodeService<X::PostalCodes>,
     pub members: MemberService<X::Invitations, X::Identity, X::Emails, X::Secrets>,
-    pub documents: DocumentMailService<X::Purchases, X::Entries, X::Parties, X::Emails>,
+    pub documents: DocumentsOf<X>,
     pub auth: AuthService<X::Identity, X::Secrets>,
 }
 
@@ -279,7 +289,7 @@ pub(crate) struct AppState<X: Ports> {
     balances: BalanceService<X::BankAccounts, X::Entries, X::Transfers, X::Openings>,
     postal_codes: PostalCodeService<X::PostalCodes>,
     members: MemberService<X::Invitations, X::Identity, X::Emails, X::Secrets>,
-    documents: DocumentMailService<X::Purchases, X::Entries, X::Parties, X::Emails>,
+    documents: DocumentsOf<X>,
     auth: AuthService<X::Identity, X::Secrets>,
     config: ApiConfig,
 }
@@ -482,6 +492,10 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         .route(
             "/companies/{company_id}/entries/{entry_id}/settlements/{settlement_id}/receipt",
             post(documents::send_payment_receipt::<X>),
+        )
+        .route(
+            "/companies/{company_id}/entries/{entry_id}/settlements/{settlement_id}/mails",
+            get(documents::payment_receipt_mails::<X>),
         )
         .route(
             "/companies/{company_id}/entries/{entry_id}/settlements/{settlement_id}",
@@ -819,6 +833,10 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
             post(documents::send_purchase_order::<X>),
         )
         .route(
+            "/companies/{company_id}/purchase-orders/{order_id}/mails",
+            get(documents::purchase_order_mails::<X>),
+        )
+        .route(
             "/companies/{company_id}/purchase-orders/{order_id}/approve",
             post(purchase_orders::approve_purchase_order::<X>),
         )
@@ -892,10 +910,11 @@ mod tests {
         InMemoryBankAccountRepository, InMemoryBlobStore, InMemoryCategoryRepository,
         InMemoryChargeRepository, InMemoryCnpjRegistry, InMemoryCollectionSettingsRepository,
         InMemoryCommissionRuleRepository, InMemoryContractRepository, InMemoryCostCenterRepository,
-        InMemoryDunningPlanRepository, InMemoryEmailSender, InMemoryFinancialEntryRepository,
-        InMemoryIdentityRepository, InMemoryInventoryCountRepository, InMemoryInvitationRepository,
-        InMemoryMessageSender, InMemoryNotificationRepository, InMemoryOpeningRepository,
-        InMemoryPartyRepository, InMemoryPaymentEventRepository, InMemoryPaymentLinkRepository,
+        InMemoryDocumentMailRepository, InMemoryDunningPlanRepository, InMemoryEmailSender,
+        InMemoryFinancialEntryRepository, InMemoryIdentityRepository,
+        InMemoryInventoryCountRepository, InMemoryInvitationRepository, InMemoryMessageSender,
+        InMemoryNotificationRepository, InMemoryOpeningRepository, InMemoryPartyRepository,
+        InMemoryPaymentEventRepository, InMemoryPaymentLinkRepository,
         InMemoryPaymentMethodRepository, InMemoryPaymentTermRepository,
         InMemoryPostalCodeDirectory, InMemoryPriceListRepository, InMemoryProductRepository,
         InMemoryPurchaseOrderRepository, InMemoryQuoteRepository, InMemoryRecurrenceRepository,
@@ -994,6 +1013,7 @@ mod tests {
         type PostalCodes = InMemoryPostalCodeDirectory;
         type Invitations = InMemoryInvitationRepository;
         type Emails = InMemoryEmailSender;
+        type DocumentMails = InMemoryDocumentMailRepository;
     }
 
     /// Like `MemoryPorts`, with the CNPJ and postal code lookups switched off.
@@ -1039,6 +1059,7 @@ mod tests {
         type PostalCodes = Option<InMemoryPostalCodeDirectory>;
         type Invitations = InMemoryInvitationRepository;
         type Emails = InMemoryEmailSender;
+        type DocumentMails = InMemoryDocumentMailRepository;
     }
 
     type TestReferences = RegisterReferences<
@@ -1616,6 +1637,7 @@ mod tests {
         InMemoryFinancialEntryRepository,
         InMemoryPartyRepository,
         InMemoryEmailSender,
+        InMemoryDocumentMailRepository,
     >;
 
     type TestMembers = MemberService<
@@ -1648,6 +1670,7 @@ mod tests {
             InMemoryFinancialEntryRepository::default(),
             InMemoryPartyRepository::default(),
             InMemoryEmailSender::default(),
+            InMemoryDocumentMailRepository::default(),
         )
     }
 
@@ -5669,6 +5692,7 @@ mod tests {
                     entry_store.clone(),
                     parties.clone(),
                     mailbox.clone(),
+                    InMemoryDocumentMailRepository::default(),
                 ),
                 auth: auth_service(),
             },
@@ -9396,6 +9420,25 @@ mod tests {
         );
         assert!(message.body.contains("Itens:"), "{}", message.body);
 
+        // The same order to the same address a moment later is refused, and what was sent is on record.
+        let again = mail(&draft, json!({})).await;
+        assert_eq!(
+            again.status,
+            StatusCode::TOO_MANY_REQUESTS,
+            "{}",
+            again.body
+        );
+        assert_eq!(mailbox.sent().len(), 1, "the refused one went nowhere");
+        let record = send(
+            &app,
+            get_request(&format!("{uri}/{draft}/mails"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(record.status, StatusCode::OK, "{}", record.body);
+        assert_eq!(record.body["items"].as_array().unwrap().len(), 1);
+        assert_eq!(record.body["items"][0]["to"], "fornecedor@example.com");
+        assert!(record.body["items"][0]["sent_at_millis"].as_i64().unwrap() > 0);
+
         // No address anywhere is a 422 that says what to do; an address can be given, and it must be one.
         let quiet = order(&silent).await.body["id"].as_str().unwrap().to_owned();
         send(
@@ -9471,6 +9514,29 @@ mod tests {
         assert_eq!(
             receipt.body,
             json!({ "to": "cliente@example.com", "emailed": true })
+        );
+        let on_record = send(
+            &app,
+            get_request(&format!("{settlement}/mails"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(on_record.body["items"][0]["to"], "cliente@example.com");
+        // Sent again right away, it is refused.
+        let twice = send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{settlement}/receipt"),
+                Some(&cookie),
+                json!({}),
+            ),
+        )
+        .await;
+        assert_eq!(
+            twice.status,
+            StatusCode::TOO_MANY_REQUESTS,
+            "{}",
+            twice.body
         );
         let message = mailbox.sent().pop().unwrap();
         assert_eq!(message.subject, "Comprovante de pagamento de Padaria");

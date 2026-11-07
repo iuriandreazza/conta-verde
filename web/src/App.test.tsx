@@ -3348,6 +3348,7 @@ describe("financial entries", () => {
           if (url.endsWith("/settlements/s1/receipt") && init?.method === "POST") {
             return { status: 200, body: { to: "cliente@example.com", emailed: true } };
           }
+          if (url.endsWith("/settlements/s1/mails")) return { status: 200, body: { items: [] } };
           return url.endsWith("/settlements") ? { status: 200, body: [settlement] } : undefined;
         }),
       );

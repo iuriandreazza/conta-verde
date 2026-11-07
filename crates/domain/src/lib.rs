@@ -15,6 +15,7 @@ mod cost_center;
 mod delinquency;
 mod document;
 mod document_check;
+mod document_mail;
 mod dunning;
 mod email;
 mod error;
@@ -83,6 +84,7 @@ pub use cost_center::{CostCenter, CostCenterDraft};
 pub use delinquency::{BUCKET_STARTS, DelinquencyReport, DelinquentCustomer, LateInstallment};
 pub use document::{Cnpj, Document};
 pub use document_check::DocumentCheck;
+pub use document_mail::{COOLDOWN_MILLIS, DAILY_CAP, DAY_MILLIS, DocumentMail, DocumentMailKind};
 pub use dunning::{
     DunningChannel, DunningPlan, DunningRule, MAX_DAYS_AFTER, MAX_DAYS_BEFORE, MAX_DUNNING_RULES,
 };
@@ -95,10 +97,10 @@ pub use financial_entry::{
 };
 pub use ids::{
     AttachmentId, BankAccountId, CategoryId, ChargeId, CommissionRuleId, CompanyId, ContractId,
-    CostCenterId, EntryId, InventoryCountId, InvitationId, JobId, NotificationId, PartyId,
-    PaymentEventId, PaymentMethodId, PaymentTermId, PriceListId, ProductId, PurchaseOrderId,
-    PurchaseReceiptId, QuoteId, RecurrenceId, SaleId, SaleReturnId, SettlementId, StatementLineId,
-    StockMovementId, TransferId, UserId,
+    CostCenterId, DocumentMailId, EntryId, InventoryCountId, InvitationId, JobId, NotificationId,
+    PartyId, PaymentEventId, PaymentMethodId, PaymentTermId, PriceListId, ProductId,
+    PurchaseOrderId, PurchaseReceiptId, QuoteId, RecurrenceId, SaleId, SaleReturnId, SettlementId,
+    StatementLineId, StockMovementId, TransferId, UserId,
 };
 pub use inventory_count::{
     CountLine, CountLineDraft, CountStatus, InventoryCount, InventoryCountDraft, MAX_COUNT_LINES,

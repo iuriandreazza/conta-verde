@@ -235,7 +235,9 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
         ApplicationError::PostalCodeLookupUnavailable => {
             (StatusCode::SERVICE_UNAVAILABLE, error.to_string())
         }
-        ApplicationError::RecheckTooSoon => (StatusCode::TOO_MANY_REQUESTS, error.to_string()),
+        ApplicationError::RecheckTooSoon | ApplicationError::MailRefused(_) => {
+            (StatusCode::TOO_MANY_REQUESTS, error.to_string())
+        }
         // Internal details can leak: log them, but show clients a generic message.
         ApplicationError::Repository(RepositoryError::Storage(detail)) => internal(detail),
         ApplicationError::Secret(error) => internal(&error.to_string()),

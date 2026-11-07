@@ -1085,6 +1085,12 @@ export interface Mailed {
   emailed: boolean;
 }
 
+/** That a document was e-mailed: to whom, and when (Unix milliseconds). */
+export interface SentMail {
+  to: string;
+  sent_at_millis: number;
+}
+
 export interface PurchaseOrderFilters {
   q: string;
   status: "" | PurchaseStatus;
@@ -2061,6 +2067,10 @@ export const api = {
   },
   sendPurchaseOrder: (companyId: string, id: string, to: string) =>
     post<Mailed>(`/companies/${companyId}/purchase-orders/${id}/send`, to ? { to } : {}),
+  purchaseOrderMails: (companyId: string, id: string) =>
+    request<{ items: SentMail[] }>(`/companies/${companyId}/purchase-orders/${id}/mails`),
+  paymentReceiptMails: (companyId: string, entryId: string, settlementId: string) =>
+    request<{ items: SentMail[] }>(`/companies/${companyId}/entries/${entryId}/settlements/${settlementId}/mails`),
   sendPaymentReceipt: (companyId: string, entryId: string, settlementId: string, to: string) =>
     post<Mailed>(`/companies/${companyId}/entries/${entryId}/settlements/${settlementId}/receipt`, to ? { to } : {}),
   getPurchaseStatusCounts: (companyId: string, filters: Pick<PurchaseOrderFilters, "q" | "from" | "to">) => {
