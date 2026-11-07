@@ -79,6 +79,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0061](0061-document-emails.md) | A purchase order and a payment receipt sent by e-mail | accepted | — |
 | [0062](0062-account-notices.md) | Notices to the owner of an address when the account changes | accepted | — |
 | [0063](0063-email-confirmation.md) | Confirming the address of an account | accepted | — |
+| [0064](0064-entry-import-from-a-file.md) | Entry import from a file | accepted | — |
 
 ## Template
 

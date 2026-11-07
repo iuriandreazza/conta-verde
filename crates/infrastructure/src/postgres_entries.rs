@@ -8,9 +8,9 @@ use conta_verde_application::{
 use conta_verde_domain::{
     Amount, AuditEntity, AuditEntry, AuditRecord, BankAccountId, CalendarDate, CategoryId,
     ChargeId, CompanyId, CostCenterId, Decimal, EntryId, EntryInstallmentDraft, EntryKind,
-    EntryOrigin, FinancialEntry, FinancialEntryDraft, PartyId, PaymentMethodId, PurchaseReceiptId,
-    RecurrenceId, RecurrenceOrigin, SaleId, SaleReturnId, Settlement, SettlementDraft,
-    SettlementId,
+    EntryOrigin, FinancialEntry, FinancialEntryDraft, ImportId, PartyId, PaymentMethodId,
+    PurchaseReceiptId, RecurrenceId, RecurrenceOrigin, SaleId, SaleReturnId, Settlement,
+    SettlementDraft, SettlementId,
 };
 use sqlx::postgres::PgRow;
 use sqlx::{PgConnection, PgPool, Postgres, QueryBuilder, Row};
@@ -20,12 +20,13 @@ use crate::postgres::{snapshot, storage_error};
 use crate::postgres_audit;
 
 /// The unique indexes that say an origin already has its entry.
-const ORIGIN_UNIQUE_INDEXES: [&str; 5] = [
+const ORIGIN_UNIQUE_INDEXES: [&str; 6] = [
     "financial_entries_occurrence_key",
     "financial_entries_sale_key",
     "financial_entries_sale_return_key",
     "financial_entries_charge_fee_key",
     "financial_entries_purchase_receipt_key",
+    "financial_entries_import_key",
 ];
 
 /// The unique index that gives a charge at most one settlement (ADR 0046).
@@ -34,7 +35,7 @@ const CHARGE_SETTLEMENT_INDEX: &str = "entry_settlements_charge_key";
 const SELECT_ENTRIES: &str = "SELECT id, company_id, kind, description, party_id, category_id, \
      cost_center_id, to_char(competence_date, 'YYYY-MM-DD') AS competence_date, recurrence_id, \
      to_char(occurrence_on, 'YYYY-MM-DD') AS occurrence_on, sale_id, sale_return_id, \
-     charge_fee_id, purchase_receipt_id, voided FROM financial_entries";
+     charge_fee_id, purchase_receipt_id, import_id, voided FROM financial_entries";
 
 pub struct PostgresFinancialEntryRepository {
     pool: PgPool,
@@ -84,8 +85,8 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
         sqlx::query(
             "INSERT INTO financial_entries \
              (id, company_id, kind, description, party_id, category_id, cost_center_id, competence_date, \
-              recurrence_id, occurrence_on, sale_id, sale_return_id, charge_fee_id, purchase_receipt_id) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, CAST($8 AS DATE), $9, CAST($10 AS DATE), $11, $12, $13, $14)",
+              recurrence_id, occurrence_on, sale_id, sale_return_id, charge_fee_id, purchase_receipt_id, import_id) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, CAST($8 AS DATE), $9, CAST($10 AS DATE), $11, $12, $13, $14, $15)",
         )
         .bind(entry.id().as_uuid())
         .bind(entry.company_id().as_uuid())
@@ -117,6 +118,10 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
         })
         .bind(match entry.origin() {
             Some(EntryOrigin::PurchaseReceipt(id)) => Some(id.as_uuid()),
+            _ => None,
+        })
+        .bind(match entry.origin() {
+            Some(EntryOrigin::Import(id)) => Some(id.as_uuid()),
             _ => None,
         })
         .execute(&mut *tx)
@@ -738,6 +743,7 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
             EntryOrigin::SaleReturn(id) => ("sale_return_id", id.as_uuid()),
             EntryOrigin::ChargeFee(id) => ("charge_fee_id", id.as_uuid()),
             EntryOrigin::PurchaseReceipt(id) => ("purchase_receipt_id", id.as_uuid()),
+            EntryOrigin::Import(id) => ("import_id", id.as_uuid()),
             EntryOrigin::Recurrence(_) => {
                 return Err(RepositoryError::Storage(
                     "an entry is looked up by sale or return, never by occurrence".to_owned(),
@@ -1029,6 +1035,7 @@ fn entry_from_row(
     let sale_return: Option<Uuid> = row.try_get("sale_return_id").map_err(storage_error)?;
     let charge_fee: Option<Uuid> = row.try_get("charge_fee_id").map_err(storage_error)?;
     let receipt: Option<Uuid> = row.try_get("purchase_receipt_id").map_err(storage_error)?;
+    let import: Option<Uuid> = row.try_get("import_id").map_err(storage_error)?;
     let voided: bool = row.try_get("voided").map_err(storage_error)?;
     let origin = match (
         recurrence,
@@ -1037,19 +1044,21 @@ fn entry_from_row(
         sale_return,
         charge_fee,
         receipt,
+        import,
     ) {
-        (Some(recurrence_id), Some(occurrence_on), _, _, _, _) => {
+        (Some(recurrence_id), Some(occurrence_on), _, _, _, _, _) => {
             Some(EntryOrigin::Recurrence(RecurrenceOrigin {
                 recurrence_id: RecurrenceId::from_uuid(recurrence_id),
                 occurrence_on,
             }))
         }
-        (_, _, Some(id), _, _, _) => Some(EntryOrigin::Sale(SaleId::from_uuid(id))),
-        (_, _, _, Some(id), _, _) => Some(EntryOrigin::SaleReturn(SaleReturnId::from_uuid(id))),
-        (_, _, _, _, Some(id), _) => Some(EntryOrigin::ChargeFee(ChargeId::from_uuid(id))),
-        (_, _, _, _, _, Some(id)) => Some(EntryOrigin::PurchaseReceipt(
+        (_, _, Some(id), _, _, _, _) => Some(EntryOrigin::Sale(SaleId::from_uuid(id))),
+        (_, _, _, Some(id), _, _, _) => Some(EntryOrigin::SaleReturn(SaleReturnId::from_uuid(id))),
+        (_, _, _, _, Some(id), _, _) => Some(EntryOrigin::ChargeFee(ChargeId::from_uuid(id))),
+        (_, _, _, _, _, Some(id), _) => Some(EntryOrigin::PurchaseReceipt(
             PurchaseReceiptId::from_uuid(id),
         )),
+        (_, _, _, _, _, _, Some(id)) => Some(EntryOrigin::Import(ImportId::from_uuid(id))),
         _ => None,
     };
     let entry = entry.with_voided(voided);
@@ -1161,6 +1170,27 @@ mod tests {
             &service,
             &PostgresCategoryRepository::new(pool.clone()),
             company,
+            &seed,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn imports_entries_from_a_file() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let other_company = contract::create_company(&pool).await;
+        let seed = seed(&pool, company).await;
+        let service = FinancialEntryService::new(
+            PostgresFinancialEntryRepository::new(pool.clone()),
+            references(&pool),
+        );
+        contract::imports_entries_from_a_file(
+            &service,
+            &PostgresCategoryRepository::new(pool.clone()),
+            company,
+            other_company,
             &seed,
         )
         .await;

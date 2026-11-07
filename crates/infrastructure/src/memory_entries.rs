@@ -739,6 +739,25 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn imports_entries_from_a_file() {
+        let registers = Registers::new();
+        let (company, other_company) = (CompanyId::generate(), CompanyId::generate());
+        let seed = registers.seed(company).await;
+        let service = FinancialEntryService::new(
+            InMemoryFinancialEntryRepository::default(),
+            registers.references(),
+        );
+        contract::imports_entries_from_a_file(
+            &service,
+            &registers.categories,
+            company,
+            other_company,
+            &seed,
+        )
+        .await;
+    }
+
+    #[tokio::test]
     async fn reports_delinquency() {
         let registers = Registers::new();
         let (company, other_company) = (CompanyId::generate(), CompanyId::generate());
