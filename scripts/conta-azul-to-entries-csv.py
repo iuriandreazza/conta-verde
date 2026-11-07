@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Turns the exports of a cloud ERP into the files conta-verde imports (ADR 0063).
+"""Turns the exports of a cloud ERP into the files conta-verde imports (ADR 0064).
 
     uv run --with openpyxl scripts/conta-azul-to-entries-csv.py entries --kind payable contas-a-pagar.xls -o entries.csv
     uv run --with openpyxl scripts/conta-azul-to-entries-csv.py entries --kind receivable contas-a-receber.xls -o entries.csv

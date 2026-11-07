@@ -149,7 +149,7 @@ private endpoint.
 
 - [ ] PostgreSQL row-level security policies as a second barrier to the application checks ([ADR 0004](adr/0004-company-scoped-tenancy.md))
 - [ ] Backup and restore procedure, upgrade guide, published Docker image
-- [ ] Migration importers: entries, open or paid, from CSV (done, [ADR 0063](adr/0063-entry-import-from-a-file.md), with `scripts/conta-azul-to-entries-csv.py` to convert a reference product's export); stock balances from CSV; guidance for leaving the reference product
+- [ ] Migration importers: entries, open or paid, from CSV (done, [ADR 0064](adr/0064-entry-import-from-a-file.md), with `scripts/conta-azul-to-entries-csv.py` to convert a reference product's export); stock balances from CSV; guidance for leaving the reference product
 - [ ] Performance baseline on a 5-year dataset; indexes reviewed
 - [ ] User documentation complete in English; Portuguese translation of the UI
 

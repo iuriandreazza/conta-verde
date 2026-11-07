@@ -23,7 +23,7 @@ function split(text: string): { header: string; rows: string[] } {
  * Imports an entries file in pieces of at most `ENTRY_IMPORT_PIECE_ROWS` rows, each with the header.
  * Every piece is checked before any is written, so a refused row anywhere writes nothing at all;
  * the pieces are then written in order and stop at the first failure, and since a row already
- * imported is skipped, sending the file again finishes what a failure left (ADR 0063). The rows in
+ * imported is skipped, sending the file again finishes what a failure left (ADR 0064). The rows in
  * the answer are numbered as in the whole file, header counted, as a spreadsheet shows them.
  */
 export async function importEntriesInPieces(
