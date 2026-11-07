@@ -700,6 +700,10 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
             get(stock::list_movements::<X>).post(stock::record_movement::<X>),
         )
         .route(
+            "/companies/{company_id}/stock/movements/kind-counts",
+            get(stock::movement_kind_counts::<X>),
+        )
+        .route(
             "/companies/{company_id}/stock/movements/{movement_id}",
             get(stock::get_movement::<X>),
         )

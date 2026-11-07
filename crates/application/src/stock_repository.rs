@@ -61,6 +61,12 @@ impl StockMovementQuery {
         self
     }
 
+    /// The same product and days with any kind, which is what a count per kind needs.
+    pub fn any_kind(mut self) -> Self {
+        self.kind = None;
+        self
+    }
+
     pub fn product(&self) -> Option<ProductId> {
         self.product
     }
@@ -165,4 +171,12 @@ pub trait StockMovementRepository: Send + Sync {
         after: Option<&DateCursor>,
         limit: usize,
     ) -> impl Future<Output = Result<Vec<StockMovement>, RepositoryError>> + Send;
+
+    /// How many movements of the company match `query` of each kind, ignoring the query's own kind; kinds with
+    /// none are left out.
+    fn count_by_kind(
+        &self,
+        company_id: CompanyId,
+        query: &StockMovementQuery,
+    ) -> impl Future<Output = Result<Vec<(StockMovementKind, u64)>, RepositoryError>> + Send;
 }
