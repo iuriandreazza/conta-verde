@@ -1,0 +1,10 @@
+app: conta-verde-dev
+placement:
+  country: BR
+database: nous-dev
+services:
+  - name: web
+    image: ghcr.io/iuriandreazza/conta-verde:dev
+    exposed: true
+    ports:
+      - "3080"
