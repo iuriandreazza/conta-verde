@@ -131,6 +131,8 @@ where
             Err(RepositoryError::NotFound) => return Err(AuthError::InvalidResetLink.into()),
             other => other?,
         };
+        // The link reached the mailbox, so the address is confirmed.
+        self.identities.mark_email_verified(user_id).await?;
         // Whoever changed it, the owner of the address is told: if it was not them, this is how they find out.
         if let Some(user) = self.identities.find_user(user_id).await? {
             self.notify(
