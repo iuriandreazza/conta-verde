@@ -31,6 +31,8 @@ mod import;
 mod inventory_count_repository;
 mod inventory_count_service;
 mod invitation_repository;
+mod job_queue;
+mod job_runner;
 mod list_query;
 mod member_service;
 mod message_sender;
@@ -117,6 +119,8 @@ pub use inventory_count_service::{
 pub use invitation_repository::{
     InvitationRepository, InvitationState, NewInvitation, StoredInvitation,
 };
+pub use job_queue::JobQueue;
+pub use job_runner::{JobReport, JobRunner, QueuedEmailSender};
 pub use list_query::{MAX_SEARCH_CHARS, NameSort};
 pub use member_service::{InvitationPreview, Invited, MemberService};
 pub use message_sender::{MessageError, MessageSender, TextMessage};

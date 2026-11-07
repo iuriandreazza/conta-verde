@@ -4,27 +4,27 @@ use conta_verde_api::{ApiConfig, Ports, Services, router};
 use conta_verde_application::{
     AttachmentService, AuthService, BalanceService, BankAccountService, CategoryService,
     CommissionService, ContractService, CostCenterService, FinancialEntryService,
-    InventoryCountService, MemberService, PartyService, PaymentMethodService, PaymentTermService,
-    PostalCodeService, PriceListService, ProductService, PurchaseService, QuoteService,
-    ReconciliationService, RecurrenceService, SaleService, SalesReportService, StockService,
-    TransferService,
+    InventoryCountService, JobRunner, MemberService, PartyService, PaymentMethodService,
+    PaymentTermService, PostalCodeService, PriceListService, ProductService, PurchaseService,
+    QuoteService, ReconciliationService, RecurrenceService, SaleService, SalesReportService,
+    StockService, TransferService,
 };
 use conta_verde_application::{
     ChargeService, CollectionService, DunningService, EmailError, EmailMessage, EmailSender,
     MessageError, MessageSender, PaymentPageService, PaymentProvider, PaymentWebhookService,
-    ProviderCharge, ProviderChargeRequest, ProviderError, ProviderEvent, TextMessage, WebhookError,
-    WebhookHeaders,
+    ProviderCharge, ProviderChargeRequest, ProviderError, ProviderEvent, QueuedEmailSender,
+    TextMessage, WebhookError, WebhookHeaders,
 };
 use conta_verde_infrastructure::{
     Argon2SecretService, BrasilApiCnpjRegistry, BrasilApiPostalCodeDirectory, CachedCnpjRegistry,
     LocalBlobStore, LogEmailSender, PostgresAttachmentRepository, PostgresBankAccountRepository,
     PostgresCategoryRepository, PostgresCommissionRuleRepository, PostgresContractRepository,
     PostgresCostCenterRepository, PostgresFinancialEntryRepository, PostgresIdentityRepository,
-    PostgresInventoryCountRepository, PostgresInvitationRepository, PostgresOpeningRepository,
-    PostgresPartyRepository, PostgresPaymentMethodRepository, PostgresPaymentTermRepository,
-    PostgresPriceListRepository, PostgresProductRepository, PostgresPurchaseOrderRepository,
-    PostgresQuoteRepository, PostgresRecurrenceRepository, PostgresSaleRepository,
-    PostgresStatementLineRepository, PostgresStockMovementRepository,
+    PostgresInventoryCountRepository, PostgresInvitationRepository, PostgresJobQueue,
+    PostgresOpeningRepository, PostgresPartyRepository, PostgresPaymentMethodRepository,
+    PostgresPaymentTermRepository, PostgresPriceListRepository, PostgresProductRepository,
+    PostgresPurchaseOrderRepository, PostgresQuoteRepository, PostgresRecurrenceRepository,
+    PostgresSaleRepository, PostgresStatementLineRepository, PostgresStockMovementRepository,
     PostgresStockSettingsRepository, PostgresTransferRepository, RegisterDocumentReferences,
     RegisterReferences, SmtpEmailSender, connect_and_migrate,
 };
@@ -91,12 +91,15 @@ impl Ports for PostgresPorts {
     type Statements = PostgresStatementLineRepository;
     type PostalCodes = Option<BrasilApiPostalCodeDirectory>;
     type Invitations = PostgresInvitationRepository;
-    type Emails = ConfiguredEmailSender;
+    type Emails = QueuedEmailSender<PostgresJobQueue>;
 }
 
 const SESSION_LIFETIME: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 const INVITATION_LIFETIME: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 const JOB_INTERVAL: Duration = Duration::from_secs(60 * 60);
+/// How often the worker looks for jobs that are due: a message waits at most this long.
+const JOBS_POLL_INTERVAL: Duration = Duration::from_secs(5);
+const JOBS_PER_PASS: usize = 50;
 const CNPJ_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 
 #[tokio::main]
@@ -209,7 +212,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             PostgresProductRepository::new(pool.clone()),
             PostgresPaymentTermRepository::new(pool.clone()),
         ),
-        email_sender_from_env()?,
+        queued_emails(PostgresJobQueue::new(pool.clone()))?,
         Argon2SecretService::new()?,
         &public_url,
     );
@@ -231,7 +234,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             payment_page_service()?,
             PostgresNotificationRepository::new(pool.clone()),
             PostgresIdentityRepository::new(pool.clone()),
-            email_sender_from_env()?,
+            queued_emails(PostgresJobQueue::new(pool.clone()))?,
             message_sender_from_env()?,
         ))
     };
@@ -310,11 +313,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let members = MemberService::new(
         PostgresInvitationRepository::new(pool.clone()),
         PostgresIdentityRepository::new(pool.clone()),
-        email_sender_from_env()?,
+        queued_emails(PostgresJobQueue::new(pool.clone()))?,
         Argon2SecretService::new()?,
         INVITATION_LIFETIME,
         &public_url,
     );
+    tokio::spawn(run_jobs(JobRunner::new(
+        PostgresJobQueue::new(pool.clone()),
+        email_sender_from_env()?,
+    )));
     let auth = AuthService::new(
         PostgresIdentityRepository::new(pool),
         Argon2SecretService::new()?,
@@ -666,10 +673,55 @@ enum ConfiguredEmailSender {
 }
 
 impl EmailSender for ConfiguredEmailSender {
+    fn is_enabled(&self) -> bool {
+        matches!(self, Self::Smtp(_))
+    }
+
     async fn send(&self, message: &EmailMessage) -> Result<(), EmailError> {
         match self {
             Self::Smtp(sender) => sender.send(message).await,
             Self::Log(sender) => sender.send(message).await,
+        }
+    }
+}
+
+/// What asks for an e-mail (an invitation, a quote) hands it to the queue ([ADR 0059]); the worker sends it. With no
+/// mail server configured nothing is queued, and the page shows the link to pass on.
+fn queued_emails(
+    queue: PostgresJobQueue,
+) -> Result<QueuedEmailSender<PostgresJobQueue>, Box<dyn std::error::Error + Send + Sync>> {
+    Ok(QueuedEmailSender::new(
+        queue,
+        email_sender_from_env()?.is_enabled(),
+    ))
+}
+
+/// The worker of ADR 0059: every few seconds, does the jobs that are due. Safe to run in several instances, since a
+/// job is taken by one worker at a time and one a dead worker held is taken again when its lease ends.
+async fn run_jobs<Q, E>(runner: JobRunner<Q, E>)
+where
+    Q: conta_verde_application::JobQueue,
+    E: EmailSender,
+{
+    let mut tick = tokio::time::interval(JOBS_POLL_INTERVAL);
+    loop {
+        tick.tick().await;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| {
+                i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX)
+            });
+        match runner.run_due(now, JOBS_PER_PASS).await {
+            Ok(report) if report.done > 0 || report.retried > 0 || report.dead > 0 => {
+                tracing::info!(
+                    done = report.done,
+                    retried = report.retried,
+                    dead = report.dead,
+                    "jobs run"
+                );
+            }
+            Ok(_) => {}
+            Err(error) => tracing::error!(%error, "running jobs failed"),
         }
     }
 }

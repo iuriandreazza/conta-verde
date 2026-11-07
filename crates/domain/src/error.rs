@@ -26,6 +26,8 @@ pub enum DomainError {
     /// A subcategory takes its groups from its parent.
     GroupsAreInherited,
     InvalidBankCode,
+    /// A job a use case built wrongly: a programming error, never something a client sent.
+    InvalidJob(&'static str),
     InvalidBranch,
     InvalidAccountNumber,
     CashAccountHasNoBank,
@@ -178,6 +180,7 @@ impl fmt::Display for DomainError {
             Self::GroupsAreInherited => {
                 f.write_str("a subcategory takes its DRE and cash-flow groups from its parent")
             }
+            Self::InvalidJob(why) => write!(f, "invalid job: {why}"),
             Self::InvalidBankCode => {
                 f.write_str("bank code must have 3 digits, or 8 for an institution without one")
             }

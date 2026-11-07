@@ -17,5 +17,11 @@ pub struct EmailError;
 /// Port for sending e-mail ([ADR 0014]). A send that fails must never fail what asked for it: the
 /// invitation exists, and its link is shown to the person who made it.
 pub trait EmailSender: Send + Sync {
+    /// Whether a message sent here reaches anyone: false for an adapter that only logs, which is what makes a page
+    /// show an invitation's link to pass on.
+    fn is_enabled(&self) -> bool {
+        true
+    }
+
     fn send(&self, message: &EmailMessage) -> impl Future<Output = Result<(), EmailError>> + Send;
 }

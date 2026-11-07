@@ -9,6 +9,10 @@ use conta_verde_application::{EmailError, EmailMessage, EmailSender};
 pub struct LogEmailSender;
 
 impl EmailSender for LogEmailSender {
+    fn is_enabled(&self) -> bool {
+        false
+    }
+
     async fn send(&self, message: &EmailMessage) -> Result<(), EmailError> {
         tracing::info!(
             to = message.to.as_str(),
