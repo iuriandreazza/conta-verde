@@ -77,6 +77,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0059](0059-job-queue.md) | A queue of jobs and a worker, with e-mail sent through it | accepted | — |
 | [0060](0060-password-reset.md) | Password reset by an e-mailed link | accepted | — |
 | [0061](0061-document-emails.md) | A purchase order and a payment receipt sent by e-mail | accepted | — |
+| [0062](0062-account-notices.md) | Notices to the owner of an address when the account changes | accepted | — |
 
 ## Template
 

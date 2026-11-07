@@ -3030,6 +3030,11 @@ mod tests {
             send(&app, confirm(&token, "battery staple")).await.status,
             StatusCode::NO_CONTENT
         );
+        // The owner of the address is told that the password changed, and where to go if it was not them.
+        let notice = mailbox.sent().pop().unwrap();
+        assert_eq!(notice.to.as_str(), "ana@example.com");
+        assert_eq!(notice.subject, "Sua senha no conta-verde foi alterada");
+        assert!(notice.body.contains("/forgot-password"), "{}", notice.body);
         // The link is spent, the old session is over and the new password signs in.
         assert_eq!(
             send(&app, confirm(&token, "another one 123")).await.status,
@@ -3134,6 +3139,15 @@ mod tests {
         );
         let accepted = send(&app, accept(Some(&bia))).await;
         assert_eq!(accepted.status, StatusCode::OK, "{}", accepted.body);
+        // Whoever sent the invitation is told it was accepted.
+        let notice = mailbox.sent().pop().unwrap();
+        assert_eq!(notice.to.as_str(), "ana@example.com");
+        assert!(
+            notice.subject.contains("aceitou seu convite para Padaria"),
+            "{}",
+            notice.subject
+        );
+        assert!(notice.body.contains("bia@example.com"), "{}", notice.body);
         assert_eq!(accepted.body["company_id"], company_id.to_string());
 
         // Bia now belongs to the company, in the role, and what the role allows applies at once.
