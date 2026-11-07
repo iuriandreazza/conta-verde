@@ -195,6 +195,64 @@ describe("purchases", () => {
     expect(fetchMock.mock.calls.some(([url]) => /status-counts\?from=\d{4}-01-01&to=\d{4}-12-31/.test(String(url)))).toBe(true);
   });
 
+  it("approves the drafts and cancels what can be cancelled among the orders ticked, leaving the rest alone and saying what failed", async () => {
+    const draft2: PurchaseOrder = { ...draft, id: "o6", number: 6 };
+    const fetchMock = mockApi(
+      answer([draft, draft2, approved, received], (url, init) => {
+        if (init?.method !== "POST") return undefined;
+        if (url.endsWith("/purchase-orders/o6/approve")) return { status: 409, body: { error: "purchase order is locked" } };
+        if (url.endsWith("/approve")) return { status: 200, body: { ...draft, status: "approved" } };
+        if (url.endsWith("/cancel")) return { status: 200, body: { ...approved, status: "cancelled" } };
+        return undefined;
+      }),
+    );
+    renderAt("/companies/c1/purchases");
+    await screen.findByRole("row", { name: /Torrefação Serra.*Aprovado/ });
+
+    // Nothing is offered until something is ticked.
+    expect(screen.queryByRole("region", { name: "Compras selecionadas" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByLabelText("Selecionar todas as compras da lista"));
+    const bar = within(screen.getByRole("region", { name: "Compras selecionadas" }));
+    expect(bar.getByText("4 compras selecionadas")).toBeInTheDocument();
+    // Two drafts can be approved; two drafts and the approved one can be cancelled; the received one is neither.
+    expect(bar.getByRole("button", { name: "Aprovar (2)" })).toBeInTheDocument();
+    expect(bar.getByRole("button", { name: "Cancelar (3)" })).toBeInTheDocument();
+
+    await userEvent.click(bar.getByRole("button", { name: "Aprovar (2)" }));
+    expect(bar.getByText(/Vai aprovar 2 compras; as outras não se aplicam/)).toBeInTheDocument();
+    expect(calls(fetchMock, "POST")).toHaveLength(0);
+    await userEvent.click(bar.getByRole("button", { name: "Confirmar" }));
+
+    expect(await screen.findByText("1 compra aprovada.")).toBeInTheDocument();
+    expect(await screen.findByText(/Não foi possível aprovar: nº 6 \(purchase order is locked\)/)).toBeInTheDocument();
+    expect(calls(fetchMock, "POST").map(([url]) => String(url).split("/purchase-orders/")[1])).toEqual(["o1/approve", "o6/approve"]);
+    // The ticks are gone once it is done.
+    expect(screen.queryByRole("region", { name: "Compras selecionadas" })).not.toBeInTheDocument();
+  });
+
+  it("forgets the tick of an order that leaves the list when the search changes", async () => {
+    mockApi((url, init) => {
+      const search = new URL(url, "http://x").searchParams.get("q");
+      const orders = search === "outra" ? [approved] : [draft, approved];
+      return answer(orders)(url, init);
+    });
+    renderAt("/companies/c1/purchases");
+    await userEvent.click(await screen.findByLabelText("Selecionar a compra 1"));
+    expect(screen.getByText("1 compra selecionada")).toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText("Buscar"), "outra");
+    await vi.waitFor(() => expect(screen.queryByLabelText("Selecionar a compra 1")).not.toBeInTheDocument());
+    expect(screen.queryByRole("region", { name: "Compras selecionadas" })).not.toBeInTheDocument();
+  });
+
+  it("offers no ticking to a role that only reads", async () => {
+    mockApi(answer([draft], readOnly));
+    renderAt("/companies/c1/purchases");
+    await screen.findByRole("row", { name: /Torrefação Serra/ });
+    expect(screen.queryByLabelText("Selecionar todas as compras da lista")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Selecionar a compra 1")).not.toBeInTheDocument();
+  });
+
   it("exports the orders as they are filtered, with the supplier's name and the total as a plain decimal", async () => {
     const saved = stubDownloads();
     mockApi(answer([draft]));
