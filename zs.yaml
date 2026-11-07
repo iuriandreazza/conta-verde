@@ -5,5 +5,5 @@ services:
   - name: web
     image: ghcr.io/iuriandreazza/conta-verde:dev
     exposed: true
-    port: 8080
+    port: 80
     database: nous-dev

@@ -26,5 +26,5 @@ COPY --from=web /src/web/dist /usr/share/nginx/html
 COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
 COPY deploy/entrypoint.sh /entrypoint.sh
 ENV BIND_ADDR=127.0.0.1:3000 ATTACHMENTS_DIR=/data/attachments
-EXPOSE 8080
+EXPOSE 80
 ENTRYPOINT ["/entrypoint.sh"]
