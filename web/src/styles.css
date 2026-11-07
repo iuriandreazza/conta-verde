@@ -2136,3 +2136,64 @@ tbody tr:last-child td {
   background: var(--green-soft);
   font-size: 0.9rem;
 }
+
+/* The steps of a flow, in a row that wraps on a narrow screen. */
+.stepper {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  margin: 0 0 1rem;
+  padding: 0;
+  list-style: none;
+  font-size: 0.85rem;
+}
+
+.stepper li {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--muted);
+}
+
+.stepper li[data-state="current"] {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.stepper-dot {
+  display: inline-grid;
+  place-items: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  font-size: 0.75rem;
+}
+
+.stepper li[data-state="current"] .stepper-dot {
+  border-color: var(--green);
+  background: var(--green);
+  color: #fff;
+}
+
+.stepper li[data-state="done"] .stepper-dot {
+  border-color: var(--green);
+  background: var(--green-soft);
+  color: var(--green-dark);
+}
+
+/* A few labelled facts in two columns. */
+.summary {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.35rem 1rem;
+  margin: 0 0 0.75rem;
+}
+
+.summary dt {
+  color: var(--muted);
+}
+
+.summary dd {
+  margin: 0;
+}
