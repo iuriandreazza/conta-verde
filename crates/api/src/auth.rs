@@ -120,15 +120,18 @@ pub(crate) async fn register<X: Ports>(
                 email: request.email,
                 company_name,
             };
-            match state.auth.register(draft, &request.password).await {
-                // The address belongs to an account nobody confirmed: its real owner is sent the way to take it over.
-                Err(ApplicationError::Repository(RepositoryError::DuplicateEmail))
-                    if state.members.recover_unconfirmed_address(&email).await? =>
-                {
-                    return Err(ApplicationError::AddressNeverConfirmed.into());
-                }
-                other => other?,
+            let registered = state.auth.register(draft, &request.password).await;
+            // The address belongs to an account nobody confirmed: its real owner is sent the way to take it over.
+            if matches!(
+                registered,
+                Err(ApplicationError::Repository(
+                    RepositoryError::DuplicateEmail
+                ))
+            ) && state.members.recover_unconfirmed_address(&email).await?
+            {
+                return Err(ApplicationError::AddressNeverConfirmed.into());
             }
+            registered?
         }
     };
     // A person who made a company of their own is asked to confirm the address; one who joined by an invitation just did.
