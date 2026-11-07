@@ -15,6 +15,7 @@ mod delinquency;
 mod documents;
 mod dunning;
 mod entries;
+mod entries_import;
 mod error;
 mod history;
 mod inventory_counts;
@@ -52,7 +53,7 @@ use conta_verde_application::{
     BankAccountService, BlobStore, CategoryRepository, CategoryService, ChargeRepository,
     ChargeService, CnpjRegistry, CommissionRuleRepository, CommissionService, ContractRepository,
     ContractService, CostCenterRepository, CostCenterService, DocumentMailService,
-    DocumentReferences, EmailSender, EntryReferences, FinancialEntryRepository,
+    DocumentReferences, EmailSender, EntryLookups, EntryReferences, FinancialEntryRepository,
     FinancialEntryService, IdentityRepository, InventoryCountRepository, InventoryCountService,
     InvitationRepository, MemberService, OpeningRepository, PartyRepository, PartyService,
     PaymentMethodRepository, PaymentMethodService, PaymentProvider, PaymentTermRepository,
@@ -93,7 +94,7 @@ pub trait Ports: 'static {
     type PaymentTerms: PaymentTermRepository + 'static;
     type PriceLists: PriceListRepository + 'static;
     type Entries: FinancialEntryRepository + 'static;
-    type EntryReferences: EntryReferences + 'static;
+    type EntryReferences: EntryReferences + EntryLookups + 'static;
     type Attachments: AttachmentRepository + 'static;
     type Blobs: BlobStore + 'static;
     type Charges: ChargeRepository + 'static;
@@ -461,6 +462,10 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         .route(
             "/companies/{company_id}/entries",
             get(entries::list_entries::<X>).post(entries::register_entry::<X>),
+        )
+        .route(
+            "/companies/{company_id}/entries/import",
+            post(entries_import::import_entries::<X>),
         )
         .route(
             "/companies/{company_id}/entries/{entry_id}",
@@ -5724,6 +5729,104 @@ mod tests {
                 .map(|(due, amount)| json!({ "due_date": due, "amount": amount }))
                 .collect::<Vec<_>>(),
         })
+    }
+
+    #[tokio::test]
+    async fn imports_entries_from_a_csv_file_once_and_names_every_refused_row() {
+        let app = entry_app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let targets = entry_targets(&app, &cookie, company_id).await;
+        let child = post_category(
+            &app,
+            &cookie,
+            company_id,
+            json!({ "name": "Mensalidades", "parent_id": targets.category }),
+        )
+        .await;
+        assert_eq!(child.status, StatusCode::CREATED, "{}", child.body);
+        let account = post_to(
+            &app,
+            &bank_accounts_uri(company_id),
+            &cookie,
+            json!({ "kind": "checking", "name": "Conta principal" }),
+        )
+        .await;
+        assert_eq!(account.status, StatusCode::CREATED, "{}", account.body);
+        let uri = format!("/companies/{company_id}/entries/import");
+        let header = "reference;kind;description;party_name;category;cost_center;competence_date;due_date;amount;settled_on;interest;bank_account\n";
+        let file = format!(
+            "{header}\
+             ca-1;receivable;Mensalidade de março;Padaria Central;Vendas > Mensalidades;Matriz;2026-03-10;2026-03-15;100.50;2026-03-16;1.5;Conta principal\n\
+             ca-2;payable;Material;;Despesas;;2026-03-11;2026-03-20;40;;;\n"
+        );
+
+        let dry = send(
+            &app,
+            csv_request(&format!("{uri}?dry_run=true"), Some(&cookie), file.clone()),
+        )
+        .await;
+        assert_eq!(dry.status, StatusCode::OK, "{}", dry.body);
+        assert_eq!(
+            (dry.body["valid"].clone(), dry.body["created"].clone()),
+            (json!(2), json!(0))
+        );
+        let listed = send(&app, get_request(&entries_uri(company_id), Some(&cookie))).await;
+        assert_eq!(listed.body["items"], json!([]));
+
+        let done = send(&app, csv_request(&uri, Some(&cookie), file.clone())).await;
+        assert_eq!(done.status, StatusCode::OK, "{}", done.body);
+        assert_eq!(done.body["created"], 2);
+        let listed = send(&app, get_request(&entries_uri(company_id), Some(&cookie))).await;
+        let items = listed.body["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        let paid = items
+            .iter()
+            .find(|item| item["description"] == "Mensalidade de março")
+            .unwrap();
+        assert_eq!(paid["party_id"], targets.party);
+        assert_eq!(paid["installments"][0]["settled"], "100.5");
+
+        let again = send(&app, csv_request(&uri, Some(&cookie), file)).await;
+        assert_eq!(
+            (
+                again.body["created"].clone(),
+                again.body["skipped"].as_array().unwrap().len()
+            ),
+            (json!(0), 2)
+        );
+
+        // A refused row refuses the file, and the reply names the row.
+        let refused = send(
+            &app,
+            csv_request(
+                &uri,
+                Some(&cookie),
+                format!("{header}ca-3;payable;Outro;;Inexistente;;2026-03-11;2026-03-20;10;;;\n"),
+            ),
+        )
+        .await;
+        assert_eq!(refused.status, StatusCode::OK);
+        assert_eq!(refused.body["created"], 0);
+        assert_eq!(refused.body["refused"][0]["row"], 2);
+        assert!(
+            refused.body["refused"][0]["message"]
+                .as_str()
+                .unwrap()
+                .contains("Inexistente")
+        );
+
+        let unknown = send(
+            &app,
+            csv_request(
+                &uri,
+                Some(&cookie),
+                "reference;kind;surprise\nx;payable;1\n",
+            ),
+        )
+        .await;
+        assert_eq!(unknown.status, StatusCode::UNPROCESSABLE_ENTITY);
+        let anonymous = send(&app, csv_request(&uri, None, "reference\n1\n")).await;
+        assert_eq!(anonymous.status, StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

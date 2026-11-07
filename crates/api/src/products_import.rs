@@ -2,6 +2,7 @@ use axum::Json;
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::HeaderMap;
+use conta_verde_application::MAX_IMPORT_ROWS;
 use conta_verde_domain::{ProductDraft, ProductKind};
 
 use crate::access::CompanyAccess;
@@ -96,7 +97,7 @@ pub(crate) async fn import_products<X: Ports>(
 ) -> Result<Json<ImportResponse>, ApiError> {
     let bytes = read_file(&headers, body).await?;
     let (rows, mut refused) =
-        read_table(&bytes, COLUMNS, &["name", "unit"])?.rows(product_from_record);
+        read_table(&bytes, COLUMNS, &["name", "unit"], MAX_IMPORT_ROWS)?.rows(product_from_record);
 
     let dry_run = query.dry_run();
     let report = state

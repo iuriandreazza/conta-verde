@@ -135,7 +135,7 @@ export interface ImportResult {
   dry_run: boolean;
   valid: number;
   created: number;
-  /** Rows whose document or SKU is already registered: never overwritten. */
+  /** Rows whose document, SKU or reference is already registered: never overwritten. */
   skipped: ImportNote[];
   refused: ImportNote[];
 }
@@ -1675,6 +1675,12 @@ export const api = {
     request<ImportResult>(
       `/companies/${companyId}/products/import${dryRun ? "?dry_run=true" : ""}`,
       { method: "POST", headers: { "Content-Type": "text/csv" }, body: file },
+    ),
+  /** One piece of an entries file, sent as text; `importEntriesInPieces` cuts the file into them. */
+  importEntriesPiece: (companyId: string, csv: string, dryRun: boolean) =>
+    request<ImportResult>(
+      `/companies/${companyId}/entries/import${dryRun ? "?dry_run=true" : ""}`,
+      { method: "POST", headers: { "Content-Type": "text/csv" }, body: csv },
     ),
   listMembers: (companyId: string) => request<Member[]>(`/companies/${companyId}/members`),
   changeRole: (companyId: string, userId: string, role: Role) =>

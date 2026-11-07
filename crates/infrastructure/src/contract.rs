@@ -25,6 +25,7 @@ use conta_verde_application::{
     DunningPlanRepository, DunningService, EmailMessage, InstallmentLinks, MessageSender,
     NotificationRepository, TextMessage,
 };
+use conta_verde_application::{EntryImportDraft, EntryLookups, SettlementImport};
 use conta_verde_application::{
     ImportRow, InvitationRepository, InvitationState, Invited, MemberService, NewAccount,
     NewInvitation, NewUser, PaymentTermQuery, PaymentTermRepository, PaymentTermService,
@@ -52,8 +53,8 @@ use conta_verde_domain::{BillingCycle, CommissionRuleDraft, ContractDraft, Contr
 use conta_verde_domain::{ChargeMethod, ChargeStatus};
 use conta_verde_domain::{Decimal, PriceListDraft, PriceListItemDraft, StockSituation};
 use conta_verde_domain::{
-    EntryOrigin, ReturnItemDraft, SaleDraft, SaleReturn, SaleReturnDraft, SaleReturnId, SaleStatus,
-    sale_return_creation_changes,
+    EntryOrigin, ImportId, ReturnItemDraft, SaleDraft, SaleReturn, SaleReturnDraft, SaleReturnId,
+    SaleStatus, sale_return_creation_changes,
 };
 use conta_verde_domain::{InstallmentDraft, payment_term_changes, payment_term_creation_changes};
 use conta_verde_domain::{LineDraft, QuoteDraft, QuoteStatus};
@@ -14799,4 +14800,237 @@ pub async fn runs_the_job_queue<Q: conta_verde_application::JobQueue>(queue: &Q)
     assert!([d, e].contains(&x.id) && [d, e].contains(&y.id));
     queue.complete(d).await.unwrap();
     queue.complete(e).await.unwrap();
+}
+
+fn import_row(reference: &str, category: &str, amount: &str) -> EntryImportDraft {
+    EntryImportDraft {
+        reference: reference.into(),
+        kind: "payable".into(),
+        description: format!("Imported {reference}"),
+        party_document: None,
+        party_name: None,
+        category: category.into(),
+        cost_center: None,
+        competence_date: "2026-03-10".into(),
+        due_date: "2026-03-15".into(),
+        amount: amount.into(),
+        settlement: None,
+    }
+}
+
+fn paid_on(day: &str, account: &str) -> Option<SettlementImport> {
+    Some(SettlementImport {
+        settled_on: day.into(),
+        applied: None,
+        interest: None,
+        fine: None,
+        discount: None,
+        bank_account: account.into(),
+    })
+}
+
+async fn imported_entry<R, F>(
+    service: &FinancialEntryService<R, F>,
+    company: CompanyId,
+    reference: &str,
+) -> Option<FinancialEntry>
+where
+    R: FinancialEntryRepository,
+    F: EntryReferences,
+{
+    let origin = EntryOrigin::Import(ImportId::new(company, reference).unwrap());
+    service.made_by(company, origin).await.unwrap()
+}
+
+/// A file of entries is checked as a whole before anything is written, finds what it names (a category
+/// by its path, a party by name, a cost center, a bank account) among the active records of the company,
+/// writes each row with its audit entry and its settlement, and sending it again adds nothing and finishes
+/// a settlement a failure left unmade (ADR 0064).
+pub async fn imports_entries_from_a_file<R, F, C>(
+    service: &FinancialEntryService<R, F>,
+    categories: &C,
+    company: CompanyId,
+    other_company: CompanyId,
+    seed: &EntrySeed,
+) where
+    R: FinancialEntryRepository,
+    F: EntryReferences + EntryLookups,
+    C: CategoryRepository,
+{
+    let ana = actor();
+    let parent = categories
+        .find(company, seed.category)
+        .await
+        .unwrap()
+        .unwrap();
+    let child = child_category(&parent, "Mensalidades");
+    save_category(categories, &child).await;
+
+    let mut paid = import_row("a-1", "Vendas > Mensalidades", "100.50");
+    paid.settlement = paid_on("2026-03-16", "Conta principal");
+    paid.settlement.as_mut().unwrap().interest = Some("1.5".into());
+    let mut open = import_row("a-2", "vendas", "40");
+    open.kind = "receivable".into();
+    open.party_name = Some("Mercado Boa Compra".into());
+    open.cost_center = Some("Matriz".into());
+    let file = || vec![(2, paid.clone()), (3, open.clone())];
+
+    // A dry run says what would happen and writes nothing.
+    let dry = service
+        .import_entries(company, &ana, file(), true)
+        .await
+        .unwrap();
+    assert_eq!((dry.valid, dry.created), (2, 0));
+    assert!(dry.refused.is_empty() && dry.skipped.is_empty());
+    assert!(imported_entry(service, company, "a-1").await.is_none());
+
+    let report = service
+        .import_entries(company, &ana, file(), false)
+        .await
+        .unwrap();
+    assert_eq!((report.valid, report.created), (2, 2));
+    let first = imported_entry(service, company, "a-1").await.unwrap();
+    assert_eq!(first.category_id(), child.id());
+    assert_eq!(first.total(), "100.5".parse::<Decimal>().unwrap());
+    let settlements = service.settlements(company, first.id()).await.unwrap();
+    assert_eq!(settlements.len(), 1);
+    assert_eq!(settlements[0].bank_account_id(), seed.bank_account);
+    assert_eq!(settlements[0].cash(), "102".parse::<Decimal>().unwrap());
+    let second = imported_entry(service, company, "a-2").await.unwrap();
+    assert_eq!(second.party_id(), Some(seed.party));
+    assert_eq!(second.cost_center_id(), Some(seed.cost_center));
+    assert!(
+        service
+            .settlements(company, second.id())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(service.history(company, first.id()).await.unwrap().len(), 1);
+
+    // Sending it again adds nothing, in a dry run too.
+    for dry_run in [true, false] {
+        let again = service
+            .import_entries(company, &ana, file(), dry_run)
+            .await
+            .unwrap();
+        assert_eq!(again.created, 0);
+        assert_eq!(again.skipped.len(), 2);
+    }
+    assert_eq!(
+        service
+            .settlements(company, first.id())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // An entry whose settlement was never made gets it when the file comes again.
+    let mut unfinished = import_row("a-3", "Vendas", "25");
+    service
+        .import_entries(company, &ana, vec![(2, unfinished.clone())], false)
+        .await
+        .unwrap();
+    unfinished.settlement = paid_on("2026-03-20", "Reserva");
+    let finish = service
+        .import_entries(company, &ana, vec![(2, unfinished)], false)
+        .await
+        .unwrap();
+    assert_eq!((finish.created, finish.skipped.len()), (0, 1));
+    let third = imported_entry(service, company, "a-3").await.unwrap();
+    assert_eq!(
+        service
+            .settlements(company, third.id())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // A name alone is enough while it means one category; once two trees have it, the path is asked for.
+    service
+        .import_entries(
+            company,
+            &ana,
+            vec![(2, import_row("a-4", "mensalidades", "5"))],
+            false,
+        )
+        .await
+        .unwrap();
+    let bare = imported_entry(service, company, "a-4").await.unwrap();
+    assert_eq!(bare.category_id(), child.id());
+    let other_parent = categories
+        .find(company, seed.other_category)
+        .await
+        .unwrap()
+        .unwrap();
+    save_category(categories, &child_category(&other_parent, "Mensalidades")).await;
+    let ambiguous = service
+        .import_entries(
+            company,
+            &ana,
+            vec![
+                (2, import_row("a-5", "Mensalidades", "5")),
+                (3, import_row("a-6", "Serviços > Mensalidades", "5")),
+            ],
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(ambiguous.refused.len(), 1);
+    assert_eq!(ambiguous.refused[0].row, 2);
+    assert!(ambiguous.refused[0].message.contains("Root > Child"));
+    assert!(imported_entry(service, company, "a-6").await.is_none());
+
+    // One refused row refuses the file: every problem is named by its row and nothing is written.
+    let mut too_much = import_row("b-3", "Vendas", "10");
+    too_much.settlement = paid_on("2026-03-16", "Conta principal");
+    too_much.settlement.as_mut().unwrap().applied = Some("11".into());
+    let mut no_account = import_row("b-4", "Vendas", "10");
+    no_account.settlement = paid_on("2026-03-16", "Caixa antigo");
+    let mut bad_kind = import_row("b-5", "Vendas", "10");
+    bad_kind.kind = "income".into();
+    let mut closed_center = import_row("b-6", "Vendas", "10");
+    closed_center.cost_center = Some("Fechado".into());
+    let mut stranger = import_row("b-7", "Vendas", "10");
+    stranger.party_name = Some("Nobody".into());
+    let problems = vec![
+        (2, import_row("b-1", "Antiga", "10")),
+        (3, import_row("b-2", "Transferências", "10")),
+        (4, too_much),
+        (5, no_account),
+        (6, bad_kind),
+        (7, closed_center),
+        (8, stranger),
+        (9, import_row("b-8", "Vendas", "10.505")),
+        (10, import_row("b-9", "Vendas", "10")),
+        (11, import_row("b-9", "Vendas", "10")),
+        (12, import_row("b-10", "Vendas", "10")),
+    ];
+    let refused = service
+        .import_entries(company, &ana, problems, false)
+        .await
+        .unwrap();
+    assert_eq!((refused.valid, refused.created), (2, 0));
+    let rows: Vec<usize> = refused.refused.iter().map(|note| note.row).collect();
+    assert_eq!(rows, vec![2, 3, 4, 5, 6, 7, 8, 9, 11]);
+    assert!(imported_entry(service, company, "b-10").await.is_none());
+
+    // What belongs to another company is not found there.
+    let elsewhere = service
+        .import_entries(
+            other_company,
+            &ana,
+            vec![(2, import_row("a-1", "Vendas", "10"))],
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(elsewhere.refused.len(), 1);
+    assert!(
+        imported_entry(service, other_company, "a-1")
+            .await
+            .is_none()
+    );
 }
