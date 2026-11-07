@@ -1,4 +1,4 @@
-import { useState, type DragEvent, type FormEvent } from "react";
+import { useEffect, useState, type DragEvent, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import type { Category, CostCenter, InvoiceEntryParams, InvoicePreview, PaymentTerm, Product } from "../api";
 import { treeRows } from "../lib/categoryTree";
@@ -128,6 +128,12 @@ function EnterInvoice({ companyId, targets, preview, pending, error, onEnter, on
   const [costCenterId, setCostCenterId] = useState("");
   const [termId, setTermId] = useState("");
   const [receivedOn, setReceivedOn] = useState(preview.issued_on);
+  // What the API said about the last attempt is about the values of that attempt: once the person changes one or goes to
+  // another step it is put away, and a new attempt (the parent clears it first) shows its own.
+  const [putAway, setPutAway] = useState<string | null>(null);
+  useEffect(() => {
+    if (error === null) setPutAway(null);
+  }, [error]);
   const markDirty = useSheetDirty();
   const categoryRows = treeRows(targets.categories).filter(({ category }) => category.active && category.dre_group !== "transfers");
   const products = targets.products.filter((product) => product.active || chosen.includes(product.id));
@@ -148,7 +154,13 @@ function EnterInvoice({ companyId, targets, preview, pending, error, onEnter, on
 
   function change<T>(setter: (value: T) => void, value: T) {
     markDirty();
+    setPutAway(error);
     setter(value);
+  }
+
+  function goTo(next: number) {
+    setPutAway(error);
+    setStep(next);
   }
 
   function enter() {
@@ -165,7 +177,7 @@ function EnterInvoice({ companyId, targets, preview, pending, error, onEnter, on
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (step === STEPS.length - 1) enter();
-    else if (stepProblem[step] === null) setStep(step + 1);
+    else if (stepProblem[step] === null) goTo(step + 1);
   }
 
   return (
@@ -352,7 +364,7 @@ function EnterInvoice({ companyId, targets, preview, pending, error, onEnter, on
         </section>
       )}
       {stepProblem[step] !== null && stepProblem[step] !== undefined && step !== 1 && <p className="muted">{stepProblem[step]}</p>}
-      <Notice message={step === STEPS.length - 1 ? error : null} />
+      <Notice message={step === STEPS.length - 1 && error !== putAway ? error : null} />
       <div className="form-footer">
         {step === 1 ? (
           <>
@@ -362,7 +374,7 @@ function EnterInvoice({ companyId, targets, preview, pending, error, onEnter, on
             </Button>
           </>
         ) : (
-          <Button type="button" variant="ghost" disabled={pending} onClick={() => setStep(step - 1)}>
+          <Button type="button" variant="ghost" disabled={pending} onClick={() => goTo(step - 1)}>
             Voltar
           </Button>
         )}

@@ -274,6 +274,33 @@ describe("purchase entry from an NF-e", () => {
     expect(sheet.getByRole("heading", { name: "Concluir a entrada" })).toBeInTheDocument();
   });
 
+  it("puts away the API's reason once the person goes back and changes something, and shows a new one for a new attempt", async () => {
+    mockApi(
+      answer(invoice({ items: invoice().items.map((item) => ({ ...item, product_id: "pr1" })) }), (url, init) =>
+        url.includes("/purchase-imports?") && init?.method === "POST" ? { status: 409, body: { error: "the invoice changed meanwhile" } } : undefined,
+      ),
+    );
+    renderAt("/companies/c1/purchases");
+    const sheet = await readInvoice();
+    await chooseNature(sheet);
+    await next(sheet);
+    await userEvent.click(await sheet.findByRole("button", { name: "Entrar compra" }));
+    expect(await sheet.findByRole("alert")).toHaveTextContent("the invoice changed meanwhile");
+
+    // Back to the nature, change the category, forward again: the old reason is not shown.
+    await userEvent.click(sheet.getByRole("button", { name: "Voltar" }));
+    await userEvent.click(sheet.getByRole("button", { name: "Voltar" }));
+    await userEvent.selectOptions(await sheet.findByLabelText("Categoria das contas a pagar"), "cat1");
+    await next(sheet);
+    await next(sheet);
+    await sheet.findByRole("heading", { name: "Concluir a entrada" });
+    expect(sheet.queryByRole("alert")).not.toBeInTheDocument();
+
+    // A new attempt that fails the same way shows it again.
+    await userEvent.click(sheet.getByRole("button", { name: "Entrar compra" }));
+    expect(await sheet.findByRole("alert")).toHaveTextContent("the invoice changed meanwhile");
+  });
+
   it("does not let an invoice from an unregistered supplier be entered", async () => {
     mockApi(answer(invoice({ supplier_id: null, items: invoice().items.map((item) => ({ ...item, product_id: "pr1" })) })));
     renderAt("/companies/c1/purchases");
