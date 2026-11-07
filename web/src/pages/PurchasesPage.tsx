@@ -21,6 +21,7 @@ import { HistoryIcon } from "../components/icons/history";
 import { PlusIcon } from "../components/icons/plus";
 import { SquarePenIcon } from "../components/icons/square-pen";
 import { ListRow } from "../components/ListRow";
+import { MenuButton } from "../components/MenuButton";
 import { Notice } from "../components/Notice";
 import { PageHeader } from "../components/PageHeader";
 import { PurchaseForm } from "../components/PurchaseForm";
@@ -201,12 +202,15 @@ export function PurchasesPage() {
       />
       {canWrite && (
         <div className="list-actions">
-          <Button type="button" icon={PlusIcon} onClick={() => openCreate("purchase")}>
-            Nova compra
-          </Button>
-          <Button type="button" variant="ghost" icon={FileTextIcon} onClick={() => openCreate("purchaseImport")}>
-            Entrar NF-e (XML)
-          </Button>
+          <MenuButton
+            label="Novo"
+            icon={PlusIcon}
+            variant="primary"
+            items={[
+              { key: "purchase", label: "Nova compra", icon: PlusIcon, onSelect: () => openCreate("purchase") },
+              { key: "invoice", label: "Entrar NF-e (XML)", icon: FileTextIcon, onSelect: () => openCreate("purchaseImport") },
+            ]}
+          />
         </div>
       )}
       <Notice message={saved} tone="success" />

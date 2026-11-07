@@ -178,7 +178,8 @@ describe("purchases", () => {
       ),
     );
     renderAt("/companies/c1/purchases");
-    await userEvent.click(await screen.findByRole("button", { name: "Nova compra" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Novo" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Nova compra" }));
     const form = within((await screen.findByRole("heading", { name: "Nova compra" })).closest("aside")!);
     await form.findByLabelText("Fornecedor");
 
