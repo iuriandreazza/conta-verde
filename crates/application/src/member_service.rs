@@ -121,14 +121,34 @@ where
     ) -> Result<(), ApplicationError> {
         validate_password(password)?;
         let password_hash = self.secrets.hash_password(password).await?;
-        match self
+        let user_id = match self
             .identities
             .reset_password(&self.secrets.digest_token(token), &password_hash)
             .await
         {
-            Err(RepositoryError::NotFound) => Err(AuthError::InvalidResetLink.into()),
-            other => Ok(other?),
+            Err(RepositoryError::NotFound) => return Err(AuthError::InvalidResetLink.into()),
+            other => other?,
+        };
+        // Whoever changed it, the owner of the address is told: if it was not them, this is how they find out.
+        if let Some(user) = self.identities.find_user(user_id).await? {
+            self.notify(
+                user.email().clone(),
+                "Sua senha no conta-verde foi alterada".to_owned(),
+                format!(
+                    "A senha da sua conta no conta-verde foi alterada e você foi desconectado de todos os \
+                     aparelhos.\n\nSe foi você, não precisa fazer nada. Se não foi, peça uma nova redefinição \
+                     de senha em {}/forgot-password agora.\n",
+                    self.public_url
+                ),
+            )
+            .await;
         }
+        Ok(())
+    }
+
+    /// A notice nobody waits for: if it cannot be queued the mail server's log says so, and what happened stands.
+    async fn notify(&self, to: Email, subject: String, body: String) {
+        let _ = self.emails.send(&EmailMessage { to, subject, body }).await;
     }
 
     /// The company's members, with what each is, ordered by name ignoring case.
@@ -317,8 +337,9 @@ where
             .add_membership(user.id(), invitation.company_id(), invitation.role())
             .await
         {
+            Ok(()) => self.tell_the_inviter(&invitation, user).await?,
             // Already a member (a second accept that raced the first): the company is theirs.
-            Ok(()) | Err(RepositoryError::DuplicateMembership) => {}
+            Err(RepositoryError::DuplicateMembership) => {}
             Err(error) => {
                 // Best effort: if even this fails the invitation stays used, and the person asks
                 // for a new one.
@@ -359,6 +380,33 @@ where
         // exists and the person signs in to find no company, and asks for a new invitation.
         let company_id = self.accept(token, &user).await?;
         Ok((user, company_id))
+    }
+
+    /// Tells whoever sent the invitation that it was accepted, so they know the person is in.
+    async fn tell_the_inviter(
+        &self,
+        invitation: &Invitation,
+        user: &User,
+    ) -> Result<(), ApplicationError> {
+        let Some(inviter) = self.identities.find_user(invitation.invited_by()).await? else {
+            return Ok(());
+        };
+        let company_name = self
+            .identities
+            .company_name(invitation.company_id())
+            .await?
+            .unwrap_or_default();
+        let (person, company) = (one_line(user.name()), one_line(&company_name));
+        self.notify(
+            inviter.email().clone(),
+            format!("{person} aceitou seu convite para {company}"),
+            format!(
+                "{person} ({}) aceitou seu convite e agora faz parte de {company} no conta-verde.\n",
+                user.email().as_str()
+            ),
+        )
+        .await;
+        Ok(())
     }
 
     /// The invitation a token leads to, if it can still be accepted. An unknown token and a token

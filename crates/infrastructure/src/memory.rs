@@ -413,6 +413,11 @@ impl IdentityRepository for InMemoryIdentityRepository {
             .cloned())
     }
 
+    async fn find_user(&self, user_id: UserId) -> Result<Option<User>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        Ok(state.user(user_id).cloned())
+    }
+
     async fn delete_session(&self, token_digest: &str) -> Result<(), RepositoryError> {
         let mut state = self.state.lock().expect("repository lock poisoned");
         state.sessions.remove(token_digest);
@@ -447,7 +452,7 @@ impl IdentityRepository for InMemoryIdentityRepository {
         &self,
         token_digest: &str,
         new_hash: &str,
-    ) -> Result<(), RepositoryError> {
+    ) -> Result<UserId, RepositoryError> {
         let mut state = self.state.lock().expect("repository lock poisoned");
         let now = Instant::now();
         let user_id = state
@@ -466,7 +471,7 @@ impl IdentityRepository for InMemoryIdentityRepository {
             credentials.password_hash = new_hash.to_owned();
         }
         state.sessions.retain(|_, (owner, _)| *owner != user_id);
-        Ok(())
+        Ok(user_id)
     }
 }
 

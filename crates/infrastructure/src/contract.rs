@@ -2076,10 +2076,31 @@ where
 
     // Spending the link changes the password and ends the sessions; the link works once.
     let session = auth.login(&email, "correct horse").await.unwrap().token;
-    identities
-        .reset_password("digest-1", &new_hash)
-        .await
-        .unwrap();
+    assert_eq!(
+        identities
+            .reset_password("digest-1", &new_hash)
+            .await
+            .unwrap(),
+        user,
+        "it says whose password it was"
+    );
+    assert_eq!(
+        identities
+            .find_user(user)
+            .await
+            .unwrap()
+            .unwrap()
+            .email()
+            .as_str(),
+        email
+    );
+    assert!(
+        identities
+            .find_user(UserId::generate())
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(
         auth.profile(&session).await.unwrap_err(),
         ApplicationError::Auth(AuthError::Unauthenticated)

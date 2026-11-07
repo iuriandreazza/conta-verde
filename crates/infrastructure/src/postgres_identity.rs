@@ -262,6 +262,15 @@ impl IdentityRepository for PostgresIdentityRepository {
         row.as_ref().map(user_from_row).transpose()
     }
 
+    async fn find_user(&self, user_id: UserId) -> Result<Option<User>, RepositoryError> {
+        let row = sqlx::query("SELECT id, name, email FROM users WHERE id = $1")
+            .bind(user_id.as_uuid())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(storage_error)?;
+        row.as_ref().map(user_from_row).transpose()
+    }
+
     async fn delete_session(&self, token_digest: &str) -> Result<(), RepositoryError> {
         sqlx::query("DELETE FROM sessions WHERE token_digest = $1")
             .bind(token_digest)
@@ -317,7 +326,7 @@ impl IdentityRepository for PostgresIdentityRepository {
         &self,
         token_digest: &str,
         new_hash: &str,
-    ) -> Result<(), RepositoryError> {
+    ) -> Result<UserId, RepositoryError> {
         let mut tx = self.pool.begin().await.map_err(storage_error)?;
         // Spending the link and changing the password are one step: a link works once.
         let user: Option<uuid::Uuid> = sqlx::query_scalar(
@@ -347,7 +356,7 @@ impl IdentityRepository for PostgresIdentityRepository {
             .await
             .map_err(storage_error)?;
         tx.commit().await.map_err(storage_error)?;
-        Ok(())
+        Ok(UserId::from_uuid(user))
     }
 }
 
