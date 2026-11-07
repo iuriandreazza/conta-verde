@@ -130,8 +130,12 @@ where
         for category in &categories {
             let path = match category.parent_id() {
                 None => category.name().to_owned(),
-                // A child of an inactive parent cannot be active, so the parent is always here.
-                Some(parent) => format!("{} > {}", parent_names[&parent], category.name()),
+                Some(parent) => match parent_names.get(&parent) {
+                    Some(parent_name) => format!("{parent_name} > {}", category.name()),
+                    // An active child of an inactive parent is not meant to exist (the use case
+                    // refuses it, the database does not): it cannot be named, so it is left out.
+                    None => continue,
+                },
             };
             names.add_category(
                 &path,
