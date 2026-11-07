@@ -167,6 +167,11 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
           </Button>
         </motion.form>
       )}
+      {!registering && (
+        <p>
+          <Link to="/forgot-password">Esqueci minha senha</Link>
+        </p>
+      )}
       <p>
         {registering ? (
           <>

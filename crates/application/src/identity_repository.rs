@@ -124,4 +124,23 @@ pub trait IdentityRepository: Send + Sync {
         &self,
         token_digest: &str,
     ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
+
+    /// Keeps the digest of a password reset's token for the user, replacing the one they had (a user has one at a
+    /// time). `false`, and nothing stored, when the user's last one was made less than `cooldown` ago, which is what
+    /// keeps a form from being used to fill someone's inbox.
+    fn create_password_reset(
+        &self,
+        user_id: UserId,
+        token_digest: &str,
+        lifetime: Duration,
+        cooldown: Duration,
+    ) -> impl Future<Output = Result<bool, RepositoryError>> + Send;
+
+    /// Spends the reset with this digest, once: the user's password becomes `new_hash` and **every session of theirs
+    /// ends**, so whoever held the old password is out. `NotFound` when no reset that has not expired has this digest.
+    fn reset_password(
+        &self,
+        token_digest: &str,
+        new_hash: &str,
+    ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
 }

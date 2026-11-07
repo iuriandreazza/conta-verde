@@ -62,6 +62,7 @@ use conta_verde_domain::{
     PurchaseOrderDraft, PurchaseReceiptDraft, PurchaseReceiptId, PurchaseStatus, ReceiptItemDraft,
 };
 use sqlx::PgPool;
+use std::time::Duration;
 use uuid::Uuid;
 
 use crate::{
@@ -2030,6 +2031,86 @@ where
     assert_eq!(
         auth.profile(&signed_up.token).await.unwrap_err(),
         ApplicationError::Auth(AuthError::Unauthenticated)
+    );
+}
+
+/// A password reset ([ADR 0060]): a link works once, several may be out at once and spending one ends them all, none is made a moment after the last, an
+/// expired one does nothing, and spending one ends every session and puts the new password in place of the old.
+pub async fn resets_a_password_once<I, S>(auth: &AuthService<I, S>, identities: &I, secrets: &S)
+where
+    I: IdentityRepository,
+    S: SecretService,
+{
+    let email = format!("ana-{}@example.com", Uuid::new_v4());
+    let signed_up = auth.register(draft(&email), "correct horse").await.unwrap();
+    let user = signed_up.profile.user.id();
+    let hour = Duration::from_secs(3600);
+    let new_hash = secrets.hash_password("battery staple").await.unwrap();
+
+    // One link at a time, and none right after another.
+    assert!(
+        identities
+            .create_password_reset(user, "digest-1", hour, Duration::ZERO)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !identities
+            .create_password_reset(user, "digest-2", hour, hour)
+            .await
+            .unwrap(),
+        "too soon after the last one"
+    );
+    assert_eq!(
+        identities.reset_password("digest-2", &new_hash).await,
+        Err(RepositoryError::NotFound),
+        "what was refused stored nothing"
+    );
+    // Another request does not kill the link already sent, and spending either ends them all.
+    assert!(
+        identities
+            .create_password_reset(user, "digest-3", hour, Duration::ZERO)
+            .await
+            .unwrap()
+    );
+
+    // Spending the link changes the password and ends the sessions; the link works once.
+    let session = auth.login(&email, "correct horse").await.unwrap().token;
+    identities
+        .reset_password("digest-1", &new_hash)
+        .await
+        .unwrap();
+    assert_eq!(
+        auth.profile(&session).await.unwrap_err(),
+        ApplicationError::Auth(AuthError::Unauthenticated)
+    );
+    assert_eq!(
+        auth.profile(&signed_up.token).await.unwrap_err(),
+        ApplicationError::Auth(AuthError::Unauthenticated)
+    );
+    assert_eq!(
+        auth.login(&email, "correct horse").await.unwrap_err(),
+        ApplicationError::Auth(AuthError::InvalidCredentials)
+    );
+    auth.login(&email, "battery staple").await.unwrap();
+    for spent in ["digest-1", "digest-3"] {
+        assert_eq!(
+            identities.reset_password(spent, &new_hash).await,
+            Err(RepositoryError::NotFound),
+            "{spent}"
+        );
+    }
+
+    // A link that has expired does nothing.
+    assert!(
+        identities
+            .create_password_reset(user, "digest-4", Duration::ZERO, Duration::ZERO)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        identities.reset_password("digest-4", &new_hash).await,
+        Err(RepositoryError::NotFound)
     );
 }
 

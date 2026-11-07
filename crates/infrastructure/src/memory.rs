@@ -191,6 +191,8 @@ struct IdentityState {
     companies: Vec<Company>,
     memberships: Vec<(UserId, CompanyId, Role)>,
     sessions: HashMap<String, (UserId, Instant)>,
+    /// A user's reset links: the digest, when it ends and when it was made.
+    resets: HashMap<UserId, Vec<(String, Instant, Instant)>>,
 }
 
 impl InMemoryIdentityRepository {
@@ -414,6 +416,56 @@ impl IdentityRepository for InMemoryIdentityRepository {
     async fn delete_session(&self, token_digest: &str) -> Result<(), RepositoryError> {
         let mut state = self.state.lock().expect("repository lock poisoned");
         state.sessions.remove(token_digest);
+        Ok(())
+    }
+
+    async fn create_password_reset(
+        &self,
+        user_id: UserId,
+        token_digest: &str,
+        lifetime: Duration,
+        cooldown: Duration,
+    ) -> Result<bool, RepositoryError> {
+        let mut state = self.state.lock().expect("repository lock poisoned");
+        let now = Instant::now();
+        let links = state.resets.entry(user_id).or_default();
+        if links
+            .iter()
+            .any(|(_, _, made)| now.duration_since(*made) < cooldown)
+        {
+            return Ok(false);
+        }
+        links.push((token_digest.to_owned(), now + lifetime, now));
+        // Only the newest few stay.
+        if links.len() > 5 {
+            links.remove(0);
+        }
+        Ok(true)
+    }
+
+    async fn reset_password(
+        &self,
+        token_digest: &str,
+        new_hash: &str,
+    ) -> Result<(), RepositoryError> {
+        let mut state = self.state.lock().expect("repository lock poisoned");
+        let now = Instant::now();
+        let user_id = state
+            .resets
+            .iter()
+            .find(|(_, links)| {
+                links
+                    .iter()
+                    .any(|(digest, ends, _)| digest == token_digest && *ends > now)
+            })
+            .map(|(user_id, _)| *user_id)
+            .ok_or(RepositoryError::NotFound)?;
+        // One link was used: the others of the account stop working too.
+        state.resets.remove(&user_id);
+        if let Some(credentials) = state.users.iter_mut().find(|c| c.user.id() == user_id) {
+            credentials.password_hash = new_hash.to_owned();
+        }
+        state.sessions.retain(|_, (owner, _)| *owner != user_id);
         Ok(())
     }
 }
@@ -1176,6 +1228,18 @@ mod tests {
             Duration::from_secs(3600),
         );
         contract::runs_the_account_lifecycle(&auth).await;
+    }
+
+    #[tokio::test]
+    async fn resets_a_password_once() {
+        let identities = InMemoryIdentityRepository::default();
+        let auth = AuthService::new(
+            identities.clone(),
+            Argon2SecretService::new().unwrap(),
+            Duration::from_secs(3600),
+        );
+        contract::resets_a_password_once(&auth, &identities, &Argon2SecretService::new().unwrap())
+            .await;
     }
 
     #[tokio::test]

@@ -5,9 +5,9 @@ use conta_verde_domain::{
 };
 
 use crate::{
-    ApplicationError, EmailMessage, EmailSender, IdentityRepository, InvitationRepository,
-    InvitationState, Member, NewInvitation, NewUser, RepositoryError, SecretService,
-    StoredInvitation,
+    ApplicationError, AuthError, EmailMessage, EmailSender, IdentityRepository,
+    InvitationRepository, InvitationState, Member, NewInvitation, NewUser, RepositoryError,
+    SecretService, StoredInvitation,
 };
 
 /// A company's invitation just made, and the link that accepts it.
@@ -30,7 +30,13 @@ pub struct InvitationPreview {
     pub expires_at_millis: i64,
 }
 
-/// Who belongs to a company, and how people come to ([ADR 0027]).
+/// How long a password reset link works.
+const RESET_LIFETIME: Duration = Duration::from_secs(60 * 60);
+/// How soon after one link another can be asked for the same account.
+const RESET_COOLDOWN: Duration = Duration::from_secs(60);
+
+/// Who belongs to a company, and how people come to ([ADR 0027]). It also gives back an account to its owner when the
+/// password is lost ([ADR 0060]): it has what that needs, the accounts, the e-mail and the tokens.
 pub struct MemberService<I, M, E, S> {
     invitations: I,
     identities: M,
@@ -63,6 +69,64 @@ where
             secrets,
             invitation_lifetime,
             public_url: public_url.trim_end_matches('/').to_owned(),
+        }
+    }
+
+    /// Sends a link to choose a new password to the address, when it has an account. It answers the same whether it has
+    /// one or not, so the form cannot be used to find out who has an account; and one link a minute at most is made per
+    /// account. The link is only in the e-mail, never in the answer.
+    pub async fn request_password_reset(&self, email: &str) -> Result<(), ApplicationError> {
+        let Ok(email) = Email::parse(email) else {
+            return Ok(());
+        };
+        let Some(credentials) = self.identities.find_credentials(&email).await? else {
+            return Ok(());
+        };
+        let token = self.secrets.new_token();
+        let made = self
+            .identities
+            .create_password_reset(
+                credentials.user.id(),
+                &self.secrets.digest_token(&token),
+                RESET_LIFETIME,
+                RESET_COOLDOWN,
+            )
+            .await?;
+        if !made {
+            return Ok(());
+        }
+        let message = EmailMessage {
+            to: email,
+            subject: "Redefinição de senha no conta-verde".to_owned(),
+            body: format!(
+                "Recebemos um pedido para redefinir a senha da sua conta no conta-verde.\n\n\
+                 Para escolher uma nova senha, abra o link:\n{}/reset-password/{token}\n\n\
+                 O link vale por {} minutos e só pode ser usado uma vez. Se não foi você, ignore este e-mail: \
+                 sua senha continua a mesma.\n",
+                self.public_url,
+                RESET_LIFETIME.as_secs() / 60
+            ),
+        };
+        // A message that cannot be sent is the mail server's to say in the log: the person can ask again.
+        let _ = self.emails.send(&message).await;
+        Ok(())
+    }
+
+    /// Chooses a new password with the link's token. The link works once, and every session of the account ends.
+    pub async fn reset_password(
+        &self,
+        token: &str,
+        password: &str,
+    ) -> Result<(), ApplicationError> {
+        validate_password(password)?;
+        let password_hash = self.secrets.hash_password(password).await?;
+        match self
+            .identities
+            .reset_password(&self.secrets.digest_token(token), &password_hash)
+            .await
+        {
+            Err(RepositoryError::NotFound) => Err(AuthError::InvalidResetLink.into()),
+            other => Ok(other?),
         }
     }
 
