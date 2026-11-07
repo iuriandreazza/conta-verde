@@ -3300,6 +3300,27 @@ describe("financial entries", () => {
       expect(JSON.parse(String(sent(fetchMock, "POST")[1][1]?.body)).installment).toBe(1);
     });
 
+    it("sends the customer the receipt of a settlement and says whether it was taken for sending", async () => {
+      const fetchMock = mockApi(
+        answer([sale], (url, init) => {
+          if (url.endsWith("/settlements/s1/receipt") && init?.method === "POST") {
+            return { status: 200, body: { to: "cliente@example.com", emailed: true } };
+          }
+          return url.endsWith("/settlements") ? { status: 200, body: [settlement] } : undefined;
+        }),
+      );
+      renderAt("/companies/c1/entries");
+      await userEvent.click(await screen.findByRole("button", { name: "Baixas de Venda parcelada" }));
+      const panel = within(await screen.findByRole("region", { name: "Baixas de Venda parcelada" }));
+      await userEvent.click(await panel.findByRole("button", { name: /Enviar o comprovante da baixa/ }));
+      await userEvent.click(panel.getByRole("button", { name: "Enviar o comprovante por e-mail" }));
+
+      expect(await panel.findByText("Enviado para cliente@example.com.")).toBeInTheDocument();
+      const call = sent(fetchMock, "POST")[0];
+      expect(String(call[0])).toBe("/api/companies/c1/entries/e1/settlements/s1/receipt");
+      expect(JSON.parse(String(call[1]?.body))).toEqual({});
+    });
+
     it("says why a reversal failed even though the list is read again", async () => {
       mockApi(
         answer([sale], (url, init) => {

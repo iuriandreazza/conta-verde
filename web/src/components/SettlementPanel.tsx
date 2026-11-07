@@ -20,6 +20,7 @@ import {
 } from "../lib/settlement";
 import { Button } from "./Button";
 import { CheckIcon } from "./icons/check";
+import { MailPanel } from "./MailPanel";
 import { Notice } from "./Notice";
 import { Spinner } from "./Spinner";
 
@@ -58,6 +59,8 @@ export function SettlementPanel({
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [reversingId, setReversingId] = useState<string | null>(null);
+  // The settlement whose receipt is being sent, if one is.
+  const [mailingId, setMailingId] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
   const today = todayIso();
   const open = entry.installments.filter((installment) => balanceCents(installment) > 0n);
@@ -224,18 +227,39 @@ export function SettlementPanel({
                   <span className="badge badge-muted"> Estornada</span>
                 ) : (
                   canWrite && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      className="btn-small"
-                      aria-label={`Estornar a baixa de ${formatMoney(settlement.applied)} da parcela ${settlement.installment}`}
-                      pending={reversingId === settlement.id}
-                      disabled={reversingId !== null}
-                      onClick={() => void reverse(settlement)}
-                    >
-                      Estornar
-                    </Button>
+                    <>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="btn-small"
+                        aria-label={`Estornar a baixa de ${formatMoney(settlement.applied)} da parcela ${settlement.installment}`}
+                        pending={reversingId === settlement.id}
+                        disabled={reversingId !== null}
+                        onClick={() => void reverse(settlement)}
+                      >
+                        Estornar
+                      </Button>
+                      {entry.kind === "receivable" && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="btn-small"
+                          aria-label={`Enviar o comprovante da baixa de ${formatMoney(settlement.applied)} da parcela ${settlement.installment}`}
+                          aria-expanded={mailingId === settlement.id}
+                          onClick={() => setMailingId(mailingId === settlement.id ? null : settlement.id)}
+                        >
+                          Enviar comprovante
+                        </Button>
+                      )}
+                    </>
                   )
+                )}
+                {mailingId === settlement.id && (
+                  <MailPanel
+                    what="o comprovante"
+                    send={(to) => api.sendPaymentReceipt(companyId, entry.id, settlement.id, to)}
+                    onClose={() => setMailingId(null)}
+                  />
                 )}
               </li>
             ))}

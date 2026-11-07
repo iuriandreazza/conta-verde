@@ -207,7 +207,9 @@ where
             .await?
             .ok_or(ApplicationError::PartyNotFound)?;
         let address = match rule.channel {
-            DunningChannel::Email => email_of(&party).map(|email| email.as_str().to_owned()),
+            DunningChannel::Email => party
+                .address_to_write_to()
+                .map(|email| email.as_str().to_owned()),
             DunningChannel::Whatsapp => phone_of(&party),
         };
         let Some(address) = address else {
@@ -304,13 +306,6 @@ fn clipped(text: &str) -> String {
 /// `day` moved by `by` days, if it is still a day.
 fn shifted(day: CalendarDate, by: i64) -> Option<CalendarDate> {
     CalendarDate::from_unix_days(day.to_unix_days() + by)
-}
-
-/// Where to send an e-mail reminder: the party's own address, or the first contact that has one.
-fn email_of(party: &Party) -> Option<&Email> {
-    party
-        .email()
-        .or_else(|| party.contacts().iter().find_map(Contact::email))
 }
 
 /// Where to send a WhatsApp reminder: the first contact that has a phone, as digits with the country code

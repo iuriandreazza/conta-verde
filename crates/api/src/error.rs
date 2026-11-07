@@ -175,6 +175,7 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
         | ApplicationError::AttachmentNotFound
         | ApplicationError::TransferNotFound => (StatusCode::NOT_FOUND, error.to_string()),
         ApplicationError::SettlementExceedsBalance
+        | ApplicationError::CannotMail(_)
         | ApplicationError::EntryIsSettled
         | ApplicationError::TooManyAttachments => (StatusCode::CONFLICT, error.to_string()),
         ApplicationError::AlreadyMatched | ApplicationError::LineChanged => {
@@ -194,6 +195,7 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
         // It existed and cannot be used any more: the link was used, withdrawn or has expired.
         ApplicationError::InvitationNoLongerValid => (StatusCode::GONE, error.to_string()),
         ApplicationError::InvitationForAnotherEmail => (StatusCode::FORBIDDEN, error.to_string()),
+        ApplicationError::NoEmailAddress => (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()),
         ApplicationError::Webhook(WebhookError::InvalidSignature) => {
             (StatusCode::UNAUTHORIZED, error.to_string())
         }
