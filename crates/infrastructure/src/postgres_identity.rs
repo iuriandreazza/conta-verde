@@ -408,6 +408,16 @@ impl IdentityRepository for PostgresIdentityRepository {
         Ok(written.rows_affected() == 1)
     }
 
+    async fn password_reset_open(&self, token_digest: &str) -> Result<bool, RepositoryError> {
+        sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM password_resets WHERE token_digest = $1 AND expires_at > now())",
+        )
+        .bind(token_digest)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(storage_error)
+    }
+
     async fn reset_password(
         &self,
         token_digest: &str,

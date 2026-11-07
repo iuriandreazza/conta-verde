@@ -81,6 +81,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0063](0063-email-confirmation.md) | Confirming the address of an account | accepted | — |
 | [0064](0064-entry-import-from-a-file.md) | Entry import from a file | accepted | — |
 | [0065](0065-document-mail-limits-and-log.md) | A limit and a log for documents sent by e-mail | accepted | — |
+| [0066](0066-recovering-an-unconfirmed-address.md) | Recovering an address held by an account nobody confirmed | accepted | — |
 
 ## Template
 

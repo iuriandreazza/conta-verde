@@ -435,7 +435,7 @@ export function QuotesPage() {
                                     tone={sent.emailed ? "success" : "warning"}
                                     message={
                                       sent.emailed
-                                        ? "Link enviado por e-mail. Aparece só aqui: copie se precisar."
+                                        ? "Link na fila de envio por e-mail. Aparece só aqui: copie se precisar."
                                         : "O e-mail não saiu. Passe o link ao cliente por outro meio: ele aparece só aqui."
                                     }
                                   />

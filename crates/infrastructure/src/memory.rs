@@ -507,6 +507,16 @@ impl IdentityRepository for InMemoryIdentityRepository {
         Ok(true)
     }
 
+    async fn password_reset_open(&self, token_digest: &str) -> Result<bool, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        let now = Instant::now();
+        Ok(state.resets.values().any(|links| {
+            links
+                .iter()
+                .any(|(digest, ends, _)| digest == token_digest && *ends > now)
+        }))
+    }
+
     async fn reset_password(
         &self,
         token_digest: &str,

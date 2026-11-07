@@ -2061,6 +2061,8 @@ where
     let new_hash = secrets.hash_password("battery staple").await.unwrap();
 
     // One link at a time, and none right after another.
+    // A link can be looked at without being spent.
+    assert!(!identities.password_reset_open("digest-1").await.unwrap());
     assert!(
         identities
             .create_password_reset(user, "digest-1", hour, Duration::ZERO)
@@ -2087,6 +2089,11 @@ where
             .unwrap()
     );
 
+    assert!(identities.password_reset_open("digest-1").await.unwrap());
+    assert!(
+        identities.password_reset_open("digest-1").await.unwrap(),
+        "looking does not spend it"
+    );
     // Spending the link changes the password and ends the sessions; the link works once.
     let session = auth.login(&email, "correct horse").await.unwrap().token;
     assert_eq!(

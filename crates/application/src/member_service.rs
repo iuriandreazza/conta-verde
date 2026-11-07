@@ -122,10 +122,16 @@ where
         password: &str,
     ) -> Result<(), ApplicationError> {
         validate_password(password)?;
+        // This route needs no session, so a token that cannot work is turned away before the (costly) hashing of the
+        // password it came with. The check is repeated, atomically, by the write that spends the link.
+        let digest = self.secrets.digest_token(token);
+        if !self.identities.password_reset_open(&digest).await? {
+            return Err(AuthError::InvalidResetLink.into());
+        }
         let password_hash = self.secrets.hash_password(password).await?;
         let user_id = match self
             .identities
-            .reset_password(&self.secrets.digest_token(token), &password_hash)
+            .reset_password(&digest, &password_hash)
             .await
         {
             Err(RepositoryError::NotFound) => return Err(AuthError::InvalidResetLink.into()),
@@ -181,6 +187,28 @@ where
             .await;
         }
         Ok(())
+    }
+
+    /// For a sign-up that found its address taken: when the account that holds it was **never confirmed**, sends the
+    /// address a link to recover it (the ordinary password reset) and says so. Whoever holds the mailbox can take the
+    /// account over by choosing a password, which is the proof that releases the address to its real owner; nobody
+    /// else gets anything, and nothing is deleted. `false` when the holder is confirmed or the address is not valid.
+    pub async fn recover_unconfirmed_address(&self, email: &str) -> Result<bool, ApplicationError> {
+        let Ok(email) = Email::parse(email) else {
+            return Ok(false);
+        };
+        let Some(credentials) = self.identities.find_credentials(&email).await? else {
+            return Ok(false);
+        };
+        if self
+            .identities
+            .email_verified(credentials.user.id())
+            .await?
+        {
+            return Ok(false);
+        }
+        self.request_password_reset(email.as_str()).await?;
+        Ok(true)
     }
 
     /// Confirms the address the link was sent to. The link works once.
