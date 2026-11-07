@@ -223,7 +223,7 @@ export function PurchasesPage() {
         <ListTools
           filename="compras"
           header={PURCHASE_COLUMNS}
-          fetchPage={(after) => api.listPurchaseOrders(companyId, applied, after)}
+          fetchPage={(after) => api.listPurchaseOrders(companyId, { ...applied, from: wholeDate(applied.from), to: wholeDate(applied.to) }, after)}
           toRow={(order) => [
             String(order.number),
             names.get(order.supplier_id) ?? "",
