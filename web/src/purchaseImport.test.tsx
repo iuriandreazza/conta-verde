@@ -99,7 +99,8 @@ const readOnly = (url: string): Reply | undefined =>
 
 /** Opens the sheet from the purchases page and reads the file, leaving the person on the preview. */
 const readInvoice = async (file: File = xml()) => {
-  await userEvent.click(await screen.findByRole("button", { name: "Entrar NF-e (XML)" }));
+  await userEvent.click(await screen.findByRole("button", { name: "Novo" }));
+  await userEvent.click(await screen.findByRole("menuitem", { name: "Entrar NF-e (XML)" }));
   const sheet = within((await screen.findByRole("heading", { name: "Entrada por XML (NF-e)" })).closest("aside")!);
   await userEvent.upload(await sheet.findByLabelText("Arquivo XML da NF-e"), file);
   await userEvent.click(sheet.getByRole("button", { name: "Ler arquivo" }));
@@ -209,7 +210,8 @@ describe("purchase entry from an NF-e", () => {
   it("shows the API's message for a file it refuses", async () => {
     mockApi(answer({ status: 422, body: { error: "not a valid XML" } }));
     renderAt("/companies/c1/purchases");
-    await userEvent.click(await screen.findByRole("button", { name: "Entrar NF-e (XML)" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Novo" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Entrar NF-e (XML)" }));
     const sheet = within((await screen.findByRole("heading", { name: "Entrada por XML (NF-e)" })).closest("aside")!);
     await userEvent.upload(await sheet.findByLabelText("Arquivo XML da NF-e"), xml());
     await userEvent.click(sheet.getByRole("button", { name: "Ler arquivo" }));
@@ -222,7 +224,8 @@ describe("purchase entry from an NF-e", () => {
   it("refuses a file that is not an XML or is too big before sending it", async () => {
     const fetchMock = mockApi(answer(invoice()));
     renderAt("/companies/c1/purchases");
-    await userEvent.click(await screen.findByRole("button", { name: "Entrar NF-e (XML)" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Novo" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Entrar NF-e (XML)" }));
     const sheet = within((await screen.findByRole("heading", { name: "Entrada por XML (NF-e)" })).closest("aside")!);
     const input = await sheet.findByLabelText("Arquivo XML da NF-e");
 
@@ -238,7 +241,8 @@ describe("purchase entry from an NF-e", () => {
   it("takes a file dropped on the box like a chosen one, and refuses a dropped file that is not an XML", async () => {
     const fetchMock = mockApi(answer(invoice()));
     renderAt("/companies/c1/purchases");
-    await userEvent.click(await screen.findByRole("button", { name: "Entrar NF-e (XML)" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Novo" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Entrar NF-e (XML)" }));
     const sheet = within((await screen.findByRole("heading", { name: "Entrada por XML (NF-e)" })).closest("aside")!);
     expect(sheet.getByText(/A NF-e fica salva no seu computador/)).toBeInTheDocument();
     expect(sheet.getByText("Ou arraste o XML para este espaço")).toBeInTheDocument();
@@ -266,7 +270,7 @@ describe("purchase entry from an NF-e", () => {
     mockApi(answer(invoice(), readOnly));
     renderAt("/companies/c1/purchases");
     await screen.findByRole("heading", { name: "Compras" });
-    expect(screen.queryByRole("button", { name: "Entrar NF-e (XML)" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Novo" })).not.toBeInTheDocument();
   });
 
   it("shows the access key of an order that came from an NF-e in its details", async () => {
