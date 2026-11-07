@@ -6,5 +6,5 @@ services:
     image: ghcr.io/iuriandreazza/conta-verde:dev
     exposed: true
     ports:
-      - "3080:3080"
+      - "3080"
     database: nous-dev
