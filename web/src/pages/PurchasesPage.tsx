@@ -15,6 +15,7 @@ import { History } from "../components/History";
 import { BoxIcon } from "../components/icons/box";
 import { CheckIcon } from "../components/icons/check";
 import { ChevronDownIcon } from "../components/icons/chevron-down";
+import { FilterTiles, type TileOption } from "../components/FilterTiles";
 import { FileTextIcon } from "../components/icons/file-text";
 import { HistoryIcon } from "../components/icons/history";
 import { PlusIcon } from "../components/icons/plus";
@@ -27,6 +28,7 @@ import { Sheet } from "../components/Sheet";
 import { Spinner } from "../components/Spinner";
 import { useCreation, useOnCreated } from "../creation/CreationProvider";
 import { formatDecimal, formatMoney, toInputDecimal } from "../lib/decimal";
+import { useCounts } from "../lib/useCounts";
 import { formatDate, isIsoDate } from "../lib/entryInstallments";
 import { PURCHASE_STATUS_LABELS, purchaseStatusClass } from "../lib/purchaseStatus";
 import { leftByLine, receivedByLine } from "../lib/receiving";
@@ -101,6 +103,15 @@ export function PurchasesPage() {
       filters,
     );
   const isFiltered = applied.q !== "" || applied.status !== "";
+  const counts = useCounts(() => api.getPurchaseStatusCounts(companyId, applied.q), items, !loading);
+  const tiles: TileOption<PurchaseOrderFilters["status"]>[] = [
+    { key: "", label: "Todas", count: counts === null ? null : Object.values(counts).reduce((sum, n) => sum + n, 0) },
+    ...(Object.entries(PURCHASE_STATUS_LABELS) as [PurchaseStatus, string][]).map(([key, label]) => ({
+      key,
+      label,
+      count: counts?.[key] ?? null,
+    })),
+  ];
 
   const replace = (updated: PurchaseOrder) =>
     setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)));
@@ -202,6 +213,12 @@ export function PurchasesPage() {
       <div>
         <section className="card list-card">
           <h2>Pedidos de compra</h2>
+          <FilterTiles
+            label="Situação"
+            value={filters.status}
+            options={tiles}
+            onChange={(status) => setFilters({ ...filters, status })}
+          />
           <div className="filters" role="search">
             <label>
               Buscar
@@ -213,20 +230,6 @@ export function PurchasesPage() {
                 maxLength={100}
                 onChange={(event) => setFilters({ ...filters, q: event.target.value })}
               />
-            </label>
-            <label>
-              Situação
-              <select
-                value={filters.status}
-                onChange={(event) => setFilters({ ...filters, status: event.target.value as PurchaseOrderFilters["status"] })}
-              >
-                <option value="">Todas</option>
-                {Object.entries(PURCHASE_STATUS_LABELS).map(([key, label]) => (
-                  <option key={key} value={key}>
-                    {label}
-                  </option>
-                ))}
-              </select>
             </label>
             <label>
               Ordem

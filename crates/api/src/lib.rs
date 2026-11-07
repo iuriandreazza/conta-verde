@@ -712,6 +712,10 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
             get(stock::list_positions::<X>),
         )
         .route(
+            "/companies/{company_id}/stock/positions/summary",
+            get(stock::position_summary::<X>),
+        )
+        .route(
             "/companies/{company_id}/stock/alerts",
             get(stock::list_alerts::<X>),
         )
@@ -763,6 +767,10 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
             "/companies/{company_id}/purchase-orders",
             get(purchase_orders::list_purchase_orders::<X>)
                 .post(purchase_orders::register_purchase_order::<X>),
+        )
+        .route(
+            "/companies/{company_id}/purchase-orders/status-counts",
+            get(purchase_orders::purchase_order_status_counts::<X>),
         )
         .route(
             "/companies/{company_id}/purchase-orders/{order_id}",
@@ -10132,6 +10140,53 @@ mod tests {
                 &coffee["average_cost"]
             ),
             (&json!("10"), &json!("102.5"), &json!("10.25"))
+        );
+
+        // The tiles: what the products hold per situation, and the purchases per status.
+        let summary = send(
+            &app,
+            get_request(&format!("{positions}/summary"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(summary.status, StatusCode::OK, "{}", summary.body);
+        assert_eq!(summary.body["value"], "111.5");
+        assert!(summary.body["in_stock"].as_u64().unwrap() >= 2);
+        let depleted = send(
+            &app,
+            get_request(&format!("{positions}?situation=depleted"), Some(&cookie)),
+        )
+        .await;
+        assert!(
+            depleted.body["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|item| item["product_id"] != product_ids[0])
+        );
+        let refused = send(
+            &app,
+            get_request(&format!("{positions}?situation=none"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(refused.status, StatusCode::BAD_REQUEST);
+        let counts = send(
+            &app,
+            get_request(
+                &format!("/companies/{company_id}/purchase-orders/status-counts"),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(counts.status, StatusCode::OK, "{}", counts.body);
+        assert_eq!(
+            counts.body,
+            json!({
+                "draft": 0,
+                "approved": 0,
+                "partially_received": 0,
+                "received": 1,
+                "cancelled": 0
+            })
         );
 
         // The same file again changes nothing.

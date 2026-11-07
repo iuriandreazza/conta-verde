@@ -48,6 +48,12 @@ impl PurchaseOrderQuery {
         self
     }
 
+    /// The same search and supplier with any status, which is what a count per status needs.
+    pub fn any_status(mut self) -> Self {
+        self.status = None;
+        self
+    }
+
     pub fn search(&self) -> Option<&str> {
         self.search.as_deref()
     }
@@ -144,6 +150,14 @@ pub trait PurchaseOrderRepository: Send + Sync {
         after: Option<&NumberCursor>,
         limit: usize,
     ) -> impl Future<Output = Result<Vec<PurchaseOrder>, RepositoryError>> + Send;
+
+    /// How many orders of the company match `query` in each status, ignoring the query's own status; statuses
+    /// with none are left out.
+    fn count_by_status(
+        &self,
+        company_id: CompanyId,
+        query: &PurchaseOrderQuery,
+    ) -> impl Future<Output = Result<Vec<(PurchaseStatus, u64)>, RepositoryError>> + Send;
 
     /// Stores a receipt with its audit entry, atomically, and moves the order to the status `order_after` says
     /// (with `order_audit`, when the status changes), after checking, with the order locked, that it can still

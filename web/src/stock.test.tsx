@@ -61,6 +61,14 @@ const alert = (patch: Partial<StockAlert>): StockAlert => ({
 const calls = (fetchMock: ReturnType<typeof mockApi>, method: string) =>
   fetchMock.mock.calls.filter(([, init]) => init?.method === method);
 
+const summaryOf = (positions: StockPosition[]) => ({
+  total: positions.length,
+  in_stock: positions.filter((p) => Number(p.quantity) > 0).length,
+  below_minimum: positions.filter((p) => p.minimum_stock !== null && Number(p.quantity) < Number(p.minimum_stock)).length,
+  depleted: positions.filter((p) => Number(p.quantity) <= 0).length,
+  value: positions.reduce((sum, p) => sum + Number(p.value), 0).toString(),
+});
+
 const answer =
   (extra: (url: string, init?: RequestInit) => Reply | undefined = () => undefined, positions: StockPosition[] = [position({})], movements: StockMovement[] = [], alerts: StockAlert[] = []) =>
   (url: string, init?: RequestInit): Reply => {
@@ -68,6 +76,7 @@ const answer =
     if (special) return special;
     if (url === "/api/auth/me") return { status: 200, body: profile };
     if (url.endsWith("/stock/alerts")) return { status: 200, body: { items: alerts } };
+    if (url.includes("/stock/positions/summary")) return { status: 200, body: summaryOf(positions) };
     if (url.includes("/stock/positions")) return { status: 200, body: { items: positions, next_cursor: null } };
     if (url.includes("/stock/movements")) return { status: 200, body: { items: movements, next_cursor: null } };
     if (url.includes("/products")) return { status: 200, body: { items: [beans], next_cursor: null } };
@@ -115,6 +124,29 @@ describe("stock positions", () => {
     const negative = screen.getByRole("row", { name: /Açúcar/ });
     expect(within(negative).getByText("Saldo negativo")).toBeInTheDocument();
     expect(negative).toHaveTextContent("—");
+  });
+
+  it("counts the products by situation in tiles that filter the list, with the total cost under it", async () => {
+    const positions = [
+      position({}),
+      position({ product_id: "pr2", name: "Filtro de papel", sku: null, unit: "UN", quantity: "3", value: "9", average_cost: "3.333333", minimum_stock: "10" }),
+      position({ product_id: "pr3", name: "Açúcar", sku: null, quantity: "0", value: "0", average_cost: null, minimum_stock: null }),
+    ];
+    const fetchMock = mockApi(answer(undefined, positions));
+    renderAt("/companies/c1/stock");
+
+    const tiles = within(await screen.findByRole("group", { name: "Situação" }));
+    await vi.waitFor(() => expect(tiles.getByRole("button", { name: /Todos/ })).toHaveTextContent("3"));
+    expect(tiles.getByRole("button", { name: /Em estoque/ })).toHaveTextContent("2");
+    expect(tiles.getByRole("button", { name: /Abaixo do mínimo/ })).toHaveTextContent("1");
+    expect(tiles.getByRole("button", { name: /Esgotado/ })).toHaveTextContent("1");
+    expect(await screen.findByText(/Total: 3 produtos · Custo total R\$ 129,00/)).toBeInTheDocument();
+
+    await userEvent.click(tiles.getByRole("button", { name: /Esgotado/ }));
+    expect(tiles.getByRole("button", { name: /Esgotado/ })).toHaveAttribute("aria-pressed", "true");
+    await vi.waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/stock/positions?situation=depleted"))).toBe(true));
+    // Every tile keeps its number: the summary does not take the situation.
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/summary") && String(url).includes("situation"))).toBe(false);
   });
 
   it("asks for the balance on the day chosen", async () => {

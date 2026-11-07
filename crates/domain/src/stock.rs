@@ -80,6 +80,46 @@ pub struct StockOrigin {
     pub line: u16,
 }
 
+/// Where a product stands against what it holds, for the tiles that filter the stock position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StockSituation {
+    /// Something on hand.
+    InStock,
+    /// A minimum is set and the quantity is under it (so a product that ran out with a minimum is here too).
+    BelowMinimum,
+    /// Nothing on hand, or less than nothing.
+    Depleted,
+}
+
+impl StockSituation {
+    /// The key the API sends; it does not change.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::InStock => "in_stock",
+            Self::BelowMinimum => "below_minimum",
+            Self::Depleted => "depleted",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "in_stock" => Some(Self::InStock),
+            "below_minimum" => Some(Self::BelowMinimum),
+            "depleted" => Some(Self::Depleted),
+            _ => None,
+        }
+    }
+
+    /// Whether a product with `minimum` that holds `balance` is in this situation.
+    pub fn holds(self, balance: &StockBalance, minimum: Option<Decimal>) -> bool {
+        match self {
+            Self::InStock => balance.quantity() > Decimal::ZERO,
+            Self::BelowMinimum => minimum.is_some_and(|minimum| balance.quantity() < minimum),
+            Self::Depleted => balance.quantity() <= Decimal::ZERO,
+        }
+    }
+}
+
 /// What a product has: the sums of its movements. The average cost is derived from them and never stored.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StockBalance {

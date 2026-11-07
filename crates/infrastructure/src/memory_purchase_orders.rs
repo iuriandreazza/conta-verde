@@ -175,6 +175,30 @@ impl PurchaseOrderRepository for InMemoryPurchaseOrderRepository {
         Ok(rows)
     }
 
+    async fn count_by_status(
+        &self,
+        company_id: CompanyId,
+        query: &PurchaseOrderQuery,
+    ) -> Result<Vec<(PurchaseStatus, u64)>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        let query = query.clone().any_status();
+        let mut counts: Vec<(PurchaseStatus, u64)> = Vec::new();
+        for order in state
+            .orders
+            .iter()
+            .filter(|stored| stored.company_id() == company_id && query.matches(stored))
+        {
+            match counts
+                .iter_mut()
+                .find(|(status, _)| *status == order.status())
+            {
+                Some((_, count)) => *count += 1,
+                None => counts.push((order.status(), 1)),
+            }
+        }
+        Ok(counts)
+    }
+
     async fn save_receipt(
         &self,
         receipt: &PurchaseReceipt,

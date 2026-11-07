@@ -641,6 +641,8 @@ main {
 
 .list-card > h2,
 .list-card > .filters,
+.list-card > .filter-tiles,
+.list-card > .list-summary,
 .list-card > .notice,
 .list-card > .btn,
 .list-card > .status,
@@ -1992,6 +1994,8 @@ tbody tr:last-child td {
 .dropzone-file {
   font-weight: 600;
   color: var(--ink);
+}
+
 /* A printed list is the page without the shell around it: no menus, buttons or filters. */
 @media print {
   .sidebar,
@@ -2014,4 +2018,48 @@ tbody tr:last-child td {
     box-shadow: none;
     border: 0;
   }
+}
+
+/* Tiles that filter a list and count its rows: a row that wraps on a narrow screen. */
+.filter-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.filter-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  padding: 0.6rem 0.85rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background-color 0.15s ease;
+}
+
+.filter-tile:hover {
+  border-color: var(--green);
+}
+
+.filter-tile[aria-pressed="true"] {
+  border-color: var(--green);
+  box-shadow: inset 0 -3px 0 var(--green);
+}
+
+.filter-tile-label {
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+.filter-tile strong {
+  font-size: 1.25rem;
 }

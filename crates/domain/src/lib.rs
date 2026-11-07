@@ -136,7 +136,7 @@ pub use settlement::{Settlement, SettlementDraft, settled_of};
 pub use statement_line::{LineMatch, LineStatus, StatementLine, StatementLineDraft};
 pub use stock::{
     StockBalance, StockMovement, StockMovementDraft, StockMovementKind, StockOrigin,
-    StockOriginKind,
+    StockOriginKind, StockSituation,
 };
 pub use stock_settings::StockSettings;
 pub use tag::{MAX_TAGS, Tag};

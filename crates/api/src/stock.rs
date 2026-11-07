@@ -4,7 +4,7 @@ use axum::http::StatusCode;
 use conta_verde_application::{ApplicationError, ProductQuery, StockMovementQuery, StockPosition};
 use conta_verde_domain::{
     CalendarDate, ProductId, StockMovement, StockMovementDraft, StockMovementId, StockMovementKind,
-    StockSettings,
+    StockSettings, StockSituation,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -87,6 +87,8 @@ pub(crate) struct PositionsQuery {
     active: Option<String>,
     /// `YYYY-MM-DD`: what each product had through this day; now when it is left out.
     on: Option<String>,
+    /// `in_stock`, `below_minimum` or `depleted`.
+    situation: Option<String>,
     sort: Option<String>,
 }
 
@@ -258,34 +260,90 @@ pub(crate) async fn reverse_movement<X: Ports>(
     Ok((StatusCode::CREATED, Json((&movement).into())))
 }
 
+impl PositionsQuery {
+    fn product_query(&self) -> Result<ProductQuery, ApiError> {
+        let mut filter = ProductQuery::default().sorted(list_params::sort(self.sort.as_deref())?);
+        if let Some(text) = list_params::search(self.q.as_deref())? {
+            filter = filter.searching(text);
+        }
+        if let Some(active) = list_params::active(self.active.as_deref())? {
+            filter = filter.with_active(active);
+        }
+        Ok(filter)
+    }
+
+    fn day(&self) -> Result<Option<CalendarDate>, ApiError> {
+        self.on
+            .as_deref()
+            .map(|raw| {
+                CalendarDate::parse(raw)
+                    .ok_or(ApiError::InvalidQuery("invalid on: expected YYYY-MM-DD"))
+            })
+            .transpose()
+    }
+
+    fn situation(&self) -> Result<Option<StockSituation>, ApiError> {
+        self.situation
+            .as_deref()
+            .map(|raw| {
+                StockSituation::parse(raw).ok_or(ApiError::InvalidQuery(
+                    "invalid situation: expected in_stock, below_minimum or depleted",
+                ))
+            })
+            .transpose()
+    }
+}
+
 pub(crate) async fn list_positions<X: Ports>(
     State(state): State<SharedState<X>>,
     CompanyAccess(company_id, _): CompanyAccess,
     ApiQuery(query): ApiQuery<PositionsQuery>,
 ) -> Result<Json<PositionPageResponse>, ApiError> {
-    let mut filter = ProductQuery::default().sorted(list_params::sort(query.sort.as_deref())?);
-    if let Some(text) = list_params::search(query.q.as_deref())? {
-        filter = filter.searching(text);
-    }
-    if let Some(active) = list_params::active(query.active.as_deref())? {
-        filter = filter.with_active(active);
-    }
-    let on = query
-        .on
-        .as_deref()
-        .map(|raw| {
-            CalendarDate::parse(raw)
-                .ok_or(ApiError::InvalidQuery("invalid on: expected YYYY-MM-DD"))
-        })
-        .transpose()?;
     let after = query.after.as_deref().map(decode_cursor).transpose()?;
     let page = state
         .stock
-        .positions(company_id, filter, after.as_ref(), query.limit, on)
+        .positions(
+            company_id,
+            query.product_query()?,
+            after.as_ref(),
+            query.limit,
+            query.day()?,
+            query.situation()?,
+        )
         .await?;
     Ok(Json(PositionPageResponse {
         items: page.items.iter().map(PositionResponse::from).collect(),
         next_cursor: page.next.as_ref().map(encode_cursor),
+    }))
+}
+
+#[derive(Serialize)]
+pub(crate) struct PositionSummaryResponse {
+    total: u64,
+    in_stock: u64,
+    below_minimum: u64,
+    depleted: u64,
+    /// What is on hand is worth, in cents, as a decimal string.
+    value: String,
+}
+
+/// What the tiles and the footer of the position show: counts per situation and the value held, for the products
+/// that match the search (the situation filter is not applied, so every tile keeps its number).
+pub(crate) async fn position_summary<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, _): CompanyAccess,
+    ApiQuery(query): ApiQuery<PositionsQuery>,
+) -> Result<Json<PositionSummaryResponse>, ApiError> {
+    let summary = state
+        .stock
+        .position_summary(company_id, query.product_query()?, query.day()?)
+        .await?;
+    Ok(Json(PositionSummaryResponse {
+        total: summary.total,
+        in_stock: summary.in_stock,
+        below_minimum: summary.below_minimum,
+        depleted: summary.depleted,
+        value: summary.value.to_string(),
     }))
 }
 

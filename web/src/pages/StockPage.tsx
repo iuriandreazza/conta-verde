@@ -15,6 +15,7 @@ import {
   type StockSettings,
 } from "../api";
 import { Button } from "../components/Button";
+import { FilterTiles, type TileOption } from "../components/FilterTiles";
 import { History } from "../components/History";
 import { BoxIcon } from "../components/icons/box";
 import { ChevronDownIcon } from "../components/icons/chevron-down";
@@ -30,6 +31,7 @@ import { formatDate, isIsoDate } from "../lib/entryInstallments";
 import { todayIso } from "../lib/settlement";
 import { isNegative, signedQuantity, trimCost } from "../lib/stock";
 import { useCanWrite } from "../lib/useCanWrite";
+import { useCounts } from "../lib/useCounts";
 import { usePagedList } from "../lib/usePagedList";
 import { useStockProducts } from "../lib/useStockProducts";
 import { useParams } from "react-router-dom";
@@ -123,11 +125,28 @@ function PositionsView({ companyId, lowIds }: { companyId: string; lowIds: Set<s
     filters,
   );
   useOnCreated("stockMovement", () => void reload());
-  const isFiltered = applied.q !== "" || applied.on !== "";
+  const isFiltered = applied.q !== "" || applied.on !== "" || applied.situation !== "";
+  const summary = useCounts(
+    () => api.getStockPositionSummary(companyId, { q: applied.q, on: wholeDate(applied.on) }),
+    items,
+    !loading,
+  );
+  const tiles: TileOption<StockPositionFilters["situation"]>[] = [
+    { key: "", label: "Todos", count: summary?.total ?? null },
+    { key: "in_stock", label: "Em estoque", count: summary?.in_stock ?? null },
+    { key: "below_minimum", label: "Abaixo do mínimo", count: summary?.below_minimum ?? null },
+    { key: "depleted", label: "Esgotado", count: summary?.depleted ?? null },
+  ];
 
   return (
     <section className="card list-card">
       <h2>Posição do estoque</h2>
+      <FilterTiles
+        label="Situação"
+        value={filters.situation}
+        options={tiles}
+        onChange={(situation) => setFilters({ ...filters, situation })}
+      />
       <div className="filters" role="search">
         <label>
           Buscar
@@ -205,6 +224,11 @@ function PositionsView({ companyId, lowIds }: { companyId: string; lowIds: Set<s
             </tbody>
           </table>
         </div>
+      )}
+      {summary !== null && summary.total > 0 && (
+        <p className="muted list-summary" role="status">
+          Total: {summary.total} {summary.total === 1 ? "produto" : "produtos"} · Custo total {formatMoney(summary.value)}
+        </p>
       )}
       {nextCursor !== null && (
         <Button type="button" variant="ghost" icon={ChevronDownIcon} pending={loadingMore} onClick={() => void loadMore()}>

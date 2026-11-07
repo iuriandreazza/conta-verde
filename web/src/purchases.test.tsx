@@ -94,6 +94,13 @@ const answer =
     if (url.includes("/payment-terms")) return { status: 200, body: { items: [term], next_cursor: null } };
     if (url.endsWith("/categories")) return { status: 200, body: { items: [expense, transfers] } };
     if (url.includes("/cost-centers")) return { status: 200, body: { items: [], next_cursor: null } };
+    if (url.includes("/purchase-orders/status-counts")) {
+      const of = (status: PurchaseOrder["status"]) => items.filter((order) => order.status === status).length;
+      return {
+        status: 200,
+        body: { draft: of("draft"), approved: of("approved"), partially_received: of("partially_received"), received: of("received"), cancelled: of("cancelled") },
+      };
+    }
     if (url.includes("/purchase-orders")) return { status: 200, body: { items, next_cursor: null } };
     return { status: 404, body: { error: "not found" } };
   };
@@ -124,6 +131,23 @@ describe("purchases", () => {
     expect(screen.getByRole("row", { name: /Torrefação Serra.*Recebido em parte/ })).toHaveTextContent("3");
     expect(screen.getByRole("row", { name: /Torrefação Serra.*Recebido(?! em parte)/ })).toHaveTextContent("4");
     expect(screen.getByRole("row", { name: /Torrefação Serra.*Cancelado/ })).toHaveTextContent("5");
+  });
+
+  it("counts the orders by status in tiles that filter the list", async () => {
+    const fetchMock = mockApi(answer([draft, approved, partial, received, cancelled, { ...draft, id: "o6", number: 6 }]));
+    renderAt("/companies/c1/purchases");
+
+    const tiles = within(await screen.findByRole("group", { name: "Situação" }));
+    await vi.waitFor(() => expect(tiles.getByRole("button", { name: /Todas/ })).toHaveTextContent("6"));
+    expect(tiles.getByRole("button", { name: /Rascunho/ })).toHaveTextContent("2");
+    expect(tiles.getByRole("button", { name: /Aprovado/ })).toHaveTextContent("1");
+    expect(tiles.getByRole("button", { name: /Cancelado/ })).toHaveTextContent("1");
+
+    await userEvent.click(tiles.getByRole("button", { name: /Aprovado/ }));
+    expect(tiles.getByRole("button", { name: /Aprovado/ })).toHaveAttribute("aria-pressed", "true");
+    await vi.waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/purchase-orders?status=approved"))).toBe(true));
+    // The counts follow the search, never the status: every tile keeps its number.
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("status-counts?status"))).toBe(false);
   });
 
   it("offers each status only the actions it allows: a draft is edited and approved, an approved one received", async () => {
