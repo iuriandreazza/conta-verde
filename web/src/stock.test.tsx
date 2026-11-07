@@ -78,6 +78,10 @@ const answer =
     if (url.endsWith("/stock/alerts")) return { status: 200, body: { items: alerts } };
     if (url.includes("/stock/positions/summary")) return { status: 200, body: summaryOf(positions) };
     if (url.includes("/stock/positions")) return { status: 200, body: { items: positions, next_cursor: null } };
+    if (url.includes("/stock/movements/kind-counts")) {
+      const of = (kind: StockMovement["kind"]) => movements.filter((movement) => movement.kind === kind).length;
+      return { status: 200, body: { in: of("in"), out: of("out"), adjustment: of("adjustment") } };
+    }
     if (url.includes("/stock/movements")) return { status: 200, body: { items: movements, next_cursor: null } };
     if (url.includes("/products")) return { status: 200, body: { items: [beans], next_cursor: null } };
     return { status: 404, body: { error: "not found" } };
@@ -322,13 +326,21 @@ describe("stock movements", () => {
     expect(JSON.parse(String(calls(fetchMock, "POST")[0][1]?.body))).toEqual({ occurred_on: "2026-11-12" });
   });
 
-  it("filters the ledger by kind", async () => {
+  it("counts the ledger by kind in tiles that filter it", async () => {
     const fetchMock = mockApi(answer(undefined, [], ledger));
     renderAt("/companies/c1/stock");
     await userEvent.click(await screen.findByRole("button", { name: "Movimentações" }));
     await screen.findByRole("row", { name: /Compra/ });
-    await userEvent.selectOptions(screen.getByLabelText("Tipo"), "out");
+    const tiles = within(screen.getByRole("group", { name: "Tipo" }));
+    const kinds = (kind: string) => ledger.filter((entry) => entry.kind === kind).length;
+    await vi.waitFor(() => expect(tiles.getByRole("button", { name: /Todas/ })).toHaveTextContent(String(ledger.length)));
+    expect(tiles.getByRole("button", { name: /Entradas/ })).toHaveTextContent(String(kinds("in")));
+    expect(tiles.getByRole("button", { name: /Saídas/ })).toHaveTextContent(String(kinds("out")));
+
+    await userEvent.click(tiles.getByRole("button", { name: /Saídas/ }));
     await vi.waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/stock/movements?kind=out"))).toBe(true));
+    // The counts follow the product and days, never the kind.
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("kind-counts?kind"))).toBe(false);
   });
 });
 

@@ -227,6 +227,27 @@ impl StockMovementRepository for InMemoryStockMovementRepository {
         rows.truncate(limit);
         Ok(rows)
     }
+
+    async fn count_by_kind(
+        &self,
+        company_id: CompanyId,
+        query: &StockMovementQuery,
+    ) -> Result<Vec<(StockMovementKind, u64)>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        let query = query.clone().any_kind();
+        let mut counts: Vec<(StockMovementKind, u64)> = Vec::new();
+        for movement in state
+            .movements
+            .iter()
+            .filter(|stored| stored.company_id() == company_id && query.matches(stored))
+        {
+            match counts.iter_mut().find(|(kind, _)| *kind == movement.kind()) {
+                Some((_, count)) => *count += 1,
+                None => counts.push((movement.kind(), 1)),
+            }
+        }
+        Ok(counts)
+    }
 }
 
 /// Keeps the stock settings and their audit trail in process memory, for tests and for running the API without a

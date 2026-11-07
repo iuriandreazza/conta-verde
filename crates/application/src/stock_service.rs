@@ -406,6 +406,15 @@ where
         Ok(StockMovementPage { items, next })
     }
 
+    /// How many movements match `query` of each kind, for the tiles of the ledger.
+    pub async fn kind_counts(
+        &self,
+        company_id: CompanyId,
+        query: &StockMovementQuery,
+    ) -> Result<Vec<(StockMovementKind, u64)>, ApplicationError> {
+        Ok(self.movements.count_by_kind(company_id, query).await?)
+    }
+
     /// What the products of a page have, through `on` when it is given (every movement otherwise), optionally only
     /// those in `situation`. Only products have stock: services are left out. The products are scanned in the
     /// order of the query until the page is full, so a situation that few products are in costs more reads.

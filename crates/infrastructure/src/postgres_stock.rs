@@ -288,24 +288,7 @@ impl StockMovementRepository for PostgresStockMovementRepository {
         limit: usize,
     ) -> Result<Vec<StockMovement>, RepositoryError> {
         let mut sql = QueryBuilder::<Postgres>::new(SELECT_MOVEMENTS);
-        sql.push(" WHERE company_id = ")
-            .push_bind(company_id.as_uuid());
-        if let Some(product) = query.product() {
-            sql.push(" AND product_id = ").push_bind(product.as_uuid());
-        }
-        if let Some(kind) = query.kind() {
-            sql.push(" AND kind = ").push_bind(kind.as_str());
-        }
-        if let Some(from) = query.first_day() {
-            sql.push(" AND occurred_on >= CAST(")
-                .push_bind(from.to_string())
-                .push(" AS DATE)");
-        }
-        if let Some(to) = query.last_day() {
-            sql.push(" AND occurred_on <= CAST(")
-                .push_bind(to.to_string())
-                .push(" AS DATE)");
-        }
+        push_movement_filters(&mut sql, company_id, query);
         if let Some(cursor) = after {
             sql.push(" AND (occurred_on, id) < (CAST(")
                 .push_bind(cursor.date.to_string())
@@ -323,6 +306,58 @@ impl StockMovementRepository for PostgresStockMovementRepository {
             .map_err(storage_error)?;
         tx.commit().await.map_err(storage_error)?;
         rows.iter().map(movement_from_row).collect()
+    }
+
+    async fn count_by_kind(
+        &self,
+        company_id: CompanyId,
+        query: &StockMovementQuery,
+    ) -> Result<Vec<(StockMovementKind, u64)>, RepositoryError> {
+        let mut sql =
+            QueryBuilder::<Postgres>::new("SELECT kind, count(*) AS total FROM stock_movements");
+        push_movement_filters(&mut sql, company_id, &query.clone().any_kind());
+        sql.push(" GROUP BY kind");
+        let rows = sql
+            .build()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(storage_error)?;
+        rows.iter()
+            .map(|row| {
+                let kind: String = row.get("kind");
+                let total: i64 = row.get("total");
+                let kind = StockMovementKind::parse(&kind)
+                    .ok_or_else(|| RepositoryError::Storage(format!("unknown kind {kind}")))?;
+                Ok((kind, u64::try_from(total).unwrap_or(0)))
+            })
+            .collect()
+    }
+}
+
+/// ` WHERE company_id = ... AND ...` for what `query` narrows to, shared by the list and the counts so that both
+/// agree on what matches.
+fn push_movement_filters(
+    sql: &mut QueryBuilder<'_, Postgres>,
+    company_id: CompanyId,
+    query: &StockMovementQuery,
+) {
+    sql.push(" WHERE company_id = ")
+        .push_bind(company_id.as_uuid());
+    if let Some(product) = query.product() {
+        sql.push(" AND product_id = ").push_bind(product.as_uuid());
+    }
+    if let Some(kind) = query.kind() {
+        sql.push(" AND kind = ").push_bind(kind.as_str());
+    }
+    if let Some(from) = query.first_day() {
+        sql.push(" AND occurred_on >= CAST(")
+            .push_bind(from.to_string())
+            .push(" AS DATE)");
+    }
+    if let Some(to) = query.last_day() {
+        sql.push(" AND occurred_on <= CAST(")
+            .push_bind(to.to_string())
+            .push(" AS DATE)");
     }
 }
 

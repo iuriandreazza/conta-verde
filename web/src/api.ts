@@ -1189,6 +1189,9 @@ export interface StockMovementFilters {
 
 export const NO_MOVEMENT_FILTERS: StockMovementFilters = { product: "", kind: "", from: "", to: "" };
 
+/** How many movements match the product and days in each kind, for the tiles of the ledger. */
+export type StockKindCounts = Record<StockMovementKind, number>;
+
 /** A movement written by hand; an `in` takes its cost as `value` (the total) or `unit_cost`, not both. */
 export interface StockMovementInput {
   product_id: string;
@@ -2084,6 +2087,14 @@ export const api = {
     if (after) params.set("after", after);
     const query = params.size > 0 ? `?${params}` : "";
     return request<StockMovementPage>(`/companies/${companyId}/stock/movements${query}`);
+  },
+  getStockKindCounts: (companyId: string, filters: Pick<StockMovementFilters, "product" | "from" | "to">) => {
+    const params = new URLSearchParams();
+    if (filters.product) params.set("product", filters.product);
+    if (filters.from) params.set("from", filters.from);
+    if (filters.to) params.set("to", filters.to);
+    const query = params.size > 0 ? `?${params}` : "";
+    return request<StockKindCounts>(`/companies/${companyId}/stock/movements/kind-counts${query}`);
   },
   recordStockMovement: (companyId: string, input: StockMovementInput) =>
     post<StockMovement>(`/companies/${companyId}/stock/movements`, input),

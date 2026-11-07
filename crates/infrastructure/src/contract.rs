@@ -13380,6 +13380,45 @@ pub async fn runs_the_stock_ledger<M, P, St>(
             .is_empty()
     );
 
+    // The counts per kind add up to the ledger, follow the product and days and never the kind asked for.
+    let kinds = |query: StockMovementQuery| {
+        let stock = &stock;
+        async move {
+            let mut counts = stock.kind_counts(company, &query).await.unwrap();
+            counts.sort_by_key(|(kind, _)| kind.as_str());
+            counts
+        }
+    };
+    let everything = kinds(StockMovementQuery::default()).await;
+    assert_eq!(
+        everything.iter().map(|(_, count)| count).sum::<u64>(),
+        all.items.len() as u64
+    );
+    assert_eq!(
+        kinds(StockMovementQuery::default().of_kind(In)).await,
+        everything
+    );
+    assert_eq!(
+        kinds(StockMovementQuery::default().from(day("2026-11-08")))
+            .await
+            .iter()
+            .map(|(_, count)| count)
+            .sum::<u64>(),
+        2
+    );
+    assert!(
+        kinds(StockMovementQuery::default().of_product(seed.other_product))
+            .await
+            .is_empty()
+    );
+    assert!(
+        stock
+            .kind_counts(other_company, &StockMovementQuery::default())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
     // What each product had on a day, and what has stock at all: services are left out.
     let positions = stock
         .positions(

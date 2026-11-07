@@ -56,27 +56,73 @@ pub(crate) struct MovementsQuery {
 
 impl MovementsQuery {
     fn movement_query(&self) -> Result<StockMovementQuery, ApiError> {
-        let mut query = StockMovementQuery::default();
-        if let Some(product) = self.product {
-            query = query.of_product(ProductId::from_uuid(product));
-        }
+        let mut query = movement_filters(self.product, self.from.as_deref(), self.to.as_deref())?;
         if let Some(raw) = self.kind.as_deref() {
             query = query.of_kind(StockMovementKind::parse(raw).ok_or(ApiError::InvalidQuery(
                 "invalid kind: expected in, out or adjustment",
             ))?);
         }
-        if let Some(raw) = self.from.as_deref() {
-            query = query.from(
-                CalendarDate::parse(raw)
-                    .ok_or(ApiError::InvalidQuery("invalid from: expected YYYY-MM-DD"))?,
-            );
-        }
-        if let Some(raw) = self.to.as_deref() {
-            query = query.to(CalendarDate::parse(raw)
-                .ok_or(ApiError::InvalidQuery("invalid to: expected YYYY-MM-DD"))?);
-        }
         Ok(query)
     }
+}
+
+/// What the tiles of the ledger ask: the product and days, never the kind.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct KindCountsQuery {
+    product: Option<Uuid>,
+    from: Option<String>,
+    to: Option<String>,
+}
+
+fn movement_filters(
+    product: Option<Uuid>,
+    from: Option<&str>,
+    to: Option<&str>,
+) -> Result<StockMovementQuery, ApiError> {
+    let mut query = StockMovementQuery::default();
+    if let Some(product) = product {
+        query = query.of_product(ProductId::from_uuid(product));
+    }
+    if let Some(raw) = from {
+        query = query.from(
+            CalendarDate::parse(raw)
+                .ok_or(ApiError::InvalidQuery("invalid from: expected YYYY-MM-DD"))?,
+        );
+    }
+    if let Some(raw) = to {
+        query = query.to(CalendarDate::parse(raw)
+            .ok_or(ApiError::InvalidQuery("invalid to: expected YYYY-MM-DD"))?);
+    }
+    Ok(query)
+}
+
+#[derive(Serialize)]
+pub(crate) struct KindCountsResponse {
+    #[serde(rename = "in")]
+    entered: u64,
+    out: u64,
+    adjustment: u64,
+}
+
+pub(crate) async fn movement_kind_counts<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, _): CompanyAccess,
+    ApiQuery(query): ApiQuery<KindCountsQuery>,
+) -> Result<Json<KindCountsResponse>, ApiError> {
+    let filter = movement_filters(query.product, query.from.as_deref(), query.to.as_deref())?;
+    let counts = state.stock.kind_counts(company_id, &filter).await?;
+    let of = |wanted: StockMovementKind| {
+        counts
+            .iter()
+            .find(|(kind, _)| *kind == wanted)
+            .map_or(0, |(_, count)| *count)
+    };
+    Ok(Json(KindCountsResponse {
+        entered: of(StockMovementKind::In),
+        out: of(StockMovementKind::Out),
+        adjustment: of(StockMovementKind::Adjustment),
+    }))
 }
 
 #[derive(Deserialize)]

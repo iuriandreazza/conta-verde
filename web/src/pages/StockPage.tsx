@@ -249,6 +249,17 @@ function MovementsView({ companyId, products, canWrite }: { companyId: string; p
   );
   useOnCreated("stockMovement", () => void reload());
   const isFiltered = applied.product !== "" || applied.kind !== "" || applied.from !== "" || applied.to !== "";
+  const counts = useCounts(
+    () => api.getStockKindCounts(companyId, { product: applied.product, from: wholeDate(applied.from), to: wholeDate(applied.to) }),
+    items,
+    !loading,
+  );
+  const tiles: TileOption<StockMovementFilters["kind"]>[] = [
+    { key: "", label: "Todas", count: counts === null ? null : counts.in + counts.out + counts.adjustment },
+    { key: "in", label: "Entradas", count: counts?.in ?? null },
+    { key: "out", label: "Saídas", count: counts?.out ?? null },
+    { key: "adjustment", label: "Ajustes", count: counts?.adjustment ?? null },
+  ];
   const names = useMemo(() => new Map(products.map((product) => [product.id, product.name])), [products]);
   // What the loaded rows already undo: another page may hold an undoing, and then the API says so.
   const undone = useMemo(() => new Set(items.flatMap((movement) => (movement.reverses === null ? [] : [movement.reverses]))), [items]);
@@ -256,6 +267,7 @@ function MovementsView({ companyId, products, canWrite }: { companyId: string; p
   return (
     <section className="card list-card">
       <h2>Movimentações</h2>
+      <FilterTiles label="Tipo" value={filters.kind} options={tiles} onChange={(kind) => setFilters({ ...filters, kind })} />
       <div className="filters" role="search">
         <label>
           Produto
@@ -264,17 +276,6 @@ function MovementsView({ companyId, products, canWrite }: { companyId: string; p
             {products.map((product) => (
               <option key={product.id} value={product.id}>
                 {product.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Tipo
-          <select value={filters.kind} onChange={(event) => setFilters({ ...filters, kind: event.target.value as StockMovementFilters["kind"] })}>
-            <option value="">Todos</option>
-            {Object.entries(KIND_LABELS).map(([key, label]) => (
-              <option key={key} value={key}>
-                {label}
               </option>
             ))}
           </select>
