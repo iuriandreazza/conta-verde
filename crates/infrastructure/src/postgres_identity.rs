@@ -262,6 +262,92 @@ impl IdentityRepository for PostgresIdentityRepository {
         row.as_ref().map(user_from_row).transpose()
     }
 
+    async fn email_verified(&self, user_id: UserId) -> Result<bool, RepositoryError> {
+        let verified: Option<bool> =
+            sqlx::query_scalar("SELECT email_verified_at IS NOT NULL FROM users WHERE id = $1")
+                .bind(user_id.as_uuid())
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(storage_error)?;
+        Ok(verified.unwrap_or(false))
+    }
+
+    async fn mark_email_verified(&self, user_id: UserId) -> Result<(), RepositoryError> {
+        sqlx::query(
+            "UPDATE users SET email_verified_at = COALESCE(email_verified_at, now()) WHERE id = $1",
+        )
+        .bind(user_id.as_uuid())
+        .execute(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        Ok(())
+    }
+
+    async fn create_email_confirmation(
+        &self,
+        user_id: UserId,
+        token_digest: &str,
+        lifetime: Duration,
+        cooldown: Duration,
+    ) -> Result<bool, RepositoryError> {
+        sqlx::query("DELETE FROM email_confirmations WHERE expires_at <= now()")
+            .execute(&self.pool)
+            .await
+            .map_err(storage_error)?;
+        let written = sqlx::query(
+            "INSERT INTO email_confirmations (token_digest, user_id, expires_at, created_at) \
+             SELECT $2, $1, now() + make_interval(secs => $3), now() \
+             WHERE NOT EXISTS (SELECT 1 FROM email_confirmations WHERE user_id = $1 \
+                               AND created_at > now() - make_interval(secs => $4))",
+        )
+        .bind(user_id.as_uuid())
+        .bind(token_digest)
+        .bind(lifetime.as_secs_f64())
+        .bind(cooldown.as_secs_f64())
+        .execute(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        if written.rows_affected() == 1 {
+            sqlx::query(
+                "DELETE FROM email_confirmations WHERE user_id = $1 AND token_digest NOT IN \
+                 (SELECT token_digest FROM email_confirmations WHERE user_id = $1 \
+                  ORDER BY created_at DESC LIMIT 5)",
+            )
+            .bind(user_id.as_uuid())
+            .execute(&self.pool)
+            .await
+            .map_err(storage_error)?;
+        }
+        Ok(written.rows_affected() == 1)
+    }
+
+    async fn confirm_email(&self, token_digest: &str) -> Result<UserId, RepositoryError> {
+        let mut tx = self.pool.begin().await.map_err(storage_error)?;
+        let user: Option<uuid::Uuid> = sqlx::query_scalar(
+            "DELETE FROM email_confirmations WHERE token_digest = $1 AND expires_at > now() \
+             RETURNING user_id",
+        )
+        .bind(token_digest)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(storage_error)?;
+        let user = user.ok_or(RepositoryError::NotFound)?;
+        sqlx::query("DELETE FROM email_confirmations WHERE user_id = $1")
+            .bind(user)
+            .execute(&mut *tx)
+            .await
+            .map_err(storage_error)?;
+        sqlx::query(
+            "UPDATE users SET email_verified_at = COALESCE(email_verified_at, now()) WHERE id = $1",
+        )
+        .bind(user)
+        .execute(&mut *tx)
+        .await
+        .map_err(storage_error)?;
+        tx.commit().await.map_err(storage_error)?;
+        Ok(UserId::from_uuid(user))
+    }
+
     async fn find_user(&self, user_id: UserId) -> Result<Option<User>, RepositoryError> {
         let row = sqlx::query("SELECT id, name, email FROM users WHERE id = $1")
             .bind(user_id.as_uuid())
@@ -422,6 +508,19 @@ mod tests {
             Duration::from_secs(3600),
         );
         contract::resets_a_password_once(&auth, &identities, &secrets).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn confirms_an_email_once() {
+        let pool = contract::test_pool().await;
+        let identities = PostgresIdentityRepository::new(pool);
+        let auth = AuthService::new(
+            identities.clone(),
+            crate::Argon2SecretService::new().unwrap(),
+            Duration::from_secs(3600),
+        );
+        contract::confirms_an_email_once(&auth, &identities).await;
     }
 
     #[tokio::test]

@@ -16,6 +16,7 @@ export const OWNER_PERMISSIONS = {
 
 export const profile: Profile = {
   user: { id: "u1", name: "Ana", email: "ana@example.com" },
+  email_verified: true,
   companies: [{ id: "c1", name: "Padaria", role: "owner", permissions: OWNER_PERMISSIONS }],
 };
 

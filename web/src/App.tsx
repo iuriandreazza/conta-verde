@@ -2,6 +2,7 @@ import { Route, Routes } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { RequireAuth } from "./components/RequireAuth";
 import { AcceptInvitationPage } from "./pages/AcceptInvitationPage";
+import { ConfirmEmailPage } from "./pages/ConfirmEmailPage";
 import { ForgotPasswordPage } from "./pages/ForgotPasswordPage";
 import { ResetPasswordPage } from "./pages/ResetPasswordPage";
 import { AuthPage } from "./pages/AuthPage";
@@ -42,6 +43,7 @@ export function App() {
       <Route element={<Layout />}>
         <Route path="/login" element={<AuthPage mode="login" />} />
         <Route path="/register" element={<AuthPage mode="register" />} />
+        <Route path="/confirm-email/:token" element={<ConfirmEmailPage />} />
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password/:token" element={<ResetPasswordPage />} />
         <Route path="/invitations/:token" element={<AcceptInvitationPage />} />

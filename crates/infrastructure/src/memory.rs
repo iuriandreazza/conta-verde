@@ -193,6 +193,9 @@ struct IdentityState {
     sessions: HashMap<String, (UserId, Instant)>,
     /// A user's reset links: the digest, when it ends and when it was made.
     resets: HashMap<UserId, Vec<(String, Instant, Instant)>>,
+    /// A user's address confirmation links, like the reset links.
+    confirmations: HashMap<UserId, Vec<(String, Instant, Instant)>>,
+    verified: Vec<UserId>,
 }
 
 impl InMemoryIdentityRepository {
@@ -411,6 +414,62 @@ impl IdentityRepository for InMemoryIdentityRepository {
             .filter(|(_, expires_at)| *expires_at > Instant::now())
             .and_then(|(user_id, _)| state.user(*user_id))
             .cloned())
+    }
+
+    async fn email_verified(&self, user_id: UserId) -> Result<bool, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        Ok(state.verified.contains(&user_id))
+    }
+
+    async fn mark_email_verified(&self, user_id: UserId) -> Result<(), RepositoryError> {
+        let mut state = self.state.lock().expect("repository lock poisoned");
+        if !state.verified.contains(&user_id) {
+            state.verified.push(user_id);
+        }
+        Ok(())
+    }
+
+    async fn create_email_confirmation(
+        &self,
+        user_id: UserId,
+        token_digest: &str,
+        lifetime: Duration,
+        cooldown: Duration,
+    ) -> Result<bool, RepositoryError> {
+        let mut state = self.state.lock().expect("repository lock poisoned");
+        let now = Instant::now();
+        let links = state.confirmations.entry(user_id).or_default();
+        if links
+            .iter()
+            .any(|(_, _, made)| now.duration_since(*made) < cooldown)
+        {
+            return Ok(false);
+        }
+        links.push((token_digest.to_owned(), now + lifetime, now));
+        if links.len() > 5 {
+            links.remove(0);
+        }
+        Ok(true)
+    }
+
+    async fn confirm_email(&self, token_digest: &str) -> Result<UserId, RepositoryError> {
+        let mut state = self.state.lock().expect("repository lock poisoned");
+        let now = Instant::now();
+        let user_id = state
+            .confirmations
+            .iter()
+            .find(|(_, links)| {
+                links
+                    .iter()
+                    .any(|(digest, ends, _)| digest == token_digest && *ends > now)
+            })
+            .map(|(user_id, _)| *user_id)
+            .ok_or(RepositoryError::NotFound)?;
+        state.confirmations.remove(&user_id);
+        if !state.verified.contains(&user_id) {
+            state.verified.push(user_id);
+        }
+        Ok(user_id)
     }
 
     async fn find_user(&self, user_id: UserId) -> Result<Option<User>, RepositoryError> {
@@ -1245,6 +1304,17 @@ mod tests {
         );
         contract::resets_a_password_once(&auth, &identities, &Argon2SecretService::new().unwrap())
             .await;
+    }
+
+    #[tokio::test]
+    async fn confirms_an_email_once() {
+        let identities = InMemoryIdentityRepository::default();
+        let auth = AuthService::new(
+            identities.clone(),
+            Argon2SecretService::new().unwrap(),
+            Duration::from_secs(3600),
+        );
+        contract::confirms_an_email_once(&auth, &identities).await;
     }
 
     #[tokio::test]

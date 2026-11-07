@@ -56,6 +56,8 @@ export interface InvitationPreview {
 export interface Profile {
   user: User;
   companies: Company[];
+  /** Whether the address was confirmed; the app asks for it until it is. */
+  email_verified: boolean;
 }
 
 /** What Receita Federal said about a CNPJ when the party was registered. */
@@ -1629,6 +1631,9 @@ export const api = {
   register: (registration: Registration) => post<Profile>("/auth/register", registration),
   login: (email: string, password: string) => post<Profile>("/auth/login", { email, password }),
   logout: () => post<void>("/auth/logout"),
+  /** Sends the signed-in person a new link to confirm their address. */
+  requestEmailConfirmation: () => post<void>("/auth/email-confirmation"),
+  confirmEmail: (token: string) => post<void>("/auth/email-confirmation/confirm", { token }),
   /** Always answers the same, whether the address has an account or not. */
   requestPasswordReset: (email: string) => post<void>("/auth/password-reset", { email }),
   resetPassword: (token: string, password: string) => post<void>("/auth/password-reset/confirm", { token, password }),

@@ -10,6 +10,7 @@ import { PageHeader } from "./components/PageHeader";
 
 const profile: Profile = {
   user: { id: "u1", name: "Ana", email: "ana@example.com" },
+  email_verified: true,
   companies: [
     {
       id: "c1",

@@ -117,7 +117,9 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
                 // A member, but not of a role that reaches this: the company is theirs to see.
                 AuthError::NotAllowed => StatusCode::FORBIDDEN,
                 // Like an expired quote link: the link existed or never did, and either way it no longer works.
-                AuthError::InvalidResetLink => StatusCode::GONE,
+                AuthError::InvalidResetLink | AuthError::InvalidConfirmationLink => {
+                    StatusCode::GONE
+                }
             };
             (status, error.to_string())
         }

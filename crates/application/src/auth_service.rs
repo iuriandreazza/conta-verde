@@ -14,6 +14,8 @@ use crate::{
 pub struct Profile {
     pub user: User,
     pub memberships: Vec<CompanyMembership>,
+    /// Whether the user has shown they read the mail of their address ([ADR 0063]).
+    pub email_verified: bool,
 }
 
 /// A user proven to belong to a company, and what they are there.
@@ -89,6 +91,7 @@ impl<I: IdentityRepository, S: SecretService> AuthService<I, S> {
             token,
             profile: Profile {
                 user: account.user,
+                email_verified: false,
                 // The person who creates a company is its owner.
                 memberships: vec![CompanyMembership {
                     company: account.company,
@@ -105,9 +108,14 @@ impl<I: IdentityRepository, S: SecretService> AuthService<I, S> {
     pub async fn sign_in_new_member(&self, user: User) -> Result<SignedIn, ApplicationError> {
         let token = self.open_session(user.id()).await?;
         let memberships = self.identities.memberships_of(user.id()).await?;
+        let email_verified = self.identities.email_verified(user.id()).await?;
         Ok(SignedIn {
             token,
-            profile: Profile { user, memberships },
+            profile: Profile {
+                user,
+                memberships,
+                email_verified,
+            },
         })
     }
 
@@ -126,9 +134,14 @@ impl<I: IdentityRepository, S: SecretService> AuthService<I, S> {
             Some(StoredCredentials { user, .. }) if verified => {
                 let token = self.open_session(user.id()).await?;
                 let memberships = self.identities.memberships_of(user.id()).await?;
+                let email_verified = self.identities.email_verified(user.id()).await?;
                 Ok(SignedIn {
                     token,
-                    profile: Profile { user, memberships },
+                    profile: Profile {
+                        user,
+                        memberships,
+                        email_verified,
+                    },
                 })
             }
             _ => Err(AuthError::InvalidCredentials.into()),
@@ -143,7 +156,12 @@ impl<I: IdentityRepository, S: SecretService> AuthService<I, S> {
     pub async fn profile(&self, token: &str) -> Result<Profile, ApplicationError> {
         let user = self.authenticate(token).await?;
         let memberships = self.identities.memberships_of(user.id()).await?;
-        Ok(Profile { user, memberships })
+        let email_verified = self.identities.email_verified(user.id()).await?;
+        Ok(Profile {
+            user,
+            memberships,
+            email_verified,
+        })
     }
 
     /// Proves the session owner belongs to the company, and says what they are there. Companies

@@ -2135,6 +2135,90 @@ where
     );
 }
 
+/// An address confirmation ([ADR 0063]): unconfirmed at first, several links may be out and none right after another, a
+/// link confirms once and its siblings die with it, an expired one does nothing, and an address can be marked without one.
+pub async fn confirms_an_email_once<I, S>(auth: &AuthService<I, S>, identities: &I)
+where
+    I: IdentityRepository,
+    S: SecretService,
+{
+    let hour = Duration::from_secs(3600);
+    let email = format!("ana-{}@example.com", Uuid::new_v4());
+    let user = auth
+        .register(draft(&email), "correct horse")
+        .await
+        .unwrap()
+        .profile
+        .user
+        .id();
+    assert!(!identities.email_verified(user).await.unwrap());
+
+    assert!(
+        identities
+            .create_email_confirmation(user, "digest-1", hour, Duration::ZERO)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !identities
+            .create_email_confirmation(user, "digest-2", hour, hour)
+            .await
+            .unwrap(),
+        "too soon after the last one"
+    );
+    assert!(
+        identities
+            .create_email_confirmation(user, "digest-3", hour, Duration::ZERO)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        identities.confirm_email("digest-2").await,
+        Err(RepositoryError::NotFound)
+    );
+    assert_eq!(identities.confirm_email("digest-1").await.unwrap(), user);
+    assert!(identities.email_verified(user).await.unwrap());
+    for spent in ["digest-1", "digest-3"] {
+        assert_eq!(
+            identities.confirm_email(spent).await,
+            Err(RepositoryError::NotFound),
+            "{spent}"
+        );
+    }
+    assert!(
+        auth.login(&email, "correct horse")
+            .await
+            .unwrap()
+            .profile
+            .email_verified
+    );
+
+    // An expired link does nothing, and an address can be marked without one.
+    let other = auth
+        .register(
+            draft(&format!("bia-{}@example.com", Uuid::new_v4())),
+            "correct horse",
+        )
+        .await
+        .unwrap()
+        .profile
+        .user
+        .id();
+    assert!(
+        identities
+            .create_email_confirmation(other, "digest-4", Duration::ZERO, Duration::ZERO)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        identities.confirm_email("digest-4").await,
+        Err(RepositoryError::NotFound)
+    );
+    assert!(!identities.email_verified(other).await.unwrap());
+    identities.mark_email_verified(other).await.unwrap();
+    assert!(identities.email_verified(other).await.unwrap());
+}
+
 // ---- products and services
 
 fn product_draft(name: &str, kind: ProductKind, sku: Option<&str>, active: bool) -> ProductDraft {

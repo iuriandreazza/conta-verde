@@ -34,6 +34,8 @@ pub(crate) struct LoginRequest {
 pub(crate) struct ProfileResponse {
     user: UserResponse,
     companies: Vec<CompanyResponse>,
+    /// Whether the address was confirmed; the web app asks for it until it is.
+    email_verified: bool,
 }
 
 #[derive(Serialize)]
@@ -64,6 +66,7 @@ impl From<&Profile> for ProfileResponse {
                 name: profile.user.name().to_owned(),
                 email: profile.user.email().as_str().to_owned(),
             },
+            email_verified: profile.email_verified,
             companies: profile
                 .memberships
                 .iter()
@@ -119,6 +122,12 @@ pub(crate) async fn register<X: Ports>(
             state.auth.register(draft, &request.password).await?
         }
     };
+    // A person who made a company of their own is asked to confirm the address; one who joined by an invitation just did.
+    // Failing to queue the e-mail never fails the sign-up: the page offers to send it again.
+    let _ = state
+        .members
+        .send_email_confirmation(&signed_in.profile.user)
+        .await;
     Ok((
         StatusCode::CREATED,
         started(&state, &signed_in),
@@ -202,5 +211,30 @@ pub(crate) async fn reset_password<X: Ports>(
         .members
         .reset_password(&request.token, &request.password)
         .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Sends the signed-in user a new link to confirm their address (`202` whether or not one was made: one a minute at most,
+/// and none when it is confirmed already).
+pub(crate) async fn request_email_confirmation<X: Ports>(
+    State(state): State<SharedState<X>>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    let user = state.auth.current_user(require_token(&headers)?).await?;
+    state.members.send_email_confirmation(&user).await?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+#[derive(Deserialize)]
+pub(crate) struct ConfirmEmailRequest {
+    token: String,
+}
+
+/// Confirms the address with the token of the e-mailed link; no session, since the token is the proof.
+pub(crate) async fn confirm_email<X: Ports>(
+    State(state): State<SharedState<X>>,
+    ApiJson(request): ApiJson<ConfirmEmailRequest>,
+) -> Result<StatusCode, ApiError> {
+    state.members.confirm_email(&request.token).await?;
     Ok(StatusCode::NO_CONTENT)
 }

@@ -328,6 +328,14 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         .route("/auth/logout", post(auth::logout::<X>))
         .route("/auth/me", get(auth::me::<X>))
         .route(
+            "/auth/email-confirmation",
+            post(auth::request_email_confirmation::<X>),
+        )
+        .route(
+            "/auth/email-confirmation/confirm",
+            post(auth::confirm_email::<X>),
+        )
+        .route(
             "/auth/password-reset",
             post(auth::request_password_reset::<X>),
         )
@@ -2977,9 +2985,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_address_is_confirmed_through_an_e_mailed_link_that_works_once() {
+        let (app, _, mailbox) = app_with_mailbox();
+        let (cookie, _) = sign_up(&app, "ana@example.com").await;
+
+        // The sign-up sent the link and says the address is not confirmed yet.
+        let sent = mailbox.sent();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].to.as_str(), "ana@example.com");
+        assert_eq!(sent[0].subject, "Confirme seu e-mail no conta-verde");
+        let token = sent[0]
+            .body
+            .lines()
+            .find(|line| line.contains("/confirm-email/"))
+            .unwrap()
+            .rsplit('/')
+            .next()
+            .unwrap()
+            .to_owned();
+        let me = |cookie: &str| send(&app, get_request("/auth/me", Some(cookie)));
+        assert_eq!(me(&cookie).await.body["email_verified"], false);
+
+        // Asking again needs a session, and one a minute at most is made.
+        let resend = |cookie: Option<&str>| {
+            send(
+                &app,
+                json_request("POST", "/auth/email-confirmation", cookie, Value::Null),
+            )
+        };
+        assert_eq!(resend(None).await.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(resend(Some(&cookie)).await.status, StatusCode::ACCEPTED);
+        assert_eq!(mailbox.sent().len(), 1, "too soon after the last one");
+
+        let confirm = |token: &str| {
+            send(
+                &app,
+                json_request(
+                    "POST",
+                    "/auth/email-confirmation/confirm",
+                    None,
+                    json!({ "token": token }),
+                ),
+            )
+        };
+        assert_eq!(confirm("wrong").await.status, StatusCode::GONE);
+        assert_eq!(confirm(&token).await.status, StatusCode::NO_CONTENT);
+        assert_eq!(me(&cookie).await.body["email_verified"], true);
+        assert_eq!(confirm(&token).await.status, StatusCode::GONE);
+        // Confirmed: nothing more is sent.
+        assert_eq!(resend(Some(&cookie)).await.status, StatusCode::ACCEPTED);
+        assert_eq!(mailbox.sent().len(), 1);
+    }
+
+    #[tokio::test]
     async fn a_lost_password_is_replaced_through_an_e_mailed_link_that_works_once() {
         let (app, _, mailbox) = app_with_mailbox();
         let (cookie, _) = sign_up(&app, "ana@example.com").await;
+        // The sign-up sent its own e-mail (the address to confirm): start from an empty mailbox.
+        mailbox.clear();
         let ask = |email: &str| {
             json_request(
                 "POST",
@@ -3071,6 +3134,7 @@ mod tests {
         let (bia, bia_company) = sign_up(&app, "bia@example.com").await;
         let (cris, _) = sign_up(&app, "cris@example.com").await;
 
+        mailbox.clear();
         let invited = invite_as(&app, &ana, company_id, "Bia@Example.com", "sales").await;
         assert_eq!(invited.status, StatusCode::CREATED, "{}", invited.body);
         assert_eq!(invited.body["role"], "sales");

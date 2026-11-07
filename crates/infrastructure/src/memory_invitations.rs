@@ -165,6 +165,11 @@ impl InMemoryEmailSender {
     pub fn sent(&self) -> Vec<EmailMessage> {
         self.sent.lock().expect("sender lock poisoned").clone()
     }
+
+    /// Forgets what was sent, so a test can look at what one step sends and nothing before it.
+    pub fn clear(&self) {
+        self.sent.lock().expect("sender lock poisoned").clear();
+    }
 }
 
 impl EmailSender for InMemoryEmailSender {
