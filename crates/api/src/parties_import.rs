@@ -2,6 +2,7 @@ use axum::Json;
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::HeaderMap;
+use conta_verde_application::MAX_IMPORT_ROWS;
 use conta_verde_domain::{AddressDraft, PartyDraft};
 
 use crate::access::CompanyAccess;
@@ -91,7 +92,7 @@ pub(crate) async fn import_parties<X: Ports>(
     body: Body,
 ) -> Result<Json<ImportResponse>, ApiError> {
     let bytes = read_file(&headers, body).await?;
-    let table = read_table(&bytes, COLUMNS, &["name"])?;
+    let table = read_table(&bytes, COLUMNS, &["name"], MAX_IMPORT_ROWS)?;
     if !ROLES.iter().any(|role| table.has_column(role)) {
         return Err(FileError::MissingRoleColumn.into());
     }

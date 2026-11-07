@@ -71,6 +71,38 @@ pub struct RecurrenceOrigin {
     pub occurrence_on: CalendarDate,
 }
 
+/// The reference a file gave to one of its rows ([ADR 0064]), reduced to an id that belongs to the company: the
+/// same company and reference always give the same id, so sending a file again finds what it already made.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ImportId(uuid::Uuid);
+
+/// The longest reference a file may give a row.
+pub const MAX_IMPORT_REFERENCE_CHARS: usize = 200;
+
+impl ImportId {
+    pub fn new(company_id: CompanyId, reference: &str) -> Result<Self, DomainError> {
+        let reference = reference.trim();
+        if reference.is_empty()
+            || reference.chars().count() > MAX_IMPORT_REFERENCE_CHARS
+            || reference.chars().any(char::is_control)
+        {
+            return Err(DomainError::InvalidImportReference);
+        }
+        Ok(Self(uuid::Uuid::new_v5(
+            &company_id.as_uuid(),
+            reference.as_bytes(),
+        )))
+    }
+
+    pub fn from_uuid(value: uuid::Uuid) -> Self {
+        Self(value)
+    }
+
+    pub fn as_uuid(&self) -> uuid::Uuid {
+        self.0
+    }
+}
+
 /// Where an entry came from when something other than a person made it ([ADR 0037]): each origin has at
 /// most one entry, so making it twice, or in two places, is safe. It never changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,6 +117,8 @@ pub enum EntryOrigin {
     ChargeFee(ChargeId),
     /// The payable of a receipt of goods ([ADR 0053]).
     PurchaseReceipt(PurchaseReceiptId),
+    /// A row of an import file ([ADR 0064]).
+    Import(ImportId),
 }
 
 /// Unvalidated input for registering or changing an entry.
@@ -455,5 +489,31 @@ mod tests {
             assert_eq!(EntryKind::parse(kind.as_str()), Some(kind));
         }
         assert_eq!(EntryKind::parse("Receivable"), None);
+    }
+
+    #[test]
+    fn an_import_reference_is_the_same_id_for_a_company_and_another_for_the_next() {
+        let (company, other) = (CompanyId::generate(), CompanyId::generate());
+        let id = ImportId::new(company, "export-1 / row 4").unwrap();
+        assert_eq!(id, ImportId::new(company, " export-1 / row 4 ").unwrap());
+        assert_ne!(id, ImportId::new(company, "export-1 / row 5").unwrap());
+        assert_ne!(id, ImportId::new(other, "export-1 / row 4").unwrap());
+    }
+
+    #[test]
+    fn an_import_reference_is_one_line_of_at_most_200_characters() {
+        let company = CompanyId::generate();
+        for refused in [
+            "",
+            "   ",
+            "two\nlines",
+            &"x".repeat(MAX_IMPORT_REFERENCE_CHARS + 1),
+        ] {
+            assert_eq!(
+                ImportId::new(company, refused),
+                Err(DomainError::InvalidImportReference)
+            );
+        }
+        assert!(ImportId::new(company, &"x".repeat(MAX_IMPORT_REFERENCE_CHARS)).is_ok());
     }
 }

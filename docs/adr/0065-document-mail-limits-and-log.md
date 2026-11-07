@@ -1,11 +1,11 @@
 ---
-title: "ADR 0064: A limit and a log for documents sent by e-mail"
+title: "ADR 0065: A limit and a log for documents sent by e-mail"
 status: accepted
 date: 2026-11-07
 tags: [adr, email, purchases, finance]
 ---
 
-# ADR 0064: A limit and a log for documents sent by e-mail
+# ADR 0065: A limit and a log for documents sent by e-mail
 
 ## Context
 

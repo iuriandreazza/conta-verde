@@ -1,4 +1,4 @@
--- The log of documents e-mailed on request (ADR 0064): which, to whom, by whom, when. Never edited; a row is deleted only to
+-- The log of documents e-mailed on request (ADR 0065): which, to whom, by whom, when. Never edited; a row is deleted only to
 -- take back a send that went nowhere. Not audited: the document did not change. `document_id` is a purchase order or a
 -- settlement by `kind`, so the database cannot hold a foreign key to it: the use case finds the document in the company
 -- before it records the send. `sent_at` is Unix milliseconds from the caller's clock, so a test can move it.

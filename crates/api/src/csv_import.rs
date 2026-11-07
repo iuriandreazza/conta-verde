@@ -6,7 +6,7 @@ use std::collections::HashSet;
 
 use axum::body::{Body, Bytes};
 use axum::http::{HeaderMap, header};
-use conta_verde_application::{ImportReport, ImportRow, MAX_IMPORT_ROWS, RowNote};
+use conta_verde_application::{ImportReport, ImportRow, RowNote};
 use serde::{Deserialize, Serialize};
 
 use crate::error::ApiError;
@@ -64,7 +64,7 @@ pub(crate) async fn read_body(
 pub(crate) enum FileError {
     NotUtf8,
     Empty,
-    TooManyRows,
+    TooManyRows(usize),
     Unreadable(String),
     MissingColumn(&'static str),
     UnknownColumns(Vec<String>),
@@ -86,8 +86,8 @@ impl std::fmt::Display for FileError {
                 "the file is not UTF-8: save it as CSV UTF-8 (a spreadsheet's plain \"CSV\" is often not)",
             ),
             Self::Empty => f.write_str("the file has no rows"),
-            Self::TooManyRows => {
-                write!(f, "the file has more than {MAX_IMPORT_ROWS} rows: split it")
+            Self::TooManyRows(max) => {
+                write!(f, "the file has more than {max} rows: split it")
             }
             Self::Unreadable(cause) => write!(f, "the file cannot be read as CSV: {cause}"),
             Self::MissingColumn(column) => write!(f, "the file has no `{column}` column"),
@@ -173,6 +173,7 @@ pub(crate) fn read_table(
     bytes: &[u8],
     columns: &[&str],
     required: &[&'static str],
+    max_rows: usize,
 ) -> Result<Table, FileError> {
     let text = std::str::from_utf8(bytes).map_err(|_| FileError::NotUtf8)?;
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
@@ -229,8 +230,8 @@ pub(crate) fn read_table(
         if record.iter().all(str::is_empty) {
             continue;
         }
-        if records.len() == MAX_IMPORT_ROWS {
-            return Err(FileError::TooManyRows);
+        if records.len() == max_rows {
+            return Err(FileError::TooManyRows(max_rows));
         }
         records.push((index + 2, record));
     }
@@ -293,12 +294,14 @@ pub(crate) fn yes_or_no(cell: Option<&str>) -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
+    use conta_verde_application::MAX_IMPORT_ROWS;
+
     use super::*;
 
     const COLUMNS: &[&str] = &["name", "document", "customer"];
 
     fn table(text: &str) -> Result<Table, FileError> {
-        read_table(text.as_bytes(), COLUMNS, &["name"])
+        read_table(text.as_bytes(), COLUMNS, &["name"], MAX_IMPORT_ROWS)
     }
 
     fn cells(text: &str) -> Vec<(usize, Option<String>, Option<String>)> {
@@ -366,7 +369,7 @@ mod tests {
             assert_eq!(table(text).err(), Some(expected), "{text:?}");
         }
         assert_eq!(
-            read_table(&[0xff, 0xfe, b'a'], COLUMNS, &[]).err(),
+            read_table(&[0xff, 0xfe, b'a'], COLUMNS, &[], MAX_IMPORT_ROWS).err(),
             Some(FileError::NotUtf8)
         );
     }
@@ -406,7 +409,7 @@ mod tests {
         assert!(table(&file(MAX_IMPORT_ROWS)).is_ok());
         assert_eq!(
             table(&file(MAX_IMPORT_ROWS + 1)).err(),
-            Some(FileError::TooManyRows)
+            Some(FileError::TooManyRows(MAX_IMPORT_ROWS))
         );
     }
 

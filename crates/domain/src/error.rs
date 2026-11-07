@@ -38,6 +38,7 @@ pub enum DomainError {
     TooManyPriceListItems,
     DuplicatePriceListProduct,
     InvalidDescription,
+    InvalidImportReference,
     /// Names the date: an entry has a competence date and a due date for each installment.
     InvalidDate(&'static str),
     InvalidInstallmentAmount,
@@ -198,6 +199,9 @@ impl fmt::Display for DomainError {
             ),
             Self::InvalidDescription => f.write_str(
                 "description must be one line of 1 to 200 characters, without control characters",
+            ),
+            Self::InvalidImportReference => f.write_str(
+                "reference must be 1 to 200 characters, without control characters",
             ),
             Self::InvalidDate(field) => {
                 write!(f, "{field} must be a real date written YYYY-MM-DD, from 1900 to 2200")

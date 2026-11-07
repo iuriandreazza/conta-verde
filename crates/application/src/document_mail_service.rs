@@ -30,7 +30,7 @@ pub struct MailAsk<'a> {
 
 /// Sends a person a document as text: a purchase order to its supplier, the proof of a payment to the customer who
 /// made it ([ADR 0061]). The document does not change, so there is no audit entry; **what was sent is a log**
-/// ([ADR 0064]): who sent it to whom and when, with a limit that is the same for everyone: the same document is not sent
+/// ([ADR 0065]): who sent it to whom and when, with a limit that is the same for everyone: the same document is not sent
 /// again to the same address within five minutes, and a company may e-mail a hundred documents a day. A message that is
 /// not taken (no mail server) is `emailed: false` and uses up nothing.
 pub struct DocumentMailService<P, E, Y, M, L> {

@@ -16,7 +16,7 @@ pub enum Reservation {
     CapReached,
 }
 
-/// Port for the log of documents that were e-mailed ([ADR 0064]). The check and the record are **one atomic step**, so two
+/// Port for the log of documents that were e-mailed ([ADR 0065]). The check and the record are **one atomic step**, so two
 /// sends racing for the last place cannot both have it.
 pub trait DocumentMailRepository: Send + Sync {
     /// Records `mail` unless the company's limits say no: the same document, to the same address, less than

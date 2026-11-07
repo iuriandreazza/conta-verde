@@ -37,6 +37,10 @@ impl<R: FinancialEntryRepository, F: EntryReferences> FinancialEntryService<R, F
         }
     }
 
+    pub(crate) fn references(&self) -> &F {
+        &self.references
+    }
+
     /// Validates the draft and its references, and stores the entry; the creation is recorded in
     /// the audit trail under `actor`, in the same write.
     pub async fn register(

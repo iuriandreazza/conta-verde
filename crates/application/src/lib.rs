@@ -25,6 +25,7 @@ mod document_references;
 mod dunning_plan_repository;
 mod dunning_service;
 mod email_sender;
+mod entry_import;
 mod entry_repository;
 mod error;
 mod financial_entry_service;
@@ -107,6 +108,9 @@ pub use document_references::DocumentReferences;
 pub use dunning_plan_repository::DunningPlanRepository;
 pub use dunning_service::{DunningReport, DunningService};
 pub use email_sender::{EmailError, EmailMessage, EmailSender};
+pub use entry_import::{
+    EntryImportDraft, EntryLookups, ImportNames, MAX_ENTRY_IMPORT_ROWS, SettlementImport,
+};
 pub use entry_repository::{
     DateCursor, DayOpen, EntryCursor, EntryReferences, EntrySort, FinancialEntryQuery,
     FinancialEntryRepository, OverdueItem, OverdueReport, ReportBasis, ReportGroup, ReportRow,

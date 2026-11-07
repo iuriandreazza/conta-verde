@@ -92,7 +92,8 @@ pub use email::Email;
 pub use error::DomainError;
 pub use financial_entry::{
     EntryInstallment, EntryInstallmentDraft, EntryKind, EntryOrigin, FinancialEntry,
-    FinancialEntryDraft, MAX_ENTRY_INSTALLMENTS, RecurrenceOrigin,
+    FinancialEntryDraft, ImportId, MAX_ENTRY_INSTALLMENTS, MAX_IMPORT_REFERENCE_CHARS,
+    RecurrenceOrigin,
 };
 pub use ids::{
     AttachmentId, BankAccountId, CategoryId, ChargeId, CommissionRuleId, CompanyId, ContractId,

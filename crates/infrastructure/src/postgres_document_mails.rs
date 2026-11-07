@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::postgres::storage_error;
 
-/// Keeps the log of e-mailed documents in Postgres ([ADR 0064]). The limits are checked and the row written in one
+/// Keeps the log of e-mailed documents in Postgres ([ADR 0065]). The limits are checked and the row written in one
 /// transaction that holds a lock on the company, so two sends racing for the last place cannot both have it.
 #[derive(Clone)]
 pub struct PostgresDocumentMailRepository {
