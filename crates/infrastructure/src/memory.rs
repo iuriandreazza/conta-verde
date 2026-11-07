@@ -191,8 +191,8 @@ struct IdentityState {
     companies: Vec<Company>,
     memberships: Vec<(UserId, CompanyId, Role)>,
     sessions: HashMap<String, (UserId, Instant)>,
-    /// A user's reset: the digest, when it ends and when it was made.
-    resets: HashMap<UserId, (String, Instant, Instant)>,
+    /// A user's reset links: the digest, when it ends and when it was made.
+    resets: HashMap<UserId, Vec<(String, Instant, Instant)>>,
 }
 
 impl InMemoryIdentityRepository {
@@ -428,16 +428,18 @@ impl IdentityRepository for InMemoryIdentityRepository {
     ) -> Result<bool, RepositoryError> {
         let mut state = self.state.lock().expect("repository lock poisoned");
         let now = Instant::now();
-        if state
-            .resets
-            .get(&user_id)
-            .is_some_and(|(_, _, made)| now.duration_since(*made) < cooldown)
+        let links = state.resets.entry(user_id).or_default();
+        if links
+            .iter()
+            .any(|(_, _, made)| now.duration_since(*made) < cooldown)
         {
             return Ok(false);
         }
-        state
-            .resets
-            .insert(user_id, (token_digest.to_owned(), now + lifetime, now));
+        links.push((token_digest.to_owned(), now + lifetime, now));
+        // Only the newest few stay.
+        if links.len() > 5 {
+            links.remove(0);
+        }
         Ok(true)
     }
 
@@ -451,9 +453,14 @@ impl IdentityRepository for InMemoryIdentityRepository {
         let user_id = state
             .resets
             .iter()
-            .find(|(_, (digest, ends, _))| digest == token_digest && *ends > now)
+            .find(|(_, links)| {
+                links
+                    .iter()
+                    .any(|(digest, ends, _)| digest == token_digest && *ends > now)
+            })
             .map(|(user_id, _)| *user_id)
             .ok_or(RepositoryError::NotFound)?;
+        // One link was used: the others of the account stop working too.
         state.resets.remove(&user_id);
         if let Some(credentials) = state.users.iter_mut().find(|c| c.user.id() == user_id) {
             credentials.password_hash = new_hash.to_owned();

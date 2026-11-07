@@ -26,12 +26,13 @@ thing built on it.
   an account (an address that is not an address included). When the address has an account it makes a link and e-mails it.
 - `POST /auth/password-reset/confirm` `{token, password}` chooses the new password (the same rules as a sign-up) and answers
   `204`. A link that does not exist, has expired or was used is `410`.
-- **The token** is 256 bits from `SecretService::new_token`; only its SHA-256 digest is stored (`password_resets`), like a
+- **The token** is 256 bits from `SecretService::new_token`; only its SHA-256 digest is stored (`password_resets`, several per account), like a
   session or an invitation. It lives **one hour** and works **once**: the digest row is deleted in the same transaction
   that changes the password.
-- **One link per account** (primary key on the user): asking again replaces the last link, and **no new link is made less
-  than a minute after the last**, so the form cannot be used to fill someone's inbox. The refused request still answers
-  `202`.
+- **Asking again does not kill a link already sent** (anyone who knows the address could otherwise keep replacing it before
+  the owner uses it): an account may have up to five links out, **no new one is made less than a minute after the last**, so
+  the form cannot be used to fill an inbox (the refused request still answers `202`), and **spending any of them deletes
+  them all**.
 - **Spending a link ends every session of the account**, so whoever held the old password is out. The person signs in again.
 - The e-mail goes through the queue (`EmailSender` is `QueuedEmailSender`, ADR 0059). With no mail server configured the
   message is only logged, and the log then holds the link; nothing about it reaches the client.

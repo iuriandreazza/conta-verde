@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ApiError, api, errorMessage } from "../api";
+import { useAuth } from "../auth";
 import { Button } from "../components/Button";
 import { Notice } from "../components/Notice";
 import { PasswordField } from "../components/PasswordField";
@@ -13,6 +14,7 @@ import { usePageTitle } from "../lib/usePageTitle";
 export function ResetPasswordPage() {
   const { token = "" } = useParams();
   usePageTitle("Nova senha");
+  const { refresh } = useAuth();
   const [done, setDone] = useState(false);
   const [error, setError] = useState<{ message: string; gone: boolean } | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -25,6 +27,9 @@ export function ResetPasswordPage() {
     try {
       await api.resetPassword(token, password);
       setDone(true);
+      // Every session of the account ended: a browser still signed in finds out now (its 401 signs it out); a
+      // browser that was not signed in has nothing to find out.
+      refresh().catch(() => undefined);
     } catch (failure) {
       setError({ message: errorMessage(failure), gone: failure instanceof ApiError && failure.status === 410 });
     } finally {

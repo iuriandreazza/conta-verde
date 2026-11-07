@@ -2034,7 +2034,7 @@ where
     );
 }
 
-/// A password reset ([ADR 0060]): a link works once, a new one replaces the last unless that was made a moment ago, an
+/// A password reset ([ADR 0060]): a link works once, several may be out at once and spending one ends them all, none is made a moment after the last, an
 /// expired one does nothing, and spending one ends every session and puts the new password in place of the old.
 pub async fn resets_a_password_once<I, S>(auth: &AuthService<I, S>, identities: &I, secrets: &S)
 where
@@ -2066,22 +2066,18 @@ where
         Err(RepositoryError::NotFound),
         "what was refused stored nothing"
     );
+    // Another request does not kill the link already sent, and spending either ends them all.
     assert!(
         identities
             .create_password_reset(user, "digest-3", hour, Duration::ZERO)
             .await
             .unwrap()
     );
-    assert_eq!(
-        identities.reset_password("digest-1", &new_hash).await,
-        Err(RepositoryError::NotFound),
-        "a new link replaced the old one"
-    );
 
     // Spending the link changes the password and ends the sessions; the link works once.
     let session = auth.login(&email, "correct horse").await.unwrap().token;
     identities
-        .reset_password("digest-3", &new_hash)
+        .reset_password("digest-1", &new_hash)
         .await
         .unwrap();
     assert_eq!(
@@ -2097,10 +2093,13 @@ where
         ApplicationError::Auth(AuthError::InvalidCredentials)
     );
     auth.login(&email, "battery staple").await.unwrap();
-    assert_eq!(
-        identities.reset_password("digest-3", &new_hash).await,
-        Err(RepositoryError::NotFound)
-    );
+    for spent in ["digest-1", "digest-3"] {
+        assert_eq!(
+            identities.reset_password(spent, &new_hash).await,
+            Err(RepositoryError::NotFound),
+            "{spent}"
+        );
+    }
 
     // A link that has expired does nothing.
     assert!(

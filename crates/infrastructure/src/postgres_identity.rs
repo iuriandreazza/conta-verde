@@ -283,13 +283,13 @@ impl IdentityRepository for PostgresIdentityRepository {
             .execute(&self.pool)
             .await
             .map_err(storage_error)?;
-        // One row per user: a new link replaces the old one, unless the old one is too recent.
+        // Asking again does not kill a link already sent (anyone who knows the address could keep doing that), but a
+        // request too soon after the last makes nothing.
         let written = sqlx::query(
-            "INSERT INTO password_resets (user_id, token_digest, expires_at, created_at) \
-             VALUES ($1, $2, now() + make_interval(secs => $3), now()) \
-             ON CONFLICT (user_id) DO UPDATE SET token_digest = EXCLUDED.token_digest, \
-                 expires_at = EXCLUDED.expires_at, created_at = EXCLUDED.created_at \
-             WHERE password_resets.created_at <= now() - make_interval(secs => $4)",
+            "INSERT INTO password_resets (token_digest, user_id, expires_at, created_at) \
+             SELECT $2, $1, now() + make_interval(secs => $3), now() \
+             WHERE NOT EXISTS (SELECT 1 FROM password_resets WHERE user_id = $1 \
+                               AND created_at > now() - make_interval(secs => $4))",
         )
         .bind(user_id.as_uuid())
         .bind(token_digest)
@@ -298,6 +298,18 @@ impl IdentityRepository for PostgresIdentityRepository {
         .execute(&self.pool)
         .await
         .map_err(storage_error)?;
+        if written.rows_affected() == 1 {
+            // Only the newest few stay, so the table does not grow with requests.
+            sqlx::query(
+                "DELETE FROM password_resets WHERE user_id = $1 AND token_digest NOT IN \
+                 (SELECT token_digest FROM password_resets WHERE user_id = $1 \
+                  ORDER BY created_at DESC LIMIT 5)",
+            )
+            .bind(user_id.as_uuid())
+            .execute(&self.pool)
+            .await
+            .map_err(storage_error)?;
+        }
         Ok(written.rows_affected() == 1)
     }
 
@@ -317,6 +329,12 @@ impl IdentityRepository for PostgresIdentityRepository {
         .await
         .map_err(storage_error)?;
         let user = user.ok_or(RepositoryError::NotFound)?;
+        // One link was used: the others of the account stop working too.
+        sqlx::query("DELETE FROM password_resets WHERE user_id = $1")
+            .bind(user)
+            .execute(&mut *tx)
+            .await
+            .map_err(storage_error)?;
         sqlx::query("UPDATE users SET password_hash = $2 WHERE id = $1")
             .bind(user)
             .bind(new_hash)
