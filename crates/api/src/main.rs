@@ -3,11 +3,11 @@ use std::time::Duration;
 use conta_verde_api::{ApiConfig, Ports, Services, router};
 use conta_verde_application::{
     AttachmentService, AuthService, BalanceService, BankAccountService, CategoryService,
-    CommissionService, ContractService, CostCenterService, FinancialEntryService,
-    InventoryCountService, JobRunner, MemberService, PartyService, PaymentMethodService,
-    PaymentTermService, PostalCodeService, PriceListService, ProductService, PurchaseService,
-    QuoteService, ReconciliationService, RecurrenceService, SaleService, SalesReportService,
-    StockService, TransferService,
+    CommissionService, ContractService, CostCenterService, DocumentMailService,
+    FinancialEntryService, InventoryCountService, JobRunner, MemberService, PartyService,
+    PaymentMethodService, PaymentTermService, PostalCodeService, PriceListService, ProductService,
+    PurchaseService, QuoteService, ReconciliationService, RecurrenceService, SaleService,
+    SalesReportService, StockService, TransferService,
 };
 use conta_verde_application::{
     ChargeService, CollectionService, DunningService, EmailError, EmailMessage, EmailSender,
@@ -322,6 +322,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         PostgresJobQueue::new(pool.clone()),
         email_sender_from_env()?,
     )));
+    let documents = DocumentMailService::new(
+        PostgresPurchaseOrderRepository::new(pool.clone()),
+        PostgresFinancialEntryRepository::new(pool.clone()),
+        PostgresPartyRepository::new(pool.clone()),
+        queued_emails(PostgresJobQueue::new(pool.clone()))?,
+    );
     let auth = AuthService::new(
         PostgresIdentityRepository::new(pool),
         Argon2SecretService::new()?,
@@ -362,6 +368,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 balances,
                 postal_codes,
                 members,
+                documents,
                 auth,
             },
             config,

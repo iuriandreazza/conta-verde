@@ -12,6 +12,7 @@ mod cost_centers;
 mod csv_import;
 mod cursor;
 mod delinquency;
+mod documents;
 mod dunning;
 mod entries;
 mod error;
@@ -50,15 +51,15 @@ use conta_verde_application::{
     AttachmentRepository, AttachmentService, AuthService, BalanceService, BankAccountRepository,
     BankAccountService, BlobStore, CategoryRepository, CategoryService, ChargeRepository,
     ChargeService, CnpjRegistry, CommissionRuleRepository, CommissionService, ContractRepository,
-    ContractService, CostCenterRepository, CostCenterService, DocumentReferences, EmailSender,
-    EntryReferences, FinancialEntryRepository, FinancialEntryService, IdentityRepository,
-    InventoryCountRepository, InventoryCountService, InvitationRepository, MemberService,
-    OpeningRepository, PartyRepository, PartyService, PaymentMethodRepository,
-    PaymentMethodService, PaymentProvider, PaymentTermRepository, PaymentTermService,
-    PostalCodeDirectory, PostalCodeService, PriceListRepository, PriceListService,
-    ProductRepository, ProductService, PurchaseOrderRepository, PurchaseService, QuoteRepository,
-    QuoteService, ReconciliationService, RecurrenceRepository, RecurrenceService, SaleRepository,
-    SaleService, SalesReportService, SecretService, StatementLineRepository,
+    ContractService, CostCenterRepository, CostCenterService, DocumentMailService,
+    DocumentReferences, EmailSender, EntryReferences, FinancialEntryRepository,
+    FinancialEntryService, IdentityRepository, InventoryCountRepository, InventoryCountService,
+    InvitationRepository, MemberService, OpeningRepository, PartyRepository, PartyService,
+    PaymentMethodRepository, PaymentMethodService, PaymentProvider, PaymentTermRepository,
+    PaymentTermService, PostalCodeDirectory, PostalCodeService, PriceListRepository,
+    PriceListService, ProductRepository, ProductService, PurchaseOrderRepository, PurchaseService,
+    QuoteRepository, QuoteService, ReconciliationService, RecurrenceRepository, RecurrenceService,
+    SaleRepository, SaleService, SalesReportService, SecretService, StatementLineRepository,
     StockMovementRepository, StockService, StockSettingsRepository, TransferRepository,
     TransferService,
 };
@@ -242,6 +243,7 @@ pub struct Services<X: Ports> {
     pub balances: BalanceService<X::BankAccounts, X::Entries, X::Transfers, X::Openings>,
     pub postal_codes: PostalCodeService<X::PostalCodes>,
     pub members: MemberService<X::Invitations, X::Identity, X::Emails, X::Secrets>,
+    pub documents: DocumentMailService<X::Purchases, X::Entries, X::Parties, X::Emails>,
     pub auth: AuthService<X::Identity, X::Secrets>,
 }
 
@@ -276,6 +278,7 @@ pub(crate) struct AppState<X: Ports> {
     balances: BalanceService<X::BankAccounts, X::Entries, X::Transfers, X::Openings>,
     postal_codes: PostalCodeService<X::PostalCodes>,
     members: MemberService<X::Invitations, X::Identity, X::Emails, X::Secrets>,
+    documents: DocumentMailService<X::Purchases, X::Entries, X::Parties, X::Emails>,
     auth: AuthService<X::Identity, X::Secrets>,
     config: ApiConfig,
 }
@@ -314,6 +317,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         balances: services.balances,
         postal_codes: services.postal_codes,
         members: services.members,
+        documents: services.documents,
         auth: services.auth,
         config,
     });
@@ -461,6 +465,10 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         .route(
             "/companies/{company_id}/entries/{entry_id}/settlements",
             get(entries::list_settlements::<X>).post(entries::settle_installment::<X>),
+        )
+        .route(
+            "/companies/{company_id}/entries/{entry_id}/settlements/{settlement_id}/receipt",
+            post(documents::send_payment_receipt::<X>),
         )
         .route(
             "/companies/{company_id}/entries/{entry_id}/settlements/{settlement_id}",
@@ -792,6 +800,10 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         .route(
             "/companies/{company_id}/purchase-orders/{order_id}/history",
             get(purchase_orders::purchase_order_history::<X>),
+        )
+        .route(
+            "/companies/{company_id}/purchase-orders/{order_id}/send",
+            post(documents::send_purchase_order::<X>),
         )
         .route(
             "/companies/{company_id}/purchase-orders/{order_id}/approve",
@@ -1586,6 +1598,13 @@ mod tests {
         )
     }
 
+    type TestDocuments = DocumentMailService<
+        InMemoryPurchaseOrderRepository,
+        InMemoryFinancialEntryRepository,
+        InMemoryPartyRepository,
+        InMemoryEmailSender,
+    >;
+
     type TestMembers = MemberService<
         InMemoryInvitationRepository,
         InMemoryIdentityRepository,
@@ -1610,6 +1629,15 @@ mod tests {
     }
 
     /// One that shares nothing with the app's identities: for the tests that never invite.
+    fn standalone_documents() -> TestDocuments {
+        DocumentMailService::new(
+            InMemoryPurchaseOrderRepository::default(),
+            InMemoryFinancialEntryRepository::default(),
+            InMemoryPartyRepository::default(),
+            InMemoryEmailSender::default(),
+        )
+    }
+
     fn standalone_members() -> TestMembers {
         members_over(
             &InMemoryIdentityRepository::default(),
@@ -1680,6 +1708,7 @@ mod tests {
                 balances: standalone_balances(),
                 postal_codes: PostalCodeService::new(postal_codes),
                 members,
+                documents: standalone_documents(),
                 auth,
             },
             ApiConfig::default(),
@@ -2334,6 +2363,7 @@ mod tests {
                 balances: standalone_balances(),
                 postal_codes: PostalCodeService::new(None),
                 members: standalone_members(),
+                documents: standalone_documents(),
                 auth: auth_service(),
             },
             ApiConfig::default(),
@@ -3913,6 +3943,7 @@ mod tests {
                 balances: standalone_balances(),
                 postal_codes: PostalCodeService::new(None),
                 members: standalone_members(),
+                documents: standalone_documents(),
                 auth: auth_service(),
             },
             ApiConfig::default(),
@@ -5392,6 +5423,13 @@ mod tests {
     /// An app whose entries read the very registers its categories, cost centers and parties
     /// write to, which is what pointing an entry at a record needs.
     fn entry_app() -> Router {
+        entry_app_with_mailbox().0
+    }
+
+    /// Like `entry_app`, and the mailbox the e-mails of its documents go to; its purchases and documents share a store.
+    fn entry_app_with_mailbox() -> (Router, InMemoryEmailSender) {
+        let mailbox = InMemoryEmailSender::default();
+        let purchase_store = InMemoryPurchaseOrderRepository::default();
         let categories = InMemoryCategoryRepository::default();
         let cost_centers = InMemoryCostCenterRepository::default();
         let parties = InMemoryPartyRepository::default();
@@ -5423,7 +5461,7 @@ mod tests {
                 stock_settings.clone(),
             )
         };
-        router::<MemoryPorts>(
+        let app = router::<MemoryPorts>(
             Services {
                 parties: PartyService::new(parties.clone(), known_companies())
                     .with_recheck_interval(Duration::ZERO),
@@ -5508,7 +5546,7 @@ mod tests {
                 quotes: quotes_over(quote_store.clone(), &parties, &products, &payment_terms),
                 sales: sales(),
                 purchases: purchases_over(
-                    InMemoryPurchaseOrderRepository::default(),
+                    purchase_store.clone(),
                     entry_store.clone(),
                     &categories,
                     &cost_centers,
@@ -5537,16 +5575,23 @@ mod tests {
                 sales_reports: SalesReportService::new(sale_store.clone()),
                 balances: BalanceService::new(
                     bank_accounts.clone(),
-                    entry_store,
+                    entry_store.clone(),
                     transfer_store,
                     InMemoryOpeningRepository::default(),
                 ),
                 postal_codes: PostalCodeService::new(known_postal_codes()),
                 members: standalone_members(),
+                documents: DocumentMailService::new(
+                    purchase_store,
+                    entry_store.clone(),
+                    parties.clone(),
+                    mailbox.clone(),
+                ),
                 auth: auth_service(),
             },
             ApiConfig::default(),
-        )
+        );
+        (app, mailbox)
     }
 
     /// The ids an entry points at, made through the API.
@@ -9093,6 +9138,211 @@ mod tests {
                   "unit_price": "3.33" }
             ],
         })
+    }
+
+    #[tokio::test]
+    async fn a_purchase_order_and_a_payment_receipt_are_mailed_to_the_party_through_the_queue() {
+        let (app, mailbox) = entry_app_with_mailbox();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let targets = sales_targets(&app, &cookie, company_id).await;
+        let category = revenue_category(&app, &cookie, company_id).await;
+        let party = |name: &str, email: Option<&str>, supplier: bool| {
+            let mut body =
+                json!({ "name": name, "is_customer": !supplier, "is_supplier": supplier });
+            if let Some(email) = email {
+                body["email"] = json!(email);
+            }
+            send(
+                &app,
+                json_request("POST", &parties_uri(company_id), Some(&cookie), body),
+            )
+        };
+        let supplier = party("Torrefação Boa", Some("fornecedor@example.com"), true).await;
+        let supplier = supplier.body["id"].as_str().unwrap().to_owned();
+        let silent = party("Sem Email", None, true).await.body["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let uri = purchases_uri(company_id);
+        let order = |supplier: &str| {
+            send(
+                &app,
+                json_request(
+                    "POST",
+                    &uri,
+                    Some(&cookie),
+                    purchase_body(&targets, supplier, &category),
+                ),
+            )
+        };
+        let mail = |id: &str, body: Value| {
+            send(
+                &app,
+                json_request("POST", &format!("{uri}/{id}/send"), Some(&cookie), body),
+            )
+        };
+
+        // A draft is not sent to a supplier; an approved order goes to the supplier's address.
+        let draft = order(&supplier).await.body["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let refused = mail(&draft, json!({})).await;
+        assert_eq!(refused.status, StatusCode::CONFLICT, "{}", refused.body);
+        send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{uri}/{draft}/approve"),
+                Some(&cookie),
+                Value::Null,
+            ),
+        )
+        .await;
+        let sent = mail(&draft, json!({})).await;
+        assert_eq!(sent.status, StatusCode::OK, "{}", sent.body);
+        assert_eq!(
+            sent.body,
+            json!({ "to": "fornecedor@example.com", "emailed": true })
+        );
+        let message = mailbox.sent().pop().unwrap();
+        assert_eq!(message.to.as_str(), "fornecedor@example.com");
+        assert_eq!(message.subject, "Pedido de compra nº 1 de Padaria");
+        assert!(
+            message.body.contains("Total: R$ 106,69"),
+            "{}",
+            message.body
+        );
+        assert!(message.body.contains("Itens:"), "{}", message.body);
+
+        // No address anywhere is a 422 that says what to do; an address can be given, and it must be one.
+        let quiet = order(&silent).await.body["id"].as_str().unwrap().to_owned();
+        send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{uri}/{quiet}/approve"),
+                Some(&cookie),
+                Value::Null,
+            ),
+        )
+        .await;
+        assert_eq!(
+            mail(&quiet, json!({})).await.status,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        assert_eq!(
+            mail(&quiet, json!({ "to": "not an address" })).await.status,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let given = mail(&quiet, json!({ "to": "compras@example.com" })).await;
+        assert_eq!(given.body["to"], "compras@example.com");
+        assert_eq!(
+            mail("00000000-0000-0000-0000-000000000000", json!({}))
+                .await
+                .status,
+            StatusCode::NOT_FOUND
+        );
+
+        // A settlement of a receivable is proved to the customer; a payable and a reversed payment are not.
+        let account = registered_account(&app, &cookie, company_id, "Caixa").await;
+        let customer = party("Mercadinho", Some("cliente@example.com"), false).await;
+        let customer = customer.body["id"].as_str().unwrap().to_owned();
+        let entries = entries_uri(company_id);
+        let mut body = json!({
+            "kind": "receivable", "description": "Venda de café", "party_id": customer,
+            "category_id": category, "competence_date": "2026-11-05",
+            "installments": [{ "due_date": "2026-12-10", "amount": "100" }, { "due_date": "2027-01-10", "amount": "50.5" }],
+        });
+        let entry = send(
+            &app,
+            json_request("POST", &entries, Some(&cookie), body.clone()),
+        )
+        .await;
+        assert_eq!(entry.status, StatusCode::CREATED, "{}", entry.body);
+        let entry = format!("{entries}/{}", entry.body["id"].as_str().unwrap());
+        let settled = send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{entry}/settlements"),
+                Some(&cookie),
+                json!({ "installment": 1, "settled_on": "2026-12-09", "applied": "100", "interest": "1.5", "bank_account_id": account }),
+            ),
+        )
+        .await;
+        assert_eq!(settled.status, StatusCode::CREATED, "{}", settled.body);
+        let settlement = format!(
+            "{entry}/settlements/{}",
+            settled.body["id"].as_str().unwrap()
+        );
+        let receipt = send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{settlement}/receipt"),
+                Some(&cookie),
+                json!({}),
+            ),
+        )
+        .await;
+        assert_eq!(receipt.status, StatusCode::OK, "{}", receipt.body);
+        assert_eq!(
+            receipt.body,
+            json!({ "to": "cliente@example.com", "emailed": true })
+        );
+        let message = mailbox.sent().pop().unwrap();
+        assert_eq!(message.subject, "Comprovante de pagamento de Padaria");
+        for line in [
+            "Olá, Mercadinho.",
+            "Referente a: Venda de café",
+            "Parcela: 1 de 2",
+            "Data: 09/12/2026",
+            "Juros: R$ 1,50",
+            "Valor pago: R$ 101,50",
+        ] {
+            assert!(message.body.contains(line), "{line} in {}", message.body);
+        }
+        let reversed = send(
+            &app,
+            json_request("DELETE", &settlement, Some(&cookie), Value::Null),
+        )
+        .await;
+        assert!(reversed.status.is_success(), "{}", reversed.body);
+        assert_eq!(
+            send(
+                &app,
+                json_request(
+                    "POST",
+                    &format!("{settlement}/receipt"),
+                    Some(&cookie),
+                    json!({})
+                )
+            )
+            .await
+            .status,
+            StatusCode::CONFLICT
+        );
+        body["kind"] = json!("payable");
+        let payable = send(&app, json_request("POST", &entries, Some(&cookie), body)).await;
+        let payable = format!("{entries}/{}", payable.body["id"].as_str().unwrap());
+        assert_eq!(
+            send(
+                &app,
+                json_request(
+                    "POST",
+                    &format!(
+                        "{payable}/settlements/{}/receipt",
+                        settled.body["id"].as_str().unwrap()
+                    ),
+                    Some(&cookie),
+                    json!({})
+                )
+            )
+            .await
+            .status,
+            StatusCode::CONFLICT
+        );
     }
 
     #[tokio::test]

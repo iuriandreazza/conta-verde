@@ -1077,6 +1077,12 @@ export interface PurchaseOrderInput {
   lines: LineInput[];
 }
 
+/** What asking for a document by e-mail answers: where it went, and whether it was taken for sending. */
+export interface Mailed {
+  to: string;
+  emailed: boolean;
+}
+
 export interface PurchaseOrderFilters {
   q: string;
   status: "" | PurchaseStatus;
@@ -2037,6 +2043,10 @@ export const api = {
     const query = params.size > 0 ? `?${params}` : "";
     return request<PurchaseOrderPage>(`/companies/${companyId}/purchase-orders${query}`);
   },
+  sendPurchaseOrder: (companyId: string, id: string, to: string) =>
+    post<Mailed>(`/companies/${companyId}/purchase-orders/${id}/send`, to ? { to } : {}),
+  sendPaymentReceipt: (companyId: string, entryId: string, settlementId: string, to: string) =>
+    post<Mailed>(`/companies/${companyId}/entries/${entryId}/settlements/${settlementId}/receipt`, to ? { to } : {}),
   getPurchaseStatusCounts: (companyId: string, q: string) => {
     const query = q ? `?${new URLSearchParams({ q })}` : "";
     return request<PurchaseStatusCounts>(`/companies/${companyId}/purchase-orders/status-counts${query}`);

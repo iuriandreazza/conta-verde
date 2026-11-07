@@ -118,6 +118,12 @@ impl Party {
         self.email.as_ref()
     }
 
+    /// Where to write to the party: their own address, or the first contact that has one.
+    pub fn address_to_write_to(&self) -> Option<&Email> {
+        self.email()
+            .or_else(|| self.contacts().iter().find_map(Contact::email))
+    }
+
     pub fn is_customer(&self) -> bool {
         self.is_customer
     }

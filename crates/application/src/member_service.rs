@@ -4,6 +4,7 @@ use conta_verde_domain::{
     Actor, CompanyId, Email, Invitation, InvitationId, Role, User, UserId, validate_password,
 };
 
+use crate::text::one_line;
 use crate::{
     ApplicationError, AuthError, EmailMessage, EmailSender, IdentityRepository,
     InvitationRepository, InvitationState, Member, NewInvitation, NewUser, RepositoryError,
@@ -374,13 +375,6 @@ where
         }
         Ok(stored)
     }
-}
-
-/// The text on one line: every control character, a line break included, becomes a space.
-fn one_line(text: &str) -> String {
-    text.chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect()
 }
 
 /// A write that matched no membership means they were removed in the meantime.

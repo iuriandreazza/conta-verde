@@ -149,6 +149,35 @@ describe("purchases", () => {
     expect(screen.getByRole("row", { name: /Torrefação Serra.*Cancelado/ })).toHaveTextContent("5");
   });
 
+  it("sends an approved order to the supplier, to the address typed or the one on file, and says why it could not", async () => {
+    let refuse = true;
+    const fetchMock = mockApi(
+      answer([draft, approved], (url, init) =>
+        url.endsWith("/purchase-orders/o2/send") && init?.method === "POST"
+          ? refuse
+            ? { status: 422, body: { error: "there is no e-mail address to send to: register one for the party or give one" } }
+            : { status: 200, body: { to: "compras@example.com", emailed: true } }
+          : undefined,
+      ),
+    );
+    renderAt("/companies/c1/purchases");
+    // Only an order that can be sent has the button.
+    expect(await screen.findByRole("button", { name: "Enviar a compra 2 ao fornecedor" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Enviar a compra 1 ao fornecedor" })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Enviar a compra 2 ao fornecedor" }));
+    const panel = within(await screen.findByRole("region", { name: "Envio da compra 2" }));
+    await userEvent.click(panel.getByRole("button", { name: "Enviar o pedido por e-mail" }));
+    expect(await panel.findByRole("alert")).toHaveTextContent("there is no e-mail address");
+
+    refuse = false;
+    await userEvent.type(panel.getByLabelText("Enviar para"), "compras@example.com");
+    await userEvent.click(panel.getByRole("button", { name: "Enviar o pedido por e-mail" }));
+    expect(await panel.findByText("Enviado para compras@example.com.")).toBeInTheDocument();
+    const posts = calls(fetchMock, "POST");
+    expect(JSON.parse(String(posts[1][1]?.body))).toEqual({ to: "compras@example.com" });
+  });
+
   it("exports the orders as they are filtered, with the supplier's name and the total as a plain decimal", async () => {
     const saved = stubDownloads();
     mockApi(answer([draft]));

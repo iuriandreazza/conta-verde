@@ -19,8 +19,10 @@ import { FilterTiles, type TileOption } from "../components/FilterTiles";
 import { FileTextIcon } from "../components/icons/file-text";
 import { HistoryIcon } from "../components/icons/history";
 import { PlusIcon } from "../components/icons/plus";
+import { SendIcon } from "../components/icons/send";
 import { SquarePenIcon } from "../components/icons/square-pen";
 import { ListRow } from "../components/ListRow";
+import { MailPanel } from "../components/MailPanel";
 import { ListTools } from "../components/ListTools";
 import { MenuButton } from "../components/MenuButton";
 import { Notice } from "../components/Notice";
@@ -54,7 +56,7 @@ const FIELD_LABELS: Record<string, string> = {
   status: "Situação",
 };
 
-type PanelKind = "details" | "receive" | "approve" | "cancel" | "close" | "history";
+type PanelKind = "details" | "receive" | "approve" | "cancel" | "close" | "history" | "send";
 type Panel = { kind: PanelKind; id: string };
 type Action = "approve" | "cancel" | "close";
 
@@ -399,6 +401,19 @@ export function PurchasesPage() {
                               Cancelar
                             </Button>
                           )}
+                          {canWrite && (order.status === "approved" || order.status === "partially_received") && (
+                            <Button
+                              iconOnly
+                              type="button"
+                              variant="ghost"
+                              icon={SendIcon}
+                              aria-label={`Enviar a compra ${order.number} ao fornecedor`}
+                              aria-expanded={isOpen("send", order.id)}
+                              onClick={() => toggle("send", order.id)}
+                            >
+                              Enviar ao fornecedor
+                            </Button>
+                          )}
                           <Button
                             iconOnly
                             type="button"
@@ -441,6 +456,17 @@ export function PurchasesPage() {
                                 </Button>
                               </div>
                             </div>
+                          </td>
+                        </tr>
+                      )}
+                      {panel?.id === order.id && panel.kind === "send" && (
+                        <tr>
+                          <td colSpan={6} role="region" aria-label={`Envio da compra ${order.number}`}>
+                            <MailPanel
+                              what="o pedido"
+                              send={(to) => api.sendPurchaseOrder(companyId, order.id, to)}
+                              onClose={() => setPanel(null)}
+                            />
                           </td>
                         </tr>
                       )}
