@@ -12903,6 +12903,21 @@ pub async fn runs_the_purchase_lifecycle<P, E, F, R, T>(
         (PurchaseOrderQuery::default().searching("pão fran"), 3),
         (PurchaseOrderQuery::default().searching("2"), 1),
         (PurchaseOrderQuery::default().searching("%"), 0),
+        // The orders of the seed were all made on 2026-11-06, and the days are included.
+        (
+            PurchaseOrderQuery::default()
+                .ordered_from(CalendarDate::parse("2026-11-06").unwrap())
+                .ordered_until(CalendarDate::parse("2026-11-06").unwrap()),
+            3,
+        ),
+        (
+            PurchaseOrderQuery::default().ordered_from(CalendarDate::parse("2026-11-07").unwrap()),
+            0,
+        ),
+        (
+            PurchaseOrderQuery::default().ordered_until(CalendarDate::parse("2026-11-05").unwrap()),
+            0,
+        ),
     ] {
         let found = purchases.list(company, &query, None, None).await.unwrap();
         assert_eq!(found.items.len(), expected, "{query:?}");
@@ -12926,6 +12941,14 @@ pub async fn runs_the_purchase_lifecycle<P, E, F, R, T>(
         (
             PurchaseOrderQuery::default().with_supplier(seed.customer),
             vec![],
+        ),
+        (
+            PurchaseOrderQuery::default().ordered_from(CalendarDate::parse("2026-11-07").unwrap()),
+            vec![],
+        ),
+        (
+            PurchaseOrderQuery::default().ordered_until(CalendarDate::parse("2026-11-06").unwrap()),
+            vec![(PurchaseStatus::Draft, 3)],
         ),
     ] {
         assert_eq!(

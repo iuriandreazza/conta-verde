@@ -141,7 +141,8 @@ describe("purchases", () => {
     expect(row).toHaveTextContent("1");
     expect(row).toHaveTextContent("06/11/2026");
     expect(row).toHaveTextContent("R$ 255,00");
-    expect(row).toHaveTextContent("Previsto para 20/11/2026");
+    // The expected day has its own column now.
+    expect(row).toHaveTextContent("20/11/2026");
     expect(row).toHaveTextContent("Rascunho");
     expect(screen.getByRole("row", { name: /Torrefação Serra.*Aprovado/ })).toHaveTextContent("2");
     expect(screen.getByRole("row", { name: /Torrefação Serra.*Recebido em parte/ })).toHaveTextContent("3");
@@ -176,6 +177,22 @@ describe("purchases", () => {
     expect(await panel.findByText("Enviado para compras@example.com.")).toBeInTheDocument();
     const posts = calls(fetchMock, "POST");
     expect(JSON.parse(String(posts[1][1]?.body))).toEqual({ to: "compras@example.com" });
+  });
+
+  it("shows the number of the invoice an order came from, and asks only for the period the person chooses", async () => {
+    const key = "35" + "2611" + "11222333000181" + "55" + "001" + "000001234" + "1" + "12345678" + "0";
+    const fetchMock = mockApi(answer([{ ...received, invoice_key: key }, draft]));
+    renderAt("/companies/c1/purchases");
+
+    expect(await screen.findByRole("row", { name: /Torrefação Serra.*1234/ })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Nº da NF" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Previsão" })).toBeInTheDocument();
+
+    // No period at first; choosing one narrows the list and the counts alike.
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("from="))).toBe(false);
+    await userEvent.selectOptions(screen.getByLabelText("Período"), "year");
+    await vi.waitFor(() => expect(fetchMock.mock.calls.some(([url]) => /purchase-orders\?from=\d{4}-01-01&to=\d{4}-12-31/.test(String(url)))).toBe(true));
+    expect(fetchMock.mock.calls.some(([url]) => /status-counts\?from=\d{4}-01-01&to=\d{4}-12-31/.test(String(url)))).toBe(true);
   });
 
   it("exports the orders as they are filtered, with the supplier's name and the total as a plain decimal", async () => {

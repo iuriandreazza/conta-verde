@@ -25,6 +25,7 @@ import { ListRow } from "../components/ListRow";
 import { MailPanel } from "../components/MailPanel";
 import { ListTools } from "../components/ListTools";
 import { MenuButton } from "../components/MenuButton";
+import { PeriodFilter } from "../components/PeriodFilter";
 import { Notice } from "../components/Notice";
 import { PageHeader } from "../components/PageHeader";
 import { PurchaseForm } from "../components/PurchaseForm";
@@ -32,8 +33,9 @@ import { Sheet } from "../components/Sheet";
 import { Spinner } from "../components/Spinner";
 import { useCreation, useOnCreated } from "../creation/CreationProvider";
 import { formatDecimal, formatMoney, toInputDecimal } from "../lib/decimal";
+import { invoiceNumber } from "../lib/invoice";
 import { useCounts } from "../lib/useCounts";
-import { formatDate, isIsoDate } from "../lib/entryInstallments";
+import { formatDate, isIsoDate, wholeDate } from "../lib/entryInstallments";
 import { PURCHASE_STATUS_LABELS, purchaseStatusClass } from "../lib/purchaseStatus";
 import { leftByLine, receivedByLine } from "../lib/receiving";
 import { quantityToApi, toQuantity } from "../lib/saleLines";
@@ -105,11 +107,12 @@ export function PurchasesPage() {
 
   const { items, setItems, nextCursor, loading, loadingMore, error, applied, reload, loadMore } =
     usePagedList<PurchaseOrder, PurchaseOrderFilters>(
-      (applied, after) => api.listPurchaseOrders(companyId, applied, after),
+      (applied, after) => api.listPurchaseOrders(companyId, { ...applied, from: wholeDate(applied.from), to: wholeDate(applied.to) }, after),
       filters,
     );
-  const isFiltered = applied.q !== "" || applied.status !== "";
-  const counts = useCounts(() => api.getPurchaseStatusCounts(companyId, applied.q), items, !loading);
+  const today = todayIso();
+  const isFiltered = applied.q !== "" || applied.status !== "" || applied.from !== "" || applied.to !== "";
+  const counts = useCounts(() => api.getPurchaseStatusCounts(companyId, { q: applied.q, from: wholeDate(applied.from), to: wholeDate(applied.to) }), items, !loading);
   const tiles: TileOption<PurchaseOrderFilters["status"]>[] = [
     { key: "", label: "Todas", count: counts === null ? null : Object.values(counts).reduce((sum, n) => sum + n, 0) },
     ...(Object.entries(PURCHASE_STATUS_LABELS) as [PurchaseStatus, string][]).map(([key, label]) => ({
@@ -220,7 +223,7 @@ export function PurchasesPage() {
         <ListTools
           filename="compras"
           header={PURCHASE_COLUMNS}
-          fetchPage={(after) => api.listPurchaseOrders(companyId, applied, after)}
+          fetchPage={(after) => api.listPurchaseOrders(companyId, { ...applied, from: wholeDate(applied.from), to: wholeDate(applied.to) }, after)}
           toRow={(order) => [
             String(order.number),
             names.get(order.supplier_id) ?? "",
@@ -240,6 +243,11 @@ export function PurchasesPage() {
             value={filters.status}
             options={tiles}
             onChange={(status) => setFilters({ ...filters, status })}
+          />
+          <PeriodFilter
+            value={{ from: filters.from, to: filters.to }}
+            onChange={(span) => setFilters({ ...filters, ...span })}
+            today={today}
           />
           <div className="filters" role="search">
             <label>
@@ -298,6 +306,8 @@ export function PurchasesPage() {
                     <th>Nº</th>
                     <th>Fornecedor</th>
                     <th>Data</th>
+                    <th>Previsão</th>
+                    <th>Nº da NF</th>
                     <th className="num">Total</th>
                     <th>Situação</th>
                     <th>
@@ -314,10 +324,11 @@ export function PurchasesPage() {
                           <div className="cell-title">{names.get(order.supplier_id) ?? ""}</div>
                           <div className="muted">
                             {order.lines.length} {order.lines.length === 1 ? "item" : "itens"}
-                            {order.expected_on !== null && ` · Previsto para ${formatDate(order.expected_on)}`}
                           </div>
                         </td>
                         <td>{formatDate(order.ordered_on)}</td>
+                        <td>{order.expected_on === null ? "—" : formatDate(order.expected_on)}</td>
+                        <td>{invoiceNumber(order.invoice_key) || "—"}</td>
                         <td className="num">{formatMoney(order.total)}</td>
                         <td>
                           <span className={purchaseStatusClass(order.status)}>{PURCHASE_STATUS_LABELS[order.status]}</span>
@@ -429,21 +440,21 @@ export function PurchasesPage() {
                       </ListRow>
                       {panel?.id === order.id && panel.kind === "details" && (
                         <tr>
-                          <td colSpan={6} role="region" aria-label={`Detalhes da compra ${order.number}`}>
+                          <td colSpan={8} role="region" aria-label={`Detalhes da compra ${order.number}`}>
                             <DetailsPanel companyId={companyId} order={order} names={names} canWrite={canWrite} onBusyChange={setActing} />
                           </td>
                         </tr>
                       )}
                       {panel?.id === order.id && panel.kind === "receive" && (
                         <tr>
-                          <td colSpan={6} role="region" aria-label={`Recebimento da compra ${order.number}`}>
+                          <td colSpan={8} role="region" aria-label={`Recebimento da compra ${order.number}`}>
                             <ReceivePanel companyId={companyId} order={order} onBusyChange={setActing} onReceived={(receipt) => void received(order, receipt)} />
                           </td>
                         </tr>
                       )}
                       {panel?.id === order.id && (panel.kind === "approve" || panel.kind === "cancel" || panel.kind === "close") && (
                         <tr>
-                          <td colSpan={6} role="region" aria-label={`Confirmação da compra ${order.number}`}>
+                          <td colSpan={8} role="region" aria-label={`Confirmação da compra ${order.number}`}>
                             <div className="settlements">
                               <p>{CONFIRMATIONS[panel.kind].text(order)}</p>
                               <Notice message={actionError} />
@@ -461,7 +472,7 @@ export function PurchasesPage() {
                       )}
                       {panel?.id === order.id && panel.kind === "send" && (
                         <tr>
-                          <td colSpan={6} role="region" aria-label={`Envio da compra ${order.number}`}>
+                          <td colSpan={8} role="region" aria-label={`Envio da compra ${order.number}`}>
                             <MailPanel
                               what="o pedido"
                               send={(to) => api.sendPurchaseOrder(companyId, order.id, to)}
@@ -472,7 +483,7 @@ export function PurchasesPage() {
                       )}
                       {panel?.id === order.id && panel.kind === "history" && (
                         <tr>
-                          <td colSpan={6} role="region" aria-label={`Histórico da compra ${order.number}`}>
+                          <td colSpan={8} role="region" aria-label={`Histórico da compra ${order.number}`}>
                             <History
                               load={historyLoader(order.id)}
                               fieldLabel={(field) => FIELD_LABELS[field] ?? field}
