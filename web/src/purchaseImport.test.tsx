@@ -247,6 +247,17 @@ describe("purchase entry from an NF-e", () => {
     expect(url.searchParams.get("payment_term_id")).toBe("t1");
   });
 
+  it("does not go on with a day that is not a whole date, like a year typed half way", async () => {
+    mockApi(answer(invoice()));
+    renderAt("/companies/c1/purchases");
+    const sheet = await readInvoice();
+    await next(sheet);
+    await userEvent.selectOptions(await sheet.findByLabelText("Categoria das contas a pagar"), "cat1");
+    fireEvent.change(sheet.getByLabelText("Dia em que a mercadoria chegou"), { target: { value: "0002-11-06" } });
+    expect(sheet.getByText("Informe o dia em que a mercadoria chegou.")).toBeInTheDocument();
+    expect(sheet.getByRole("button", { name: "Continuar" })).toBeDisabled();
+  });
+
   it("shows the API's reason on the last step when the entry fails, and stays there", async () => {
     mockApi(
       answer(invoice({ items: invoice().items.map((item) => ({ ...item, product_id: "pr1" })) }), (url, init) =>

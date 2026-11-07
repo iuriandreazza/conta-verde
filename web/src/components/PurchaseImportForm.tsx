@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import type { Category, CostCenter, InvoiceEntryParams, InvoicePreview, PaymentTerm, Product } from "../api";
 import { treeRows } from "../lib/categoryTree";
 import { formatDecimal, formatMoney } from "../lib/decimal";
-import { formatDate, isIsoDate } from "../lib/entryInstallments";
+import { formatDate, wholeDate } from "../lib/entryInstallments";
 import { BackButton } from "./BackButton";
 import { Button } from "./Button";
 import { CheckIcon } from "./icons/check";
@@ -142,7 +142,7 @@ function EnterInvoice({ companyId, targets, preview, pending, error, onEnter, on
   // What lets each step go on: the rest is chosen on the steps after it.
   const stepProblem: Record<number, string | null> = {
     1: unregistered ? "Cadastre o fornecedor para continuar." : alreadyEntered ? "Esta nota já foi entrada." : null,
-    2: categoryId === "" ? "Escolha a categoria das contas a pagar." : !isIsoDate(receivedOn) ? "Informe o dia em que a mercadoria chegou." : null,
+    2: categoryId === "" ? "Escolha a categoria das contas a pagar." : wholeDate(receivedOn) === "" ? "Informe o dia em que a mercadoria chegou." : null,
     3: withoutProduct > 0 ? "Escolha o produto de cada item." : null,
   };
 
