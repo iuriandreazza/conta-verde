@@ -427,19 +427,19 @@ where
                 .products
                 .list_by_company(company_id, &query, cursor.as_ref(), limit + 1)
                 .await?;
-            let (products, next): (Vec<Product>, Option<NameCursor>) = split_page(rows, limit);
-            let ids: Vec<ProductId> = products.iter().map(Product::id).collect();
+            // The extra row is read too, so that `found` holding more than a page says exactly that more exists.
+            let exhausted = rows.len() <= limit;
+            cursor = rows.last().map(NameCursor::from);
+            let ids: Vec<ProductId> = rows.iter().map(Product::id).collect();
             let balances = self.movements.balances(company_id, &ids, on).await?;
             found.extend(
-                products
-                    .into_iter()
+                rows.into_iter()
                     .zip(balances)
                     .map(|(product, (_, balance))| StockPosition { product, balance })
                     .filter(|position| situation.is_none_or(|wanted| position.is(wanted))),
             );
-            match next {
-                Some(more) if found.len() <= limit => cursor = Some(more),
-                _ => break,
+            if exhausted || found.len() > limit {
+                break;
             }
         }
         let (items, next) = split_page(found, limit);

@@ -239,16 +239,24 @@ pub(crate) struct StatusCountsResponse {
     cancelled: u64,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct StatusCountsQuery {
+    /// Text found in the number, the notes or a line's description.
+    q: Option<String>,
+}
+
 /// What the tiles above the list show: the orders that match the search and supplier, per status.
 pub(crate) async fn purchase_order_status_counts<X: Ports>(
     State(state): State<SharedState<X>>,
     CompanyAccess(company_id, _): CompanyAccess,
-    ApiQuery(query): ApiQuery<ListQuery>,
+    ApiQuery(query): ApiQuery<StatusCountsQuery>,
 ) -> Result<Json<StatusCountsResponse>, ApiError> {
-    let counts = state
-        .purchases
-        .status_counts(company_id, &query.order_query()?)
-        .await?;
+    let mut filter = PurchaseOrderQuery::default();
+    if let Some(text) = list_params::search(query.q.as_deref())? {
+        filter = filter.searching(text);
+    }
+    let counts = state.purchases.status_counts(company_id, &filter).await?;
     let of = |wanted: PurchaseStatus| {
         counts
             .iter()
