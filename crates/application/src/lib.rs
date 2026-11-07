@@ -163,8 +163,8 @@ pub use stock_repository::{
     MovementTotals, StockFloor, StockMovementQuery, StockMovementRepository,
 };
 pub use stock_service::{
-    CountStock, DocumentStock, MovementSummary, StockAlert, StockMovementPage, StockPosition,
-    StockPositionPage, StockService, StockValuation, ValuationRow,
+    CountStock, DocumentStock, MovementSummary, PositionSummary, StockAlert, StockMovementPage,
+    StockPosition, StockPositionPage, StockService, StockValuation, ValuationRow,
 };
 pub use stock_settings_repository::StockSettingsRepository;
 pub use transfer_repository::{

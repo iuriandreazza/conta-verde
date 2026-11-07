@@ -18,6 +18,38 @@ use crate::postgres_audit;
 
 const INVOICE_UNIQUE_INDEX: &str = "purchase_orders_invoice_key_key";
 
+/// ` WHERE company_id = ... AND ...` for what `query` narrows to, shared by the list and the counts so that
+/// both agree on what matches.
+fn push_filters(
+    sql: &mut QueryBuilder<'_, Postgres>,
+    company_id: CompanyId,
+    query: &PurchaseOrderQuery,
+) {
+    sql.push(" WHERE company_id = ")
+        .push_bind(company_id.as_uuid());
+    if let Some(status) = query.status() {
+        sql.push(" AND status = ").push_bind(status.as_str());
+    }
+    if let Some(supplier) = query.supplier() {
+        sql.push(" AND supplier_id = ")
+            .push_bind(supplier.as_uuid());
+    }
+    if let Some(text) = query.search() {
+        // `strpos` instead of `LIKE` so that `%` and `_` in the text mean themselves.
+        sql.push(" AND (number::text = ")
+            .push_bind(text.to_owned())
+            .push(" OR strpos(lower(coalesce(notes, '')), lower(")
+            .push_bind(text.to_owned())
+            .push(
+                ")) > 0 OR EXISTS (SELECT 1 FROM purchase_order_items i \
+                   WHERE i.purchase_id = purchase_orders.id \
+                   AND strpos(lower(i.description), lower(",
+            )
+            .push_bind(text.to_owned())
+            .push(")) > 0))");
+    }
+}
+
 const SELECT_ORDERS: &str = "SELECT id, company_id, number, supplier_id, \
      to_char(ordered_on, 'YYYY-MM-DD') AS ordered_on, \
      to_char(expected_on, 'YYYY-MM-DD') AS expected_on, payment_term_id, category_id, \
@@ -246,29 +278,7 @@ impl PurchaseOrderRepository for PostgresPurchaseOrderRepository {
         limit: usize,
     ) -> Result<Vec<PurchaseOrder>, RepositoryError> {
         let mut sql = QueryBuilder::<Postgres>::new(SELECT_ORDERS);
-        sql.push(" WHERE company_id = ")
-            .push_bind(company_id.as_uuid());
-        if let Some(status) = query.status() {
-            sql.push(" AND status = ").push_bind(status.as_str());
-        }
-        if let Some(supplier) = query.supplier() {
-            sql.push(" AND supplier_id = ")
-                .push_bind(supplier.as_uuid());
-        }
-        if let Some(text) = query.search() {
-            // `strpos` instead of `LIKE` so that `%` and `_` in the text mean themselves.
-            sql.push(" AND (number::text = ")
-                .push_bind(text.to_owned())
-                .push(" OR strpos(lower(coalesce(notes, '')), lower(")
-                .push_bind(text.to_owned())
-                .push(
-                    ")) > 0 OR EXISTS (SELECT 1 FROM purchase_order_items i \
-                       WHERE i.purchase_id = purchase_orders.id \
-                       AND strpos(lower(i.description), lower(",
-                )
-                .push_bind(text.to_owned())
-                .push(")) > 0))");
-        }
+        push_filters(&mut sql, company_id, query);
         let (comparison, direction) = match query.sort() {
             NumberSort::NumberAsc => (">", "ASC"),
             NumberSort::NumberDesc => ("<", "DESC"),
@@ -294,6 +304,31 @@ impl PurchaseOrderRepository for PostgresPurchaseOrderRepository {
         let orders = with_lines(&mut tx, rows).await?;
         tx.commit().await.map_err(storage_error)?;
         Ok(orders)
+    }
+
+    async fn count_by_status(
+        &self,
+        company_id: CompanyId,
+        query: &PurchaseOrderQuery,
+    ) -> Result<Vec<(PurchaseStatus, u64)>, RepositoryError> {
+        let mut sql =
+            QueryBuilder::<Postgres>::new("SELECT status, count(*) AS total FROM purchase_orders");
+        push_filters(&mut sql, company_id, &query.clone().any_status());
+        sql.push(" GROUP BY status");
+        let rows = sql
+            .build()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(storage_error)?;
+        rows.iter()
+            .map(|row| {
+                let status: String = row.get("status");
+                let total: i64 = row.get("total");
+                let status = PurchaseStatus::parse(&status)
+                    .ok_or_else(|| RepositoryError::Storage(format!("unknown status {status}")))?;
+                Ok((status, u64::try_from(total).unwrap_or(0)))
+            })
+            .collect()
     }
 
     async fn save_receipt(

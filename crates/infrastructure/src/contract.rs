@@ -50,6 +50,7 @@ use conta_verde_domain::{
 };
 use conta_verde_domain::{BillingCycle, CommissionRuleDraft, ContractDraft, ContractStatus};
 use conta_verde_domain::{ChargeMethod, ChargeStatus};
+use conta_verde_domain::{Decimal, PriceListDraft, PriceListItemDraft, StockSituation};
 use conta_verde_domain::{
     EntryOrigin, ReturnItemDraft, SaleDraft, SaleReturn, SaleReturnDraft, SaleReturnId, SaleStatus,
     sale_return_creation_changes,
@@ -57,7 +58,6 @@ use conta_verde_domain::{
 use conta_verde_domain::{InstallmentDraft, payment_term_changes, payment_term_creation_changes};
 use conta_verde_domain::{LineDraft, QuoteDraft, QuoteStatus};
 use conta_verde_domain::{PaymentEvent, PaymentEventId, PaymentEventKind, PaymentEventOutcome};
-use conta_verde_domain::{PriceListDraft, PriceListItemDraft};
 use conta_verde_domain::{
     PurchaseOrderDraft, PurchaseReceiptDraft, PurchaseReceiptId, PurchaseStatus, ReceiptItemDraft,
 };
@@ -12722,6 +12722,40 @@ pub async fn runs_the_purchase_lifecycle<P, E, F, R, T>(
         assert_eq!(found.items.len(), expected, "{query:?}");
     }
 
+    // The counts per status ignore the query's own status, follow its search and supplier, and stay in the company.
+    let counts = |orders: Vec<(PurchaseStatus, u64)>| {
+        let mut orders = orders;
+        orders.sort_by_key(|(status, _)| status.as_str());
+        orders
+    };
+    for (query, expected) in [
+        (
+            PurchaseOrderQuery::default().with_status(PurchaseStatus::Received),
+            vec![(PurchaseStatus::Draft, 3)],
+        ),
+        (
+            PurchaseOrderQuery::default().searching("2"),
+            vec![(PurchaseStatus::Draft, 1)],
+        ),
+        (
+            PurchaseOrderQuery::default().with_supplier(seed.customer),
+            vec![],
+        ),
+    ] {
+        assert_eq!(
+            counts(purchases.status_counts(company, &query).await.unwrap()),
+            expected,
+            "{query:?}"
+        );
+    }
+    assert!(
+        purchases
+            .status_counts(other_company, &PurchaseOrderQuery::default())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
     // A draft changes; one that changes nothing records nothing.
     let mut edit = purchase_draft(entry_seed, seed);
     edit.lines[0].quantity = "12".into();
@@ -12766,6 +12800,19 @@ pub async fn runs_the_purchase_lifecycle<P, E, F, R, T>(
     // Approved: its items are fixed.
     let approved = purchases.approve(company, &ana, first.id()).await.unwrap();
     assert_eq!(approved.status(), PurchaseStatus::Approved);
+    assert_eq!(
+        counts(
+            purchases
+                .status_counts(company, &PurchaseOrderQuery::default())
+                .await
+                .unwrap()
+        ),
+        vec![
+            (PurchaseStatus::Approved, 1),
+            (PurchaseStatus::Cancelled, 1),
+            (PurchaseStatus::Draft, 1),
+        ]
+    );
     for error in [
         purchases
             .approve(company, &ana, first.id())
@@ -13341,6 +13388,7 @@ pub async fn runs_the_stock_ledger<M, P, St>(
             None,
             None,
             Some(day("2026-11-03")),
+            None,
         )
         .await
         .unwrap();
@@ -13353,6 +13401,68 @@ pub async fn runs_the_stock_ledger<M, P, St>(
     assert_eq!(
         state(positions.items[2].balance),
         ("0".into(), "0".into(), None)
+    );
+
+    // The situations filter the same products page by page, and the summary counts them without a page.
+    let on = Some(day("2026-11-03"));
+    for situation in [
+        StockSituation::InStock,
+        StockSituation::BelowMinimum,
+        StockSituation::Depleted,
+    ] {
+        let expected: Vec<&str> = positions
+            .items
+            .iter()
+            .filter(|position| position.is(situation))
+            .map(|position| position.product.name())
+            .collect();
+        let mut seen: Vec<String> = Vec::new();
+        let mut after = None;
+        loop {
+            let page = stock
+                .positions(
+                    company,
+                    ProductQuery::default(),
+                    after.as_ref(),
+                    Some(1),
+                    on,
+                    Some(situation),
+                )
+                .await
+                .unwrap();
+            seen.extend(page.items.iter().map(|p| p.product.name().to_owned()));
+            match page.next {
+                Some(cursor) => after = Some(cursor),
+                None => break,
+            }
+        }
+        assert_eq!(seen, expected, "{situation:?}");
+    }
+    let summary = stock
+        .position_summary(company, ProductQuery::default(), on)
+        .await
+        .unwrap();
+    let count = |situation| {
+        positions
+            .items
+            .iter()
+            .filter(|position| position.is(situation))
+            .count() as u64
+    };
+    assert_eq!(summary.total, 3);
+    assert_eq!(summary.in_stock, count(StockSituation::InStock));
+    assert_eq!(summary.below_minimum, count(StockSituation::BelowMinimum));
+    assert_eq!(summary.depleted, count(StockSituation::Depleted));
+    assert!(positions.items[0].is(StockSituation::InStock));
+    assert!(positions.items[2].is(StockSituation::Depleted));
+    assert_eq!(
+        summary.value,
+        positions
+            .items
+            .iter()
+            .map(|position| position.balance.value())
+            .sum::<Decimal>()
+            .normalize()
     );
 
     // Two writes for the same stock at once: one lands, the other is valued again against what is left and

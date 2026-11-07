@@ -1085,6 +1085,9 @@ export interface PurchaseOrderFilters {
 
 export const NO_PURCHASE_FILTERS: PurchaseOrderFilters = { q: "", status: "", sort: "-number" };
 
+/** How many orders match the search in each status, for the tiles of the list. */
+export type PurchaseStatusCounts = Record<PurchaseStatus, number>;
+
 export interface ReceiptItem {
   /** The line's place in the order, from 1. */
   line: number;
@@ -1134,14 +1137,27 @@ export interface StockPositionPage {
   next_cursor: string | null;
 }
 
+export type StockSituation = "in_stock" | "below_minimum" | "depleted";
+
 export interface StockPositionFilters {
   q: string;
+  /** Only the products in this situation; empty is every product. */
+  situation: "" | StockSituation;
   /** `YYYY-MM-DD`: the movements through this day; empty is now. */
   on: string;
   sort: "name" | "-name";
 }
 
-export const NO_POSITION_FILTERS: StockPositionFilters = { q: "", on: "", sort: "name" };
+export const NO_POSITION_FILTERS: StockPositionFilters = { q: "", situation: "", on: "", sort: "name" };
+
+/** The products that match the search, counted by situation, and what they hold (decimal string, in reais). */
+export interface StockPositionSummary {
+  total: number;
+  in_stock: number;
+  below_minimum: number;
+  depleted: number;
+  value: string;
+}
 
 export interface StockMovement {
   id: string;
@@ -2015,6 +2031,10 @@ export const api = {
     const query = params.size > 0 ? `?${params}` : "";
     return request<PurchaseOrderPage>(`/companies/${companyId}/purchase-orders${query}`);
   },
+  getPurchaseStatusCounts: (companyId: string, q: string) => {
+    const query = q ? `?${new URLSearchParams({ q })}` : "";
+    return request<PurchaseStatusCounts>(`/companies/${companyId}/purchase-orders/status-counts${query}`);
+  },
   getPurchaseOrder: (companyId: string, id: string) =>
     request<PurchaseOrder>(`/companies/${companyId}/purchase-orders/${id}`),
   createPurchaseOrder: (companyId: string, input: PurchaseOrderInput) =>
@@ -2041,11 +2061,19 @@ export const api = {
   listStockPositions: (companyId: string, filters: StockPositionFilters = NO_POSITION_FILTERS, after?: string) => {
     const params = new URLSearchParams();
     if (filters.q) params.set("q", filters.q);
+    if (filters.situation) params.set("situation", filters.situation);
     if (filters.on) params.set("on", filters.on);
     if (filters.sort !== NO_POSITION_FILTERS.sort) params.set("sort", filters.sort);
     if (after) params.set("after", after);
     const query = params.size > 0 ? `?${params}` : "";
     return request<StockPositionPage>(`/companies/${companyId}/stock/positions${query}`);
+  },
+  getStockPositionSummary: (companyId: string, filters: Pick<StockPositionFilters, "q" | "on">) => {
+    const params = new URLSearchParams();
+    if (filters.q) params.set("q", filters.q);
+    if (filters.on) params.set("on", filters.on);
+    const query = params.size > 0 ? `?${params}` : "";
+    return request<StockPositionSummary>(`/companies/${companyId}/stock/positions/summary${query}`);
   },
   listStockMovements: (companyId: string, filters: StockMovementFilters = NO_MOVEMENT_FILTERS, after?: string) => {
     const params = new URLSearchParams();

@@ -5,7 +5,7 @@ use conta_verde_domain::{
     Actor, AuditAction, CalendarDate, CompanyId, Decimal, DomainError, InventoryCount,
     InventoryCountId, Product, ProductId, ProductKind, PurchaseOrder, PurchaseReceipt, Sale,
     SaleId, SaleReturn, StockBalance, StockMovement, StockMovementDraft, StockMovementId,
-    StockMovementKind, StockOrigin, StockOriginKind, StockSettings, round_to_cents,
+    StockMovementKind, StockOrigin, StockOriginKind, StockSettings, StockSituation, round_to_cents,
     stock_movement_creation_changes, stock_settings_changes, stock_settings_creation_changes,
 };
 use uuid::Uuid;
@@ -114,6 +114,33 @@ pub struct StockMovementPage {
 pub struct StockPosition {
     pub product: Product,
     pub balance: StockBalance,
+}
+
+impl From<&StockPosition> for NameCursor {
+    fn from(position: &StockPosition) -> Self {
+        Self::from(&position.product)
+    }
+}
+
+impl StockPosition {
+    pub fn is(&self, situation: StockSituation) -> bool {
+        let minimum = self
+            .product
+            .minimum_stock()
+            .map(|amount| amount.as_decimal());
+        situation.holds(&self.balance, minimum)
+    }
+}
+
+/// The products that match a search, counted by situation and what they are worth.
+#[derive(Debug, Clone, Default)]
+pub struct PositionSummary {
+    pub total: u64,
+    pub in_stock: u64,
+    pub below_minimum: u64,
+    pub depleted: u64,
+    /// The value of what is on hand, in cents.
+    pub value: Decimal,
 }
 
 #[derive(Debug, Clone)]
@@ -379,8 +406,9 @@ where
         Ok(StockMovementPage { items, next })
     }
 
-    /// What the products of a page have, through `on` when it is given (every movement otherwise). Only products
-    /// have stock: services are left out.
+    /// What the products of a page have, through `on` when it is given (every movement otherwise), optionally only
+    /// those in `situation`. Only products have stock: services are left out. The products are scanned in the
+    /// order of the query until the page is full, so a situation that few products are in costs more reads.
     pub async fn positions(
         &self,
         company_id: CompanyId,
@@ -388,31 +416,67 @@ where
         after: Option<&NameCursor>,
         limit: Option<usize>,
         on: Option<CalendarDate>,
+        situation: Option<StockSituation>,
     ) -> Result<StockPositionPage, ApplicationError> {
         let limit = clamp_limit(limit);
-        let rows = self
-            .products
-            .list_by_company(
-                company_id,
-                &query.of_kind(ProductKind::Product),
-                after,
-                limit + 1,
-            )
-            .await?;
-        let (products, next): (Vec<Product>, Option<NameCursor>) = split_page(rows, limit);
-        let ids: Vec<ProductId> = products.iter().map(Product::id).collect();
-        let balances = self.movements.balances(company_id, &ids, on).await?;
-        let items = products
-            .into_iter()
-            .zip(balances)
-            .map(|(product, (_, balance))| StockPosition { product, balance })
-            .collect();
+        let query = query.of_kind(ProductKind::Product);
+        let mut cursor = after.cloned();
+        let mut found: Vec<StockPosition> = Vec::new();
+        loop {
+            let rows = self
+                .products
+                .list_by_company(company_id, &query, cursor.as_ref(), limit + 1)
+                .await?;
+            let (products, next): (Vec<Product>, Option<NameCursor>) = split_page(rows, limit);
+            let ids: Vec<ProductId> = products.iter().map(Product::id).collect();
+            let balances = self.movements.balances(company_id, &ids, on).await?;
+            found.extend(
+                products
+                    .into_iter()
+                    .zip(balances)
+                    .map(|(product, (_, balance))| StockPosition { product, balance })
+                    .filter(|position| situation.is_none_or(|wanted| position.is(wanted))),
+            );
+            match next {
+                Some(more) if found.len() <= limit => cursor = Some(more),
+                _ => break,
+            }
+        }
+        let (items, next) = split_page(found, limit);
         Ok(StockPositionPage { items, next })
     }
 
+    /// How many of the products that match `query` are in each situation through `on`, and what they hold, for the
+    /// tiles and the footer of the position. Every product is read, like the valuation.
+    pub async fn position_summary(
+        &self,
+        company_id: CompanyId,
+        query: ProductQuery,
+        on: Option<CalendarDate>,
+    ) -> Result<PositionSummary, ApplicationError> {
+        let products = self.all_products(company_id, query).await?;
+        let ids: Vec<ProductId> = products.iter().map(Product::id).collect();
+        let balances = self.movements.balances(company_id, &ids, on).await?;
+        let mut summary = PositionSummary::default();
+        for (product, (_, balance)) in products.into_iter().zip(balances) {
+            let position = StockPosition { product, balance };
+            summary.total += 1;
+            summary.in_stock += u64::from(position.is(StockSituation::InStock));
+            summary.below_minimum += u64::from(position.is(StockSituation::BelowMinimum));
+            summary.depleted += u64::from(position.is(StockSituation::Depleted));
+            summary.value += position.balance.value();
+        }
+        summary.value = summary.value.normalize();
+        Ok(summary)
+    }
+
     /// Every product of kind product, by name: the products are read a page at a time.
-    async fn all_products(&self, company_id: CompanyId) -> Result<Vec<Product>, ApplicationError> {
-        let query = ProductQuery::default().of_kind(ProductKind::Product);
+    async fn all_products(
+        &self,
+        company_id: CompanyId,
+        query: ProductQuery,
+    ) -> Result<Vec<Product>, ApplicationError> {
+        let query = query.of_kind(ProductKind::Product);
         let mut all = Vec::new();
         let mut after: Option<NameCursor> = None;
         loop {
@@ -435,7 +499,9 @@ where
         company_id: CompanyId,
         on: CalendarDate,
     ) -> Result<StockValuation, ApplicationError> {
-        let products = self.all_products(company_id).await?;
+        let products = self
+            .all_products(company_id, ProductQuery::default())
+            .await?;
         let ids: Vec<ProductId> = products.iter().map(Product::id).collect();
         let balances = self.movements.balances(company_id, &ids, Some(on)).await?;
         let mut held: Vec<(Product, StockBalance)> = products
@@ -511,7 +577,9 @@ where
             }
             None => moved.iter().map(|id| (*id, StockBalance::EMPTY)).collect(),
         };
-        let products = self.all_products(company_id).await?;
+        let products = self
+            .all_products(company_id, ProductQuery::default())
+            .await?;
         let mut rows = Vec::with_capacity(totals.len());
         for (((id, sums), (_, opened)), (_, closed)) in totals.into_iter().zip(opening).zip(closing)
         {

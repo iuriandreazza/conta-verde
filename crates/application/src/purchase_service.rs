@@ -1,7 +1,7 @@
 use conta_verde_domain::{
     Actor, AuditAction, AuditRecord, CompanyId, Decimal, DomainError, EntryOrigin, FinancialEntry,
     FinancialEntryDraft, PurchaseOrder, PurchaseOrderDraft, PurchaseOrderId, PurchaseReceipt,
-    PurchaseReceiptDraft, PurchaseReceiptId, ScheduleDraft, purchase_order_changes,
+    PurchaseReceiptDraft, PurchaseReceiptId, PurchaseStatus, ScheduleDraft, purchase_order_changes,
     purchase_order_creation_changes, purchase_receipt_creation_changes,
 };
 
@@ -393,6 +393,15 @@ where
             .await?;
         let (items, next) = split_page(rows, limit);
         Ok(PurchaseOrderPage { items, next })
+    }
+
+    /// How many orders match the search and supplier of `query` in each status, for the tiles of the list.
+    pub async fn status_counts(
+        &self,
+        company_id: CompanyId,
+        query: &PurchaseOrderQuery,
+    ) -> Result<Vec<(PurchaseStatus, u64)>, ApplicationError> {
+        Ok(self.purchases.count_by_status(company_id, query).await?)
     }
 
     async fn find(

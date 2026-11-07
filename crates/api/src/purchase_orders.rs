@@ -230,6 +230,40 @@ pub(crate) async fn list_purchase_orders<X: Ports>(
     }))
 }
 
+#[derive(Serialize)]
+pub(crate) struct StatusCountsResponse {
+    draft: u64,
+    approved: u64,
+    partially_received: u64,
+    received: u64,
+    cancelled: u64,
+}
+
+/// What the tiles above the list show: the orders that match the search and supplier, per status.
+pub(crate) async fn purchase_order_status_counts<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, _): CompanyAccess,
+    ApiQuery(query): ApiQuery<ListQuery>,
+) -> Result<Json<StatusCountsResponse>, ApiError> {
+    let counts = state
+        .purchases
+        .status_counts(company_id, &query.order_query()?)
+        .await?;
+    let of = |wanted: PurchaseStatus| {
+        counts
+            .iter()
+            .find(|(status, _)| *status == wanted)
+            .map_or(0, |(_, count)| *count)
+    };
+    Ok(Json(StatusCountsResponse {
+        draft: of(PurchaseStatus::Draft),
+        approved: of(PurchaseStatus::Approved),
+        partially_received: of(PurchaseStatus::PartiallyReceived),
+        received: of(PurchaseStatus::Received),
+        cancelled: of(PurchaseStatus::Cancelled),
+    }))
+}
+
 pub(crate) async fn register_purchase_order<X: Ports>(
     State(state): State<SharedState<X>>,
     CompanyAccess(company_id, actor): CompanyAccess,
