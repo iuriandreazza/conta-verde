@@ -21,6 +21,7 @@ import { HistoryIcon } from "../components/icons/history";
 import { PlusIcon } from "../components/icons/plus";
 import { SquarePenIcon } from "../components/icons/square-pen";
 import { ListRow } from "../components/ListRow";
+import { ListTools } from "../components/ListTools";
 import { MenuButton } from "../components/MenuButton";
 import { Notice } from "../components/Notice";
 import { PageHeader } from "../components/PageHeader";
@@ -82,6 +83,8 @@ const CONFIRMATIONS: Record<Action, { text: (order: PurchaseOrder) => string; bu
 };
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one instance.
+const PURCHASE_COLUMNS = ["Número", "Fornecedor", "Data", "Previsão", "Situação", "Total"];
+
 export function PurchasesPage() {
   const { companyId = "" } = useParams();
   const canWrite = useCanWrite("purchases");
@@ -200,8 +203,8 @@ export function PurchasesPage() {
         title="Compras"
         description="Pedidos aos fornecedores: cada recebimento, mesmo parcial, gera a conta a pagar do que chegou pelo prazo de pagamento."
       />
-      {canWrite && (
-        <div className="list-actions">
+      <div className="list-actions">
+        {canWrite && (
           <MenuButton
             label="Novo"
             icon={PlusIcon}
@@ -211,8 +214,21 @@ export function PurchasesPage() {
               { key: "invoice", label: "Entrar NF-e (XML)", icon: FileTextIcon, onSelect: () => openCreate("purchaseImport") },
             ]}
           />
-        </div>
-      )}
+        )}
+        <ListTools
+          filename="compras"
+          header={PURCHASE_COLUMNS}
+          fetchPage={(after) => api.listPurchaseOrders(companyId, applied, after)}
+          toRow={(order) => [
+            String(order.number),
+            names.get(order.supplier_id) ?? "",
+            order.ordered_on,
+            order.expected_on ?? "",
+            PURCHASE_STATUS_LABELS[order.status],
+            toInputDecimal(order.total),
+          ]}
+        />
+      </div>
       <Notice message={saved} tone="success" />
       <div>
         <section className="card list-card">
