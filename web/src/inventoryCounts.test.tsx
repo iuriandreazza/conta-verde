@@ -122,6 +122,37 @@ describe("inventory counts", () => {
     });
   });
 
+  it("starts a count from a spreadsheet: the lines come from the file, what it cannot use is said, and the form still checks them", async () => {
+    const fetchMock = mockApi(
+      answer([], (url, init) => (url.endsWith("/inventory-counts") && init?.method === "POST" ? { status: 201, body: open } : undefined)),
+    );
+    renderAt("/companies/c1/inventory-counts");
+    await userEvent.click((await screen.findAllByRole("button", { name: "Novo inventário via planilha" }))[0]);
+    const sheet = within((await screen.findByRole("heading", { name: "Novo inventário via planilha" })).closest("aside")!);
+
+    // The lines wait for the file; they can also be typed.
+    expect(sheet.queryByLabelText("Produto do item 1")).not.toBeInTheDocument();
+    expect(sheet.getByRole("button", { name: "Baixar modelo" })).toBeInTheDocument();
+    const file = new File(["SKU;Contado\ngrao;8\nNADA;3\n"], "contagem.csv", { type: "text/csv" });
+    await userEvent.upload(sheet.getByLabelText("Arquivo da planilha de contagem"), file);
+
+    expect(await sheet.findByLabelText("Produto do item 1")).toHaveValue("pr1");
+    expect(sheet.getByLabelText("Quantidade contada do item 1")).toHaveValue("8");
+    expect(sheet.getByText(/Não foi possível usar uma linha da planilha.*Linha 3: não há produto com o SKU "NADA"/)).toBeInTheDocument();
+    await userEvent.click(sheet.getByRole("button", { name: "Criar inventário" }));
+
+    expect(await screen.findByText(/Inventário nº 1 criado/)).toBeInTheDocument();
+    expect(JSON.parse(String(calls(fetchMock, "POST")[0][1]?.body)).lines).toEqual([{ product_id: "pr1", counted: "8" }]);
+  });
+
+  it("offers the usual form to a count that is typed by hand, with the sheet as an option", async () => {
+    mockApi(answer([]));
+    renderAt("/companies/c1/inventory-counts");
+    const sheet = await openSheet();
+    expect(sheet.getByLabelText("Arquivo da planilha de contagem")).toBeInTheDocument();
+    expect(sheet.queryByRole("button", { name: "Preencher à mão" })).not.toBeInTheDocument();
+  });
+
   it("refuses a count with nothing counted, an ambiguous quantity and a negative one, before asking the API", async () => {
     const fetchMock = mockApi(answer([]));
     renderAt("/companies/c1/inventory-counts");

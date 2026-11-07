@@ -37,6 +37,8 @@ export interface CreateOptions {
   parentId?: string;
   /** An entry starts as a receivable or a payable: "Nova receita", "Nova despesa". */
   kind?: "receivable" | "payable";
+  /** An inventory count starts from a spreadsheet: "Novo inventário via planilha". */
+  viaSheet?: boolean;
 }
 
 export interface CreatorProps {
@@ -58,7 +60,7 @@ const CREATORS: Record<
   sale: { title: "Novo pedido", Creator: SaleCreator },
   purchase: { title: "Nova compra", Creator: PurchaseCreator },
   stockMovement: { title: "Novo movimento de estoque", Creator: StockMovementCreator },
-  inventoryCount: { title: "Novo inventário", Creator: InventoryCountCreator },
+  inventoryCount: { title: (options) => (options.viaSheet ? "Novo inventário via planilha" : "Novo inventário"), Creator: InventoryCountCreator },
   purchaseImport: { title: "Entrada por XML (NF-e)", Creator: PurchaseImportCreator },
   quote: { title: "Novo orçamento", Creator: QuoteCreator },
   contract: { title: "Novo contrato", Creator: ContractCreator },

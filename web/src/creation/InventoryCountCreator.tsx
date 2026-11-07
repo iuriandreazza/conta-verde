@@ -6,7 +6,7 @@ import { useStockProducts } from "../lib/useStockProducts";
 import type { CreatorProps } from "./CreationProvider";
 
 /** The form of a new inventory count, with the products read first to choose from. */
-export function InventoryCountCreator({ companyId, onBusyChange, onCreated, onCancel }: CreatorProps) {
+export function InventoryCountCreator({ companyId, options, onBusyChange, onCreated, onCancel }: CreatorProps) {
   const { products, error: loadError, loaded } = useStockProducts(companyId);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -36,5 +36,15 @@ export function InventoryCountCreator({ companyId, onBusyChange, onCreated, onCa
       <p role="alert">{loadError}</p>
     );
   }
-  return <InventoryCountForm count={null} products={products} pending={saving} error={error} onSubmit={(input) => void save(input)} onCancel={onCancel} />;
+  return (
+    <InventoryCountForm
+      count={null}
+      products={products}
+      viaSheet={options.viaSheet === true}
+      pending={saving}
+      error={error}
+      onSubmit={(input) => void save(input)}
+      onCancel={onCancel}
+    />
+  );
 }

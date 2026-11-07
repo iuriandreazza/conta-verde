@@ -150,6 +150,9 @@ export function InventoryCountsPage() {
           <Button type="button" icon={PlusIcon} onClick={() => openCreate("inventoryCount")}>
             Novo inventário
           </Button>
+          <Button type="button" variant="ghost" onClick={() => openCreate("inventoryCount", { viaSheet: true })}>
+            Novo inventário via planilha
+          </Button>
         </div>
       )}
       <Notice message={saved} tone="success" />
@@ -205,9 +208,14 @@ export function InventoryCountsPage() {
                 Compare o estoque físico com o do sistema: informe o que foi contado e o sistema ajusta as diferenças, ao custo médio, na data da contagem.
               </p>
               {canWrite && (
-                <Button type="button" icon={PlusIcon} onClick={() => openCreate("inventoryCount")}>
-                  Novo inventário
-                </Button>
+                <>
+                  <Button type="button" icon={PlusIcon} onClick={() => openCreate("inventoryCount")}>
+                    Novo inventário
+                  </Button>
+                  <Button type="button" variant="ghost" onClick={() => openCreate("inventoryCount", { viaSheet: true })}>
+                    Novo inventário via planilha
+                  </Button>
+                </>
               )}
             </div>
           ) : (
