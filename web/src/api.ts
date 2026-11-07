@@ -1623,6 +1623,9 @@ export const api = {
   register: (registration: Registration) => post<Profile>("/auth/register", registration),
   login: (email: string, password: string) => post<Profile>("/auth/login", { email, password }),
   logout: () => post<void>("/auth/logout"),
+  /** Always answers the same, whether the address has an account or not. */
+  requestPasswordReset: (email: string) => post<void>("/auth/password-reset", { email }),
+  resetPassword: (token: string, password: string) => post<void>("/auth/password-reset/confirm", { token, password }),
   me: () => request<Profile>("/auth/me"),
   /** A cursor only continues the list that produced it, so pass the same filters with it. */
   listParties: (companyId: string, filters: PartyFilters = NO_FILTERS, after?: string) => {

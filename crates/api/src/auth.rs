@@ -171,3 +171,36 @@ fn started<X: Ports>(state: &AppState<X>, signed_in: &SignedIn) -> SetCookie {
 fn body(signed_in: &SignedIn) -> Json<ProfileResponse> {
     Json(ProfileResponse::from(&signed_in.profile))
 }
+
+#[derive(Deserialize)]
+pub(crate) struct PasswordResetRequest {
+    email: String,
+}
+
+/// Asks for a link to choose a new password. It answers `202` for any address, so it tells nobody who has an account;
+/// the link is only in the e-mail.
+pub(crate) async fn request_password_reset<X: Ports>(
+    State(state): State<SharedState<X>>,
+    ApiJson(request): ApiJson<PasswordResetRequest>,
+) -> Result<StatusCode, ApiError> {
+    state.members.request_password_reset(&request.email).await?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+#[derive(Deserialize)]
+pub(crate) struct ResetPasswordRequest {
+    token: String,
+    password: String,
+}
+
+/// Chooses a new password with the token of the e-mailed link; the link works once and every session ends.
+pub(crate) async fn reset_password<X: Ports>(
+    State(state): State<SharedState<X>>,
+    ApiJson(request): ApiJson<ResetPasswordRequest>,
+) -> Result<StatusCode, ApiError> {
+    state
+        .members
+        .reset_password(&request.token, &request.password)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}

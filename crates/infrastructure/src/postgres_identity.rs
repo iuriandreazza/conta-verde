@@ -13,6 +13,7 @@ use crate::postgres::storage_error;
 const EMAIL_UNIQUE_CONSTRAINT: &str = "users_email_key";
 const MEMBERSHIP_PKEY: &str = "memberships_pkey";
 
+#[derive(Clone)]
 pub struct PostgresIdentityRepository {
     pool: PgPool,
 }
@@ -269,6 +270,67 @@ impl IdentityRepository for PostgresIdentityRepository {
             .map_err(storage_error)?;
         Ok(())
     }
+
+    async fn create_password_reset(
+        &self,
+        user_id: UserId,
+        token_digest: &str,
+        lifetime: Duration,
+        cooldown: Duration,
+    ) -> Result<bool, RepositoryError> {
+        // Expired rows are dead weight, so sweep them while writing anyway.
+        sqlx::query("DELETE FROM password_resets WHERE expires_at <= now()")
+            .execute(&self.pool)
+            .await
+            .map_err(storage_error)?;
+        // One row per user: a new link replaces the old one, unless the old one is too recent.
+        let written = sqlx::query(
+            "INSERT INTO password_resets (user_id, token_digest, expires_at, created_at) \
+             VALUES ($1, $2, now() + make_interval(secs => $3), now()) \
+             ON CONFLICT (user_id) DO UPDATE SET token_digest = EXCLUDED.token_digest, \
+                 expires_at = EXCLUDED.expires_at, created_at = EXCLUDED.created_at \
+             WHERE password_resets.created_at <= now() - make_interval(secs => $4)",
+        )
+        .bind(user_id.as_uuid())
+        .bind(token_digest)
+        .bind(lifetime.as_secs_f64())
+        .bind(cooldown.as_secs_f64())
+        .execute(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        Ok(written.rows_affected() == 1)
+    }
+
+    async fn reset_password(
+        &self,
+        token_digest: &str,
+        new_hash: &str,
+    ) -> Result<(), RepositoryError> {
+        let mut tx = self.pool.begin().await.map_err(storage_error)?;
+        // Spending the link and changing the password are one step: a link works once.
+        let user: Option<uuid::Uuid> = sqlx::query_scalar(
+            "DELETE FROM password_resets WHERE token_digest = $1 AND expires_at > now() \
+             RETURNING user_id",
+        )
+        .bind(token_digest)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(storage_error)?;
+        let user = user.ok_or(RepositoryError::NotFound)?;
+        sqlx::query("UPDATE users SET password_hash = $2 WHERE id = $1")
+            .bind(user)
+            .bind(new_hash)
+            .execute(&mut *tx)
+            .await
+            .map_err(storage_error)?;
+        sqlx::query("DELETE FROM sessions WHERE user_id = $1")
+            .bind(user)
+            .execute(&mut *tx)
+            .await
+            .map_err(storage_error)?;
+        tx.commit().await.map_err(storage_error)?;
+        Ok(())
+    }
 }
 
 fn user_from_row(row: &PgRow) -> Result<User, RepositoryError> {
@@ -319,6 +381,20 @@ mod tests {
             Duration::from_secs(3600),
         );
         contract::runs_the_account_lifecycle(&auth).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn resets_a_password_once() {
+        let pool = contract::test_pool().await;
+        let identities = PostgresIdentityRepository::new(pool);
+        let secrets = crate::Argon2SecretService::new().unwrap();
+        let auth = AuthService::new(
+            identities.clone(),
+            crate::Argon2SecretService::new().unwrap(),
+            Duration::from_secs(3600),
+        );
+        contract::resets_a_password_once(&auth, &identities, &secrets).await;
     }
 
     #[tokio::test]

@@ -324,6 +324,14 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         .route("/auth/logout", post(auth::logout::<X>))
         .route("/auth/me", get(auth::me::<X>))
         .route(
+            "/auth/password-reset",
+            post(auth::request_password_reset::<X>),
+        )
+        .route(
+            "/auth/password-reset/confirm",
+            post(auth::reset_password::<X>),
+        )
+        .route(
             "/companies/{company_id}/parties",
             get(parties::list_parties::<X>).post(parties::register_party::<X>),
         )
@@ -2936,6 +2944,89 @@ mod tests {
             ),
         )
         .await
+    }
+
+    #[tokio::test]
+    async fn a_lost_password_is_replaced_through_an_e_mailed_link_that_works_once() {
+        let (app, _, mailbox) = app_with_mailbox();
+        let (cookie, _) = sign_up(&app, "ana@example.com").await;
+        let ask = |email: &str| {
+            json_request(
+                "POST",
+                "/auth/password-reset",
+                None,
+                json!({ "email": email }),
+            )
+        };
+
+        // Any address gets the same answer, and only an account gets an e-mail.
+        for email in ["nobody@example.com", "not an address"] {
+            assert_eq!(send(&app, ask(email)).await.status, StatusCode::ACCEPTED);
+        }
+        assert!(mailbox.sent().is_empty());
+        let asked = send(&app, ask("ana@example.com")).await;
+        assert_eq!(asked.status, StatusCode::ACCEPTED);
+        assert!(asked.body.is_null(), "the link is only in the e-mail");
+        let sent = mailbox.sent();
+        assert_eq!(sent.len(), 1);
+        let link = sent[0]
+            .body
+            .lines()
+            .find(|l| l.contains("/reset-password/"))
+            .unwrap();
+        let token = link.rsplit('/').next().unwrap().to_owned();
+
+        // Another request right after makes no second e-mail.
+        send(&app, ask("ana@example.com")).await;
+        assert_eq!(mailbox.sent().len(), 1);
+
+        let confirm = |token: &str, password: &str| {
+            json_request(
+                "POST",
+                "/auth/password-reset/confirm",
+                None,
+                json!({ "token": token, "password": password }),
+            )
+        };
+        assert_eq!(
+            send(&app, confirm(&token, "short")).await.status,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        assert_eq!(
+            send(&app, confirm("wrong", "battery staple")).await.status,
+            StatusCode::GONE
+        );
+        assert_eq!(
+            send(&app, confirm(&token, "battery staple")).await.status,
+            StatusCode::NO_CONTENT
+        );
+        // The link is spent, the old session is over and the new password signs in.
+        assert_eq!(
+            send(&app, confirm(&token, "another one 123")).await.status,
+            StatusCode::GONE
+        );
+        assert_eq!(
+            send(&app, get_request("/auth/me", Some(&cookie)))
+                .await
+                .status,
+            StatusCode::UNAUTHORIZED
+        );
+        let login = |password: &str| {
+            json_request(
+                "POST",
+                "/auth/login",
+                None,
+                json!({ "email": "ana@example.com", "password": password }),
+            )
+        };
+        assert_eq!(
+            send(&app, login("correct horse")).await.status,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            send(&app, login("battery staple")).await.status,
+            StatusCode::OK
+        );
     }
 
     #[tokio::test]

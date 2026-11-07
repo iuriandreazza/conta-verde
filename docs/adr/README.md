@@ -75,6 +75,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0057](0057-purchase-entry-from-nfe-xml.md) | Purchase entry from a supplier's NF-e XML | accepted | 5 |
 | [0058](0058-stock-reports.md) | Stock reports: position, movements and valuation | accepted | 5 |
 | [0059](0059-job-queue.md) | A queue of jobs and a worker, with e-mail sent through it | accepted | — |
+| [0060](0060-password-reset.md) | Password reset by an e-mailed link | accepted | — |
 
 ## Template
 

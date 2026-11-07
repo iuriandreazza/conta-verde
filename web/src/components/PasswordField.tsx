@@ -3,10 +3,12 @@ import { EyeIcon } from "./icons/eye";
 import { EyeOffIcon } from "./icons/eye-off";
 
 interface PasswordFieldProps {
+  /** A password being chosen (a sign-up, a reset) rather than typed in: it has a minimum and is not filled in. */
   registering: boolean;
+  label?: string;
 }
 
-export function PasswordField({ registering }: PasswordFieldProps) {
+export function PasswordField({ registering, label = "Senha" }: PasswordFieldProps) {
   const [visible, setVisible] = useState(false);
   const inputId = useId();
   const Icon = visible ? EyeOffIcon : EyeIcon;
@@ -14,7 +16,7 @@ export function PasswordField({ registering }: PasswordFieldProps) {
   // The toggle sits outside the <label> so it does not become part of the input's accessible name.
   return (
     <div className="field">
-      <label htmlFor={inputId}>Senha</label>
+      <label htmlFor={inputId}>{label}</label>
       <span className="field-with-action">
         <input
           id={inputId}

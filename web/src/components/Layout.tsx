@@ -86,7 +86,11 @@ export function Layout() {
   // Until the session is known, a protected page gets no chrome: the sign-in layout would flash for
   // every signed-in user who reloads. The sign-in and sign-up pages keep their layout, or the form
   // would be remounted (and lose what was typed) once the answer arrives.
-  const onPublicPage = location.pathname === "/login" || location.pathname === "/register";
+  const onPublicPage =
+    location.pathname === "/login" ||
+    location.pathname === "/register" ||
+    location.pathname === "/forgot-password" ||
+    location.pathname.startsWith("/reset-password/");
   if (session.status === "loading" && !onPublicPage) {
     return (
       <div className="app-main">
