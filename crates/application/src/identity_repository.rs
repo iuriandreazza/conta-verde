@@ -136,6 +136,13 @@ pub trait IdentityRepository: Send + Sync {
         cooldown: Duration,
     ) -> impl Future<Output = Result<bool, RepositoryError>> + Send;
 
+    /// Whether a reset that has not expired has this digest, without spending it: a request that cannot succeed is turned
+    /// away before the work of hashing a new password.
+    fn password_reset_open(
+        &self,
+        token_digest: &str,
+    ) -> impl Future<Output = Result<bool, RepositoryError>> + Send;
+
     /// Spends the reset with this digest, once: the user's password becomes `new_hash` and **every session of theirs
     /// ends**, so whoever held the old password is out. It says whose password it was. `NotFound` when no reset that has
     /// not expired has this digest.

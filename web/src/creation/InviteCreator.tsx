@@ -18,7 +18,7 @@ function InviteResult({ invited }: { invited: Invited }) {
         tone={invited.emailed ? "success" : "warning"}
         message={
           invited.emailed
-            ? `Convite enviado para ${invited.email}.`
+            ? `Convite criado: o e-mail para ${invited.email} está na fila de envio.`
             : `Convite criado, mas o e-mail não foi enviado. Passe o link para ${invited.email}.`
         }
       />

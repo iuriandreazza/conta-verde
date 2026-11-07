@@ -177,6 +177,7 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
         | ApplicationError::AttachmentNotFound
         | ApplicationError::TransferNotFound => (StatusCode::NOT_FOUND, error.to_string()),
         ApplicationError::SettlementExceedsBalance
+        | ApplicationError::AddressNeverConfirmed
         | ApplicationError::CannotMail(_)
         | ApplicationError::EntryIsSettled
         | ApplicationError::TooManyAttachments => (StatusCode::CONFLICT, error.to_string()),

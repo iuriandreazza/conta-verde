@@ -1,7 +1,7 @@
 import { motion, useAnimationControls } from "motion/react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, Navigate, useSearchParams } from "react-router-dom";
-import { api, errorMessage, type InvitationPreview } from "../api";
+import { ApiError, api, errorMessage, type InvitationPreview } from "../api";
 import { useAuth } from "../auth";
 import { Notice } from "../components/Notice";
 import { Button } from "../components/Button";
@@ -65,6 +65,8 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
   const [params] = useSearchParams();
   const next = nextAfterSignIn(params.get("next"));
   const [error, setError] = useState<string | null>(null);
+  // An address that is already taken: the way out is to sign in or to recover the account, not to try another form.
+  const [addressTaken, setAddressTaken] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const shake = useAnimationControls();
   const registering = mode === "register";
@@ -88,6 +90,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
     const field = (name: string) => String(form.get(name) ?? "");
     setSubmitting(true);
     setError(null);
+    setAddressTaken(false);
     try {
       if (registering) {
         const account = { name: field("name"), email: field("email"), password: field("password") };
@@ -104,6 +107,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
     } catch (failure) {
       signedUp.current = null;
       setError(errorMessage(failure));
+      setAddressTaken(registering && failure instanceof ApiError && failure.status === 409);
       void shake.start({ x: [0, -8, 8, -5, 5, 0], transition: { duration: 0.4 } });
     } finally {
       setSubmitting(false);
@@ -162,6 +166,11 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
           </label>
           <PasswordField registering={registering} />
           <Notice message={error} />
+          {addressTaken && (
+            <p>
+              Esse e-mail já tem conta. <Link to="/login">Entrar</Link> ou <Link to="/forgot-password">recuperar a senha</Link>.
+            </p>
+          )}
           <Button type="submit" icon={registering ? UserPlusIcon : LogInIcon} pending={submitting}>
             {registering ? "Criar conta" : "Entrar"}
           </Button>

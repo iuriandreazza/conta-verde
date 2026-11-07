@@ -3013,6 +3013,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_sign_up_for_an_address_nobody_confirmed_sends_its_owner_the_way_to_take_the_account_over()
+     {
+        let (app, _, mailbox) = app_with_mailbox();
+        sign_up(&app, "ana@example.com").await;
+        mailbox.clear();
+        let again = |password: &str| {
+            send(
+                &app,
+                json_request(
+                    "POST",
+                    "/auth/register",
+                    None,
+                    json!({ "name": "Outra", "email": "ana@example.com", "password": password, "company_name": "Outra empresa" }),
+                ),
+            )
+        };
+
+        // The address is held by an account that never confirmed it: refused, and the address gets a recovery link.
+        let refused = again("another pass 1").await;
+        assert_eq!(refused.status, StatusCode::CONFLICT, "{}", refused.body);
+        assert!(
+            refused.body["error"]
+                .as_str()
+                .unwrap()
+                .contains("never confirmed")
+        );
+        let sent = mailbox.sent();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].to.as_str(), "ana@example.com");
+        assert_eq!(sent[0].subject, "Redefinição de senha no conta-verde");
+        let token = sent[0]
+            .body
+            .lines()
+            .find(|line| line.contains("/reset-password/"))
+            .unwrap()
+            .rsplit('/')
+            .next()
+            .unwrap()
+            .to_owned();
+        // Asking again at once does not mail it again.
+        assert_eq!(again("another pass 1").await.status, StatusCode::CONFLICT);
+        assert_eq!(mailbox.sent().len(), 1);
+
+        // Whoever has the mailbox takes the account over by choosing a password; the address is confirmed.
+        let taken = send(
+            &app,
+            json_request(
+                "POST",
+                "/auth/password-reset/confirm",
+                None,
+                json!({ "token": token, "password": "mine now 123" }),
+            ),
+        )
+        .await;
+        assert_eq!(taken.status, StatusCode::NO_CONTENT);
+        // Now it is held by a confirmed account: a plain refusal, and nothing is sent.
+        mailbox.clear();
+        let plain = again("another pass 1").await;
+        assert_eq!(plain.status, StatusCode::CONFLICT);
+        assert!(
+            !plain.body["error"]
+                .as_str()
+                .unwrap()
+                .contains("never confirmed")
+        );
+        assert!(mailbox.sent().is_empty());
+    }
+
+    #[tokio::test]
     async fn an_address_is_confirmed_through_an_e_mailed_link_that_works_once() {
         let (app, _, mailbox) = app_with_mailbox();
         let (cookie, _) = sign_up(&app, "ana@example.com").await;

@@ -1,7 +1,7 @@
 use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
-use conta_verde_application::{Profile, SignedIn};
+use conta_verde_application::{ApplicationError, Profile, RepositoryError, SignedIn};
 use conta_verde_domain::{AccountDraft, Area};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -114,12 +114,24 @@ pub(crate) async fn register<X: Ports>(
             let company_name = request
                 .company_name
                 .ok_or(ApiError::InvalidField("company_name is required"))?;
+            let email = request.email.clone();
             let draft = AccountDraft {
                 user_name: request.name,
                 email: request.email,
                 company_name,
             };
-            state.auth.register(draft, &request.password).await?
+            let registered = state.auth.register(draft, &request.password).await;
+            // The address belongs to an account nobody confirmed: its real owner is sent the way to take it over.
+            if matches!(
+                registered,
+                Err(ApplicationError::Repository(
+                    RepositoryError::DuplicateEmail
+                ))
+            ) && state.members.recover_unconfirmed_address(&email).await?
+            {
+                return Err(ApplicationError::AddressNeverConfirmed.into());
+            }
+            registered?
         }
     };
     // A person who made a company of their own is asked to confirm the address; one who joined by an invitation just did.

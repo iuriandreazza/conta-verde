@@ -225,6 +225,8 @@ pub enum ApplicationError {
     InvitationForAnotherEmail,
     /// A document that cannot be e-mailed in the state it is in; says why.
     CannotMail(&'static str),
+    /// A sign-up for an address held by an account that was never confirmed: a link to recover it went to that address.
+    AddressNeverConfirmed,
     /// The e-mail was not sent because of a limit; says which.
     MailRefused(&'static str),
     /// Nobody to send the e-mail to: the party has no address and none was given.
@@ -452,6 +454,9 @@ impl fmt::Display for ApplicationError {
             ),
             Self::InvitationNoLongerValid => f.write_str(
                 "this invitation was already used or withdrawn, or has expired: ask for a new one",
+            ),
+            Self::AddressNeverConfirmed => f.write_str(
+                "this address has an account that was never confirmed: a link to recover it was sent to the address",
             ),
             Self::CannotMail(why) | Self::MailRefused(why) => f.write_str(why),
             Self::NoEmailAddress => {
