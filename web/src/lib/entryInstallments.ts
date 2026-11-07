@@ -56,6 +56,12 @@ function daysIn(year: number, month: number): number {
   return new Date(Date.UTC(year, month, 0)).getUTCDate();
 }
 
+/**
+ * The day to send to the API, or empty: a date input passes through years like 0002 while the year is typed, and a
+ * request for such a day is refused.
+ */
+export const wholeDate = (day: string) => (isIsoDate(day) && day >= "1000-01-01" ? day : "");
+
 /** Whether the text is a real day written `YYYY-MM-DD`. */
 export function isIsoDate(text: string): boolean {
   const match = ISO_DATE.exec(text);

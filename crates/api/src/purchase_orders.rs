@@ -3,8 +3,9 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use conta_verde_application::{ApplicationError, PurchaseOrderQuery, ReceiptRecord};
 use conta_verde_domain::{
-    CategoryId, CostCenterId, LineDraft, PartyId, PaymentTermId, PurchaseOrder, PurchaseOrderDraft,
-    PurchaseOrderId, PurchaseReceiptDraft, PurchaseReceiptId, PurchaseStatus, ReceiptItemDraft,
+    CalendarDate, CategoryId, CostCenterId, LineDraft, PartyId, PaymentTermId, PurchaseOrder,
+    PurchaseOrderDraft, PurchaseOrderId, PurchaseReceiptDraft, PurchaseReceiptId, PurchaseStatus,
+    ReceiptItemDraft,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -76,6 +77,10 @@ pub(crate) struct ListQuery {
     /// `draft`, `approved`, `partially_received`, `received` or `cancelled`.
     status: Option<String>,
     supplier: Option<Uuid>,
+    /// `YYYY-MM-DD`: orders made on this day or later.
+    from: Option<String>,
+    /// `YYYY-MM-DD`: orders made on this day or earlier.
+    to: Option<String>,
     /// `-number` (default) or `number`.
     sort: Option<String>,
 }
@@ -94,8 +99,30 @@ impl ListQuery {
         if let Some(supplier) = self.supplier {
             query = query.with_supplier(PartyId::from_uuid(supplier));
         }
+        query = with_days(query, self.from.as_deref(), self.to.as_deref())?;
         Ok(query.sorted(list_params::number_sort(self.sort.as_deref())?))
     }
+}
+
+/// Narrows `query` to the orders made from a day to a day, either of them optional.
+fn with_days(
+    mut query: PurchaseOrderQuery,
+    from: Option<&str>,
+    to: Option<&str>,
+) -> Result<PurchaseOrderQuery, ApiError> {
+    if let Some(raw) = from {
+        query = query.ordered_from(
+            CalendarDate::parse(raw)
+                .ok_or(ApiError::InvalidQuery("invalid from: expected YYYY-MM-DD"))?,
+        );
+    }
+    if let Some(raw) = to {
+        query = query.ordered_until(
+            CalendarDate::parse(raw)
+                .ok_or(ApiError::InvalidQuery("invalid to: expected YYYY-MM-DD"))?,
+        );
+    }
+    Ok(query)
 }
 
 #[derive(Serialize)]
@@ -244,6 +271,8 @@ pub(crate) struct StatusCountsResponse {
 pub(crate) struct StatusCountsQuery {
     /// Text found in the number, the notes or a line's description.
     q: Option<String>,
+    from: Option<String>,
+    to: Option<String>,
 }
 
 /// What the tiles above the list show: the orders that match the search and supplier, per status.
@@ -256,6 +285,7 @@ pub(crate) async fn purchase_order_status_counts<X: Ports>(
     if let Some(text) = list_params::search(query.q.as_deref())? {
         filter = filter.searching(text);
     }
+    let filter = with_days(filter, query.from.as_deref(), query.to.as_deref())?;
     let counts = state.purchases.status_counts(company_id, &filter).await?;
     let of = |wanted: PurchaseStatus| {
         counts

@@ -28,7 +28,7 @@ import { PageHeader } from "../components/PageHeader";
 import { Spinner } from "../components/Spinner";
 import { useCreation, useOnCreated } from "../creation/CreationProvider";
 import { formatDecimal, formatMoney, toInputDecimal } from "../lib/decimal";
-import { formatDate, isIsoDate } from "../lib/entryInstallments";
+import { formatDate, isIsoDate, wholeDate } from "../lib/entryInstallments";
 import { todayIso } from "../lib/settlement";
 import { isNegative, signedQuantity, trimCost } from "../lib/stock";
 import { useCanWrite } from "../lib/useCanWrite";
@@ -53,7 +53,6 @@ const ORIGIN_LABELS: Record<StockOriginKind, string> = {
 };
 
 /** A date field that is not a whole date yet (a year still being typed) asks nothing of the API. */
-const wholeDate = (day: string) => (isIsoDate(day) && day >= "1000-01-01" ? day : "");
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one instance.
 export function StockPage() {

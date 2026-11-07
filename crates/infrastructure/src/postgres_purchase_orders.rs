@@ -34,6 +34,16 @@ fn push_filters(
         sql.push(" AND supplier_id = ")
             .push_bind(supplier.as_uuid());
     }
+    if let Some(from) = query.first_day() {
+        sql.push(" AND ordered_on >= CAST(")
+            .push_bind(from.to_string())
+            .push(" AS DATE)");
+    }
+    if let Some(until) = query.last_day() {
+        sql.push(" AND ordered_on <= CAST(")
+            .push_bind(until.to_string())
+            .push(" AS DATE)");
+    }
     if let Some(text) = query.search() {
         // `strpos` instead of `LIKE` so that `%` and `_` in the text mean themselves.
         sql.push(" AND (number::text = ")

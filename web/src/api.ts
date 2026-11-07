@@ -1088,10 +1088,13 @@ export interface Mailed {
 export interface PurchaseOrderFilters {
   q: string;
   status: "" | PurchaseStatus;
+  /** `YYYY-MM-DD`: the orders made from this day to that day (empty is no limit). */
+  from: string;
+  to: string;
   sort: "-number" | "number";
 }
 
-export const NO_PURCHASE_FILTERS: PurchaseOrderFilters = { q: "", status: "", sort: "-number" };
+export const NO_PURCHASE_FILTERS: PurchaseOrderFilters = { q: "", status: "", from: "", to: "", sort: "-number" };
 
 /** How many orders match the search in each status, for the tiles of the list. */
 export type PurchaseStatusCounts = Record<PurchaseStatus, number>;
@@ -2043,6 +2046,8 @@ export const api = {
     const params = new URLSearchParams();
     if (filters.q) params.set("q", filters.q);
     if (filters.status) params.set("status", filters.status);
+    if (filters.from) params.set("from", filters.from);
+    if (filters.to) params.set("to", filters.to);
     if (filters.sort !== NO_PURCHASE_FILTERS.sort) params.set("sort", filters.sort);
     if (after) params.set("after", after);
     const query = params.size > 0 ? `?${params}` : "";
@@ -2052,8 +2057,12 @@ export const api = {
     post<Mailed>(`/companies/${companyId}/purchase-orders/${id}/send`, to ? { to } : {}),
   sendPaymentReceipt: (companyId: string, entryId: string, settlementId: string, to: string) =>
     post<Mailed>(`/companies/${companyId}/entries/${entryId}/settlements/${settlementId}/receipt`, to ? { to } : {}),
-  getPurchaseStatusCounts: (companyId: string, q: string) => {
-    const query = q ? `?${new URLSearchParams({ q })}` : "";
+  getPurchaseStatusCounts: (companyId: string, filters: Pick<PurchaseOrderFilters, "q" | "from" | "to">) => {
+    const params = new URLSearchParams();
+    if (filters.q) params.set("q", filters.q);
+    if (filters.from) params.set("from", filters.from);
+    if (filters.to) params.set("to", filters.to);
+    const query = params.size > 0 ? `?${params}` : "";
     return request<PurchaseStatusCounts>(`/companies/${companyId}/purchase-orders/status-counts${query}`);
   },
   getPurchaseOrder: (companyId: string, id: string) =>

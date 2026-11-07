@@ -1,8 +1,8 @@
 use std::future::Future;
 
 use conta_verde_domain::{
-    AccessKey, AuditEntry, AuditRecord, CompanyId, PartyId, PurchaseOrder, PurchaseOrderId,
-    PurchaseReceipt, PurchaseReceiptId, PurchaseStatus,
+    AccessKey, AuditEntry, AuditRecord, CalendarDate, CompanyId, PartyId, PurchaseOrder,
+    PurchaseOrderId, PurchaseReceipt, PurchaseReceiptId, PurchaseStatus,
 };
 
 use crate::list_query::clean_search;
@@ -23,6 +23,8 @@ pub struct PurchaseOrderQuery {
     search: Option<String>,
     status: Option<PurchaseStatus>,
     supplier: Option<PartyId>,
+    ordered_from: Option<CalendarDate>,
+    ordered_until: Option<CalendarDate>,
     sort: NumberSort,
 }
 
@@ -40,6 +42,18 @@ impl PurchaseOrderQuery {
 
     pub fn with_supplier(mut self, supplier: PartyId) -> Self {
         self.supplier = Some(supplier);
+        self
+    }
+
+    /// Orders made on this day or later.
+    pub fn ordered_from(mut self, day: CalendarDate) -> Self {
+        self.ordered_from = Some(day);
+        self
+    }
+
+    /// Orders made on this day or earlier.
+    pub fn ordered_until(mut self, day: CalendarDate) -> Self {
+        self.ordered_until = Some(day);
         self
     }
 
@@ -66,6 +80,14 @@ impl PurchaseOrderQuery {
         self.supplier
     }
 
+    pub fn first_day(&self) -> Option<CalendarDate> {
+        self.ordered_from
+    }
+
+    pub fn last_day(&self) -> Option<CalendarDate> {
+        self.ordered_until
+    }
+
     pub fn sort(&self) -> NumberSort {
         self.sort
     }
@@ -76,6 +98,12 @@ impl PurchaseOrderQuery {
             && self
                 .supplier
                 .is_none_or(|supplier| order.supplier_id() == supplier)
+            && self
+                .ordered_from
+                .is_none_or(|from| order.ordered_on() >= from)
+            && self
+                .ordered_until
+                .is_none_or(|until| order.ordered_on() <= until)
             && self.search().is_none_or(|text| {
                 let text = text.to_lowercase();
                 order.number().to_string() == text
