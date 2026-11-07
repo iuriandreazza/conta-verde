@@ -78,6 +78,8 @@ pub enum AuthError {
     NotAllowed,
     /// A password reset link that does not exist, has expired or was already used.
     InvalidResetLink,
+    /// An address confirmation link that does not exist, has expired or was already used.
+    InvalidConfirmationLink,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -329,7 +331,9 @@ impl fmt::Display for AuthError {
             Self::Unauthenticated => "authentication required",
             Self::Forbidden => "company not found",
             Self::NotAllowed => "your role in this company does not allow this",
-            Self::InvalidResetLink => "this link has expired or was already used",
+            Self::InvalidResetLink | Self::InvalidConfirmationLink => {
+                "this link has expired or was already used"
+            }
         };
         f.write_str(message)
     }

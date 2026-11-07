@@ -145,6 +145,36 @@ pub trait IdentityRepository: Send + Sync {
         new_hash: &str,
     ) -> impl Future<Output = Result<UserId, RepositoryError>> + Send;
 
+    /// Whether the user has confirmed their address.
+    fn email_verified(
+        &self,
+        user_id: UserId,
+    ) -> impl Future<Output = Result<bool, RepositoryError>> + Send;
+
+    /// Marks the address as confirmed without a link, for an address that has proved itself some other way (an
+    /// invitation sent to it and opened).
+    fn mark_email_verified(
+        &self,
+        user_id: UserId,
+    ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
+
+    /// Keeps the digest of an address confirmation's token for the user; up to five links stay valid at once. `false`,
+    /// and nothing stored, when the user's last one was made less than `cooldown` ago.
+    fn create_email_confirmation(
+        &self,
+        user_id: UserId,
+        token_digest: &str,
+        lifetime: Duration,
+        cooldown: Duration,
+    ) -> impl Future<Output = Result<bool, RepositoryError>> + Send;
+
+    /// Spends the confirmation with this digest: the user's address becomes confirmed and their other links are gone. It
+    /// says whose address it was. `NotFound` when no link that has not expired has this digest.
+    fn confirm_email(
+        &self,
+        token_digest: &str,
+    ) -> impl Future<Output = Result<UserId, RepositoryError>> + Send;
+
     /// The user with this id, if there is one.
     fn find_user(
         &self,

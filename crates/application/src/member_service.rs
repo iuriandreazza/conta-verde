@@ -33,6 +33,8 @@ pub struct InvitationPreview {
 
 /// How long a password reset link works.
 const RESET_LIFETIME: Duration = Duration::from_secs(60 * 60);
+/// How long an address confirmation link works.
+const CONFIRMATION_LIFETIME: Duration = Duration::from_secs(3 * 24 * 60 * 60);
 /// How soon after one link another can be asked for the same account.
 const RESET_COOLDOWN: Duration = Duration::from_secs(60);
 
@@ -129,6 +131,8 @@ where
             Err(RepositoryError::NotFound) => return Err(AuthError::InvalidResetLink.into()),
             other => other?,
         };
+        // The link reached the mailbox, so the address is confirmed.
+        self.identities.mark_email_verified(user_id).await?;
         // Whoever changed it, the owner of the address is told: if it was not them, this is how they find out.
         if let Some(user) = self.identities.find_user(user_id).await? {
             self.notify(
@@ -144,6 +148,51 @@ where
             .await;
         }
         Ok(())
+    }
+
+    /// E-mails the user a link that confirms their address, unless it is confirmed already or one was sent a moment ago.
+    /// It is how an account made with a company of its own shows that the address is the person's ([ADR 0063]).
+    pub async fn send_email_confirmation(&self, user: &User) -> Result<(), ApplicationError> {
+        if self.identities.email_verified(user.id()).await? {
+            return Ok(());
+        }
+        let token = self.secrets.new_token();
+        let made = self
+            .identities
+            .create_email_confirmation(
+                user.id(),
+                &self.secrets.digest_token(&token),
+                CONFIRMATION_LIFETIME,
+                RESET_COOLDOWN,
+            )
+            .await?;
+        if made {
+            self.notify(
+                user.email().clone(),
+                "Confirme seu e-mail no conta-verde".to_owned(),
+                format!(
+                    "Olá, {}.\n\nPara confirmar que este endereço é seu, abra o link:\n{}/confirm-email/{token}\n\n\
+                     O link vale por {} dias. Se você não criou uma conta no conta-verde, ignore este e-mail.\n",
+                    one_line(user.name()),
+                    self.public_url,
+                    CONFIRMATION_LIFETIME.as_secs() / 86_400
+                ),
+            )
+            .await;
+        }
+        Ok(())
+    }
+
+    /// Confirms the address the link was sent to. The link works once.
+    pub async fn confirm_email(&self, token: &str) -> Result<(), ApplicationError> {
+        match self
+            .identities
+            .confirm_email(&self.secrets.digest_token(token))
+            .await
+        {
+            Err(RepositoryError::NotFound) => Err(AuthError::InvalidConfirmationLink.into()),
+            other => other.map(|_| ()).map_err(Into::into),
+        }
     }
 
     /// A notice nobody waits for: if it cannot be queued the mail server's log says so, and what happened stands.
@@ -378,6 +427,8 @@ where
             .await?;
         // The invitation could be withdrawn in the instant since it was read: then the account
         // exists and the person signs in to find no company, and asks for a new invitation.
+        // The link reached the mailbox, so the address is confirmed.
+        self.identities.mark_email_verified(user.id()).await?;
         let company_id = self.accept(token, &user).await?;
         Ok((user, company_id))
     }

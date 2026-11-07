@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { Link, Outlet, useLocation, useMatch } from "react-router-dom";
 import { useAuth } from "../auth";
 import { AppTopbar } from "./AppTopbar";
+import { EmailConfirmationBanner } from "./EmailConfirmationBanner";
 import { CreationProvider } from "../creation/CreationProvider";
 import { CompanyNav } from "./CompanyNav";
 import { Footer } from "./Footer";
@@ -90,7 +91,8 @@ export function Layout() {
     location.pathname === "/login" ||
     location.pathname === "/register" ||
     location.pathname === "/forgot-password" ||
-    location.pathname.startsWith("/reset-password/");
+    location.pathname.startsWith("/reset-password/") ||
+    location.pathname.startsWith("/confirm-email/");
   if (session.status === "loading" && !onPublicPage) {
     return (
       <div className="app-main">
@@ -189,6 +191,7 @@ export function Layout() {
           onToggleNav={() => (navOpen ? closeNav() : setNavOpen(true))}
           onSignOut={handleSignOut}
         />
+        {!session.profile.email_verified && <EmailConfirmationBanner email={session.profile.user.email} />}
         {page}
         <Footer />
       </div>

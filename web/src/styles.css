@@ -2063,3 +2063,19 @@ tbody tr:last-child td {
 .filter-tile strong {
   font-size: 1.25rem;
 }
+
+/* A line above the page that asks the person for something, with the action beside it. */
+.banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin: 0.75rem var(--page-gutter, 1.5rem) 0;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-sm);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 0.9rem;
+}
