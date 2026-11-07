@@ -22,11 +22,12 @@ import { ChevronDownIcon } from "../components/icons/chevron-down";
 import { PlusIcon } from "../components/icons/plus";
 import { RotateCCWIcon } from "../components/icons/rotate-ccw";
 import { ListRow } from "../components/ListRow";
+import { ListTools } from "../components/ListTools";
 import { Notice } from "../components/Notice";
 import { PageHeader } from "../components/PageHeader";
 import { Spinner } from "../components/Spinner";
 import { useCreation, useOnCreated } from "../creation/CreationProvider";
-import { formatDecimal, formatMoney } from "../lib/decimal";
+import { formatDecimal, formatMoney, toInputDecimal } from "../lib/decimal";
 import { formatDate, isIsoDate } from "../lib/entryInstallments";
 import { todayIso } from "../lib/settlement";
 import { isNegative, signedQuantity, trimCost } from "../lib/stock";
@@ -79,41 +80,41 @@ export function StockPage() {
 
   return (
     <>
-      <PageHeader
-        title="Estoque"
-        description="O que há de cada produto, a que custo médio, e o livro de movimentações: compras, vendas e devoluções entram sozinhas; ajustes e entradas avulsas são lançados aqui."
-      />
-      {canWrite && (
-        <div className="list-actions">
-          <Button type="button" icon={PlusIcon} onClick={() => openCreate("stockMovement")}>
-            Novo movimento
-          </Button>
+        <PageHeader
+          title="Estoque"
+          description="O que há de cada produto, a que custo médio, e o livro de movimentações: compras, vendas e devoluções entram sozinhas; ajustes e entradas avulsas são lançados aqui."
+        />
+        {canWrite && (
+          <div className="list-actions">
+            <Button type="button" icon={PlusIcon} onClick={() => openCreate("stockMovement")}>
+              Novo movimento
+            </Button>
+          </div>
+        )}
+        <div className="segmented" role="group" aria-label="Visão do estoque">
+          <button type="button" aria-pressed={view === "positions"} onClick={() => setView("positions")}>
+            Posição
+          </button>
+          <button type="button" aria-pressed={view === "movements"} onClick={() => setView("movements")}>
+            Movimentações
+          </button>
+          <button type="button" aria-pressed={view === "alerts"} onClick={() => setView("alerts")}>
+            Abaixo do mínimo{alerts !== null && alerts.length > 0 && ` (${alerts.length})`}
+          </button>
+          <button type="button" aria-pressed={view === "settings"} onClick={() => setView("settings")}>
+            Configurações
+          </button>
         </div>
-      )}
-      <div className="segmented" role="group" aria-label="Visão do estoque">
-        <button type="button" aria-pressed={view === "positions"} onClick={() => setView("positions")}>
-          Posição
-        </button>
-        <button type="button" aria-pressed={view === "movements"} onClick={() => setView("movements")}>
-          Movimentações
-        </button>
-        <button type="button" aria-pressed={view === "alerts"} onClick={() => setView("alerts")}>
-          Abaixo do mínimo{alerts !== null && alerts.length > 0 && ` (${alerts.length})`}
-        </button>
-        <button type="button" aria-pressed={view === "settings"} onClick={() => setView("settings")}>
-          Configurações
-        </button>
-      </div>
-      <Notice message={productsError} />
-      {view === "positions" ? (
-        <PositionsView companyId={companyId} lowIds={new Set((alerts ?? []).map((alert) => alert.product_id))} />
-      ) : view === "movements" ? (
-        <MovementsView companyId={companyId} products={products} canWrite={canWrite} />
-      ) : view === "alerts" ? (
-        <AlertsView alerts={alerts} error={alertsError} />
-      ) : (
-        <SettingsView companyId={companyId} canWrite={canWrite} />
-      )}
+        <Notice message={productsError} />
+        {view === "positions" ? (
+          <PositionsView companyId={companyId} lowIds={new Set((alerts ?? []).map((alert) => alert.product_id))} />
+        ) : view === "movements" ? (
+          <MovementsView companyId={companyId} products={products} canWrite={canWrite} />
+        ) : view === "alerts" ? (
+          <AlertsView alerts={alerts} error={alertsError} />
+        ) : (
+          <SettingsView companyId={companyId} canWrite={canWrite} />
+        )}
     </>
   );
 }
@@ -139,103 +140,120 @@ function PositionsView({ companyId, lowIds }: { companyId: string; lowIds: Set<s
   ];
 
   return (
-    <section className="card list-card">
-      <h2>Posição do estoque</h2>
-      <FilterTiles
-        label="Situação"
-        value={filters.situation}
-        options={tiles}
-        onChange={(situation) => setFilters({ ...filters, situation })}
-      />
-      <div className="filters" role="search">
-        <label>
-          Buscar
-          <input
-            type="search"
-            value={filters.q}
-            placeholder="Nome ou código"
-            autoComplete="off"
-            maxLength={100}
-            onChange={(event) => setFilters({ ...filters, q: event.target.value })}
-          />
-        </label>
-        <label>
-          Em
-          <input type="date" value={filters.on} onChange={(event) => setFilters({ ...filters, on: event.target.value })} />
-        </label>
+    <>
+      <div className="list-actions">
+        <ListTools
+          filename="posicao-do-estoque"
+          header={["Produto", "SKU", "Unidade", "Quantidade", "Custo médio", "Valor"]}
+          fetchPage={(after) => api.listStockPositions(companyId, { ...applied, on: wholeDate(applied.on) }, after)}
+          toRow={(position) => [
+            position.name,
+            position.sku ?? "",
+            position.unit,
+            toInputDecimal(position.quantity),
+            position.average_cost === null ? "" : toInputDecimal(trimCost(position.average_cost)),
+            toInputDecimal(position.value),
+          ]}
+        />
       </div>
-      <Notice message={error} />
-      {loading ? (
-        <p role="status" className="status">
-          <Spinner /> Carregando…
-        </p>
-      ) : items.length === 0 && error ? (
-        <Button type="button" variant="ghost" onClick={() => void reload()}>
-          Tentar de novo
-        </Button>
-      ) : items.length === 0 ? (
-        <div className="empty">
-          <BoxIcon size={40} aria-hidden />
-          <p role={isFiltered ? "status" : undefined}>{isFiltered ? "Nenhum produto encontrado." : "Nenhum produto em estoque ainda."}</p>
-          {isFiltered ? (
-            <Button type="button" variant="ghost" onClick={() => setFilters({ ...NO_POSITION_FILTERS })}>
-              Limpar filtros
-            </Button>
-          ) : (
-            <p className="muted">O estoque nasce das compras recebidas, das vendas e dos movimentos lançados aqui.</p>
-          )}
+      <section className="card list-card">
+        <h2>Posição do estoque</h2>
+        <FilterTiles
+          label="Situação"
+          value={filters.situation}
+          options={tiles}
+          onChange={(situation) => setFilters({ ...filters, situation })}
+        />
+        <div className="filters" role="search">
+          <label>
+            Buscar
+            <input
+              type="search"
+              value={filters.q}
+              placeholder="Nome ou código"
+              autoComplete="off"
+              maxLength={100}
+              onChange={(event) => setFilters({ ...filters, q: event.target.value })}
+            />
+          </label>
+          <label>
+            Em
+            <input type="date" value={filters.on} onChange={(event) => setFilters({ ...filters, on: event.target.value })} />
+          </label>
         </div>
-      ) : (
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Produto</th>
-                <th className="num">Quantidade</th>
-                <th className="num">Custo médio</th>
-                <th className="num">Valor</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((position, index) => (
-                <ListRow key={position.product_id} index={index} highlighted={false}>
-                  <td>
-                    <div className="cell-title">{position.name}</div>
-                    {position.sku !== null && <div className="muted">{position.sku}</div>}
-                  </td>
-                  <td className="num">
-                    {formatDecimal(position.quantity)} {position.unit}
-                    {isNegative(position.quantity) ? (
-                      <div>
-                        <span className="badge badge-dot badge-critical">Saldo negativo</span>
-                      </div>
-                    ) : (
-                      lowIds.has(position.product_id) && (
+        <Notice message={error} />
+        {loading ? (
+          <p role="status" className="status">
+            <Spinner /> Carregando…
+          </p>
+        ) : items.length === 0 && error ? (
+          <Button type="button" variant="ghost" onClick={() => void reload()}>
+            Tentar de novo
+          </Button>
+        ) : items.length === 0 ? (
+          <div className="empty">
+            <BoxIcon size={40} aria-hidden />
+            <p role={isFiltered ? "status" : undefined}>{isFiltered ? "Nenhum produto encontrado." : "Nenhum produto em estoque ainda."}</p>
+            {isFiltered ? (
+              <Button type="button" variant="ghost" onClick={() => setFilters({ ...NO_POSITION_FILTERS })}>
+                Limpar filtros
+              </Button>
+            ) : (
+              <p className="muted">O estoque nasce das compras recebidas, das vendas e dos movimentos lançados aqui.</p>
+            )}
+          </div>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Produto</th>
+                  <th className="num">Quantidade</th>
+                  <th className="num">Custo médio</th>
+                  <th className="num">Valor</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((position, index) => (
+                  <ListRow key={position.product_id} index={index} highlighted={false}>
+                    <td>
+                      <div className="cell-title">{position.name}</div>
+                      {position.sku !== null && <div className="muted">{position.sku}</div>}
+                    </td>
+                    <td className="num">
+                      {formatDecimal(position.quantity)} {position.unit}
+                      {isNegative(position.quantity) ? (
                         <div>
-                          <span className="badge badge-dot badge-warning">Abaixo do mínimo</span>
+                          <span className="badge badge-dot badge-critical">Saldo negativo</span>
                         </div>
-                      )
-                    )}
-                  </td>
-                  <td className="num">{position.average_cost === null ? "—" : formatMoney(trimCost(position.average_cost))}</td>
-                  <td className="num">{formatMoney(position.value)}</td>
-                </ListRow>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-      {summary !== null && summary.total > 0 && (
-        <p className="muted list-summary" role="status">
-          Total: {summary.total} {summary.total === 1 ? "produto" : "produtos"} · Custo total {formatMoney(summary.value)}
-        </p>
-      )}
-      {nextCursor !== null && (
-        <Button type="button" variant="ghost" icon={ChevronDownIcon} pending={loadingMore} onClick={() => void loadMore()}>
-          Carregar mais
-        </Button>
-      )}
-    </section>
+                      ) : (
+                        lowIds.has(position.product_id) && (
+                          <div>
+                            <span className="badge badge-dot badge-warning">Abaixo do mínimo</span>
+                          </div>
+                        )
+                      )}
+                    </td>
+                    <td className="num">{position.average_cost === null ? "—" : formatMoney(trimCost(position.average_cost))}</td>
+                    <td className="num">{formatMoney(position.value)}</td>
+                  </ListRow>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {summary !== null && summary.total > 0 && (
+          <p className="muted list-summary" role="status">
+            Total: {summary.total} {summary.total === 1 ? "produto" : "produtos"} · Custo total {formatMoney(summary.value)}
+          </p>
+        )}
+        {nextCursor !== null && (
+          <Button type="button" variant="ghost" icon={ChevronDownIcon} pending={loadingMore} onClick={() => void loadMore()}>
+            Carregar mais
+          </Button>
+        )}
+      </section>
+    </>
   );
 }
 
@@ -265,138 +283,156 @@ function MovementsView({ companyId, products, canWrite }: { companyId: string; p
   const undone = useMemo(() => new Set(items.flatMap((movement) => (movement.reverses === null ? [] : [movement.reverses]))), [items]);
 
   return (
-    <section className="card list-card">
-      <h2>Movimentações</h2>
-      <FilterTiles label="Tipo" value={filters.kind} options={tiles} onChange={(kind) => setFilters({ ...filters, kind })} />
-      <div className="filters" role="search">
-        <label>
-          Produto
-          <select value={filters.product} onChange={(event) => setFilters({ ...filters, product: event.target.value })}>
-            <option value="">Todos</option>
-            {products.map((product) => (
-              <option key={product.id} value={product.id}>
-                {product.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          De
-          <input type="date" value={filters.from} onChange={(event) => setFilters({ ...filters, from: event.target.value })} />
-        </label>
-        <label>
-          Até
-          <input type="date" value={filters.to} onChange={(event) => setFilters({ ...filters, to: event.target.value })} />
-        </label>
+    <>
+      <div className="list-actions">
+        <ListTools
+          filename="movimentacoes-de-estoque"
+          header={["Data", "Produto", "Tipo", "Quantidade", "Valor", "Origem", "Observação"]}
+          fetchPage={(after) => api.listStockMovements(companyId, { ...applied, from: wholeDate(applied.from), to: wholeDate(applied.to) }, after)}
+          toRow={(movement) => [
+            movement.occurred_on,
+            names.get(movement.product_id) ?? "",
+            KIND_LABELS[movement.kind],
+            toInputDecimal(movement.quantity),
+            toInputDecimal(movement.value),
+            movement.reverses !== null ? "Desfaz movimento" : movement.origin !== null ? ORIGIN_LABELS[movement.origin.kind] : "Manual",
+            movement.note ?? "",
+          ]}
+        />
       </div>
-      <Notice message={error} />
-      <Notice message={saved} tone="success" />
-      {loading ? (
-        <p role="status" className="status">
-          <Spinner /> Carregando…
-        </p>
-      ) : items.length === 0 && error ? (
-        <Button type="button" variant="ghost" onClick={() => void reload()}>
-          Tentar de novo
-        </Button>
-      ) : items.length === 0 ? (
-        <div className="empty">
-          <BoxIcon size={40} aria-hidden />
-          <p role={isFiltered ? "status" : undefined}>{isFiltered ? "Nenhuma movimentação encontrada." : "Nenhuma movimentação ainda."}</p>
-          {isFiltered && (
-            <Button type="button" variant="ghost" onClick={() => setFilters({ ...NO_MOVEMENT_FILTERS })}>
-              Limpar filtros
-            </Button>
-          )}
+      <section className="card list-card">
+        <h2>Movimentações</h2>
+        <FilterTiles label="Tipo" value={filters.kind} options={tiles} onChange={(kind) => setFilters({ ...filters, kind })} />
+        <div className="filters" role="search">
+          <label>
+            Produto
+            <select value={filters.product} onChange={(event) => setFilters({ ...filters, product: event.target.value })}>
+              <option value="">Todos</option>
+              {products.map((product) => (
+                <option key={product.id} value={product.id}>
+                  {product.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            De
+            <input type="date" value={filters.from} onChange={(event) => setFilters({ ...filters, from: event.target.value })} />
+          </label>
+          <label>
+            Até
+            <input type="date" value={filters.to} onChange={(event) => setFilters({ ...filters, to: event.target.value })} />
+          </label>
         </div>
-      ) : (
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Data</th>
-                <th>Produto</th>
-                <th>Tipo</th>
-                <th className="num">Quantidade</th>
-                <th className="num">Valor</th>
-                <th>Origem</th>
-                <th>
-                  <span className="visually-hidden">Ações</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((movement, index) => {
-                const name = names.get(movement.product_id) ?? "";
-                const manual = movement.origin === null && movement.reverses === null;
-                return (
-                  <Fragment key={movement.id}>
-                    <ListRow index={index} highlighted={false}>
-                      <td>{formatDate(movement.occurred_on)}</td>
-                      <td>
-                        <div className="cell-title">{name}</div>
-                        {movement.note !== null && <div className="muted">{movement.note}</div>}
-                      </td>
-                      <td>{KIND_LABELS[movement.kind]}</td>
-                      <td className="num">{signedQuantity(formatDecimal(movement.quantity))}</td>
-                      <td className="num">{formatMoney(movement.value)}</td>
-                      <td>
-                        {movement.reverses !== null
-                          ? "Desfaz movimento"
-                          : movement.origin !== null
-                            ? ORIGIN_LABELS[movement.origin.kind]
-                            : "Manual"}
-                        {undone.has(movement.id) && (
-                          <>
-                            {" "}
-                            <span className="badge badge-dot badge-warning">Desfeito</span>
-                          </>
-                        )}
-                      </td>
-                      <td className="row-actions">
-                        {canWrite && manual && !undone.has(movement.id) && (
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            icon={RotateCCWIcon}
-                            className="btn-small"
-                            aria-label={`Desfazer o movimento de ${formatDate(movement.occurred_on)} de ${name}`}
-                            aria-expanded={reversing === movement.id}
-                            onClick={() => setReversing(reversing === movement.id ? null : movement.id)}
-                          >
-                            Desfazer
-                          </Button>
-                        )}
-                      </td>
-                    </ListRow>
-                    {reversing === movement.id && (
-                      <tr>
-                        <td colSpan={7} role="region" aria-label={`Desfazer o movimento de ${formatDate(movement.occurred_on)} de ${name}`}>
-                          <ReversePanel
-                            companyId={companyId}
-                            movement={movement}
-                            onDone={() => {
-                              setReversing(null);
-                              setSaved("Movimento desfeito: um movimento contrário foi lançado.");
-                              void reload();
-                            }}
-                          />
+        <Notice message={error} />
+        <Notice message={saved} tone="success" />
+        {loading ? (
+          <p role="status" className="status">
+            <Spinner /> Carregando…
+          </p>
+        ) : items.length === 0 && error ? (
+          <Button type="button" variant="ghost" onClick={() => void reload()}>
+            Tentar de novo
+          </Button>
+        ) : items.length === 0 ? (
+          <div className="empty">
+            <BoxIcon size={40} aria-hidden />
+            <p role={isFiltered ? "status" : undefined}>{isFiltered ? "Nenhuma movimentação encontrada." : "Nenhuma movimentação ainda."}</p>
+            {isFiltered && (
+              <Button type="button" variant="ghost" onClick={() => setFilters({ ...NO_MOVEMENT_FILTERS })}>
+                Limpar filtros
+              </Button>
+            )}
+          </div>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Data</th>
+                  <th>Produto</th>
+                  <th>Tipo</th>
+                  <th className="num">Quantidade</th>
+                  <th className="num">Valor</th>
+                  <th>Origem</th>
+                  <th>
+                    <span className="visually-hidden">Ações</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((movement, index) => {
+                  const name = names.get(movement.product_id) ?? "";
+                  const manual = movement.origin === null && movement.reverses === null;
+                  return (
+                    <Fragment key={movement.id}>
+                      <ListRow index={index} highlighted={false}>
+                        <td>{formatDate(movement.occurred_on)}</td>
+                        <td>
+                          <div className="cell-title">{name}</div>
+                          {movement.note !== null && <div className="muted">{movement.note}</div>}
                         </td>
-                      </tr>
-                    )}
-                  </Fragment>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-      {nextCursor !== null && (
-        <Button type="button" variant="ghost" icon={ChevronDownIcon} pending={loadingMore} onClick={() => void loadMore()}>
-          Carregar mais
-        </Button>
-      )}
-    </section>
+                        <td>{KIND_LABELS[movement.kind]}</td>
+                        <td className="num">{signedQuantity(formatDecimal(movement.quantity))}</td>
+                        <td className="num">{formatMoney(movement.value)}</td>
+                        <td>
+                          {movement.reverses !== null
+                            ? "Desfaz movimento"
+                            : movement.origin !== null
+                              ? ORIGIN_LABELS[movement.origin.kind]
+                              : "Manual"}
+                          {undone.has(movement.id) && (
+                            <>
+                              {" "}
+                              <span className="badge badge-dot badge-warning">Desfeito</span>
+                            </>
+                          )}
+                        </td>
+                        <td className="row-actions">
+                          {canWrite && manual && !undone.has(movement.id) && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              icon={RotateCCWIcon}
+                              className="btn-small"
+                              aria-label={`Desfazer o movimento de ${formatDate(movement.occurred_on)} de ${name}`}
+                              aria-expanded={reversing === movement.id}
+                              onClick={() => setReversing(reversing === movement.id ? null : movement.id)}
+                            >
+                              Desfazer
+                            </Button>
+                          )}
+                        </td>
+                      </ListRow>
+                      {reversing === movement.id && (
+                        <tr>
+                          <td colSpan={7} role="region" aria-label={`Desfazer o movimento de ${formatDate(movement.occurred_on)} de ${name}`}>
+                            <ReversePanel
+                              companyId={companyId}
+                              movement={movement}
+                              onDone={() => {
+                                setReversing(null);
+                                setSaved("Movimento desfeito: um movimento contrário foi lançado.");
+                                void reload();
+                              }}
+                            />
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {nextCursor !== null && (
+          <Button type="button" variant="ghost" icon={ChevronDownIcon} pending={loadingMore} onClick={() => void loadMore()}>
+            Carregar mais
+          </Button>
+        )}
+      </section>
+    </>
   );
 }
 

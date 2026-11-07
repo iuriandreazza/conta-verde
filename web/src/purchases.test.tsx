@@ -116,6 +116,22 @@ const readOnly = (url: string): Reply | undefined =>
       }
     : undefined;
 
+const stubDownloads = () => {
+  const saved: { name: string; text: string }[] = [];
+  vi.stubGlobal("URL", {
+    createObjectURL: (blob: Blob) => {
+      saved.push({ name: "", text: "" });
+      void blob.text().then((text) => (saved[saved.length - 1].text = text));
+      return "blob:x";
+    },
+    revokeObjectURL: () => undefined,
+  });
+  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+    saved[saved.length - 1].name = this.download;
+  });
+  return saved;
+};
+
 describe("purchases", () => {
   it("lists the orders with their supplier, date, total and status in words", async () => {
     mockApi(answer([draft, approved, partial, received, cancelled]));
@@ -131,6 +147,18 @@ describe("purchases", () => {
     expect(screen.getByRole("row", { name: /Torrefação Serra.*Recebido em parte/ })).toHaveTextContent("3");
     expect(screen.getByRole("row", { name: /Torrefação Serra.*Recebido(?! em parte)/ })).toHaveTextContent("4");
     expect(screen.getByRole("row", { name: /Torrefação Serra.*Cancelado/ })).toHaveTextContent("5");
+  });
+
+  it("exports the orders as they are filtered, with the supplier's name and the total as a plain decimal", async () => {
+    const saved = stubDownloads();
+    mockApi(answer([draft]));
+    renderAt("/companies/c1/purchases");
+    await screen.findByRole("row", { name: /Torrefação Serra/ });
+    await userEvent.click(screen.getByRole("button", { name: "Exportar" }));
+    expect(await screen.findByText("1 linha exportada.")).toBeInTheDocument();
+    await vi.waitFor(() => expect(saved[0].text).not.toBe(""));
+    expect(saved[0].name).toBe("compras.csv");
+    expect(saved[0].text).toBe("Número;Fornecedor;Data;Previsão;Situação;Total\r\n1;Torrefação Serra;2026-11-06;2026-11-20;Rascunho;255\r\n");
   });
 
   it("counts the orders by status in tiles that filter the list", async () => {

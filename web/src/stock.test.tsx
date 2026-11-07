@@ -105,6 +105,22 @@ const openSheet = async () => {
   return sheet;
 };
 
+const stubDownloads = () => {
+  const saved: { name: string; text: string }[] = [];
+  vi.stubGlobal("URL", {
+    createObjectURL: (blob: Blob) => {
+      saved.push({ name: "", text: "" });
+      void blob.text().then((text) => (saved[saved.length - 1].text = text));
+      return "blob:x";
+    },
+    revokeObjectURL: () => undefined,
+  });
+  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+    saved[saved.length - 1].name = this.download;
+  });
+  return saved;
+};
+
 describe("stock positions", () => {
   it("shows what is on hand with its unit, average cost and value, and flags what the server says is low, or negative", async () => {
     mockApi(
@@ -151,6 +167,19 @@ describe("stock positions", () => {
     await vi.waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/stock/positions?situation=depleted"))).toBe(true));
     // Every tile keeps its number: the summary does not take the situation.
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/summary") && String(url).includes("situation"))).toBe(false);
+  });
+
+  it("exports the position with plain decimals", async () => {
+    const saved = stubDownloads();
+    mockApi(answer());
+    renderAt("/companies/c1/stock");
+    await screen.findByRole("row", { name: /Grão de café 1kg/ });
+    await userEvent.click(screen.getByRole("button", { name: "Exportar" }));
+    expect(await screen.findByText("1 linha exportada.")).toBeInTheDocument();
+    await vi.waitFor(() => expect(saved[0].text).not.toBe(""));
+    expect(saved[0].name).toBe("posicao-do-estoque.csv");
+    expect(saved[0].text).toContain("Produto;SKU;Unidade;Quantidade;Custo médio;Valor\r\n");
+    expect(saved[0].text).toContain("Grão de café 1kg;");
   });
 
   it("asks for the balance on the day chosen", async () => {
