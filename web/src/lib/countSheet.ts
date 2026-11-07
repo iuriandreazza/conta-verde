@@ -5,11 +5,17 @@ import { isAmbiguousSigned, toSignedDecimal } from "./stock";
 
 const HEADER = ["SKU", "Produto", "Contado"];
 
-/** The spreadsheet a count can be filled from: every product that can have stock, with the column to fill. */
+/** The most of a sheet that is read: a count has at most a few hundred lines, so a bigger file is not one. */
+export const MAX_SHEET_BYTES = 1024 * 1024;
+
+/**
+ * The spreadsheet a count can be filled from: every active product that has a SKU (the SKU is how a line finds its
+ * product), with the column to fill.
+ */
 export function countTemplate(products: Product[]): string {
   return toCsv(
     HEADER,
-    products.filter((product) => product.active).map((product) => [product.sku ?? "", product.name, ""]),
+    products.filter((product) => product.active && product.sku !== null).map((product) => [product.sku ?? "", product.name, ""]),
   );
 }
 

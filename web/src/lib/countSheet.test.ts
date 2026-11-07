@@ -6,13 +6,12 @@ const product = (id: string, name: string, sku: string | null, active = true) =>
 const products = [product("p1", "Café", "CAFE-500"), product("p2", "Pão", "PAO-1"), product("p3", "Velho", "OLD", false), product("p4", "Sem código", null)];
 
 describe("the count sheet", () => {
-  it("makes a template of the active products, which reads back as an empty count", () => {
+  it("makes a template of the active products that have a SKU, which reads back as an empty count", () => {
     const rows = readCsv(countTemplate(products));
     expect(rows[0]).toEqual(["SKU", "Produto", "Contado"]);
     expect(rows.slice(1)).toEqual([
       ["CAFE-500", "Café", ""],
       ["PAO-1", "Pão", ""],
-      ["", "Sem código", ""],
     ]);
     expect(readCountSheet(countTemplate(products), products)).toEqual({ lines: [], problems: [] });
   });

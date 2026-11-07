@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import type { InventoryCount, InventoryCountInput, Product } from "../api";
 import { toInputDecimal } from "../lib/decimal";
-import { countTemplate, readCountSheet } from "../lib/countSheet";
+import { MAX_SHEET_BYTES, countTemplate, readCountSheet } from "../lib/countSheet";
 import { downloadCsv } from "../lib/csv";
 import { isIsoDate } from "../lib/entryInstallments";
 import { todayIso } from "../lib/settlement";
@@ -74,6 +74,10 @@ export function InventoryCountForm({ products, count, viaSheet = false, pending,
   /** Fills the lines from a CSV the person chose: what the sheet counted replaces what was typed. */
   async function readSheet(file: File | undefined) {
     if (file === undefined) return;
+    if (file.size > MAX_SHEET_BYTES) {
+      setSheetProblems(["O arquivo tem mais de 1 MiB: uma planilha de contagem não é tão grande. Confira se é o arquivo certo."]);
+      return;
+    }
     const { lines, problems } = readCountSheet(await file.text(), products.filter((product) => product.active));
     setSheetProblems(problems);
     if (lines.length > 0) {
@@ -155,7 +159,11 @@ export function InventoryCountForm({ products, count, viaSheet = false, pending,
                 accept=".csv,text/csv"
                 aria-label="Arquivo da planilha de contagem"
                 disabled={pending}
-                onChange={(event) => void readSheet(event.target.files?.[0])}
+                onChange={(event) => {
+                  void readSheet(event.target.files?.[0]);
+                  // The same file chosen again (after it was fixed) must be read again.
+                  event.target.value = "";
+                }}
               />
             </label>
           </div>
