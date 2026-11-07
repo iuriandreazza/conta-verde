@@ -104,24 +104,63 @@ const readInvoice = async (file: File = xml()) => {
   const sheet = within((await screen.findByRole("heading", { name: "Entrada por XML (NF-e)" })).closest("aside")!);
   await userEvent.upload(await sheet.findByLabelText("Arquivo XML da NF-e"), file);
   await userEvent.click(sheet.getByRole("button", { name: "Ler arquivo" }));
-  await sheet.findByRole("button", { name: "Entrar compra" });
+  // What the invoice says is the first step after the file.
+  await sheet.findByRole("heading", { name: "O que a nota diz" });
   return sheet;
 };
 
+type Sheet = Awaited<ReturnType<typeof readInvoice>>;
+
+/** Goes on to the next step. */
+const next = (sheet: Sheet) => userEvent.click(sheet.getByRole("button", { name: "Continuar" }));
+
+/** Fills the nature of the purchase (the second step) and goes on to the products. */
+const chooseNature = async (sheet: Sheet, extra?: (sheet: Sheet) => Promise<void> | void) => {
+  await next(sheet);
+  await userEvent.selectOptions(await sheet.findByLabelText("Categoria das contas a pagar"), "cat1");
+  await extra?.(sheet);
+  await next(sheet);
+  await sheet.findByRole("heading", { name: "Produtos da NF-e" });
+};
+
 describe("purchase entry from an NF-e", () => {
-  it("shows what the invoice says: the issuer, the installments, and each item with its product", async () => {
+  it("goes in order: the file, what the invoice says, the nature of the purchase, the products and a last look", async () => {
     const fetchMock = mockApi(answer(invoice()));
     renderAt("/companies/c1/purchases");
     const file = xml();
     const sheet = await readInvoice(file);
 
+    // The five steps are shown, and the one the person is on is marked.
+    const steps = within(sheet.getByRole("list", { name: "Etapas" }));
+    // The file is done (a tick in place of its number), the rest still carry theirs.
+    expect(steps.getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "Arquivo XML",
+      "2Dados da nota",
+      "3Natureza da compra",
+      "4Produtos",
+      "5Concluir",
+    ]);
+    expect(steps.getByText("Dados da nota").closest("li")).toHaveAttribute("aria-current", "step");
+
+    // Step 2: what the invoice says.
     expect(sheet.getByText("Torrefação Serra Ltda").closest("p")).toHaveTextContent("12345678000195");
     expect(sheet.getByText(/NF-e nº 123, série 1/)).toHaveTextContent("R$ 300,00");
     expect(sheet.getByText(/NF-e nº 123, série 1/)).toHaveTextContent("05/11/2026");
     const parcels = within(sheet.getByRole("list", { name: "Parcelas da nota" }));
     expect(parcels.getByText("05/12/2026 · R$ 150,00")).toBeInTheDocument();
     expect(parcels.getByText("05/01/2027 · R$ 150,00")).toBeInTheDocument();
-    const first = sheet.getByRole("row", { name: /GRAO/ });
+    await next(sheet);
+
+    // Step 3: the nature; the invoice gives installments, so the payment term does not apply, and a category is needed.
+    expect(await sheet.findByRole("heading", { name: "Natureza da compra" })).toBeInTheDocument();
+    expect(sheet.queryByLabelText("Prazo de pagamento")).not.toBeInTheDocument();
+    expect(sheet.getByRole("button", { name: "Continuar" })).toBeDisabled();
+    expect(sheet.getByText("Escolha a categoria das contas a pagar.")).toBeInTheDocument();
+    await userEvent.selectOptions(sheet.getByLabelText("Categoria das contas a pagar"), "cat1");
+    await next(sheet);
+
+    // Step 4: each item with its product; one has none, and that stops the way on.
+    const first = await sheet.findByRole("row", { name: /GRAO/ });
     expect(first).toHaveTextContent("10 KG");
     expect(first).toHaveTextContent("R$ 270,50");
     expect(first).toHaveTextContent("R$ 20,50");
@@ -129,17 +168,28 @@ describe("purchase entry from an NF-e", () => {
     const second = sheet.getByRole("row", { name: /XYZ-9/ });
     expect(within(second).getByLabelText("Produto do item 2")).toHaveValue("");
     expect(within(second).getByText("Sem produto")).toBeInTheDocument();
-    // The invoice gives installments, so the payment term does not apply.
-    expect(sheet.queryByLabelText("Prazo de pagamento")).not.toBeInTheDocument();
-    expect(sheet.getByRole("button", { name: "Entrar compra" })).toBeDisabled();
+    expect(sheet.getByRole("button", { name: "Continuar" })).toBeDisabled();
 
-    // The XML goes to the preview as it is, as the body.
+    // The XML went to the preview as it is, as the body, and only once.
     const [, init] = calls(fetchMock, "POST")[0];
     expect(init?.body).toBe(file);
     expect(new Headers(init?.headers).get("Content-Type")).toBe("application/xml");
+    expect(calls(fetchMock, "POST")).toHaveLength(1);
   });
 
-  it("enters the purchase with the chosen products, category and day, the file as the body", async () => {
+  it("goes back a step without losing what was chosen", async () => {
+    mockApi(answer(invoice()));
+    renderAt("/companies/c1/purchases");
+    const sheet = await readInvoice();
+    await chooseNature(sheet);
+
+    await userEvent.click(sheet.getByRole("button", { name: "Voltar" }));
+    expect(await sheet.findByLabelText("Categoria das contas a pagar")).toHaveValue("cat1");
+    await userEvent.click(sheet.getByRole("button", { name: "Voltar" }));
+    expect(await sheet.findByRole("heading", { name: "O que a nota diz" })).toBeInTheDocument();
+  });
+
+  it("enters the purchase with the chosen products, category and day, the file as the body, after a last look", async () => {
     const fetchMock = mockApi(
       answer(invoice(), (url, init) =>
         url.includes("/purchase-imports?") && init?.method === "POST"
@@ -151,9 +201,18 @@ describe("purchase entry from an NF-e", () => {
     const file = xml();
     const sheet = await readInvoice(file);
 
+    await chooseNature(sheet, () => {
+      fireEvent.change(sheet.getByLabelText("Dia em que a mercadoria chegou"), { target: { value: "2026-11-08" } });
+    });
     await userEvent.selectOptions(sheet.getByLabelText("Produto do item 2"), "pr2");
-    await userEvent.selectOptions(sheet.getByLabelText("Categoria das contas a pagar"), "cat1");
-    fireEvent.change(sheet.getByLabelText("Dia em que a mercadoria chegou"), { target: { value: "2026-11-08" } });
+    await next(sheet);
+
+    // The last look says what will be made, and nothing is sent until it is confirmed.
+    expect(await sheet.findByRole("heading", { name: "Concluir a entrada" })).toBeInTheDocument();
+    expect(sheet.getByText("Torrefação Serra Ltda")).toBeInTheDocument();
+    expect(sheet.getByText("2 parcelas, as da nota")).toBeInTheDocument();
+    expect(sheet.getByText("08/11/2026")).toBeInTheDocument();
+    expect(calls(fetchMock, "POST")).toHaveLength(1);
     await userEvent.click(sheet.getByRole("button", { name: "Entrar compra" }));
 
     expect(await screen.findByText("Compra nº 7 criada a partir da NF-e.")).toBeInTheDocument();
@@ -176,13 +235,43 @@ describe("purchase entry from an NF-e", () => {
     const sheet = await readInvoice();
 
     expect(sheet.getByText("A nota não informa parcelas.")).toBeInTheDocument();
-    await userEvent.selectOptions(sheet.getByLabelText("Prazo de pagamento"), "t1");
-    await userEvent.selectOptions(sheet.getByLabelText("Categoria das contas a pagar"), "cat1");
+    await chooseNature(sheet, async () => {
+      await userEvent.selectOptions(sheet.getByLabelText("Prazo de pagamento"), "t1");
+    });
+    await next(sheet);
+    expect(await sheet.findByText("30 dias")).toBeInTheDocument();
     await userEvent.click(sheet.getByRole("button", { name: "Entrar compra" }));
 
     expect(await screen.findByText("Compra nº 8 criada a partir da NF-e.")).toBeInTheDocument();
     const url = new URL(String(calls(fetchMock, "POST")[1][0]), "http://localhost");
     expect(url.searchParams.get("payment_term_id")).toBe("t1");
+  });
+
+  it("does not go on with a day that is not a whole date, like a year typed half way", async () => {
+    mockApi(answer(invoice()));
+    renderAt("/companies/c1/purchases");
+    const sheet = await readInvoice();
+    await next(sheet);
+    await userEvent.selectOptions(await sheet.findByLabelText("Categoria das contas a pagar"), "cat1");
+    fireEvent.change(sheet.getByLabelText("Dia em que a mercadoria chegou"), { target: { value: "0002-11-06" } });
+    expect(sheet.getByText("Informe o dia em que a mercadoria chegou.")).toBeInTheDocument();
+    expect(sheet.getByRole("button", { name: "Continuar" })).toBeDisabled();
+  });
+
+  it("shows the API's reason on the last step when the entry fails, and stays there", async () => {
+    mockApi(
+      answer(invoice({ items: invoice().items.map((item) => ({ ...item, product_id: "pr1" })) }), (url, init) =>
+        url.includes("/purchase-imports?") && init?.method === "POST" ? { status: 409, body: { error: "the invoice changed meanwhile" } } : undefined,
+      ),
+    );
+    renderAt("/companies/c1/purchases");
+    const sheet = await readInvoice();
+    await chooseNature(sheet);
+    await next(sheet);
+    await userEvent.click(await sheet.findByRole("button", { name: "Entrar compra" }));
+
+    expect(await sheet.findByRole("alert")).toHaveTextContent("the invoice changed meanwhile");
+    expect(sheet.getByRole("heading", { name: "Concluir a entrada" })).toBeInTheDocument();
   });
 
   it("does not let an invoice from an unregistered supplier be entered", async () => {
@@ -191,11 +280,10 @@ describe("purchase entry from an NF-e", () => {
     const sheet = await readInvoice();
 
     expect(sheet.getByText(/Fornecedor não cadastrado.*12345678000195/)).toBeInTheDocument();
-    await userEvent.selectOptions(sheet.getByLabelText("Categoria das contas a pagar"), "cat1");
-    expect(sheet.getByRole("button", { name: "Entrar compra" })).toBeDisabled();
+    expect(sheet.getByRole("button", { name: "Continuar" })).toBeDisabled();
   });
 
-  it("says when the invoice was already entered, with a link to the purchases, and does not enter it again", async () => {
+  it("says when the invoice was already entered, with a link to the purchases, and does not go on", async () => {
     mockApi(
       answer(invoice({ entered: { purchase_id: "o1", number: 7, status: "received" }, items: invoice().items.map((item) => ({ ...item, product_id: "pr1" })) })),
     );
@@ -204,7 +292,7 @@ describe("purchase entry from an NF-e", () => {
 
     expect(sheet.getByText("Esta nota já foi entrada como a compra nº 7.")).toBeInTheDocument();
     expect(sheet.getByRole("link", { name: "Ver nas compras" })).toHaveAttribute("href", "/companies/c1/purchases");
-    expect(sheet.getByRole("button", { name: "Entrar compra" })).toBeDisabled();
+    expect(sheet.getByRole("button", { name: "Continuar" })).toBeDisabled();
   });
 
   it("shows the API's message for a file it refuses", async () => {
@@ -262,7 +350,7 @@ describe("purchase entry from an NF-e", () => {
     fireEvent.drop(zone, { dataTransfer: { files: [file] } });
     expect(await sheet.findByText("nota.xml")).toBeInTheDocument();
     await userEvent.click(sheet.getByRole("button", { name: "Ler arquivo" }));
-    await sheet.findByRole("button", { name: "Entrar compra" });
+    await sheet.findByRole("heading", { name: "O que a nota diz" });
     expect(calls(fetchMock, "POST")[0][1]?.body).toBe(file);
   });
 
