@@ -203,7 +203,18 @@ fn money(value: Decimal) -> String {
     } else {
         value.to_string()
     };
-    text.replace('.', ",")
+    let (whole, cents) = text.split_once('.').unwrap_or((text.as_str(), ""));
+    let (sign, digits) = whole
+        .strip_prefix('-')
+        .map_or(("", whole), |digits| ("-", digits));
+    let mut grouped = String::new();
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index) % 3 == 0 {
+            grouped.push('.');
+        }
+        grouped.push(digit);
+    }
+    format!("{sign}{grouped},{cents}")
 }
 
 fn br_date(day: CalendarDate) -> String {
@@ -220,6 +231,8 @@ mod tests {
         assert_eq!(money(Decimal::from(10)), "10,00");
         assert_eq!(money(Decimal::new(333333, 6)), "0,333333");
         assert_eq!(money(Decimal::new(105, 1)), "10,50");
+        assert_eq!(money(Decimal::new(123456789, 2)), "1.234.567,89");
+        assert_eq!(money(Decimal::new(-100000, 2)), "-1.000,00");
         assert_eq!(quantity(Decimal::new(1500, 3)), "1,5");
         assert_eq!(quantity(Decimal::from(20)), "20");
         assert_eq!(

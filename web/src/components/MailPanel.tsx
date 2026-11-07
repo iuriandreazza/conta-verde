@@ -18,6 +18,8 @@ interface MailPanelProps {
  */
 export function MailPanel({ what, send, onClose }: MailPanelProps) {
   const [sending, setSending] = useState(false);
+  // One send per opening: another click would queue the same document again.
+  const [done, setDone] = useState(false);
   const [result, setResult] = useState<{ message: string; tone: "success" | "warning" | "error" } | null>(null);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -27,6 +29,7 @@ export function MailPanel({ what, send, onClose }: MailPanelProps) {
     setResult(null);
     try {
       const mailed = await send(to);
+      setDone(mailed.emailed);
       setResult(
         mailed.emailed
           ? { message: `Enviado para ${mailed.to}.`, tone: "success" }
@@ -52,7 +55,7 @@ export function MailPanel({ what, send, onClose }: MailPanelProps) {
       </label>
       <Notice message={result?.message ?? null} tone={result?.tone} />
       <div className="form-actions">
-        <Button type="submit" icon={SendIcon} pending={sending}>
+        <Button type="submit" icon={SendIcon} pending={sending} disabled={done}>
           Enviar {what} por e-mail
         </Button>
         <Button type="button" variant="ghost" disabled={sending} onClick={onClose}>
