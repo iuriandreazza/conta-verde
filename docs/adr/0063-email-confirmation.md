@@ -17,7 +17,7 @@ An account that joins a company by an invitation has already shown it: the link 
 
 - `users.email_verified_at` (null until confirmed). **Accounts that existed before are unconfirmed** and say so.
 - **A sign-up that makes a company of its own** e-mails a link, through the queue ([ADR 0059](0059-job-queue.md)):
-  `{PUBLIC_URL}/confirm-email/{token}`. A sign-up through an invitation is **marked confirmed at once** and sends nothing.
+  `{PUBLIC_URL}/confirm-email/{token}`. A sign-up through an invitation is **marked confirmed at once** and sends nothing, and so is an account that **spends a password reset link**: the link reached the mailbox.
 - **Confirming does not block anything.** It is a request, not a gate: the app shows a banner above the page until the
   address is confirmed, with a button to send the link again. Locking features behind it is a product decision for later.
 - The token is 256 bits; only its SHA-256 digest is kept (`email_confirmations`), for **3 days**, single use. Up to five links

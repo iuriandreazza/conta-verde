@@ -3121,10 +3121,10 @@ mod tests {
             send(&app, login("correct horse")).await.status,
             StatusCode::UNAUTHORIZED
         );
-        assert_eq!(
-            send(&app, login("battery staple")).await.status,
-            StatusCode::OK
-        );
+        let signed_in = send(&app, login("battery staple")).await;
+        assert_eq!(signed_in.status, StatusCode::OK);
+        // A link that reached the mailbox confirmed the address too.
+        assert_eq!(signed_in.body["email_verified"], true);
     }
 
     #[tokio::test]
