@@ -29,6 +29,7 @@ uuid_id!(CommissionRuleId);
 uuid_id!(CompanyId);
 uuid_id!(ContractId);
 uuid_id!(CostCenterId);
+uuid_id!(DocumentMailId);
 uuid_id!(EntryId);
 uuid_id!(InventoryCountId);
 uuid_id!(InvitationId);

@@ -1,11 +1,12 @@
 use axum::Json;
 use axum::extract::{Path, State};
-use conta_verde_application::ApplicationError;
-use conta_verde_domain::{EntryId, PurchaseOrderId, SettlementId};
+use conta_verde_application::{ApplicationError, MailAsk};
+use conta_verde_domain::{DocumentMail, DocumentMailKind, EntryId, PurchaseOrderId, SettlementId};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::access::CompanyAccess;
+use crate::clock::now_millis;
 use crate::error::ApiError;
 use crate::json::ApiJson;
 use crate::{Ports, SharedState};
@@ -33,7 +34,7 @@ fn parse<T>(raw: &str, make: fn(Uuid) -> T, missing: ApplicationError) -> Result
 /// E-mails an approved or partly received purchase order to its supplier, or to the address given.
 pub(crate) async fn send_purchase_order<X: Ports>(
     State(state): State<SharedState<X>>,
-    CompanyAccess(company_id, _): CompanyAccess,
+    CompanyAccess(company_id, actor): CompanyAccess,
     Path((_, id)): Path<(Uuid, String)>,
     ApiJson(request): ApiJson<MailRequest>,
 ) -> Result<Json<MailedResponse>, ApiError> {
@@ -45,7 +46,16 @@ pub(crate) async fn send_purchase_order<X: Ports>(
     let company_name = state.auth.company_name(company_id).await?;
     let mailed = state
         .documents
-        .send_purchase_order(company_id, id, request.to.as_deref(), &company_name)
+        .send_purchase_order(
+            company_id,
+            &MailAsk {
+                actor: &actor,
+                now_millis: now_millis(),
+                to: request.to.as_deref(),
+                company_name: &company_name,
+            },
+            id,
+        )
         .await?;
     Ok(Json(MailedResponse {
         to: mailed.to.as_str().to_owned(),
@@ -56,7 +66,7 @@ pub(crate) async fn send_purchase_order<X: Ports>(
 /// E-mails the customer the proof of a settlement of a receivable.
 pub(crate) async fn send_payment_receipt<X: Ports>(
     State(state): State<SharedState<X>>,
-    CompanyAccess(company_id, _): CompanyAccess,
+    CompanyAccess(company_id, actor): CompanyAccess,
     Path((_, entry_id, settlement_id)): Path<(Uuid, String, String)>,
     ApiJson(request): ApiJson<MailRequest>,
 ) -> Result<Json<MailedResponse>, ApiError> {
@@ -75,14 +85,79 @@ pub(crate) async fn send_payment_receipt<X: Ports>(
         .documents
         .send_payment_receipt(
             company_id,
+            &MailAsk {
+                actor: &actor,
+                now_millis: now_millis(),
+                to: request.to.as_deref(),
+                company_name: &company_name,
+            },
             entry_id,
             settlement_id,
-            request.to.as_deref(),
-            &company_name,
         )
         .await?;
     Ok(Json(MailedResponse {
         to: mailed.to.as_str().to_owned(),
         emailed: mailed.emailed,
+    }))
+}
+
+#[derive(Serialize)]
+pub(crate) struct SentMailResponse {
+    to: String,
+    /// Unix milliseconds.
+    sent_at_millis: i64,
+}
+
+impl From<&DocumentMail> for SentMailResponse {
+    fn from(mail: &DocumentMail) -> Self {
+        Self {
+            to: mail.to.as_str().to_owned(),
+            sent_at_millis: mail.sent_at_millis,
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub(crate) struct SentMailsResponse {
+    items: Vec<SentMailResponse>,
+}
+
+/// When and to whom a purchase order was e-mailed, newest first.
+pub(crate) async fn purchase_order_mails<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, _): CompanyAccess,
+    Path((_, id)): Path<(Uuid, String)>,
+) -> Result<Json<SentMailsResponse>, ApiError> {
+    let id = parse(
+        &id,
+        PurchaseOrderId::from_uuid,
+        ApplicationError::PurchaseNotFound,
+    )?;
+    let sent = state
+        .documents
+        .history(company_id, DocumentMailKind::PurchaseOrder, id.as_uuid())
+        .await?;
+    Ok(Json(SentMailsResponse {
+        items: sent.iter().map(SentMailResponse::from).collect(),
+    }))
+}
+
+/// When and to whom the receipt of a settlement was e-mailed, newest first.
+pub(crate) async fn payment_receipt_mails<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, _): CompanyAccess,
+    Path((_, _, settlement_id)): Path<(Uuid, String, String)>,
+) -> Result<Json<SentMailsResponse>, ApiError> {
+    let id = parse(
+        &settlement_id,
+        SettlementId::from_uuid,
+        ApplicationError::SettlementNotFound,
+    )?;
+    let sent = state
+        .documents
+        .history(company_id, DocumentMailKind::PaymentReceipt, id.as_uuid())
+        .await?;
+    Ok(Json(SentMailsResponse {
+        items: sent.iter().map(SentMailResponse::from).collect(),
     }))
 }

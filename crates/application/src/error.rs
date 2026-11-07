@@ -225,6 +225,8 @@ pub enum ApplicationError {
     InvitationForAnotherEmail,
     /// A document that cannot be e-mailed in the state it is in; says why.
     CannotMail(&'static str),
+    /// The e-mail was not sent because of a limit; says which.
+    MailRefused(&'static str),
     /// Nobody to send the e-mail to: the party has no address and none was given.
     NoEmailAddress,
     /// The operator switched the CNPJ lookup off, so there is nothing to ask.
@@ -451,7 +453,7 @@ impl fmt::Display for ApplicationError {
             Self::InvitationNoLongerValid => f.write_str(
                 "this invitation was already used or withdrawn, or has expired: ask for a new one",
             ),
-            Self::CannotMail(why) => f.write_str(why),
+            Self::CannotMail(why) | Self::MailRefused(why) => f.write_str(why),
             Self::NoEmailAddress => {
                 f.write_str("there is no e-mail address to send to: register one for the party or give one")
             }

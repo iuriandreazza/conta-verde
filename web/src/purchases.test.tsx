@@ -154,7 +154,9 @@ describe("purchases", () => {
     let refuse = true;
     const fetchMock = mockApi(
       answer([draft, approved], (url, init) =>
-        url.endsWith("/purchase-orders/o2/send") && init?.method === "POST"
+        url.endsWith("/purchase-orders/o2/mails")
+          ? { status: 200, body: { items: refuse ? [] : [{ to: "compras@example.com", sent_at_millis: Date.UTC(2026, 10, 6, 17, 30) }] } }
+          : url.endsWith("/purchase-orders/o2/send") && init?.method === "POST"
           ? refuse
             ? { status: 422, body: { error: "there is no e-mail address to send to: register one for the party or give one" } }
             : { status: 200, body: { to: "compras@example.com", emailed: true } }
@@ -175,6 +177,8 @@ describe("purchases", () => {
     await userEvent.type(panel.getByLabelText("Enviar para"), "compras@example.com");
     await userEvent.click(panel.getByRole("button", { name: "Enviar o pedido por e-mail" }));
     expect(await panel.findByText("Enviado para compras@example.com.")).toBeInTheDocument();
+    // What was sent is on record and shown once it has been read again.
+    expect(await panel.findByText(/Já enviado: .* para compras@example.com\./)).toBeInTheDocument();
     const posts = calls(fetchMock, "POST");
     expect(JSON.parse(String(posts[1][1]?.body))).toEqual({ to: "compras@example.com" });
   });

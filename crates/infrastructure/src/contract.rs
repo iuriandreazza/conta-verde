@@ -106,6 +106,18 @@ pub async fn create_company(pool: &PgPool) -> CompanyId {
     id
 }
 
+/// A user row, for a test that needs somebody to have done something.
+pub async fn create_user(pool: &PgPool) -> UserId {
+    let id = UserId::generate();
+    sqlx::query("INSERT INTO users (id, name, email, password_hash) VALUES ($1, 'Test', $2, 'x')")
+        .bind(id.as_uuid())
+        .bind(format!("test-{}@example.com", id.as_uuid()))
+        .execute(pool)
+        .await
+        .unwrap();
+    id
+}
+
 fn party_draft(name: &str, document: Option<&str>) -> PartyDraft {
     PartyDraft {
         name: name.into(),
@@ -14799,4 +14811,122 @@ pub async fn runs_the_job_queue<Q: conta_verde_application::JobQueue>(queue: &Q)
     assert!([d, e].contains(&x.id) && [d, e].contains(&y.id));
     queue.complete(d).await.unwrap();
     queue.complete(e).await.unwrap();
+}
+
+/// The log of e-mailed documents ([ADR 0064]): the same document is not sent again to the same address within the
+/// cooldown, a company has a cap over a day, another company's sends do not count, a send that went nowhere is taken back,
+/// and what was sent is listed newest first.
+pub async fn limits_and_logs_the_documents_that_are_mailed<
+    L: conta_verde_application::DocumentMailRepository,
+>(
+    log: &L,
+    company: CompanyId,
+    other_company: CompanyId,
+    user: UserId,
+) {
+    use conta_verde_application::Reservation::{CapReached, Reserved, TooSoon};
+    use conta_verde_domain::{DocumentMail, DocumentMailId, DocumentMailKind};
+
+    // A cooldown of a second, a day of ten seconds and a cap of three keep the numbers small.
+    const COOLDOWN: i64 = 1_000;
+    const DAY: i64 = 10_000;
+    const CAP: u32 = 3;
+    let (order, receipt) = (Uuid::new_v4(), Uuid::new_v4());
+    let mail = |company, kind, document, to: &str, at| DocumentMail {
+        id: DocumentMailId::generate(),
+        company_id: company,
+        kind,
+        document_id: document,
+        to: conta_verde_domain::Email::parse(to).unwrap(),
+        sent_by: user,
+        sent_at_millis: at,
+    };
+    let reserve =
+        |m: DocumentMail| async move { log.reserve(&m, COOLDOWN, DAY, CAP).await.unwrap() };
+    let po = DocumentMailKind::PurchaseOrder;
+
+    // The same document to the same address waits out the cooldown, to the second it is over.
+    assert_eq!(
+        reserve(mail(company, po, order, "a@example.com", 1_000)).await,
+        Reserved
+    );
+    assert_eq!(
+        reserve(mail(company, po, order, "a@example.com", 1_500)).await,
+        TooSoon
+    );
+    assert_eq!(
+        reserve(mail(company, po, order, "a@example.com", 2_000)).await,
+        Reserved
+    );
+    // Another address, another document or another kind is not held back by it.
+    assert_eq!(
+        reserve(mail(company, po, order, "b@example.com", 2_100)).await,
+        Reserved
+    );
+
+    // Three went out over the day: the fourth is refused, whatever it is.
+    assert_eq!(
+        reserve(mail(
+            company,
+            DocumentMailKind::PaymentReceipt,
+            receipt,
+            "c@example.com",
+            2_500
+        ))
+        .await,
+        CapReached
+    );
+    // Another company has its own count.
+    assert_eq!(
+        reserve(mail(other_company, po, order, "a@example.com", 2_500)).await,
+        Reserved
+    );
+
+    // What a refusal stored nothing of: the log holds the three, newest first, and none of another company's.
+    let sent = log.of_document(company, po, order, 10).await.unwrap();
+    assert_eq!(
+        sent.iter()
+            .map(|m| (m.sent_at_millis, m.to.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            (2_100, "b@example.com"),
+            (2_000, "a@example.com"),
+            (1_000, "a@example.com")
+        ]
+    );
+    assert_eq!(sent[0].sent_by, user);
+    assert_eq!(
+        log.of_document(company, po, order, 2).await.unwrap().len(),
+        2
+    );
+    assert!(
+        log.of_document(company, DocumentMailKind::PaymentReceipt, order, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        log.of_document(other_company, po, order, 10)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // Once the day has passed the old sends no longer count.
+    assert_eq!(
+        reserve(mail(company, po, order, "a@example.com", 12_001)).await,
+        Reserved
+    );
+
+    // A send that went nowhere is taken back, and does not hold the next one up.
+    let gone = mail(company, po, receipt, "d@example.com", 20_000);
+    assert_eq!(reserve(gone.clone()).await, Reserved);
+    log.release(company, gone.id).await.unwrap();
+    assert_eq!(
+        reserve(mail(company, po, receipt, "d@example.com", 20_000)).await,
+        Reserved
+    );
+    // Taking back what another company holds takes back nothing.
+    log.release(other_company, gone.id).await.unwrap();
 }

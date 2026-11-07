@@ -19,14 +19,14 @@ use conta_verde_infrastructure::{
     Argon2SecretService, BrasilApiCnpjRegistry, BrasilApiPostalCodeDirectory, CachedCnpjRegistry,
     LocalBlobStore, LogEmailSender, PostgresAttachmentRepository, PostgresBankAccountRepository,
     PostgresCategoryRepository, PostgresCommissionRuleRepository, PostgresContractRepository,
-    PostgresCostCenterRepository, PostgresFinancialEntryRepository, PostgresIdentityRepository,
-    PostgresInventoryCountRepository, PostgresInvitationRepository, PostgresJobQueue,
-    PostgresOpeningRepository, PostgresPartyRepository, PostgresPaymentMethodRepository,
-    PostgresPaymentTermRepository, PostgresPriceListRepository, PostgresProductRepository,
-    PostgresPurchaseOrderRepository, PostgresQuoteRepository, PostgresRecurrenceRepository,
-    PostgresSaleRepository, PostgresStatementLineRepository, PostgresStockMovementRepository,
-    PostgresStockSettingsRepository, PostgresTransferRepository, RegisterDocumentReferences,
-    RegisterReferences, SmtpEmailSender, connect_and_migrate,
+    PostgresCostCenterRepository, PostgresDocumentMailRepository, PostgresFinancialEntryRepository,
+    PostgresIdentityRepository, PostgresInventoryCountRepository, PostgresInvitationRepository,
+    PostgresJobQueue, PostgresOpeningRepository, PostgresPartyRepository,
+    PostgresPaymentMethodRepository, PostgresPaymentTermRepository, PostgresPriceListRepository,
+    PostgresProductRepository, PostgresPurchaseOrderRepository, PostgresQuoteRepository,
+    PostgresRecurrenceRepository, PostgresSaleRepository, PostgresStatementLineRepository,
+    PostgresStockMovementRepository, PostgresStockSettingsRepository, PostgresTransferRepository,
+    RegisterDocumentReferences, RegisterReferences, SmtpEmailSender, connect_and_migrate,
 };
 use conta_verde_infrastructure::{
     AsaasProvider, NoMessageSender, PostgresDunningPlanRepository, PostgresNotificationRepository,
@@ -92,6 +92,7 @@ impl Ports for PostgresPorts {
     type PostalCodes = Option<BrasilApiPostalCodeDirectory>;
     type Invitations = PostgresInvitationRepository;
     type Emails = QueuedEmailSender<PostgresJobQueue>;
+    type DocumentMails = PostgresDocumentMailRepository;
 }
 
 const SESSION_LIFETIME: Duration = Duration::from_secs(30 * 24 * 60 * 60);
@@ -327,6 +328,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         PostgresFinancialEntryRepository::new(pool.clone()),
         PostgresPartyRepository::new(pool.clone()),
         queued_emails(PostgresJobQueue::new(pool.clone()))?,
+        PostgresDocumentMailRepository::new(pool.clone()),
     );
     let auth = AuthService::new(
         PostgresIdentityRepository::new(pool),

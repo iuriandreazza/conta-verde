@@ -1,12 +1,14 @@
 use conta_verde_domain::{
-    CalendarDate, CompanyId, Decimal, Email, EntryId, EntryKind, Party, PartyId, PurchaseOrderId,
+    Actor, COOLDOWN_MILLIS, CalendarDate, CompanyId, DAILY_CAP, DAY_MILLIS, Decimal, DocumentMail,
+    DocumentMailId, DocumentMailKind, Email, EntryId, EntryKind, Party, PartyId, PurchaseOrderId,
     PurchaseStatus, SettlementId,
 };
+use uuid::Uuid;
 
 use crate::text::one_line;
 use crate::{
-    ApplicationError, EmailMessage, EmailSender, FinancialEntryRepository, PartyRepository,
-    PurchaseOrderRepository,
+    ApplicationError, DocumentMailRepository, EmailMessage, EmailSender, FinancialEntryRepository,
+    PartyRepository, PurchaseOrderRepository, Reservation,
 };
 
 /// An e-mail that was asked for: to whom, and whether it was taken for sending (queued, [ADR 0059]).
@@ -16,40 +18,120 @@ pub struct Mailed {
     pub emailed: bool,
 }
 
+/// Who asks for a document to be e-mailed, when, and where it should go.
+pub struct MailAsk<'a> {
+    pub actor: &'a Actor,
+    /// Unix milliseconds: the limits are judged against it, so a test moves it.
+    pub now_millis: i64,
+    /// The address asked for; the party's own when left out.
+    pub to: Option<&'a str>,
+    pub company_name: &'a str,
+}
+
 /// Sends a person a document as text: a purchase order to its supplier, the proof of a payment to the customer who
-/// made it ([ADR 0061]). It writes nothing, so there is no audit entry: a message that is not taken is `emailed: false`,
-/// and the person asking is told.
-pub struct DocumentMailService<P, E, Y, M> {
+/// made it ([ADR 0061]). The document does not change, so there is no audit entry; **what was sent is a log**
+/// ([ADR 0064]): who sent it to whom and when, with a limit that is the same for everyone: the same document is not sent
+/// again to the same address within five minutes, and a company may e-mail a hundred documents a day. A message that is
+/// not taken (no mail server) is `emailed: false` and uses up nothing.
+pub struct DocumentMailService<P, E, Y, M, L> {
     purchases: P,
     entries: E,
     parties: Y,
     emails: M,
+    log: L,
 }
 
-impl<P, E, Y, M> DocumentMailService<P, E, Y, M>
+impl<P, E, Y, M, L> DocumentMailService<P, E, Y, M, L>
 where
     P: PurchaseOrderRepository,
     E: FinancialEntryRepository,
     Y: PartyRepository,
     M: EmailSender,
+    L: DocumentMailRepository,
 {
-    pub fn new(purchases: P, entries: E, parties: Y, emails: M) -> Self {
+    pub fn new(purchases: P, entries: E, parties: Y, emails: M, log: L) -> Self {
         Self {
             purchases,
             entries,
             parties,
             emails,
+            log,
         }
+    }
+
+    /// What was sent of a purchase order or of a payment's receipt, newest first.
+    pub async fn history(
+        &self,
+        company_id: CompanyId,
+        kind: DocumentMailKind,
+        document_id: Uuid,
+    ) -> Result<Vec<DocumentMail>, ApplicationError> {
+        Ok(self
+            .log
+            .of_document(company_id, kind, document_id, 20)
+            .await?)
+    }
+
+    /// Records the send under the limits, sends the message, and takes the record back if it went nowhere.
+    async fn deliver(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        now_millis: i64,
+        kind: DocumentMailKind,
+        document_id: Uuid,
+        message: EmailMessage,
+    ) -> Result<Mailed, ApplicationError> {
+        let Actor::User { id: sent_by, .. } = actor;
+        let mail = DocumentMail {
+            id: DocumentMailId::generate(),
+            company_id,
+            kind,
+            document_id,
+            to: message.to.clone(),
+            sent_by: *sent_by,
+            sent_at_millis: now_millis,
+        };
+        match self
+            .log
+            .reserve(&mail, COOLDOWN_MILLIS, DAY_MILLIS, DAILY_CAP)
+            .await?
+        {
+            Reservation::Reserved => {}
+            Reservation::TooSoon => {
+                return Err(ApplicationError::MailRefused(
+                    "this document was sent to this address a moment ago: wait a few minutes",
+                ));
+            }
+            Reservation::CapReached => {
+                return Err(ApplicationError::MailRefused(
+                    "the company reached the limit of documents e-mailed in a day: try again tomorrow",
+                ));
+            }
+        }
+        let emailed = self.emails.send(&message).await.is_ok();
+        if !emailed {
+            self.log.release(company_id, mail.id).await?;
+        }
+        Ok(Mailed {
+            to: message.to,
+            emailed,
+        })
     }
 
     /// E-mails an approved or partly received purchase order to `to`, or to its supplier's address.
     pub async fn send_purchase_order(
         &self,
         company_id: CompanyId,
+        request: &MailAsk<'_>,
         id: PurchaseOrderId,
-        to: Option<&str>,
-        company_name: &str,
     ) -> Result<Mailed, ApplicationError> {
+        let MailAsk {
+            actor,
+            now_millis,
+            to,
+            company_name,
+        } = *request;
         let order = self
             .purchases
             .find(company_id, id)
@@ -94,21 +176,31 @@ where
             ),
             body,
         };
-        Ok(Mailed {
-            to,
-            emailed: self.emails.send(&message).await.is_ok(),
-        })
+        self.deliver(
+            company_id,
+            actor,
+            now_millis,
+            DocumentMailKind::PurchaseOrder,
+            id.as_uuid(),
+            message,
+        )
+        .await
     }
 
     /// E-mails the customer the proof of one settlement of a receivable that was not reversed.
     pub async fn send_payment_receipt(
         &self,
         company_id: CompanyId,
+        request: &MailAsk<'_>,
         entry_id: EntryId,
         settlement_id: SettlementId,
-        to: Option<&str>,
-        company_name: &str,
     ) -> Result<Mailed, ApplicationError> {
+        let MailAsk {
+            actor,
+            now_millis,
+            to,
+            company_name,
+        } = *request;
         let entry = self
             .entries
             .find(company_id, entry_id)
@@ -160,10 +252,15 @@ where
             subject: format!("Comprovante de pagamento de {}", one_line(company_name)),
             body,
         };
-        Ok(Mailed {
-            to,
-            emailed: self.emails.send(&message).await.is_ok(),
-        })
+        self.deliver(
+            company_id,
+            actor,
+            now_millis,
+            DocumentMailKind::PaymentReceipt,
+            settlement_id.as_uuid(),
+            message,
+        )
+        .await
     }
 
     async fn party(

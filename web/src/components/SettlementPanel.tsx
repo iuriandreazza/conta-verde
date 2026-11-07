@@ -258,6 +258,7 @@ export function SettlementPanel({
                   <MailPanel
                     what="o comprovante"
                     send={(to) => api.sendPaymentReceipt(companyId, entry.id, settlement.id, to)}
+                    loadHistory={() => api.paymentReceiptMails(companyId, entry.id, settlement.id).then((reply) => reply.items)}
                     onClose={() => setMailingId(null)}
                   />
                 )}

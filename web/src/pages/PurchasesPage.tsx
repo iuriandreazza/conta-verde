@@ -559,6 +559,7 @@ export function PurchasesPage() {
                             <MailPanel
                               what="o pedido"
                               send={(to) => api.sendPurchaseOrder(companyId, order.id, to)}
+                              loadHistory={() => api.purchaseOrderMails(companyId, order.id).then((reply) => reply.items)}
                               onClose={() => setPanel(null)}
                             />
                           </td>

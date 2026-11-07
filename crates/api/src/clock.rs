@@ -21,3 +21,13 @@ pub fn customer_today() -> CalendarDate {
     let day = today();
     day.pred().unwrap_or(day)
 }
+
+/// The moment now, in Unix milliseconds. It is read to judge the limits on e-mailed documents ([ADR 0064]), which are
+/// counted over minutes and a day: a caller passes it in, so a test moves it.
+pub fn now_millis() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX)
+        })
+}
