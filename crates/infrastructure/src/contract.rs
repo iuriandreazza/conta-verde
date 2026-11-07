@@ -14948,6 +14948,41 @@ pub async fn imports_entries_from_a_file<R, F, C>(
         1
     );
 
+    // A name alone is enough while it means one category; once two trees have it, the path is asked for.
+    service
+        .import_entries(
+            company,
+            &ana,
+            vec![(2, import_row("a-4", "mensalidades", "5"))],
+            false,
+        )
+        .await
+        .unwrap();
+    let bare = imported_entry(service, company, "a-4").await.unwrap();
+    assert_eq!(bare.category_id(), child.id());
+    let other_parent = categories
+        .find(company, seed.other_category)
+        .await
+        .unwrap()
+        .unwrap();
+    save_category(categories, &child_category(&other_parent, "Mensalidades")).await;
+    let ambiguous = service
+        .import_entries(
+            company,
+            &ana,
+            vec![
+                (2, import_row("a-5", "Mensalidades", "5")),
+                (3, import_row("a-6", "Serviços > Mensalidades", "5")),
+            ],
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(ambiguous.refused.len(), 1);
+    assert_eq!(ambiguous.refused[0].row, 2);
+    assert!(ambiguous.refused[0].message.contains("Root > Child"));
+    assert!(imported_entry(service, company, "a-6").await.is_none());
+
     // One refused row refuses the file: every problem is named by its row and nothing is written.
     let mut too_much = import_row("b-3", "Vendas", "10");
     too_much.settlement = paid_on("2026-03-16", "Conta principal");

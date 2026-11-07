@@ -16,6 +16,7 @@ import { useLastValue } from "../lib/useLastValue";
 import { useEntryTargets } from "../lib/useEntryTargets";
 import { ListFooter } from "../components/ListFooter";
 import { Button } from "../components/Button";
+import { CsvImport } from "../components/CsvImport";
 import { EntryForm } from "../components/EntryForm";
 import { EntryHistory } from "../components/EntryHistory";
 import { ListTools } from "../components/ListTools";
@@ -38,6 +39,7 @@ import { STATUS_LABELS, entryStatus, todayIso, type InstallmentStatus } from "..
 import { formatDate } from "../lib/entryInstallments";
 import { usePagedList } from "../lib/usePagedList";
 import { useCanWrite } from "../lib/useCanWrite";
+import { importEntriesInPieces } from "../lib/entryImport";
 
 const STATUS_BADGES: Record<InstallmentStatus, string> = {
   open: "badge badge-dot badge-muted",
@@ -483,6 +485,42 @@ export function EntriesPage() {
           )}
         </section>
         {canWrite && (
+          <CsvImport
+            title="Importar de um arquivo CSV"
+            template={ENTRIES_TEMPLATE}
+            templateName="lancamentos.csv"
+            created={["lançamento criado", "lançamentos criados"]}
+            run={async (file, dryRun) =>
+              importEntriesInPieces(
+                await file.text(),
+                (csv, dry) => api.importEntriesPiece(companyId, csv, dry),
+                dryRun,
+              )
+            }
+            onImported={() => void reload()}
+          >
+            <p>
+              Cada linha é um lançamento de uma parcela. A primeira linha dá o nome das colunas, em
+              qualquer ordem. Obrigatórias: <code>reference</code> (o código da linha no arquivo, que não
+              se repete: é o que impede importar duas vezes), <code>kind</code> (<code>receivable</code> ou{" "}
+              <code>payable</code>), <code>description</code>, <code>category</code> (o caminho{" "}
+              <code>Raiz &gt; Filha</code>, ou só o nome de uma raiz), <code>competence_date</code> e{" "}
+              <code>due_date</code> (<code>AAAA-MM-DD</code>) e <code>amount</code> (com ponto decimal).
+            </p>
+            <p>
+              Opcionais: <code>party_document</code> e <code>party_name</code>, <code>cost_center</code>. Para
+              um lançamento já pago, <code>settled_on</code> e <code>bank_account</code>, e se for o caso{" "}
+              <code>applied</code>, <code>interest</code>, <code>fine</code> e <code>discount</code>. Categoria, centro
+              de custo e conta precisam estar cadastrados e ativos.
+            </p>
+            <p>
+              Nada é importado enquanto uma linha tiver problema. Quem já foi importado, pelo mesmo{" "}
+              <code>reference</code>, é ignorado. Arquivos grandes são enviados em partes, todas verificadas
+              antes de gravar a primeira.
+            </p>
+          </CsvImport>
+        )}
+        {canWrite && (
           <Sheet open={editing !== null} locked={saving} title={`Alterar ${shown?.description ?? ""}`} onClose={closeSheet}>
             {shown !== null &&
               (targetsLoaded ? (
@@ -508,3 +546,8 @@ export function EntriesPage() {
     </>
   );
 }
+
+const ENTRIES_TEMPLATE = [
+  "reference,kind,description,party_name,category,cost_center,competence_date,due_date,amount,settled_on,bank_account",
+  "ex-1,payable,Aluguel de março,Imobiliária Central,Despesas > Aluguel,,2026-03-01,2026-03-10,2500.00,2026-03-10,Conta principal",
+].join("\n");

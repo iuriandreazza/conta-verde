@@ -2961,6 +2961,48 @@ describe("financial entries", () => {
     expect(payable).toHaveTextContent("R$ 2.500,00");
   });
 
+  it("imports entries from a CSV file: checks it first, then writes it, as text with the header", async () => {
+    const importReply = (url: string): Reply | undefined =>
+      url.includes("/entries/import")
+        ? {
+            status: 200,
+            body: {
+              dry_run: url.includes("dry_run=true"),
+              valid: 2,
+              created: url.includes("dry_run=true") ? 0 : 2,
+              skipped: [],
+              refused: [],
+            },
+          }
+        : undefined;
+    const fetchMock = mockApi(answer([], (url) => importReply(url)));
+    renderAt("/companies/c1/entries");
+
+    await screen.findByRole("heading", { name: "Importar de um arquivo CSV" });
+    const template = screen.getByRole("link", { name: "Baixar modelo" });
+    expect(template).toHaveAttribute("download", "lancamentos.csv");
+    expect(decodeURIComponent(template.getAttribute("href") ?? "")).toContain("reference,kind,description");
+    await userEvent.upload(
+      screen.getByLabelText("Arquivo CSV"),
+      new File(
+        ["reference,kind,description,category,competence_date,due_date,amount\nr1,payable,Luz,Despesas,2026-03-01,2026-03-10,10\nr2,payable,Água,Despesas,2026-03-01,2026-03-10,20\n"],
+        "lancamentos.csv",
+        { type: "text/csv" },
+      ),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Importar" }));
+
+    expect(await screen.findByText("2 lançamentos criados.")).toBeInTheDocument();
+    const calls = fetchMock.mock.calls.filter(([url]) => String(url).includes("/entries/import"));
+    expect(calls.map(([url]) => String(url))).toEqual([
+      "/api/companies/c1/entries/import?dry_run=true",
+      "/api/companies/c1/entries/import",
+    ]);
+    const body = String(calls[1][1]?.body);
+    expect(body.split("\n")[0]).toBe("reference,kind,description,category,competence_date,due_date,amount");
+    expect(body.split("\n")).toHaveLength(3);
+  });
+
   it("registers an entry whose installments are generated from a total, the remainder on the last", async () => {
     const fetchMock = mockApi(
       answer([], (url, init) =>

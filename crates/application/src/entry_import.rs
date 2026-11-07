@@ -47,9 +47,10 @@ pub struct EntryImportDraft {
 
 /// A party the file may mean, with the roles that tell a customer's receivable from a supplier's
 /// payable when two parties share a name.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct PartyChoice {
     id: PartyId,
+    name: String,
     is_customer: bool,
     is_supplier: bool,
 }
@@ -57,7 +58,9 @@ struct PartyChoice {
 /// What a file's names stand for in one company: the active registers an entry may point at.
 #[derive(Debug, Clone, Default)]
 pub struct ImportNames {
-    categories: HashMap<String, CategoryId>,
+    categories_by_path: HashMap<String, CategoryId>,
+    /// Every active category under its own name, with whether it is a root.
+    categories_by_name: HashMap<String, Vec<(CategoryId, bool)>>,
     cost_centers: HashMap<String, CostCenterId>,
     bank_accounts: HashMap<String, BankAccountId>,
     parties_by_document: HashMap<String, PartyId>,
@@ -70,9 +73,43 @@ fn key(text: &str) -> String {
 
 impl ImportNames {
     /// An active category under the path `Root > Child`, never the one for transfers.
-    pub fn add_category(&mut self, path: &str, id: CategoryId, group: DreGroup) {
+    pub fn add_category(
+        &mut self,
+        path: &str,
+        name: &str,
+        is_root: bool,
+        id: CategoryId,
+        group: DreGroup,
+    ) {
         if group != DreGroup::Transfers {
-            self.categories.insert(key(path), id);
+            self.categories_by_path.insert(key(path), id);
+            self.categories_by_name
+                .entry(key(name))
+                .or_default()
+                .push((id, is_root));
+        }
+    }
+
+    /// A category by its path, or by its name alone when that names one root or, failing that, one
+    /// category: names repeat across trees, so an ambiguous name asks for the path.
+    fn category(&self, text: &str) -> Result<CategoryId, String> {
+        let wanted = key(text);
+        if let Some(id) = self.categories_by_path.get(&wanted) {
+            return Ok(*id);
+        }
+        let named: &[(CategoryId, bool)] = self
+            .categories_by_name
+            .get(&wanted)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let roots: Vec<_> = named.iter().filter(|(_, is_root)| *is_root).collect();
+        match (roots.as_slice(), named) {
+            ([(id, _)], _) | ([], [(id, _)]) => Ok(*id),
+            ([], []) => Err(format!("no active category \"{}\"", text.trim())),
+            _ => Err(format!(
+                "more than one category is named \"{}\": write it as Root > Child",
+                text.trim()
+            )),
         }
     }
 
@@ -100,6 +137,7 @@ impl ImportNames {
             .or_default()
             .push(PartyChoice {
                 id,
+                name: name.trim().to_owned(),
                 is_customer,
                 is_supplier,
             });
@@ -130,18 +168,27 @@ impl ImportNames {
                 None => Ok(None),
             };
         };
-        let candidates = self
+        let named: &[PartyChoice] = self
             .parties_by_name
             .get(&key(name))
             .map(Vec::as_slice)
             .unwrap_or_default();
-        let plays_role = |choice: &&PartyChoice| match kind {
-            EntryKind::Receivable => choice.is_customer,
-            EntryKind::Payable => choice.is_supplier,
+        // Parties may differ only in case: the one written exactly as in the file is the one meant.
+        let exact: Vec<&PartyChoice> = named.iter().filter(|choice| choice.name == name).collect();
+        let candidates: Vec<&PartyChoice> = if exact.is_empty() {
+            named.iter().collect()
+        } else {
+            exact
         };
-        let by_role: Vec<&PartyChoice> = candidates.iter().filter(plays_role).collect();
+        let by_role: Vec<&&PartyChoice> = candidates
+            .iter()
+            .filter(|choice| match kind {
+                EntryKind::Receivable => choice.is_customer,
+                EntryKind::Payable => choice.is_supplier,
+            })
+            .collect();
         // Several parties may share a name; the one that plays the role of this entry's kind is meant.
-        match (by_role.as_slice(), candidates) {
+        match (by_role.as_slice(), candidates.as_slice()) {
             ([one], _) => Ok(Some(one.id)),
             ([], [one]) => Ok(Some(one.id)),
             ([], []) => Err(format!("no party is named \"{name}\"")),
@@ -177,10 +224,7 @@ fn prepared(
     let import_id = ImportId::new(company_id, &draft.reference).map_err(|e| e.to_string())?;
     let kind = EntryKind::parse(draft.kind.trim())
         .ok_or_else(|| "kind must be receivable or payable".to_owned())?;
-    let category_id = *names
-        .categories
-        .get(&key(&draft.category))
-        .ok_or_else(|| format!("no active category \"{}\"", draft.category.trim()))?;
+    let category_id = names.category(&draft.category)?;
     let cost_center_id = draft
         .cost_center
         .as_deref()
@@ -353,5 +397,84 @@ fn already_imported(row: usize) -> RowNote {
     RowNote {
         row,
         message: RepositoryError::DuplicateOrigin.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names_with(parties: &[(&str, Option<&str>, bool, bool)]) -> (ImportNames, Vec<PartyId>) {
+        let mut names = ImportNames::default();
+        let ids: Vec<PartyId> = parties.iter().map(|_| PartyId::generate()).collect();
+        for ((name, document, customer, supplier), id) in parties.iter().zip(&ids) {
+            names.add_party(name, *document, *id, *customer, *supplier);
+        }
+        (names, ids)
+    }
+
+    #[test]
+    fn a_party_is_found_by_document_before_by_name_and_a_blank_one_is_none() {
+        let (names, ids) = names_with(&[("Padaria", Some("11222333000181"), true, false)]);
+
+        let found = names.party(
+            Some("11.222.333/0001-81"),
+            Some("Another"),
+            EntryKind::Receivable,
+        );
+        assert_eq!(found, Ok(Some(ids[0])));
+        assert_eq!(names.party(None, None, EntryKind::Payable), Ok(None));
+        assert!(
+            names
+                .party(Some("99.999.999/0001-99"), None, EntryKind::Payable)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_name_alone_picks_the_party_that_plays_the_role_of_the_entry() {
+        let (names, ids) =
+            names_with(&[("Boreal", None, true, false), ("Boreal", None, false, true)]);
+
+        assert_eq!(
+            names.party(None, Some("Boreal"), EntryKind::Receivable),
+            Ok(Some(ids[0]))
+        );
+        assert_eq!(
+            names.party(None, Some("Boreal"), EntryKind::Payable),
+            Ok(Some(ids[1]))
+        );
+    }
+
+    #[test]
+    fn names_that_differ_only_in_case_are_told_apart_by_the_exact_one() {
+        let (names, ids) = names_with(&[
+            ("Datamob", None, true, false),
+            ("DATAMOB", None, true, false),
+        ]);
+
+        assert_eq!(
+            names.party(None, Some("DATAMOB"), EntryKind::Receivable),
+            Ok(Some(ids[1]))
+        );
+        assert_eq!(
+            names.party(None, Some("Datamob"), EntryKind::Receivable),
+            Ok(Some(ids[0]))
+        );
+        let message = names
+            .party(None, Some("datamob"), EntryKind::Receivable)
+            .unwrap_err();
+        assert!(message.contains("more than one party"));
+    }
+
+    #[test]
+    fn an_unknown_name_is_refused() {
+        let (names, _) = names_with(&[("Padaria", None, true, false)]);
+
+        assert!(
+            names
+                .party(None, Some("Nobody"), EntryKind::Receivable)
+                .is_err()
+        );
     }
 }

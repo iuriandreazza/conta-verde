@@ -133,7 +133,13 @@ where
                 // A child of an inactive parent cannot be active, so the parent is always here.
                 Some(parent) => format!("{} > {}", parent_names[&parent], category.name()),
             };
-            names.add_category(&path, category.id(), category.dre_group());
+            names.add_category(
+                &path,
+                category.name(),
+                category.parent_id().is_none(),
+                category.id(),
+                category.dre_group(),
+            );
         }
 
         let mut after = None;
