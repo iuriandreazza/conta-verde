@@ -37,7 +37,8 @@ pub fn state_code(state: &str) -> Option<u8> {
 /// The standard-time offset from UTC of a state, in minutes: -03:00 for most, -04:00 for Amazonas, Rondônia, Roraima,
 /// Mato Grosso and Mato Grosso do Sul, -05:00 for Acre. Daylight saving is not applied: Brazil has none since 2019,
 /// and a document's time must follow the issuer's clock (verify with an accountant if it returns, [ADR 0075]).
-/// Fernando de Noronha (-02:00) is a district of Pernambuco, not a state, and is not told apart.
+/// What a state's municipalities differ in is not told apart: Fernando de Noronha (-02:00, in Pernambuco) and the west
+/// of Amazonas (-05:00).
 pub fn state_utc_offset_minutes(state: &str) -> Option<i16> {
     state_code(state)?;
     Some(match state {

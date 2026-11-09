@@ -11,7 +11,7 @@ use reqwest::{Method, StatusCode};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
-use crate::brasil_api::client;
+use crate::brasil_api::client_without_redirects;
 
 const HOMOLOGATION_URL: &str = "https://homologacao.focusnfe.com.br";
 const PRODUCTION_URL: &str = "https://api.focusnfe.com.br";
@@ -68,7 +68,7 @@ impl FocusNfeGateway {
         timeout: Duration,
     ) -> Result<Self, reqwest::Error> {
         Ok(Self {
-            client: client(timeout)?,
+            client: client_without_redirects(timeout)?,
             base_url: base_url.map(|url| url.trim_end_matches('/').to_owned()),
             homologation_token: homologation_token.map(str::to_owned),
             production_token: production_token.map(str::to_owned),
@@ -120,14 +120,29 @@ impl FocusNfeGateway {
             GatewayError::Unavailable(format!("request failed: {}", error.without_url()))
         })?;
         let status = response.status();
-        let bytes = response.bytes().await.unwrap_or_default();
-        let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+        let bytes = response.bytes().await.map_err(|error| {
+            GatewayError::Unavailable(format!("the answer was cut: {}", error.without_url()))
+        })?;
+        // An error may come without a body, but a success that is not JSON is no answer: reading it as a refusal
+        // would show a cancellation the authority took as refused.
+        let body = match serde_json::from_slice(&bytes) {
+            Ok(body) => body,
+            Err(_) if status.is_success() => {
+                return Err(GatewayError::Unavailable(
+                    "a success whose answer is not JSON".to_owned(),
+                ));
+            }
+            Err(_) => Value::Null,
+        };
         Ok(Answer { status, body })
     }
 
     /// A file the gateway made, by the path it answered with. Only a path on the gateway's own host is followed.
     async fn download(&self, base: &str, token: &str, path: &str) -> Result<Vec<u8>, GatewayError> {
-        if !path.starts_with('/') || path.starts_with("//") {
+        if !path.starts_with('/')
+            || path.starts_with("//")
+            || path.split('/').any(|segment| segment == "..")
+        {
             return Err(GatewayError::Unavailable(
                 "a file is somewhere other than a path on the gateway".to_owned(),
             ));
@@ -146,6 +161,12 @@ impl FocusNfeGateway {
                 "a file could not be downloaded: {}",
                 response.status()
             )));
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_FILE_BYTES as u64)
+        {
+            return Err(GatewayError::Unavailable("a file is too big".to_owned()));
         }
         let bytes = response.bytes().await.map_err(|error| {
             GatewayError::Unavailable(format!("download failed: {}", error.without_url()))
@@ -183,7 +204,12 @@ impl FocusNfeGateway {
             Some("denegado" | "denegada") => Ok(DocumentOutcome::Denied(refusal_of(body))),
             other => Err(GatewayError::Unavailable(format!(
                 "an answer with a status this adapter does not know: {}",
-                other.unwrap_or("none").chars().take(40).collect::<String>()
+                other
+                    .unwrap_or("none")
+                    .chars()
+                    .filter(|c| !c.is_control())
+                    .take(40)
+                    .collect::<String>()
             ))),
         }
     }
@@ -202,6 +228,16 @@ impl FocusNfeGateway {
             .map_err(|_| GatewayError::Unavailable("the answer's access key is not one".into()))?;
         let number = whole(body, "numero").ok_or_else(|| missing("numero"))?;
         let series = whole(body, "serie").ok_or_else(|| missing("serie"))?;
+        // What the key says must be what the answer says, and the key must be this issuer's: a document of another
+        // company is never taken for ours.
+        if access_key.issuer() != self.issuer_cnpj
+            || access_key.number().parse::<u64>().ok() != Some(number)
+            || access_key.series().parse::<u64>().ok() != Some(series)
+        {
+            return Err(GatewayError::Unavailable(
+                "the answer's access key does not match its issuer, number and series".to_owned(),
+            ));
+        }
         let xml_path = text(body, "caminho_xml_nota_fiscal")
             .ok_or_else(|| missing("caminho_xml_nota_fiscal"))?;
         let pdf = match text(body, "caminho_danfe") {
@@ -490,7 +526,11 @@ fn failure(answer: &Answer) -> Result<Refusal, GatewayError> {
         | StatusCode::TOO_MANY_REQUESTS => {
             Err(GatewayError::Unavailable(format!("{}", answer.status)))
         }
-        status if status.is_client_error() => Ok(refusal_of_error(&answer.body)),
+        // The gateway read the request and refused it. Any other `4xx` (a route that is not there, a method it does not
+        // take) is a problem of the call, not of the document.
+        StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY => {
+            Ok(refusal_of_error(&answer.body))
+        }
         status => Err(GatewayError::Unavailable(format!("{status}"))),
     }
 }
@@ -880,6 +920,25 @@ mod tests {
                     if !authorized(&headers, HOMOLOGATION_TOKEN) {
                         return json_reply(StatusCode::UNAUTHORIZED, json!({}));
                     }
+                    if reference == "plain-text" {
+                        return (StatusCode::OK, "all good").into_response();
+                    }
+                    if reference == "other-issuer" {
+                        let key = AccessKey::from_parts(
+                            35,
+                            CalendarDate::parse("2026-11-09").unwrap(),
+                            "12ABC34501DE35",
+                            55,
+                            1,
+                            7,
+                            1,
+                            1,
+                        )
+                        .unwrap();
+                        let mut body = files(key.as_str(), 7);
+                        body["status"] = json!("autorizado");
+                        return json_reply(StatusCode::OK, body);
+                    }
                     if reference == "refused-query" {
                         return json_reply(
                             StatusCode::UNPROCESSABLE_ENTITY,
@@ -1192,6 +1251,17 @@ mod tests {
                 .query_nfe(&homologation(), "f2")
                 .await,
             Err(GatewayError::Unavailable(reason)) if reason.contains("algo_novo")
+        ));
+        // An answer that is not JSON, and a document of another issuer's key, are not taken.
+        let addr = serve(Shared::default()).await;
+        let focus = gateway(addr, Some(HOMOLOGATION_TOKEN), None);
+        assert!(matches!(
+            focus.query_nfe(&homologation(), "plain-text").await,
+            Err(GatewayError::Unavailable(reason)) if reason.contains("not JSON")
+        ));
+        assert!(matches!(
+            focus.query_nfe(&homologation(), "other-issuer").await,
+            Err(GatewayError::Unavailable(reason)) if reason.contains("does not match")
         ));
         // A question the gateway refuses is no refusal of the document.
         let addr = serve(Shared::default()).await;

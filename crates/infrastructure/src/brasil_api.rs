@@ -50,6 +50,18 @@ pub(crate) fn client(timeout: Duration) -> Result<reqwest::Client, reqwest::Erro
         .build()
 }
 
+/// A client for a gateway that holds a credential: like [`client`], and it follows no redirect, so an answer can
+/// never send the credential or the person's data to another address.
+pub(crate) fn client_without_redirects(
+    timeout: Duration,
+) -> Result<reqwest::Client, reqwest::Error> {
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .user_agent(USER_AGENT)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+}
+
 #[derive(Deserialize)]
 struct CnpjResponse {
     razao_social: String,

@@ -5,7 +5,9 @@ use conta_verde_application::{
     AcceptedEvent, AuthorizedDocument, DocumentOutcome, EventOutcome, FiscalGateway, GatewayError,
     NfeRequest, Refusal,
 };
-use conta_verde_domain::{AccessKey, CalendarDate, FiscalSettings, state_code};
+use conta_verde_domain::{
+    AccessKey, CalendarDate, FiscalSettings, state_code, state_utc_offset_minutes,
+};
 
 const MIN_REASON_CHARS: usize = 15;
 const MAX_CANCEL_REASON_CHARS: usize = 255;
@@ -247,8 +249,11 @@ impl FiscalGateway for FakeFiscalGateway {
             .or_insert(0);
         *counter += 1;
         let number = *counter;
-        let day = CalendarDate::from_unix_days(request.issued_at_unix.div_euclid(86_400))
-            .ok_or_else(|| GatewayError::Unavailable("the moment is out of range".into()))?;
+        // The key's month is the issuer's own day, like the document's.
+        let offset = i64::from(state_utc_offset_minutes(issuer.address().state()).unwrap_or(-180));
+        let day =
+            CalendarDate::from_unix_days((request.issued_at_unix + offset * 60).div_euclid(86_400))
+                .ok_or_else(|| GatewayError::Unavailable("the moment is out of range".into()))?;
         let state_code = state_code(issuer.address().state())
             .ok_or_else(|| GatewayError::Unavailable("the issuer's state is unknown".into()))?;
         let access_key = AccessKey::from_parts(

@@ -261,6 +261,10 @@ pub trait FiscalGateway: Send + Sync {
     ) -> impl Future<Output = Result<DocumentOutcome, GatewayError>> + Send;
 
     /// Cancels an authorized NF-e. The deadline is the authority's and the gateway's, never ours.
+    ///
+    /// The events (this, the correction letter and the invalidation) are **not idempotent by reference**: after an
+    /// `Unavailable` the caller does not know whether the authority took it. It asks `query_nfe` first (a cancelled
+    /// document says so) and for the others records what it sent before sending, so it never repeats one blindly.
     fn cancel_nfe(
         &self,
         issuer: &FiscalSettings,

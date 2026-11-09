@@ -43,9 +43,9 @@ grows by slice, and an adapter that cannot do a new call yet answers `Unsupporte
   adapter does not do it: an NF-e for Lucro Presumido, which waits for the tax calculation of slice 8, or a reference that is
   not a plain id) and `Unavailable` (network, timeout, the token refused, an error of the gateway, an answer it does not
   understand: asking again later is the remedy).
-- **Idempotency is the reference.** Our id of the document is the gateway's reference: `submit_nfe` with the same reference
+- **Idempotency is the reference, for the document only.** Our id of the document is the gateway's reference: `submit_nfe` with the same reference
   again gives the state of the document it made, never a second one, and the numbers are the gateway's. A refused document may
-  be sent again under the same reference.
+  be sent again under the same reference (**not verified** that the real gateway allows it: the fake does, and the adapter reads a `422 already_processed` as "query"). The **events** are not idempotent: after an `Unavailable` the caller cannot know whether the authority took a cancellation, a correction letter or an invalidation, so slice 4 asks `query_nfe` first (a cancelled document says so) and records what it sent before sending, never repeating one blindly.
 
 The request (`NfeRequest`) carries the issuer's settings, the nature's name, the moment in Unix seconds (the caller's clock:
 the adapter writes it with the clock of the issuer's state, `domain::fiscal_timestamp`; offsets -03:00, -04:00 for AM, RO, RR,
@@ -95,12 +95,11 @@ Authentication is HTTP Basic with the token as the user and an empty password. T
 - **The files** are downloaded from the **path** the answer gives, joined to the gateway's own host and with the same
   authentication; a path that is not on that host is refused, so an answer cannot send the token elsewhere. A file over 10 MiB
   is refused.
-- **Nothing sensitive is logged.** A call logs its status and, for the failures above, a fixed text; never a body, a
-  reference in an address, or a token.
+- **Nothing sensitive reaches a log or an error.** The adapter holds no logger: a failure is a `GatewayError` whose text is a status or a fixed sentence (never a body, an address, a reference or a token) and the use case logs it. The client follows **no redirect**, a file path with `..` is refused, a file over 10 MiB is refused from its declared length and again from what was read, a success whose answer is not JSON is `Unavailable` (never read as a refusal), a `4xx` other than `400` and `422` on a submission is a problem of the call and not a refusal of the document, and a query the gateway refuses says nothing of the document. The key in an authorized answer must be this issuer's and agree with its number and series.
 - **Configuration is the environment's** ([ADR 0073](0073-fiscal-module-plan.md)): `FISCAL_GATEWAY=focus`,
   `FOCUS_NFE_TOKEN_HOMOLOGATION` and/or `FOCUS_NFE_TOKEN_PRODUCTION` (at least one: a call in an environment without its
   token is `Unavailable` and says which), `FOCUS_NFE_ISSUER_CNPJ` (a valid CNPJ, required: a call for any other company is
-  `WrongIssuer` before anything is sent) and an optional `FOCUS_NFE_API_URL` for a stand-in. The server does not start with
+  `WrongIssuer` before anything is sent) and an optional `FOCUS_NFE_API_URL` for a stand-in (an `https://` address or a local one: the tokens go there). The server does not start with
   the gateway named and a setting missing or wrong.
 - **Not verified**, and what the ignored sandbox test exists to settle: the names of the request's fields beyond the sale
   the documentation shows (the tributable unit fields, the buyer's registration indicator, the payment group, the recipient's

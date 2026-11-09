@@ -645,9 +645,20 @@ fn fiscal_gateway_from_env()
         }
         Some("focus") => {
             let (homologation, production) = (
-                setting("FOCUS_NFE_TOKEN_HOMOLOGATION"),
-                setting("FOCUS_NFE_TOKEN_PRODUCTION"),
+                setting("FOCUS_NFE_TOKEN_HOMOLOGATION").map(|token| token.trim().to_owned()),
+                setting("FOCUS_NFE_TOKEN_PRODUCTION").map(|token| token.trim().to_owned()),
             );
+            // The tokens go to this address in every call: it is the gateway's over TLS, or a stand-in on this machine.
+            let api_url = setting("FOCUS_NFE_API_URL");
+            if let Some(url) = &api_url
+                && !(url.starts_with("https://")
+                    || url.starts_with("http://localhost")
+                    || url.starts_with("http://127.0.0.1"))
+            {
+                return Err(
+                    "FOCUS_NFE_API_URL must be an https:// address (or a local one)".into(),
+                );
+            }
             if homologation.is_none() && production.is_none() {
                 return Err(
                     "FISCAL_GATEWAY=focus needs FOCUS_NFE_TOKEN_HOMOLOGATION or FOCUS_NFE_TOKEN_PRODUCTION"
