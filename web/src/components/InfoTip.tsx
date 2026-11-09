@@ -24,13 +24,23 @@ export function InfoTip({
 
   useEffect(() => {
     if (!visible) return;
-    function away(event: PointerEvent) {
-      if (root.current?.contains(event.target as Node)) return;
+    function putAway() {
       setPinned(false);
       setHovered(false);
     }
+    function away(event: PointerEvent) {
+      if (!root.current?.contains(event.target as Node)) putAway();
+    }
+    // On the document, so Escape works whatever has the focus while the pointer shows the text (WCAG 1.4.13).
+    function escape(event: KeyboardEvent) {
+      if (event.key === "Escape") putAway();
+    }
     document.addEventListener("pointerdown", away);
-    return () => document.removeEventListener("pointerdown", away);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", away);
+      document.removeEventListener("keydown", escape);
+    };
   }, [visible]);
 
   return (
@@ -39,13 +49,6 @@ export function InfoTip({
       ref={root}
       onPointerEnter={(event) => event.pointerType === "mouse" && setHovered(true)}
       onPointerLeave={() => setHovered(false)}
-      onKeyDown={(event) => {
-        if (event.key === "Escape" && visible) {
-          event.stopPropagation();
-          setPinned(false);
-          setHovered(false);
-        }
-      }}
     >
       <button
         type="button"

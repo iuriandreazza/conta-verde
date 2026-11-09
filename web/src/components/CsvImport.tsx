@@ -103,7 +103,7 @@ export function CsvImport({
     <section className="card import-card" aria-labelledby="import-title">
       <div className="card-title">
         <h2 id="import-title">{title}</h2>
-        <InfoTip label={`Como importar: ${title.toLowerCase()}`}>{children}</InfoTip>
+        <InfoTip label="Como importar este arquivo">{children}</InfoTip>
       </div>
       <label>
         {fileLabel}

@@ -50,6 +50,18 @@ describe("InfoTip", () => {
     await gone();
   });
 
+  it("is put away by Escape while the pointer shows it and the focus is elsewhere", async () => {
+    renderTip();
+    const other = screen.getByRole("button", { name: "Outro" });
+    await userEvent.hover(screen.getByRole("button", { name: "Como importar" }));
+    expect(screen.getByRole("tooltip")).toBeInTheDocument();
+    other.focus();
+
+    await userEvent.keyboard("{Escape}");
+
+    await waitFor(() => expect(screen.queryByRole("tooltip")).not.toBeInTheDocument());
+  });
+
   it("opens with the keyboard", async () => {
     renderTip();
     await userEvent.tab();

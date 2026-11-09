@@ -2564,6 +2564,16 @@ input[type="file"]:disabled::file-selector-button {
   box-shadow: var(--shadow-lift);
 }
 
+/* The gap between the button and the text belongs to the text, so a slow pointer crossing it keeps it open. */
+.info-tip-text::before {
+  content: "";
+  position: absolute;
+  top: -0.5rem;
+  right: 0;
+  left: 0;
+  height: 0.5rem;
+}
+
 .info-tip-end {
   right: 0;
 }
@@ -2593,4 +2603,20 @@ input[type="file"]:disabled::file-selector-button {
 
 .card-title > h2 {
   margin-bottom: 0;
+}
+
+/* In a form laid out as a grid of columns, the title runs the whole line, as the form's own headings do. */
+.settle-form > .card-title {
+  grid-column: 1 / -1;
+}
+
+/* On a phone the text takes the width of the window under the button, whichever side the button is on. */
+@media (max-width: 40rem) {
+  .info-tip-text {
+    position: fixed;
+    top: auto;
+    right: 1rem;
+    left: 1rem;
+    width: auto;
+  }
 }
