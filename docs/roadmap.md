@@ -133,6 +133,13 @@ they need for their accounting software.
 
 ## Phase 7 — Fiscal (v0.8)
 
+Planned in [ADR 0073](adr/0073-fiscal-module-plan.md), which also settles what the phase changes underneath (a `fiscal` area, the
+`FiscalGateway` port with Focus NFe as the first real adapter, the gateway token in the environment and the A1 certificate left at
+the gateway, no tax law embedded in the code, the document's state machine, the gateway owning the numbers, fiscal files in the
+`BlobStore` and in the accountant's package, the period lock for cancelling). [ADR 0006](adr/0006-fiscal-last.md) is already
+accepted and no other proposed ADR belongs to the phase. One slice per pull request, in this order:
+
+- [x] Plan ([ADR 0073](adr/0073-fiscal-module-plan.md))
 - [ ] Fiscal settings per company: tax regime (Simples Nacional first, then Lucro Presumido), A1 certificate, series and numbering, operation natures (CFOP), CST/CSOSN rules
 - [ ] Emission port with a gateway adapter and a fake ([ADR 0006](adr/0006-fiscal-last.md))
 - [ ] NF-e: issue from a sale, DANFE PDF, cancellation, correction letter, number invalidation, contingency
