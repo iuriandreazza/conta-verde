@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { MemoryRouter } from "react-router-dom";
@@ -25,6 +25,18 @@ afterEach(() => {
   vi.unstubAllGlobals();
   window.localStorage.clear();
 });
+
+// A page after the menu needs a list to read: the profile answers only for the session.
+function stubApi() {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) =>
+      url === "/api/auth/me"
+        ? new Response(JSON.stringify(profile), { status: 200 })
+        : new Response(JSON.stringify({ items: [], next_cursor: null }), { status: 200 }),
+    ),
+  );
+}
 
 function renderAt(path: string) {
   return render(
@@ -104,50 +116,75 @@ describe("page shell", () => {
     expect(document.title).toBe("Entrar · conta-verde");
   });
 
-  it("groups the sections and folds a group away", async () => {
+  it("opens the panel of the area being looked at, with its page marked", async () => {
+    stubApi();
+    renderAt("/companies/c1/entries?tipo=payable");
+
+    const panel = within(await screen.findByRole("navigation", { name: "Financeiro" }));
+    expect(panel.getByRole("link", { name: "Contas a pagar" })).toHaveAttribute("aria-current", "page");
+    expect(panel.getByRole("link", { name: "Fluxo de caixa" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Financeiro" })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.queryByRole("link", { name: "Orçamentos" })).not.toBeInTheDocument();
+  });
+
+  it("shows the items of another area when its button is chosen, and goes back to the page's own on a move", async () => {
+    stubApi();
+    renderAt("/companies/c1/entries");
+    await screen.findByRole("navigation", { name: "Financeiro" });
+
+    await userEvent.click(screen.getByRole("button", { name: "Comercial" }));
+
+    expect(screen.getByRole("navigation", { name: "Comercial" })).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Financeiro" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("link", { name: "Orçamentos" }));
+    expect(await screen.findByRole("navigation", { name: "Comercial" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Orçamentos" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("has direct areas for the dashboard and the reports, with nothing beside the rail", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(profile), { status: 200 })));
     renderAt("/companies/c1");
 
-    const finance = await screen.findByRole("button", { name: "Financeiro" });
-    expect(screen.getByRole("link", { name: "Fluxo de caixa" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Contas bancárias" })).toBeInTheDocument();
-
-    await userEvent.click(finance);
-
-    expect(finance).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByRole("link", { name: "Fluxo de caixa" })).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Contas bancárias" })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: "Painel" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Relatórios" })).toBeInTheDocument();
+    expect(document.querySelector(".panel")).toBeNull();
   });
 
-  it("shrinks the menu to a rail of icons and expands it again, remembering the choice", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(profile), { status: 200 })));
-    const { unmount } = renderAt("/companies/c1");
+  it("keeps the registers of an area in a fold that can be closed", async () => {
+    stubApi();
+    renderAt("/companies/c1/entries");
+    const panel = within(await screen.findByRole("navigation", { name: "Financeiro" }));
+    const fold = panel.getByRole("button", { name: "Cadastros financeiros" });
+    expect(fold).toHaveAttribute("aria-expanded", "true");
+    expect(panel.getByRole("link", { name: "Contas bancárias" })).toBeInTheDocument();
+
+    await userEvent.click(fold);
+
+    expect(fold).toHaveAttribute("aria-expanded", "false");
+    expect(panel.queryByRole("link", { name: "Contas bancárias" })).not.toBeInTheDocument();
+    expect(panel.getByRole("link", { name: "Fluxo de caixa" })).toBeInTheDocument();
+  });
+
+  it("puts the panel away, shows an area's items in a flyout, and remembers the choice", async () => {
+    stubApi();
+    const { unmount } = renderAt("/companies/c1/entries");
     const toggle = await screen.findByRole("button", { name: "Recolher o menu" });
     expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.queryByRole("group", { name: "Financeiro" })).not.toBeInTheDocument();
 
     await userEvent.click(toggle);
 
     expect(screen.getByRole("button", { name: "Expandir o menu" })).toHaveAttribute("aria-expanded", "false");
     expect(document.querySelector(".app")).toHaveAttribute("data-collapsed");
-    // The names stay for a screen reader and show as a tooltip where the text is out of sight.
-    expect(screen.getByRole("link", { name: "Fluxo de caixa" })).toHaveAttribute("title", "Fluxo de caixa");
+    const flyout = within(screen.getByRole("group", { name: "Financeiro" }));
+    expect(flyout.getByRole("link", { name: "Fluxo de caixa" })).toBeInTheDocument();
 
     unmount();
-    renderAt("/companies/c1");
-    expect(await screen.findByRole("button", { name: "Expandir o menu" })).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Expandir o menu" }));
-    expect(screen.getByRole("link", { name: "Fluxo de caixa" })).not.toHaveAttribute("title");
-  });
-
-  it("shows every icon in the rail even when a group was folded before", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(profile), { status: 200 })));
-    renderAt("/companies/c1");
-    await userEvent.click(await screen.findByRole("button", { name: "Financeiro" }));
-    expect(screen.queryByRole("link", { name: "Fluxo de caixa" })).not.toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole("button", { name: "Recolher o menu" }));
-
-    expect(screen.getByRole("link", { name: "Fluxo de caixa" })).toBeInTheDocument();
+    renderAt("/companies/c1/entries");
+    await userEvent.click(await screen.findByRole("button", { name: "Comercial" }));
+    // Choosing an area on the shrunk menu brings the panel back, on that area.
+    expect(document.querySelector(".app")).not.toHaveAttribute("data-collapsed");
+    expect(screen.getByRole("navigation", { name: "Comercial" })).toBeInTheDocument();
   });
 
   it("offers to create only what the role may write, from any page", async () => {
@@ -171,7 +208,6 @@ describe("page shell", () => {
 
     const menu = await screen.findByRole("button", { name: "Menu" });
     expect(menu).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByRole("button", { name: "Fechar o menu" })).not.toBeInTheDocument();
 
     await userEvent.click(menu);
     expect(menu).toHaveAttribute("aria-expanded", "true");
@@ -184,6 +220,38 @@ describe("page shell", () => {
     await userEvent.click(menu);
     await userEvent.click(screen.getByRole("button", { name: "Fechar o menu" }));
     expect(menu).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("opens the phone menu on the items of the page's area, with a way back to the areas", async () => {
+    stubApi();
+    renderAt("/companies/c1/entries");
+    await userEvent.click(await screen.findByRole("button", { name: "Menu" }));
+
+    const shell = document.querySelector(".nav-shell");
+    expect(shell).toHaveAttribute("data-level", "items");
+    expect(screen.getByRole("button", { name: "Voltar às áreas" })).toHaveFocus();
+
+    await userEvent.click(screen.getByRole("button", { name: "Voltar às áreas" }));
+
+    expect(shell).toHaveAttribute("data-level", "areas");
+    // The button that was clicked is gone from the screen: the focus goes to where the person was.
+    expect(screen.getByRole("button", { name: "Financeiro" })).toHaveFocus();
+    await userEvent.click(screen.getByRole("button", { name: "Cadastros" }));
+    expect(shell).toHaveAttribute("data-level", "items");
+    expect(screen.getByRole("button", { name: "Voltar às áreas" })).toHaveFocus();
+    expect(screen.getByRole("navigation", { name: "Cadastros" })).toBeInTheDocument();
+  });
+
+  it("lets Escape put away a flyout that shows because of the focus", async () => {
+    stubApi();
+    renderAt("/companies/c1/entries");
+    await userEvent.click(await screen.findByRole("button", { name: "Recolher o menu" }));
+    const area = screen.getByRole("button", { name: "Comercial" });
+    area.focus();
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(area).not.toHaveFocus();
   });
 
   it("has no phone menu where there are no sections to open", async () => {

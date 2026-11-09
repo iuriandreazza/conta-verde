@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Button } from "./Button";
 import { BoxIcon } from "./icons/box";
 import { BriefcaseBusinessIcon } from "./icons/briefcase-business";
@@ -27,6 +27,9 @@ interface AppTopbarProps {
   companyId: string | undefined;
   signingOut: boolean;
   signOutFailed: boolean;
+  /** The company being worked in, told here because the panel beside the menu may be put away. */
+  companyName?: string;
+  canSwitchCompany: boolean;
   navOpen: boolean;
   onToggleNav: () => void;
   onSignOut: () => void;
@@ -95,6 +98,8 @@ export function AppTopbar({
   companyId,
   signingOut,
   signOutFailed,
+  companyName,
+  canSwitchCompany,
   navOpen,
   onToggleNav,
   onSignOut,
@@ -132,6 +137,12 @@ export function AppTopbar({
         >
           Menu
         </button>
+      )}
+      {companyName && (
+        <div className="topbar-company">
+          <strong>{companyName}</strong>
+          {canSwitchCompany && <Link to="/">Trocar</Link>}
+        </div>
       )}
       <div className="topbar-actions">
         {creating.length > 0 && <MenuButton key={menuKey} variant="primary" icon={PlusIcon} label="Novo registro" items={creating} align="end" />}

@@ -1,6 +1,5 @@
-import { AnimatePresence, motion } from "motion/react";
-import { useState } from "react";
-import { Link, NavLink, useLocation } from "react-router-dom";
+import { useEffect, useRef, useState, type FocusEvent, type PointerEvent } from "react";
+import { Link, NavLink, useLocation, type Location } from "react-router-dom";
 import { entryKindOf } from "../lib/entryKind";
 import type { AnimatedIcon } from "./Button";
 import { BoxIcon } from "./icons/box";
@@ -10,6 +9,8 @@ import { CalendarDaysIcon } from "./icons/calendar-days";
 import { ChartLineIcon } from "./icons/chart-line";
 import { CheckIcon } from "./icons/check";
 import { ChevronDownIcon } from "./icons/chevron-down";
+import { ChevronLeftIcon } from "./icons/chevron-left";
+import { ChevronRightIcon } from "./icons/chevron-right";
 import { CircleDollarSignIcon } from "./icons/circle-dollar-sign";
 import { CreditCardIcon } from "./icons/credit-card";
 import { FileTextIcon } from "./icons/file-text";
@@ -31,77 +32,29 @@ interface NavItem {
   icon: AnimatedIcon;
 }
 
-interface NavSection {
-  key: string;
+/** A fold inside an area for what is set up once and rarely visited, like the reference's registers. */
+interface NavRegisters {
   label: string;
   items: NavItem[];
 }
 
-function NavItemLink({ base, item, collapsed }: { base: string; item: NavItem; collapsed: boolean }) {
-  const Icon = item.icon;
-  const location = useLocation();
-  if (item.path === "/entries") {
-    // Three links to one page: the one that is current is told by the kind in the address.
-    const to = `${base}${item.path}${item.kind ? `?tipo=${item.kind}` : ""}`;
-    const current = location.pathname.replace(/\/$/, "") === `${base}${item.path}` && entryKindOf(location.search) === (item.kind ?? "");
-    return (
-      <Link to={to} aria-current={current ? "page" : undefined} title={collapsed ? item.label : undefined}>
-        <Icon size={18} aria-hidden />
-        <span className="nav-label">{item.label}</span>
-      </Link>
-    );
-  }
-  return (
-    <NavLink to={`${base}${item.path}`} end={item.path === ""} title={collapsed ? item.label : undefined}>
-      <Icon size={18} aria-hidden />
-      <span className="nav-label">{item.label}</span>
-    </NavLink>
-  );
+/** An area is a button on the rail: it opens a panel of items, or, when it has none, is a link itself. */
+interface NavArea {
+  key: string;
+  label: string;
+  icon: AnimatedIcon;
+  /** The page of an area with nothing under it. */
+  link?: NavItem;
+  items?: NavItem[];
+  registers?: NavRegisters;
 }
 
-/** A group of sections the person can fold away; it starts open so nothing is hidden by default. */
-function NavGroup({ base, section, collapsed }: { base: string; section: NavSection; collapsed: boolean }) {
-  const [open, setOpen] = useState(true);
-  // The narrow menu has no headings to open, so every icon is shown whatever a group was left as.
-  const shown = open || collapsed;
-  return (
-    <div className="nav-group">
-      <button
-        type="button"
-        className="nav-group-toggle"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-      >
-        {section.label}
-        <motion.span className="nav-chevron" animate={{ rotate: open ? 0 : -90 }} transition={{ duration: 0.15 }}>
-          <ChevronDownIcon size={14} aria-hidden />
-        </motion.span>
-      </button>
-      <AnimatePresence initial={false}>
-        {shown && (
-          <motion.div
-            className="nav-group-items"
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.18, ease: "easeOut" }}
-          >
-            {section.items.map((item) => (
-              <NavItemLink key={`${item.path}${item.kind ?? ""}`} base={base} item={item} collapsed={collapsed} />
-            ))}
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
-
-const HOME: NavItem = { path: "", label: "Painel", icon: ChartLineIcon };
-
-const SECTIONS: NavSection[] = [
+const AREAS: NavArea[] = [
+  { key: "home", label: "Painel", icon: ChartLineIcon, link: { path: "", label: "Painel", icon: ChartLineIcon } },
   {
     key: "commercial",
     label: "Comercial",
+    icon: HandCoinsIcon,
     items: [
       { path: "/quotes", label: "Orçamentos", icon: FileTextIcon },
       { path: "/sales", label: "Vendas", icon: HandCoinsIcon },
@@ -113,6 +66,7 @@ const SECTIONS: NavSection[] = [
   {
     key: "purchases",
     label: "Suprimentos",
+    icon: BoxIcon,
     items: [
       { path: "/purchases", label: "Compras", icon: BriefcaseBusinessIcon },
       { path: "/stock", label: "Estoque", icon: BoxIcon },
@@ -123,6 +77,7 @@ const SECTIONS: NavSection[] = [
   {
     key: "finance",
     label: "Financeiro",
+    icon: WalletIcon,
     items: [
       { path: "/entries", kind: "receivable", label: "Contas a receber", icon: HandCoinsIcon },
       { path: "/entries", kind: "payable", label: "Contas a pagar", icon: CreditCardIcon },
@@ -134,51 +89,218 @@ const SECTIONS: NavSection[] = [
       { path: "/collection", label: "Cobrança", icon: CreditCardIcon },
       { path: "/delinquency", label: "Inadimplência", icon: BadgeAlertIcon },
     ],
+    registers: {
+      label: "Cadastros financeiros",
+      items: [
+        { path: "/categories", label: "Categorias", icon: FolderTreeIcon },
+        { path: "/cost-centers", label: "Centros de custo", icon: LayersIcon },
+        { path: "/bank-accounts", label: "Contas bancárias", icon: WalletIcon },
+        { path: "/payment-methods", label: "Formas de pagamento", icon: CreditCardIcon },
+        { path: "/payment-terms", label: "Prazos de pagamento", icon: CalendarDaysIcon },
+      ],
+    },
   },
   {
     key: "registers",
     label: "Cadastros",
+    icon: UsersIcon,
     items: [
       { path: "/parties", label: "Clientes e fornecedores", icon: UsersIcon },
       { path: "/products", label: "Produtos e serviços", icon: BoxIcon },
-      { path: "/categories", label: "Categorias", icon: FolderTreeIcon },
-      { path: "/cost-centers", label: "Centros de custo", icon: LayersIcon },
-      { path: "/bank-accounts", label: "Contas bancárias", icon: WalletIcon },
-      { path: "/payment-methods", label: "Formas de pagamento", icon: CreditCardIcon },
-      { path: "/payment-terms", label: "Prazos de pagamento", icon: CalendarDaysIcon },
     ],
   },
+  { key: "reports", label: "Relatórios", icon: FileTextIcon, link: { path: "/reports", label: "Relatórios", icon: FileTextIcon } },
 ];
 
-const REPORTS: NavItem = { path: "/reports", label: "Relatórios", icon: FileTextIcon };
-
-const MEMBERS: NavSection = {
+const SETTINGS: NavArea = {
   key: "settings",
   label: "Configurações",
+  icon: UserPlusIcon,
   items: [{ path: "/members", label: "Membros", icon: UserPlusIcon }],
 };
 
-/** The sections of a company, grouped; the link of the page being shown is marked as current. */
+function itemsOf(area: NavArea): NavItem[] {
+  return [...(area.items ?? []), ...(area.registers?.items ?? [])];
+}
+
+function isCurrent(base: string, item: NavItem, location: Location): boolean {
+  const target = `${base}${item.path}`;
+  const path = location.pathname.replace(/\/$/, "");
+  // Three links to one page: the one that is current is told by the kind in the address.
+  if (item.path === "/entries") return path === target && entryKindOf(location.search) === (item.kind ?? "");
+  return item.path === "" ? path === target : path === target || path.startsWith(`${target}/`);
+}
+
+/** The area whose page is showing, so the panel opens on it. */
+function areaHere(areas: NavArea[], base: string, location: Location): string | null {
+  const found = areas.find((area) => [...(area.link ? [area.link] : []), ...itemsOf(area)].some((item) => isCurrent(base, item, location)));
+  return found?.key ?? null;
+}
+
+function ItemLink({ base, item }: { base: string; item: NavItem }) {
+  const Icon = item.icon;
+  const location = useLocation();
+  const current = isCurrent(base, item, location);
+  const to = `${base}${item.path}${item.kind ? `?tipo=${item.kind}` : ""}`;
+  return (
+    <Link to={to} aria-current={current ? "page" : undefined}>
+      <Icon size={18} aria-hidden />
+      <span>{item.label}</span>
+    </Link>
+  );
+}
+
+/** The links of an area: its items, then its fold of registers (closed only by choice, so nothing hides by default). */
+function AreaLinks({ base, area, foldable }: { base: string; area: NavArea; foldable: boolean }) {
+  const [registersOpen, setRegistersOpen] = useState(true);
+  const registers = area.registers;
+  return (
+    <>
+      {(area.items ?? []).map((item) => (
+        <ItemLink key={`${item.path}${item.kind ?? ""}`} base={base} item={item} />
+      ))}
+      {registers && (
+        <div className="nav-registers">
+          {foldable ? (
+            <button type="button" className="nav-registers-toggle" aria-expanded={registersOpen} onClick={() => setRegistersOpen(!registersOpen)}>
+              {registers.label}
+              <ChevronDownIcon size={14} aria-hidden />
+            </button>
+          ) : (
+            <p className="nav-registers-toggle">{registers.label}</p>
+          )}
+          {(!foldable || registersOpen) && registers.items.map((item) => <ItemLink key={item.path} base={base} item={item} />)}
+        </div>
+      )}
+    </>
+  );
+}
+
+/**
+ * The company's sections in two levels, like the reference: a rail of areas and, beside it, the panel
+ * of the area being looked at. Shrunk (`collapsed`) the panel is gone and an area shows its items in a
+ * flyout; on a phone the same two levels are two screens of the drawer, `level` says which.
+ */
 export function CompanyNav({
   companyId,
   canSeeMembers,
   collapsed,
+  onExpand,
 }: {
   companyId: string;
-  /** Shows the icons alone, as a rail: the names stay for a screen reader and as tooltips. */
-  collapsed: boolean;
   /** The role reaches who belongs to the company: the others are not shown the link. */
   canSeeMembers: boolean;
+  collapsed: boolean;
+  /** Asked when an area is chosen on the shrunk rail: the panel comes back for it. */
+  onExpand: () => void;
 }) {
   const base = `/companies/${companyId}`;
+  const location = useLocation();
+  const areas = canSeeMembers ? [...AREAS, SETTINGS] : AREAS;
+  const here = areaHere(areas, base, location);
+  const placeKey = `${location.pathname}${location.search}`;
+  const hasItems = (key: string | null) => areas.find((area) => area.key === key)?.items !== undefined;
+
+  // Going to a page puts the panel back on its area, and a phone back on the screen of its items.
+  const [seenPlace, setSeenPlace] = useState(placeKey);
+  const [browsing, setBrowsing] = useState<string | null>(here);
+  const [level, setLevel] = useState<"areas" | "items">(hasItems(here) ? "items" : "areas");
+  if (seenPlace !== placeKey) {
+    setSeenPlace(placeKey);
+    setBrowsing(here);
+    setLevel(hasItems(here) ? "items" : "areas");
+  }
+
+  const open = areas.find((area) => area.key === browsing && area.items !== undefined);
+
+  // On a phone the screen a button is on goes away when the other one shows: the focus follows, or a
+  // keyboard would start again from the top of the page.
+  const shell = useRef<HTMLDivElement>(null);
+  const focusAfter = useRef<"panel" | "rail" | null>(null);
+  useEffect(() => {
+    const element = shell.current;
+    if (focusAfter.current === "panel") element?.querySelector<HTMLElement>(".panel-back")?.focus();
+    // The area just left, else the one the page is in: `querySelector` with a list takes the first in the page.
+    if (focusAfter.current === "rail") (element?.querySelector<HTMLElement>(".rail-item[data-open]") ?? element?.querySelector<HTMLElement>(".rail-item"))?.focus();
+    focusAfter.current = null;
+  }, [level]);
+
+  function choose(area: NavArea) {
+    setBrowsing(area.key);
+    setLevel("items");
+    focusAfter.current = "panel";
+    onExpand();
+  }
+
+  function goBack() {
+    setLevel("areas");
+    focusAfter.current = "rail";
+  }
+
+  // A flyout is fixed (the rail scrolls and would clip it), so it is placed from its button when it is about
+  // to show and never runs past the bottom of the window.
+  function placeFlyout(event: PointerEvent<HTMLElement> | FocusEvent<HTMLElement>) {
+    const slot = event.currentTarget;
+    const top = Math.max(8, slot.getBoundingClientRect().top - 8);
+    slot.querySelector<HTMLElement>(".flyout")?.style.setProperty("--flyout-top", `${top}px`);
+  }
+
   return (
-    <nav className="side-nav" id="company-nav" aria-label="Seções da empresa">
-      <NavItemLink base={base} item={HOME} collapsed={collapsed} />
-      {SECTIONS.map((section) => (
-        <NavGroup key={section.key} base={base} section={section} collapsed={collapsed} />
-      ))}
-      <NavItemLink base={base} item={REPORTS} collapsed={collapsed} />
-      {canSeeMembers && <NavGroup base={base} section={MEMBERS} collapsed={collapsed} />}
-    </nav>
+    <div className="nav-shell" data-level={level} ref={shell}>
+      <nav className="rail" aria-label="Áreas da empresa">
+        {areas.map((area) => {
+          const Icon = area.icon;
+          if (area.link) {
+            return (
+              <NavLink key={area.key} to={`${base}${area.link.path}`} end={area.link.path === ""} className="rail-item">
+                <Icon size={22} aria-hidden />
+                <span>{area.label}</span>
+              </NavLink>
+            );
+          }
+          return (
+            <div
+              key={area.key}
+              className="rail-slot"
+              onPointerEnter={placeFlyout}
+              onFocus={placeFlyout}
+              // A flyout that shows only because it has the focus can be put away with Escape (WCAG 1.4.13).
+              onKeyDown={(event) => event.key === "Escape" && collapsed && (event.target as HTMLElement).blur()}
+            >
+              <button
+                type="button"
+                className="rail-item"
+                aria-expanded={!collapsed && open?.key === area.key}
+                aria-controls={open?.key === area.key ? "area-panel" : undefined}
+                data-open={open?.key === area.key || undefined}
+                data-here={here === area.key || undefined}
+                onClick={() => choose(area)}
+              >
+                <Icon size={22} aria-hidden />
+                <span>{area.label}</span>
+                <ChevronRightIcon className="rail-chevron" size={16} aria-hidden />
+              </button>
+              {collapsed && (
+                <div className="flyout" role="group" aria-label={area.label}>
+                  <p className="flyout-title">{area.label}</p>
+                  <AreaLinks base={base} area={area} foldable={false} />
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </nav>
+      {open && (
+        <nav className="panel" id="area-panel" aria-label={open.label}>
+          <div className="panel-head">
+            <button type="button" className="panel-back" aria-label="Voltar às áreas" onClick={goBack}>
+              <ChevronLeftIcon size={20} aria-hidden />
+            </button>
+            <h2 className="panel-title">{open.label}</h2>
+          </div>
+          <AreaLinks base={base} area={open} foldable />
+        </nav>
+      )}
+    </div>
   );
 }
