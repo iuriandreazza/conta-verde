@@ -5,9 +5,9 @@ use conta_verde_application::{
     AttachmentService, AuthService, BalanceService, BankAccountService, CategoryService,
     CommissionService, ContractService, CostCenterService, DocumentMailService, DreService,
     FinancialEntryService, InventoryCountService, JobRunner, MemberService, PartyService,
-    PaymentMethodService, PaymentTermService, PostalCodeService, PriceListService, ProductService,
-    PurchaseService, QuoteService, ReconciliationService, RecurrenceService, SaleService,
-    SalesReportService, StockService, TransferService,
+    PaymentMethodService, PaymentTermService, PeriodLockService, PostalCodeService,
+    PriceListService, ProductService, PurchaseService, QuoteService, ReconciliationService,
+    RecurrenceService, SaleService, SalesReportService, StockService, TransferService,
 };
 use conta_verde_application::{
     BrandedEmailSender, ChargeService, CollectionService, DunningService, EmailError, EmailMessage,
@@ -22,11 +22,12 @@ use conta_verde_infrastructure::{
     PostgresCostCenterRepository, PostgresDocumentMailRepository, PostgresFinancialEntryRepository,
     PostgresIdentityRepository, PostgresInventoryCountRepository, PostgresInvitationRepository,
     PostgresJobQueue, PostgresOpeningRepository, PostgresPartyRepository,
-    PostgresPaymentMethodRepository, PostgresPaymentTermRepository, PostgresPriceListRepository,
-    PostgresProductRepository, PostgresPurchaseOrderRepository, PostgresQuoteRepository,
-    PostgresRecurrenceRepository, PostgresSaleRepository, PostgresStatementLineRepository,
-    PostgresStockMovementRepository, PostgresStockSettingsRepository, PostgresTransferRepository,
-    RegisterDocumentReferences, RegisterReferences, SmtpEmailSender, connect_and_migrate,
+    PostgresPaymentMethodRepository, PostgresPaymentTermRepository, PostgresPeriodLockRepository,
+    PostgresPriceListRepository, PostgresProductRepository, PostgresPurchaseOrderRepository,
+    PostgresQuoteRepository, PostgresRecurrenceRepository, PostgresSaleRepository,
+    PostgresStatementLineRepository, PostgresStockMovementRepository,
+    PostgresStockSettingsRepository, PostgresTransferRepository, RegisterDocumentReferences,
+    RegisterReferences, SmtpEmailSender, connect_and_migrate,
 };
 use conta_verde_infrastructure::{
     AsaasProvider, NoMessageSender, PostgresDunningPlanRepository, PostgresNotificationRepository,
@@ -61,7 +62,9 @@ impl Ports for PostgresPorts {
         PostgresPartyRepository,
         PostgresBankAccountRepository,
         PostgresPaymentMethodRepository,
+        PostgresPeriodLockRepository,
     >;
+    type PeriodLocks = PostgresPeriodLockRepository;
     type Attachments = PostgresAttachmentRepository;
     type Blobs = LocalBlobStore;
     type Charges = PostgresChargeRepository;
@@ -135,8 +138,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             PostgresPartyRepository::new(pool.clone()),
             PostgresBankAccountRepository::new(pool.clone()),
             PostgresPaymentMethodRepository::new(pool.clone()),
+            PostgresPeriodLockRepository::new(pool.clone()),
         )
     };
+    let period_locks = PeriodLockService::new(PostgresPeriodLockRepository::new(pool.clone()));
     let entries = FinancialEntryService::new(
         PostgresFinancialEntryRepository::new(pool.clone()),
         references(),
@@ -209,7 +214,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         PostgresFinancialEntryRepository::new(pool.clone()),
         PostgresTransferRepository::new(pool.clone()),
         PostgresOpeningRepository::new(pool.clone()),
-    );
+    )
+    .with_period_lock(PostgresPeriodLockRepository::new(pool.clone()));
     let postal_codes = PostalCodeService::new(postal_code_directory_from_env()?);
     let quotes = QuoteService::new(
         PostgresQuoteRepository::new(pool.clone()),
@@ -261,6 +267,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             PostgresProductRepository::new(pool.clone()),
             PostgresStockSettingsRepository::new(pool.clone()),
         )
+        .with_period_lock(PostgresPeriodLockRepository::new(pool.clone()))
     };
     let sale_service = || {
         SaleService::new(
@@ -374,6 +381,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 commissions,
                 reconciliation,
                 balances,
+                period_locks,
                 postal_codes,
                 members,
                 documents,

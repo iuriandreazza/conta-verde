@@ -586,6 +586,11 @@ export interface PublicCharge {
 }
 
 /** Where the money of a paid charge lands, and what the provider's fee is entered under (ADR 0046). */
+/** The company's closed period (ADR 0069): everything dated on or before the day is closed. */
+export interface PeriodLock {
+  locked_through: string | null;
+}
+
 export interface CollectionSettings {
   bank_account_id: string | null;
   fee_category_id: string | null;
@@ -1921,6 +1926,16 @@ export const api = {
       method: "DELETE",
     }),
   /** The provider charges are made at, or `null` when the operator configured none. */
+  getPeriodLock: (companyId: string) =>
+    request<PeriodLock>(`/companies/${companyId}/accounting/period-lock`),
+  /** Closes through a month's last day, or reopens with an earlier day (or none) and a reason. */
+  replacePeriodLock: (companyId: string, lock: { locked_through: string | null; reason?: string }) =>
+    request<PeriodLock>(`/companies/${companyId}/accounting/period-lock`, {
+      method: "PUT",
+      body: JSON.stringify(lock),
+    }),
+  periodLockHistory: (companyId: string) =>
+    request<HistoryEntry[]>(`/companies/${companyId}/accounting/period-lock/history`),
   getCollection: (companyId: string) =>
     request<{ provider: string | null }>(`/companies/${companyId}/collection`),
   getCollectionSettings: (companyId: string) =>

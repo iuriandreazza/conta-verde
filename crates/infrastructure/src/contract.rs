@@ -11693,11 +11693,12 @@ pub async fn configures_collection<S, F>(
 /// enters the fee, once however many times it arrives or is interrupted; what is not signed, not known or
 /// another company's is refused and leaves nothing; what no longer fits is kept and flagged.
 #[allow(clippy::too_many_arguments)]
-pub async fn settles_charges_from_webhooks<C, Ev, S, E, F, P>(
+pub async fn settles_charges_from_webhooks<C, Ev, S, E, F, P, L>(
     webhooks: &PaymentWebhookService<FakePaymentProvider, C, Ev, S, E, F>,
     charges: &ChargeService<C, E, P, FakePaymentProvider, S>,
     entries: &FinancialEntryService<E, F>,
     settings: &CollectionService<S, F>,
+    locks: &conta_verde_application::PeriodLockService<L>,
     events: &Ev,
     company: CompanyId,
     other_company: CompanyId,
@@ -11709,6 +11710,7 @@ pub async fn settles_charges_from_webhooks<C, Ev, S, E, F, P>(
     E: FinancialEntryRepository,
     F: EntryReferences,
     P: PartyRepository,
+    L: conta_verde_application::PeriodLockRepository,
 {
     use conta_verde_domain::{Charge, FinancialEntry};
 
@@ -12048,6 +12050,43 @@ pub async fn settles_charges_from_webhooks<C, Ev, S, E, F, P>(
             .iter()
             .all(|s| s.charge_id() != Some(first.id()) || s.is_reversed())
     );
+
+    // A payment made on a day of a closed month ([ADR 0069]) settles nothing and enters no fee: the charge is kept
+    // paid, with the reason, and the notice is acknowledged (the provider is not asked to send it again).
+    let late = new_entry("Venda 13", &["10"]).await.unwrap();
+    let late_charge = charge_for(&late, 1).await.unwrap();
+    locks
+        .replace(
+            company,
+            &ana,
+            Some(conta_verde_domain::CalendarDate::parse("2026-12-31").unwrap()),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(pay(&late_charge, "evt_closed", "10", "0.50").await, Ok(1));
+    assert!(settlements_of(&late).await.unwrap().is_empty());
+    assert!(
+        entries
+            .made_by(company, EntryOrigin::ChargeFee(late_charge.id()))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let kept = status_of(&late_charge).await;
+    assert_eq!(kept.status(), ChargeStatus::Paid);
+    let note = kept.receipt().unwrap().note.clone().unwrap();
+    assert!(
+        note.contains("the period through 2026-12-31 is closed"),
+        "{note}"
+    );
+    let (outcome, event_note) = outcome_of(events, company, &late_charge, "evt_closed").await;
+    assert_eq!(outcome, PaymentEventOutcome::NotApplied);
+    assert_eq!(event_note, Some(note));
+    locks
+        .replace(company, &ana, None, Some("reopened for the test"))
+        .await
+        .unwrap();
 }
 
 /// What came of the notice the provider sent under this id: its outcome and note.
@@ -15190,6 +15229,692 @@ pub async fn limits_and_logs_the_documents_that_are_mailed<
     );
     // Taking back what another company holds takes back nothing.
     log.release(other_company, gone.id).await.unwrap();
+}
+
+/// What a company's closed period is ([ADR 0069]): there is none until a month is closed, only the last day of a month
+/// can be, closing again or further is audited, and so is reopening, which needs a reason; the same date again writes
+/// nothing, and what one company closes is not another's.
+pub async fn runs_the_period_lock<L: conta_verde_application::PeriodLockRepository>(
+    locks: &conta_verde_application::PeriodLockService<L>,
+    company: CompanyId,
+    other_company: CompanyId,
+) {
+    use conta_verde_domain::CalendarDate;
+    let ana = actor();
+    let day = |raw: &str| CalendarDate::parse(raw).unwrap();
+    let through =
+        |lock: conta_verde_domain::PeriodLock| lock.locked_through().map(|day| day.to_string());
+
+    assert_eq!(through(locks.get(company).await.unwrap()), None);
+    assert!(locks.history(company).await.unwrap().is_empty());
+
+    // Only a whole month: the last day of one.
+    assert_eq!(
+        locks
+            .replace(company, &ana, Some(day("2026-10-30")), None)
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::InvalidPeriodLock)
+    );
+    assert_eq!(through(locks.get(company).await.unwrap()), None);
+
+    let closed = locks
+        .replace(company, &ana, Some(day("2026-10-31")), None)
+        .await
+        .unwrap();
+    assert_eq!(through(closed), Some("2026-10-31".into()));
+    assert_eq!(
+        through(locks.get(company).await.unwrap()),
+        Some("2026-10-31".into())
+    );
+    // Asking for what is already so writes and records nothing.
+    locks
+        .replace(company, &ana, Some(day("2026-10-31")), None)
+        .await
+        .unwrap();
+    assert_eq!(locks.history(company).await.unwrap().len(), 1);
+
+    // Closing further needs no reason.
+    locks
+        .replace(company, &ana, Some(day("2026-11-30")), None)
+        .await
+        .unwrap();
+    assert_eq!(locks.history(company).await.unwrap().len(), 2);
+
+    // Reopening does, and a refused reopening changes nothing.
+    for reason in [None, Some("   "), Some("two\nlines")] {
+        assert_eq!(
+            locks
+                .replace(company, &ana, Some(day("2026-09-30")), reason)
+                .await
+                .unwrap_err(),
+            ApplicationError::Domain(DomainError::InvalidReopenReason),
+            "{reason:?}"
+        );
+    }
+    assert_eq!(
+        through(locks.get(company).await.unwrap()),
+        Some("2026-11-30".into())
+    );
+    locks
+        .replace(
+            company,
+            &ana,
+            Some(day("2026-09-30")),
+            Some(" late supplier invoice "),
+        )
+        .await
+        .unwrap();
+    let history = locks.history(company).await.unwrap();
+    assert_eq!(history.len(), 3);
+    let reopened = &history[2];
+    assert_eq!(reopened.entry.action, AuditAction::Updated);
+    let changed: Vec<(String, Option<String>, Option<String>)> = reopened
+        .entry
+        .changes
+        .iter()
+        .map(|change| (change.field.clone(), change.from.clone(), change.to.clone()))
+        .collect();
+    assert_eq!(
+        changed,
+        [
+            (
+                "locked_through".to_owned(),
+                Some("2026-11-30".to_owned()),
+                Some("2026-09-30".to_owned())
+            ),
+            (
+                "reason".to_owned(),
+                None,
+                Some("late supplier invoice".to_owned())
+            ),
+        ]
+    );
+
+    // Reopening everything, and closing again after it.
+    locks
+        .replace(company, &ana, None, Some("started over"))
+        .await
+        .unwrap();
+    assert_eq!(through(locks.get(company).await.unwrap()), None);
+    locks
+        .replace(company, &ana, Some(day("2026-01-31")), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        through(locks.get(company).await.unwrap()),
+        Some("2026-01-31".into())
+    );
+    assert_eq!(locks.history(company).await.unwrap().len(), 5);
+
+    // Another company has its own.
+    assert_eq!(through(locks.get(other_company).await.unwrap()), None);
+    assert!(locks.history(other_company).await.unwrap().is_empty());
+}
+
+/// A closed month refuses what the books of its days hold ([ADR 0069]): an entry by its competence date (making it,
+/// changing it, moving it into or out of the month, cancelling it), a settlement and a transfer by their own day, and
+/// reversing either, even from an open day; an opening balance by its day. What is dated after the lock is written as
+/// ever, including a settlement of an entry whose competence is closed, and a refusal leaves nothing behind. Reopening
+/// lets the month be written again, and what one company closed does not close another.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub async fn a_closed_month_refuses_what_the_books_hold<E, F, T, A, EO, TO, O, L>(
+    locks: &conta_verde_application::PeriodLockService<L>,
+    entries: &FinancialEntryService<E, F>,
+    transfers: &TransferService<T, F>,
+    balances: &BalanceService<A, EO, TO, O, L>,
+    company: CompanyId,
+    other_company: CompanyId,
+    seed: &EntrySeed,
+    other_seed: &EntrySeed,
+) where
+    E: FinancialEntryRepository,
+    F: EntryReferences,
+    T: TransferRepository,
+    A: BankAccountRepository,
+    EO: FinancialEntryRepository,
+    TO: TransferRepository,
+    O: conta_verde_application::OpeningRepository,
+    L: conta_verde_application::PeriodLockRepository,
+{
+    use conta_verde_domain::CalendarDate;
+    let ana = actor();
+    let day = |raw: &str| CalendarDate::parse(raw).unwrap();
+    let closed = ApplicationError::PeriodLocked {
+        through: day("2026-10-31"),
+    };
+    let settle_on = |installment: u16, applied: &str, on: &str| {
+        let mut draft = settlement_draft(seed, installment, applied);
+        draft.settled_on = on.into();
+        draft
+    };
+
+    // October, before anything is closed: an invoice settled twice (once in October, once in November), another
+    // without settlements, one of November, a transfer, and an opening balance.
+    let invoice = entries
+        .register(
+            company,
+            &ana,
+            entry_draft(seed, "Fatura", "2026-10-15", &[("2026-11-10", "100")]),
+        )
+        .await
+        .unwrap();
+    let october_payment = entries
+        .settle(
+            company,
+            &ana,
+            invoice.id(),
+            settle_on(1, "40", "2026-10-20"),
+        )
+        .await
+        .unwrap();
+    let november_payment = entries
+        .settle(
+            company,
+            &ana,
+            invoice.id(),
+            settle_on(1, "30", "2026-11-05"),
+        )
+        .await
+        .unwrap();
+    let loose = entries
+        .register(
+            company,
+            &ana,
+            entry_draft(seed, "Avulso", "2026-10-12", &[("2026-10-20", "10")]),
+        )
+        .await
+        .unwrap();
+    let november = entries
+        .register(
+            company,
+            &ana,
+            entry_draft(seed, "Novembro", "2026-11-03", &[("2026-11-30", "20")]),
+        )
+        .await
+        .unwrap();
+    let october_transfer = transfers
+        .register(
+            company,
+            &ana,
+            transfer_draft(
+                seed.bank_account,
+                seed.other_bank_account,
+                "10",
+                "2026-10-25",
+            ),
+        )
+        .await
+        .unwrap();
+    let november_transfer = transfers
+        .register(
+            company,
+            &ana,
+            transfer_draft(
+                seed.bank_account,
+                seed.other_bank_account,
+                "5",
+                "2026-11-04",
+            ),
+        )
+        .await
+        .unwrap();
+    balances
+        .set_opening(company, &ana, seed.bank_account, "100", "2026-10-01")
+        .await
+        .unwrap();
+
+    locks
+        .replace(company, &ana, Some(day("2026-10-31")), None)
+        .await
+        .unwrap();
+
+    // Entries: by the competence date, on either side of an edit.
+    assert_eq!(
+        entries
+            .register(
+                company,
+                &ana,
+                entry_draft(seed, "Tarde", "2026-10-31", &[("2026-11-30", "1")])
+            )
+            .await
+            .unwrap_err(),
+        closed
+    );
+    assert_eq!(
+        entries
+            .update(
+                company,
+                &ana,
+                loose.id(),
+                entry_draft(
+                    seed,
+                    "Avulso corrigido",
+                    "2026-10-12",
+                    &[("2026-10-20", "10")]
+                ),
+            )
+            .await
+            .unwrap_err(),
+        closed
+    );
+    assert_eq!(
+        entries
+            .update(
+                company,
+                &ana,
+                loose.id(),
+                entry_draft(seed, "Avulso", "2026-11-12", &[("2026-11-20", "10")]),
+            )
+            .await
+            .unwrap_err(),
+        closed,
+        "out of the month"
+    );
+    assert_eq!(
+        entries
+            .update(
+                company,
+                &ana,
+                november.id(),
+                entry_draft(seed, "Novembro", "2026-10-31", &[("2026-11-30", "20")]),
+            )
+            .await
+            .unwrap_err(),
+        closed,
+        "into the month"
+    );
+    assert_eq!(
+        entries.void(company, &ana, loose.id()).await.unwrap_err(),
+        closed
+    );
+    assert_eq!(entries.history(company, loose.id()).await.unwrap().len(), 1);
+    assert!(!entries.get(company, loose.id()).await.unwrap().is_voided());
+    // The day after the lock is open.
+    entries
+        .register(
+            company,
+            &ana,
+            entry_draft(seed, "Dia 1", "2026-11-01", &[("2026-11-30", "1")]),
+        )
+        .await
+        .unwrap();
+    entries
+        .update(
+            company,
+            &ana,
+            november.id(),
+            entry_draft(
+                seed,
+                "Novembro corrigido",
+                "2026-11-03",
+                &[("2026-11-30", "20")],
+            ),
+        )
+        .await
+        .unwrap();
+
+    // Settlements: by their own day. An October invoice may be paid in November, and a payment made in October
+    // stays as it was even when undone from an open day.
+    assert_eq!(
+        entries
+            .settle(
+                company,
+                &ana,
+                november.id(),
+                settle_on(1, "5", "2026-10-31")
+            )
+            .await
+            .unwrap_err(),
+        closed
+    );
+    let later = entries
+        .settle(
+            company,
+            &ana,
+            invoice.id(),
+            settle_on(1, "20", "2026-11-06"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        entries
+            .reverse(company, &ana, invoice.id(), october_payment.id())
+            .await
+            .unwrap_err(),
+        closed
+    );
+    assert!(
+        !entries
+            .settlements(company, invoice.id())
+            .await
+            .unwrap()
+            .iter()
+            .find(|settlement| settlement.id() == october_payment.id())
+            .unwrap()
+            .is_reversed()
+    );
+    entries
+        .reverse(company, &ana, invoice.id(), later.id())
+        .await
+        .unwrap();
+    entries
+        .reverse(company, &ana, invoice.id(), november_payment.id())
+        .await
+        .unwrap();
+
+    // Transfers and the opening balance.
+    assert_eq!(
+        transfers
+            .register(
+                company,
+                &ana,
+                transfer_draft(
+                    seed.bank_account,
+                    seed.other_bank_account,
+                    "1",
+                    "2026-10-28"
+                ),
+            )
+            .await
+            .unwrap_err(),
+        closed
+    );
+    assert_eq!(
+        transfers
+            .reverse(company, &ana, october_transfer.id())
+            .await
+            .unwrap_err(),
+        closed
+    );
+    transfers
+        .reverse(company, &ana, november_transfer.id())
+        .await
+        .unwrap();
+    assert_eq!(
+        balances
+            .set_opening(company, &ana, seed.bank_account, "150", "2026-11-01")
+            .await
+            .unwrap_err(),
+        closed,
+        "the opening it replaces is of a closed day"
+    );
+    // The same opening again changes nothing, so a closed month does not refuse it.
+    balances
+        .set_opening(company, &ana, seed.bank_account, "100", "2026-10-01")
+        .await
+        .unwrap();
+    assert_eq!(
+        balances
+            .set_opening(company, &ana, seed.other_bank_account, "7", "2026-10-31")
+            .await
+            .unwrap_err(),
+        closed
+    );
+    balances
+        .set_opening(company, &ana, seed.other_bank_account, "7", "2026-11-01")
+        .await
+        .unwrap();
+
+    // Another company is not closed.
+    entries
+        .register(
+            other_company,
+            &ana,
+            entry_draft(other_seed, "Outra", "2026-10-15", &[("2026-11-30", "1")]),
+        )
+        .await
+        .unwrap();
+
+    // Reopened, October is written again.
+    locks
+        .replace(
+            company,
+            &ana,
+            Some(day("2026-09-30")),
+            Some("correcting a supplier invoice"),
+        )
+        .await
+        .unwrap();
+    entries.void(company, &ana, loose.id()).await.unwrap();
+    entries
+        .reverse(company, &ana, invoice.id(), october_payment.id())
+        .await
+        .unwrap();
+    // September is still closed.
+    assert_eq!(
+        entries
+            .register(
+                company,
+                &ana,
+                entry_draft(seed, "Setembro", "2026-09-30", &[("2026-11-30", "1")])
+            )
+            .await
+            .unwrap_err(),
+        ApplicationError::PeriodLocked {
+            through: day("2026-09-30")
+        }
+    );
+}
+
+/// A closed month refuses stock and documents that would change its books ([ADR 0069]): a movement by its day, undoing
+/// one even from an open day, completing a sale, cancelling a completed one, a return and a purchase receipt by their
+/// days, each refused before anything is written; an order that is still open, in a closed month, is not the books and
+/// may be written, but not completed. Reopening lets them through.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub async fn a_closed_month_refuses_stock_and_documents<P, E, F, R, T, S, Q, M, Pr, St, L>(
+    locks: &conta_verde_application::PeriodLockService<L>,
+    purchases: &PurchaseService<P, E, F, R, T>,
+    sales: &SaleService<S, Q, E, F, R, T>,
+    stock: &StockService<M, Pr, St, L>,
+    company: CompanyId,
+    entry_seed: &EntrySeed,
+    seed: &SalesSeed,
+) where
+    P: PurchaseOrderRepository,
+    E: FinancialEntryRepository,
+    F: EntryReferences,
+    R: DocumentReferences,
+    T: DocumentStock,
+    S: SaleRepository,
+    Q: QuoteRepository,
+    M: StockMovementRepository,
+    Pr: ProductRepository,
+    St: StockSettingsRepository,
+    L: conta_verde_application::PeriodLockRepository,
+{
+    use conta_verde_domain::{CalendarDate, StockMovementKind::In};
+    let ana = actor();
+    let day = |raw: &str| CalendarDate::parse(raw).unwrap();
+    let closed = ApplicationError::PeriodLocked {
+        through: day("2026-10-31"),
+    };
+    let refund = Refund {
+        category_id: entry_seed.other_category,
+        due_on: "2026-11-20".into(),
+    };
+    let bought = |quantity: &str, on: &str| {
+        let mut draft = stock_draft(seed.product, In, quantity, on);
+        draft.unit_cost = Some("5".into());
+        draft
+    };
+    let sale_on = |on: &str| {
+        let mut draft = sale_draft(entry_seed, seed);
+        draft.sold_on = on.into();
+        draft
+    };
+
+    // October: goods bought and received, a sale completed, another left open, an order approved.
+    let manual = stock
+        .record(company, &ana, bought("20", "2026-10-02"))
+        .await
+        .unwrap();
+    let completed = sales
+        .register(company, &ana, sale_on("2026-10-12"))
+        .await
+        .unwrap();
+    sales.complete(company, &ana, completed.id()).await.unwrap();
+    let open = sales
+        .register(company, &ana, sale_on("2026-10-14"))
+        .await
+        .unwrap();
+    let mut order = purchase_draft(entry_seed, seed);
+    order.lines = vec![sale_line(seed.product, "Café 500g", "10", "5", "0")];
+    let order = purchases.register(company, &ana, order).await.unwrap();
+    purchases.approve(company, &ana, order.id()).await.unwrap();
+
+    locks
+        .replace(company, &ana, Some(day("2026-10-31")), None)
+        .await
+        .unwrap();
+    let quantity = || async {
+        stock
+            .balance_of(company, seed.product)
+            .await
+            .unwrap()
+            .quantity()
+            .to_string()
+    };
+    let before = quantity().await;
+
+    // Stock: a movement by its day, and undoing one from an open day.
+    assert_eq!(
+        stock
+            .record(company, &ana, bought("1", "2026-10-28"))
+            .await
+            .unwrap_err(),
+        closed
+    );
+    assert_eq!(
+        stock
+            .reverse(company, &ana, manual.id(), "2026-11-03", None)
+            .await
+            .unwrap_err(),
+        closed
+    );
+    assert_eq!(quantity().await, before);
+    stock
+        .record(company, &ana, bought("1", "2026-11-02"))
+        .await
+        .unwrap();
+
+    // Sales: an open order in a closed month is not the books, completing it is.
+    assert_eq!(
+        sales.complete(company, &ana, open.id()).await.unwrap_err(),
+        closed
+    );
+    assert_eq!(
+        sales.get(company, open.id()).await.unwrap().status(),
+        SaleStatus::Open
+    );
+    assert!(
+        sales
+            .receivable(company, open.id())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    sales
+        .register(company, &ana, sale_on("2026-10-20"))
+        .await
+        .unwrap();
+    // Cancelling a completed sale changes its day, whichever day it is done on.
+    assert_eq!(
+        sales
+            .cancel(company, &ana, completed.id())
+            .await
+            .unwrap_err(),
+        closed
+    );
+    assert_eq!(
+        sales.get(company, completed.id()).await.unwrap().status(),
+        SaleStatus::Completed
+    );
+    assert!(
+        !sales
+            .receivable(company, completed.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .is_voided()
+    );
+    // A return on a closed day is refused before it is stored; one on an open day goes through, whatever the
+    // sale's own day.
+    let mut early = return_draft(&[(1, "1")]);
+    early.returned_on = "2026-10-20".into();
+    assert_eq!(
+        sales
+            .register_return(company, &ana, completed.id(), early, refund.clone())
+            .await
+            .unwrap_err(),
+        closed
+    );
+    assert!(
+        sales
+            .returns(company, completed.id())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    sales
+        .register_return(
+            company,
+            &ana,
+            completed.id(),
+            return_draft(&[(1, "1")]),
+            refund,
+        )
+        .await
+        .unwrap();
+
+    // Purchases: a receipt by its day, refused before it is stored.
+    assert_eq!(
+        purchases
+            .receive(
+                company,
+                &ana,
+                order.id(),
+                receipt_draft("2026-10-30", &[(1, "4")])
+            )
+            .await
+            .unwrap_err(),
+        closed
+    );
+    assert!(
+        purchases
+            .receipts(company, order.id())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    purchases
+        .receive(
+            company,
+            &ana,
+            order.id(),
+            receipt_draft("2026-11-04", &[(1, "4")]),
+        )
+        .await
+        .unwrap();
+
+    // Reopened, they go through.
+    locks
+        .replace(company, &ana, None, Some("the month was not ready"))
+        .await
+        .unwrap();
+    sales.complete(company, &ana, open.id()).await.unwrap();
+    // Past the lock it reaches the sale's own rule: the return made above stands.
+    assert_eq!(
+        sales
+            .cancel(company, &ana, completed.id())
+            .await
+            .unwrap_err(),
+        ApplicationError::SaleHasReturns
+    );
+    stock
+        .record(company, &ana, bought("1", "2026-10-28"))
+        .await
+        .unwrap();
 }
 
 /// The managerial income statement ([ADR 0012], [ADR 0070]): by competence date, each entry by its total in the month of

@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::future::Future;
 
 use conta_verde_domain::{
-    Actor, Amount, BankAccountId, CategoryId, CompanyId, CostCenterId, DomainError, DreGroup,
-    EntryId, EntryInstallmentDraft, EntryKind, EntryOrigin, FinancialEntry, FinancialEntryDraft,
-    ImportId, PartyId, Settlement, SettlementDraft, SettlementId,
+    Actor, Amount, BankAccountId, CalendarDate, CategoryId, CompanyId, CostCenterId, DomainError,
+    DreGroup, EntryId, EntryInstallmentDraft, EntryKind, EntryOrigin, FinancialEntry,
+    FinancialEntryDraft, ImportId, PartyId, Settlement, SettlementDraft, SettlementId,
 };
 
 use crate::{
@@ -348,6 +348,45 @@ impl<R: FinancialEntryRepository, F: EntryReferences + EntryLookups> FinancialEn
         report.valid = ready.len();
         if !report.refused.is_empty() {
             return Ok(report);
+        }
+        // A closed month refuses the row that would make an entry in it; one that was imported before is only
+        // skipped, so sending a file again after the month was closed does not fail ([ADR 0069]).
+        if let Some(through) = self.references().locked_through(company_id).await? {
+            for item in &ready {
+                let origin = EntryOrigin::Import(item.import_id);
+                // An entry that exists is skipped, but if it never got its settlement the write loop makes it
+                // now, so that day is checked too.
+                let dates: Vec<&str> = match self.made_by(company_id, origin).await? {
+                    Some(entry) if self.settlements(company_id, entry.id()).await?.is_empty() => {
+                        item.settlement
+                            .as_ref()
+                            .map(|settlement| settlement.settled_on.as_str())
+                            .into_iter()
+                            .collect()
+                    }
+                    Some(_) => continue,
+                    None => std::iter::once(item.draft.competence_date.as_str())
+                        .chain(
+                            item.settlement
+                                .as_ref()
+                                .map(|settlement| settlement.settled_on.as_str()),
+                        )
+                        .collect(),
+                };
+                if dates
+                    .into_iter()
+                    .filter_map(CalendarDate::parse)
+                    .any(|day| day <= through)
+                {
+                    report.refused.push(RowNote {
+                        row: item.row,
+                        message: ApplicationError::PeriodLocked { through }.to_string(),
+                    });
+                }
+            }
+            if !report.refused.is_empty() {
+                return Ok(report);
+            }
         }
 
         for item in ready {

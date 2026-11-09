@@ -84,6 +84,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0066](0066-recovering-an-unconfirmed-address.md) | Recovering an address held by an account nobody confirmed | accepted | — |
 | [0067](0067-accountant-and-reporting-plan.md) | Accountant and reporting: plan, shared rules and what it changes underneath | accepted | 6 |
 | [0068](0068-email-layout.md) | One layout for every e-mail | accepted | — |
+| [0069](0069-period-lock.md) | Period lock | accepted | 6 |
 | [0070](0070-income-statement.md) | The managerial income statement (DRE) | accepted | 6 |
 
 ## Template

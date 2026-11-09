@@ -2,7 +2,7 @@ use conta_verde_domain::{AccountOpening, BankAccountId, CalendarDate, CompanyId,
 
 use crate::{
     ApplicationError, BalanceService, BankAccountRepository, FinancialEntryRepository,
-    OpeningRepository, TransferRepository,
+    OpeningRepository, PeriodLockRepository, TransferRepository,
 };
 
 /// The most periods one answer may have, so a span stays small enough to read per account ([ADR 0032]).
@@ -131,12 +131,13 @@ fn period_of(periods: &mut [CashFlowPeriod], day: CalendarDate) -> &mut CashFlow
     &mut periods[index]
 }
 
-impl<A, E, T, O> BalanceService<A, E, T, O>
+impl<A, E, T, O, L> BalanceService<A, E, T, O, L>
 where
     A: BankAccountRepository,
     E: FinancialEntryRepository,
     T: TransferRepository,
     O: OpeningRepository,
+    L: PeriodLockRepository,
 {
     /// The cash flow of the company, or of one of its accounts, over the span of the query.
     pub async fn cash_flow(

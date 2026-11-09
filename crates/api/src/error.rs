@@ -155,6 +155,7 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
         | ApplicationError::StockChanged
         | ApplicationError::StockMovementFollowsADocument
         | ApplicationError::StockInsufficient { .. }
+        | ApplicationError::PeriodLocked { .. }
         | ApplicationError::EntryIsVoided
         | ApplicationError::SaleHasSettlements
         | ApplicationError::SaleHasReturns

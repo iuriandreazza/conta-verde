@@ -260,6 +260,7 @@ mod tests {
         PostgresPartyRepository,
         PostgresBankAccountRepository,
         PostgresPaymentMethodRepository,
+        crate::PostgresPeriodLockRepository,
     >;
 
     fn references(pool: &PgPool) -> PgReferences {
@@ -269,6 +270,7 @@ mod tests {
             PostgresPartyRepository::new(pool.clone()),
             PostgresBankAccountRepository::new(pool.clone()),
             PostgresPaymentMethodRepository::new(pool.clone()),
+            crate::PostgresPeriodLockRepository::new(pool.clone()),
         )
     }
 

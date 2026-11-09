@@ -72,6 +72,15 @@ where
         &self.references
     }
 
+    /// Refuses, with `PeriodLocked`, a day that is closed ([ADR 0069]).
+    pub(crate) async fn ensure_open(
+        &self,
+        company_id: CompanyId,
+        day: conta_verde_domain::CalendarDate,
+    ) -> Result<(), ApplicationError> {
+        self.entries.references().ensure_open(company_id, day).await
+    }
+
     /// Validates the draft and what it points at, and stores the order with the next number of the company.
     pub async fn register(
         &self,
@@ -220,6 +229,11 @@ where
         if !schedule.is_empty() {
             receipt = receipt.paid_in(schedule)?;
         }
+        // Before the receipt is stored: the goods and the payable of a closed day are not made ([ADR 0069]).
+        self.entries
+            .references()
+            .ensure_open(company_id, receipt.received_on())
+            .await?;
         if let Some(payable) = self.payable_of(&order, &receipt).await? {
             self.entries.validate(company_id, payable).await?;
         }

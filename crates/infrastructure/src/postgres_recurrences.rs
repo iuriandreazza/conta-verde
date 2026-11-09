@@ -271,6 +271,7 @@ mod tests {
         PostgresPartyRepository,
         PostgresBankAccountRepository,
         PostgresPaymentMethodRepository,
+        crate::PostgresPeriodLockRepository,
     > {
         RegisterReferences::new(
             PostgresCategoryRepository::new(pool.clone()),
@@ -278,6 +279,7 @@ mod tests {
             PostgresPartyRepository::new(pool.clone()),
             PostgresBankAccountRepository::new(pool.clone()),
             PostgresPaymentMethodRepository::new(pool.clone()),
+            crate::PostgresPeriodLockRepository::new(pool.clone()),
         )
     }
 
