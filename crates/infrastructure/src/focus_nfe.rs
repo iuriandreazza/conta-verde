@@ -569,7 +569,8 @@ impl FiscalGateway for FocusNfeGateway {
         match answer.status {
             StatusCode::NOT_FOUND => Ok(DocumentOutcome::Unknown),
             status if status.is_success() => self.outcome_of(&base, token, &answer).await,
-            _ => failure(&answer).map(DocumentOutcome::Rejected),
+            // A question the gateway would not answer says nothing about the document: it is not a refusal of it.
+            status => Err(GatewayError::Unavailable(format!("{status}"))),
         }
     }
 
@@ -879,6 +880,12 @@ mod tests {
                     if !authorized(&headers, HOMOLOGATION_TOKEN) {
                         return json_reply(StatusCode::UNAUTHORIZED, json!({}));
                     }
+                    if reference == "refused-query" {
+                        return json_reply(
+                            StatusCode::UNPROCESSABLE_ENTITY,
+                            json!({"codigo": "permissao_negada", "mensagem": "CNPJ não autorizado"}),
+                        );
+                    }
                     let mut fake = fake.lock().unwrap();
                     if fake.unknown_status {
                         return json_reply(StatusCode::OK, json!({"status": "algo_novo"}));
@@ -1185,6 +1192,14 @@ mod tests {
                 .query_nfe(&homologation(), "f2")
                 .await,
             Err(GatewayError::Unavailable(reason)) if reason.contains("algo_novo")
+        ));
+        // A question the gateway refuses is no refusal of the document.
+        let addr = serve(Shared::default()).await;
+        assert!(matches!(
+            gateway(addr, Some(HOMOLOGATION_TOKEN), None)
+                .query_nfe(&homologation(), "refused-query")
+                .await,
+            Err(GatewayError::Unavailable(reason)) if reason.starts_with("422")
         ));
         // And nothing listens: the address is not in the text.
         let dead = gateway(
