@@ -72,6 +72,15 @@ where
         &self.references
     }
 
+    /// Refuses, with `PeriodLocked`, a day that is closed ([ADR 0068]).
+    pub(crate) async fn ensure_open(
+        &self,
+        company_id: CompanyId,
+        day: conta_verde_domain::CalendarDate,
+    ) -> Result<(), ApplicationError> {
+        self.entries.references().ensure_open(company_id, day).await
+    }
+
     /// Validates the draft and what it points at, and stores the order with the next number of the company.
     pub async fn register(
         &self,

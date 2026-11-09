@@ -41,8 +41,9 @@ arrives: a person through the API, the hourly passes (recurrences, contracts, re
   returning or receiving is refused, before anything of it is stored (a return and a receipt are stored first, so their day
   is checked first).
 - **Automatic flows.** The recurrence and contract passes already count a failure and try again on the next pass, so a
-  closed month is skipped and a reopened one catches up; a contract is billed cycle by cycle in order, so one closed cycle
-  holds the cycles after it until the month is reopened. A webhook whose payment day is closed settles nothing and enters
+  closed month is refused and a reopened one catches up; both go **in order**, so an occurrence or a cycle in a closed month
+  holds the ones after it of that recurrence or contract (the others go on) until the month is reopened, and each pass logs
+  it as failed. A webhook whose payment day is closed settles nothing and enters
   no fee: the charge is kept **paid, with a note** that says why, the event is `not_applied`, and the provider is told
   `200` ([ADR 0046](0046-webhooks-and-automatic-settlement.md)).
 - **Routes**, in the `accounting` area ([ADR 0067](0067-accountant-and-reporting-plan.md)): `GET` and `PUT
@@ -70,6 +71,9 @@ arrives: a person through the API, the hourly passes (recurrences, contracts, re
 - **Not locked**: attachments (a missing document is added to a closed month all the time), quotes, drafts and open orders,
   the registers (categories, parties, products), and a statement line's matching. A category's DRE group never changes
   ([ADR 0012](0012-managerial-accounting-model.md)), so classification cannot move a closed month.
+- Applying an inventory count on a closed day is refused only when it would write an adjustment (a count where every line
+  already agrees changes no figure). Any month-end can be closed, a far future one included: it freezes every write until it
+  is reopened.
 - The lock is one date per company: closing half a month, or locking only some areas, is not possible.
 
 ## Revisit when

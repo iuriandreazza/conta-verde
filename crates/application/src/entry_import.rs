@@ -354,15 +354,27 @@ impl<R: FinancialEntryRepository, F: EntryReferences + EntryLookups> FinancialEn
         if let Some(through) = self.references().locked_through(company_id).await? {
             for item in &ready {
                 let origin = EntryOrigin::Import(item.import_id);
-                if self.made_by(company_id, origin).await?.is_some() {
-                    continue;
-                }
-                let dates = std::iter::once(item.draft.competence_date.as_str()).chain(
-                    item.settlement
-                        .as_ref()
-                        .map(|settlement| settlement.settled_on.as_str()),
-                );
+                // An entry that exists is skipped, but if it never got its settlement the write loop makes it
+                // now, so that day is checked too.
+                let dates: Vec<&str> = match self.made_by(company_id, origin).await? {
+                    Some(entry) if self.settlements(company_id, entry.id()).await?.is_empty() => {
+                        item.settlement
+                            .as_ref()
+                            .map(|settlement| settlement.settled_on.as_str())
+                            .into_iter()
+                            .collect()
+                    }
+                    Some(_) => continue,
+                    None => std::iter::once(item.draft.competence_date.as_str())
+                        .chain(
+                            item.settlement
+                                .as_ref()
+                                .map(|settlement| settlement.settled_on.as_str()),
+                        )
+                        .collect(),
+                };
                 if dates
+                    .into_iter()
                     .filter_map(CalendarDate::parse)
                     .any(|day| day <= through)
                 {

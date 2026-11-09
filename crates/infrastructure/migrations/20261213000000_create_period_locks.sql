@@ -6,6 +6,6 @@ CREATE TABLE period_locks (
     locked_through DATE,
     CONSTRAINT period_locks_last_of_month CHECK (
         locked_through IS NULL
-        OR locked_through = (date_trunc('month', locked_through) + INTERVAL '1 month - 1 day')::date
+        OR locked_through = (date_trunc('month', locked_through::timestamp) + INTERVAL '1 month - 1 day')::date
     )
 );

@@ -11,6 +11,9 @@ import { lastDayOfMonth, monthLabel } from "../lib/closing";
 import { formatDate } from "../lib/entryInstallments";
 import { useCanWrite } from "../lib/useCanWrite";
 
+// What a month input holds; a browser without a month picker leaves whatever was typed.
+const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
+
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one instance.
 export function AccountingPage() {
   const { companyId = "" } = useParams();
@@ -56,8 +59,8 @@ export function AccountingPage() {
       return;
     }
     const month = String(new FormData(event.currentTarget).get("month") ?? "");
-    if (month === "") {
-      setError("Escolha o mês que será fechado.");
+    if (!MONTH.test(month)) {
+      setError("Escolha o mês que será fechado, escrito como 2026-10.");
       return;
     }
     const through = lastDayOfMonth(month);
@@ -79,6 +82,10 @@ export function AccountingPage() {
     const reason = String(form.get("reason") ?? "").trim();
     if (reason === "") {
       setError("Diga o motivo de reabrir o período: ele fica no histórico.");
+      return;
+    }
+    if (month !== "" && !MONTH.test(month)) {
+      setError("Escreva o mês como 2026-10, ou deixe vazio para reabrir tudo.");
       return;
     }
     const through = month === "" ? null : lastDayOfMonth(month);
