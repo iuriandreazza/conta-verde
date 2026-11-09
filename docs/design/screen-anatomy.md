@@ -82,6 +82,7 @@ that matter: **overdue** and **due today**. Charts follow the dataviz rules in t
 | `FilterBar`, `SummaryStrip` | to build | Layout of the filter row; the state tiles as a radio group |
 | `CreationProvider` | built (Lançamentos; the other registers follow) | The host of "Novo registro": `openCreate(kind)`, one creator per kind in `web/src/creation/`, `useOnCreated(kind, reload)` for the page |
 | `Sheet` | built (Lançamentos; the other registers follow) | The bottom sheet for a form; its panel is an `<aside role="dialog">` named by its title |
+| `InfoTip` | built (import cards, chart cards, reminders) | A card's explanation behind an (i) button next to its title, not a paragraph under it: hover shows it, a press pins it, Escape or a press elsewhere puts it away. `CsvImport` keeps its card to the file field, the check and import buttons and the template link at the far end of the same row |
 | `PageHeader` | exists | Moves its title into the top bar; keeps the description and, for now, the page-level actions |
 | `Layout`, `AppTopbar`, `CompanyNav` | built | The top bar (menu on a phone, "Novo registro", user, sign out) and the grouped sidebar. A new section is one entry in `SECTIONS` of `CompanyNav` |
 

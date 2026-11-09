@@ -4,6 +4,7 @@ import { Button } from "./Button";
 import { CheckIcon } from "./icons/check";
 import { PlusIcon } from "./icons/plus";
 import { XIcon } from "./icons/x";
+import { InfoTip } from "./InfoTip";
 import { Notice } from "./Notice";
 
 const CHANNEL_LABELS: Record<DunningChannel, string> = { email: "E-mail", whatsapp: "WhatsApp" };
@@ -99,11 +100,15 @@ export function DunningPlanForm({ companyId, plan, canWrite, onSaved }: DunningP
 
   return (
     <form onSubmit={(event) => void handleSubmit(event)} className="settle-form">
-      <h2>Lembretes aos clientes</h2>
-      <p className="muted">
-        A cada hora o sistema lembra o cliente das parcelas a receber que ainda têm saldo: uma vez por regra,
-        pelo canal escolhido, com o link para pagar quando há cobrança aberta.
-      </p>
+      <div className="card-title">
+        <h2>Lembretes aos clientes</h2>
+        <InfoTip label="Como funcionam os lembretes">
+          <p>
+            A cada hora o sistema lembra o cliente das parcelas a receber que ainda têm saldo: uma vez por regra,
+            pelo canal escolhido, com o link para pagar quando há cobrança aberta.
+          </p>
+        </InfoTip>
+      </div>
       <Notice message={error} />
       <Notice message={saved} tone="success" />
       <label className="inline">

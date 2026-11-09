@@ -4087,6 +4087,8 @@ describe("cash flow", () => {
     expect(flowUrls(fetchMock).some((url) => url.includes("account=b2"))).toBe(true);
     // What came into the account less what went out of it, told as one figure.
     expect(screen.getByRole("row", { name: /dez\/2026/ })).toHaveTextContent("R$ 0,00");
+    // The card's explanation sits behind its (i).
+    await userEvent.click(screen.getByRole("button", { name: /Sobre este gráfico/ }));
     expect(screen.getByText(/A previsão vale para todas as contas juntas/)).toBeInTheDocument();
 
     await userEvent.selectOptions(screen.getByLabelText("Agrupar por"), "day");

@@ -2070,8 +2070,37 @@ tbody tr:last-child td {
   margin-top: 1.5rem;
 }
 
-.import-card .muted p {
-  margin: 0 0 0.5rem;
+/* The file field is a field like the others: the browser's own button is made to fit its row. */
+input[type="file"] {
+  padding: 0.4rem 0.5rem;
+  color: var(--ink-2);
+}
+
+input[type="file"]::file-selector-button {
+  margin-right: 0.75rem;
+  padding: 0.4rem 0.9rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--green-dark);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+input[type="file"]:disabled::file-selector-button {
+  cursor: not-allowed;
+}
+
+.import-actions {
+  align-items: center;
+  margin-top: 1rem;
+}
+
+/* The template is the odd one out of the row: at its far end, a link and not a button. */
+.import-template {
+  margin-left: auto;
+  font-weight: 600;
 }
 
 .import-notes ul {
@@ -2489,4 +2518,79 @@ tbody tr:last-child td {
 
 .summary dd {
   margin: 0;
+}
+
+/* ---------- Info tip ---------- */
+
+.info-tip {
+  position: relative;
+  display: inline-flex;
+}
+
+.info-tip-button {
+  display: inline-flex;
+  padding: 0.2rem;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.info-tip-button:hover,
+.info-tip-button[aria-expanded="true"] {
+  background: var(--green-soft);
+  color: var(--green-dark);
+}
+
+/* Below the button, wide enough to read, never wider than the window. */
+.info-tip-text {
+  position: absolute;
+  top: 100%;
+  z-index: 15;
+  display: grid;
+  gap: 0.5rem;
+  width: min(28rem, 82vw);
+  margin-top: 0.35rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink-2);
+  font-size: 0.875rem;
+  font-weight: 400;
+  line-height: 1.5;
+  text-align: left;
+  box-shadow: var(--shadow-lift);
+}
+
+.info-tip-end {
+  right: 0;
+}
+
+.info-tip-start {
+  left: 0;
+}
+
+.title-with-tip {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.info-tip-text p {
+  margin: 0;
+}
+
+/* The title of a card and its (i) share a line; the card's own heading margin stays under both. */
+.card-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.card-title > h2 {
+  margin-bottom: 0;
 }

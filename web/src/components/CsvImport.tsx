@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { errorMessage, type ImportNote, type ImportResult } from "../api";
 import { Button } from "./Button";
+import { InfoTip } from "./InfoTip";
 import { Notice } from "./Notice";
 
 /** The rows listed for a file with many problems: the rest are counted. */
@@ -100,15 +101,10 @@ export function CsvImport({
 
   return (
     <section className="card import-card" aria-labelledby="import-title">
-      <h2 id="import-title">{title}</h2>
-      <div className="muted">{children}</div>
-      {template !== undefined && (
-        <p>
-          <a href={templateHref} download={templateName}>
-            Baixar modelo
-          </a>
-        </p>
-      )}
+      <div className="card-title">
+        <h2 id="import-title">{title}</h2>
+        <InfoTip label={`Como importar: ${title.toLowerCase()}`}>{children}</InfoTip>
+      </div>
       <label>
         {fileLabel}
         <input
@@ -120,7 +116,7 @@ export function CsvImport({
           onChange={choose}
         />
       </label>
-      <div className="form-actions">
+      <div className="form-actions import-actions">
         <Button
           type="button"
           variant="ghost"
@@ -138,6 +134,11 @@ export function CsvImport({
         >
           Importar
         </Button>
+        {template !== undefined && (
+          <a className="import-template" href={templateHref} download={templateName}>
+            Baixar modelo
+          </a>
+        )}
       </div>
       <Notice message={error} />
       {result && <ImportOutcome result={result} created={created} />}
