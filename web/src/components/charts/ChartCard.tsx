@@ -1,4 +1,5 @@
 import { useId, useState, type ReactNode } from "react";
+import { InfoTip } from "../InfoTip";
 
 interface ChartCardProps {
   title: string;
@@ -16,8 +17,12 @@ export function ChartCard({ title, description, legend, table, children }: Chart
     <figure className="card chart-card" aria-labelledby={titleId}>
       <figcaption className="chart-head">
         <div>
-          <h2 id={titleId}>{title}</h2>
-          <p className="muted">{description}</p>
+          <div className="title-with-tip">
+            <h2 id={titleId}>{title}</h2>
+            <InfoTip label={`Sobre este gráfico: ${title}`} align="start">
+              <p>{description}</p>
+            </InfoTip>
+          </div>
         </div>
         <button
           type="button"
