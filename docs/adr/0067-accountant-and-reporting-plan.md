@@ -67,9 +67,11 @@ Everything under `accounting` that is a `GET` is a read for every role that reac
 reader of the other areas cannot already see, except that they gather it, which is why they are an `accounting` read and
 not a free-for-all of the `finance` area.
 
-The **test** for the table lists, for the accountant, every write route of every other area and expects `403`, and every
-read route and expects `200`; the one named exception is the write routes under `accounting`. It is written from the
-router's own route list, so a route added without a decision fails it ([ADR 0026](0026-membership-roles-and-permissions.md)'s
+The **test** for the table walks every company route of the router with the accountant and the viewer and expects `403` on
+every write of every area but `accounting` (a `POST` that only previews counts as a write: the route decides by method),
+and a reply that is not `403` on every read outside `members`; a second test reads a list from each area and expects `200`.
+The walker is read from the router's own source, and fails if it misses a company route, so a route added without a decision
+fails it ([ADR 0026](0026-membership-roles-and-permissions.md)'s
 fail-closed rule, applied to the whole table).
 
 ### Period lock: what it is, and which date locks each record
