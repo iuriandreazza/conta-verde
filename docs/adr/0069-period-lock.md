@@ -1,11 +1,11 @@
 ---
-title: "ADR 0068: Period lock"
+title: "ADR 0069: Period lock"
 status: accepted
 date: 2026-11-09
 tags: [adr, accounting, audit, phase-6]
 ---
 
-# ADR 0068: Period lock
+# ADR 0069: Period lock
 
 ## Context
 

@@ -386,7 +386,7 @@ fn settled_or_why<T>(
             Ok(Some(format!("the {what} can no longer be used")))
         }
         Err(ApplicationError::Domain(error)) => Ok(Some(error.to_string())),
-        // The day of the payment is in a closed month: the charge is kept paid with this note ([ADR 0068]).
+        // The day of the payment is in a closed month: the charge is kept paid with this note ([ADR 0069]).
         Err(error @ ApplicationError::PeriodLocked { .. }) => Ok(Some(error.to_string())),
         Err(other) => Err(other),
     }

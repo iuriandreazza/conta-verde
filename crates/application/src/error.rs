@@ -161,7 +161,7 @@ pub enum ApplicationError {
     StockMovementNotFound,
     /// The stock changed under the write and could not be valued again in a few tries.
     StockChanged,
-    /// The day is in a closed period ([ADR 0068]): the last day that is closed.
+    /// The day is in a closed period ([ADR 0069]): the last day that is closed.
     PeriodLocked {
         through: CalendarDate,
     },

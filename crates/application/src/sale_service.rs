@@ -252,7 +252,7 @@ where
         match sale.status() {
             SaleStatus::Open => {
                 let completed = sale.completed()?;
-                // The books of the day are what a completed sale changes: a closed day refuses it ([ADR 0068]).
+                // The books of the day are what a completed sale changes: a closed day refuses it ([ADR 0069]).
                 self.entry_references
                     .ensure_open(company_id, completed.sold_on())
                     .await?;

@@ -42,7 +42,7 @@ pub(crate) async fn get_period_lock<X: Ports>(
     Ok(Json((&lock).into()))
 }
 
-/// Closes through a month or, with an earlier date, none or a reason, reopens ([ADR 0068]).
+/// Closes through a month or, with an earlier date, none or a reason, reopens ([ADR 0069]).
 pub(crate) async fn put_period_lock<X: Ports>(
     State(state): State<SharedState<X>>,
     CompanyAccess(company_id, actor): CompanyAccess,

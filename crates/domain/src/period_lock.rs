@@ -3,7 +3,7 @@ use crate::{CalendarDate, CompanyId, DomainError};
 /// The longest reason a reopening may give.
 const MAX_REASON: usize = 200;
 
-/// A company's closed period ([ADR 0067], [ADR 0068]): everything dated on or before `locked_through` is closed, so a
+/// A company's closed period ([ADR 0067], [ADR 0069]): everything dated on or before `locked_through` is closed, so a
 /// write that makes, changes or undoes what the books hold on such a day is refused. The date is the last day of a
 /// month, because the lock closes whole months. There is one per company, replaced as a whole; a company that never
 /// closed anything has none.

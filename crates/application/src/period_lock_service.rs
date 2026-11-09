@@ -6,7 +6,7 @@ use conta_verde_domain::{
 use crate::audit::audit_entry;
 use crate::{ApplicationError, PeriodLockRepository};
 
-/// The day a write of a dated record is made on, checked against the lock before the write ([ADR 0068]). A lock
+/// The day a write of a dated record is made on, checked against the lock before the write ([ADR 0069]). A lock
 /// is `through` a day: everything on or before it is closed.
 pub(crate) fn ensure_open(
     through: Option<CalendarDate>,
@@ -18,7 +18,7 @@ pub(crate) fn ensure_open(
     }
 }
 
-/// Closing and reopening a company's months ([ADR 0067], [ADR 0068]).
+/// Closing and reopening a company's months ([ADR 0067], [ADR 0069]).
 pub struct PeriodLockService<R> {
     repository: R,
 }

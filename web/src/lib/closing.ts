@@ -13,7 +13,7 @@ const MONTHS = [
   "dezembro",
 ];
 
-/** The last day of a month written `YYYY-MM`, which is what the period lock closes through (ADR 0068). */
+/** The last day of a month written `YYYY-MM`, which is what the period lock closes through (ADR 0069). */
 export function lastDayOfMonth(month: string): string {
   const [year, number] = month.split("-").map(Number);
   // Day 0 of the next month is the last day of this one.

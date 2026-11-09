@@ -12051,7 +12051,7 @@ pub async fn settles_charges_from_webhooks<C, Ev, S, E, F, P, L>(
             .all(|s| s.charge_id() != Some(first.id()) || s.is_reversed())
     );
 
-    // A payment made on a day of a closed month ([ADR 0068]) settles nothing and enters no fee: the charge is kept
+    // A payment made on a day of a closed month ([ADR 0069]) settles nothing and enters no fee: the charge is kept
     // paid, with the reason, and the notice is acknowledged (the provider is not asked to send it again).
     let late = new_entry("Venda 13", &["10"]).await.unwrap();
     let late_charge = charge_for(&late, 1).await.unwrap();
@@ -15231,7 +15231,7 @@ pub async fn limits_and_logs_the_documents_that_are_mailed<
     log.release(other_company, gone.id).await.unwrap();
 }
 
-/// What a company's closed period is ([ADR 0068]): there is none until a month is closed, only the last day of a month
+/// What a company's closed period is ([ADR 0069]): there is none until a month is closed, only the last day of a month
 /// can be, closing again or further is audited, and so is reopening, which needs a reason; the same date again writes
 /// nothing, and what one company closes is not another's.
 pub async fn runs_the_period_lock<L: conta_verde_application::PeriodLockRepository>(
@@ -15352,7 +15352,7 @@ pub async fn runs_the_period_lock<L: conta_verde_application::PeriodLockReposito
     assert!(locks.history(other_company).await.unwrap().is_empty());
 }
 
-/// A closed month refuses what the books of its days hold ([ADR 0068]): an entry by its competence date (making it,
+/// A closed month refuses what the books of its days hold ([ADR 0069]): an entry by its competence date (making it,
 /// changing it, moving it into or out of the month, cancelling it), a settlement and a transfer by their own day, and
 /// reversing either, even from an open day; an opening balance by its day. What is dated after the lock is written as
 /// ever, including a settlement of an entry whose competence is closed, and a refusal leaves nothing behind. Reopening
@@ -15697,7 +15697,7 @@ pub async fn a_closed_month_refuses_what_the_books_hold<E, F, T, A, EO, TO, O, L
     );
 }
 
-/// A closed month refuses stock and documents that would change its books ([ADR 0068]): a movement by its day, undoing
+/// A closed month refuses stock and documents that would change its books ([ADR 0069]): a movement by its day, undoing
 /// one even from an open day, completing a sale, cancelling a completed one, a return and a purchase receipt by their
 /// days, each refused before anything is written; an order that is still open, in a closed month, is not the books and
 /// may be written, but not completed. Reopening lets them through.

@@ -107,7 +107,7 @@ where
             Some(order) => (order, true),
             None => {
                 // Before the order that claims the key is stored: a day in a closed month would otherwise leave
-                // an approved order behind a refused request ([ADR 0068]).
+                // an approved order behind a refused request ([ADR 0069]).
                 let arrived = match entry.received_on.as_deref() {
                     Some(raw) => CalendarDate::parse(raw),
                     None => Some(invoice.issued_on()),

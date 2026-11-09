@@ -1,4 +1,4 @@
--- A company's closed period (ADR 0067, ADR 0068): one row per company, replaced as a whole. A company that
+-- A company's closed period (ADR 0067, ADR 0069): one row per company, replaced as a whole. A company that
 -- never closed a month has no row; one that reopened everything has a row with no date.
 CREATE TABLE period_locks (
     company_id     UUID PRIMARY KEY REFERENCES companies (id),

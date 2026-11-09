@@ -180,7 +180,7 @@ impl<A, E, T, O> BalanceService<A, E, T, O> {
     }
 
     /// The service with the lock of the company's closed period, which an opening balance's day is checked
-    /// against ([ADR 0068]).
+    /// against ([ADR 0069]).
     pub fn with_period_lock<L>(self, locks: L) -> BalanceService<A, E, T, O, L> {
         BalanceService {
             accounts: self.accounts,

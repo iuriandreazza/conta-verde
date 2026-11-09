@@ -350,7 +350,7 @@ impl<R: FinancialEntryRepository, F: EntryReferences + EntryLookups> FinancialEn
             return Ok(report);
         }
         // A closed month refuses the row that would make an entry in it; one that was imported before is only
-        // skipped, so sending a file again after the month was closed does not fail ([ADR 0068]).
+        // skipped, so sending a file again after the month was closed does not fail ([ADR 0069]).
         if let Some(through) = self.references().locked_through(company_id).await? {
             for item in &ready {
                 let origin = EntryOrigin::Import(item.import_id);

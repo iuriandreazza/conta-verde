@@ -555,7 +555,7 @@ export interface PublicCharge {
 }
 
 /** Where the money of a paid charge lands, and what the provider's fee is entered under (ADR 0046). */
-/** The company's closed period (ADR 0068): everything dated on or before the day is closed. */
+/** The company's closed period (ADR 0069): everything dated on or before the day is closed. */
 export interface PeriodLock {
   locked_through: string | null;
 }

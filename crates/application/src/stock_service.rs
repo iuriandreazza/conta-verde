@@ -237,7 +237,7 @@ impl<M, P, S> StockService<M, P, S> {
     }
 
     /// The service with the lock of the company's closed period: no movement is written, or undone, on a day
-    /// that is closed ([ADR 0068]).
+    /// that is closed ([ADR 0069]).
     pub fn with_period_lock<L>(self, locks: L) -> StockService<M, P, S, L> {
         StockService {
             movements: self.movements,

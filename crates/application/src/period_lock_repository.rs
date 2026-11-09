@@ -4,7 +4,7 @@ use conta_verde_domain::{AuditEntry, AuditRecord, CalendarDate, CompanyId, Perio
 
 use crate::RepositoryError;
 
-/// Port for a company's closed period ([ADR 0068]): at most one, replaced as a whole.
+/// Port for a company's closed period ([ADR 0069]): at most one, replaced as a whole.
 ///
 /// Every write takes the audit entry that describes it and stores both **atomically** ([ADR 0008]).
 pub trait PeriodLockRepository: Send + Sync {
@@ -42,7 +42,7 @@ pub trait PeriodLockRepository: Send + Sync {
 
 /// No lock kept, so nothing is ever closed. It is what a service has until it is given a real lock port with
 /// `with_period_lock`: the API's wiring names the lock in its types, so a deployment cannot leave it out
-/// ([ADR 0068]); the services' own tests, which are about something else, need not.
+/// ([ADR 0069]); the services' own tests, which are about something else, need not.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoPeriodLock;
 

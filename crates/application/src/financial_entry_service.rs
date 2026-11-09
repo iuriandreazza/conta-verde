@@ -432,7 +432,7 @@ impl<R: FinancialEntryRepository, F: EntryReferences> FinancialEntryService<R, F
             .ok_or(ApplicationError::EntryNotFound)
     }
 
-    /// The competence date of an entry, and of what it replaces, must be on an open day ([ADR 0068]): taking an
+    /// The competence date of an entry, and of what it replaces, must be on an open day ([ADR 0069]): taking an
     /// entry out of a closed month changes that month as much as putting one in.
     async fn check_period(
         &self,

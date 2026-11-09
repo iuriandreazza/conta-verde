@@ -385,7 +385,7 @@ pub trait EntryReferences: Send + Sync {
         id: PaymentMethodId,
     ) -> impl Future<Output = Result<bool, RepositoryError>> + Send;
 
-    /// The last day that is closed, if the company closed a month ([ADR 0068]).
+    /// The last day that is closed, if the company closed a month ([ADR 0069]).
     fn locked_through(
         &self,
         company_id: CompanyId,

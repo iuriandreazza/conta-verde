@@ -30,10 +30,10 @@ adapters, the routes and the pages. The order of the roadmap holds; nothing forc
 1. **This plan.**
 2. **The accountant's access** (decided here, no ADR of its own): the `accounting` area and the table below, with a
    test that tries every route with every role.
-3. **Period lock** (ADR 0068).
-4. **DRE by month and cost center** (ADR 0069).
-5. **Exports and the Contador page** (ADR 0070).
-6. **Scheduled package by e-mail** (ADR 0071).
+3. **Period lock** (ADR 0069).
+4. **DRE by month and cost center** (ADR 0070).
+5. **Exports and the Contador page** (ADR 0071).
+6. **Scheduled package by e-mail** (ADR 0072).
 
 ### The accountant is invited like any member, and reads everything
 
@@ -120,7 +120,7 @@ Rules that follow:
   both adapters and the contract tests run it on both.
 - **Known limit**: the check is made before the write, not inside the same transaction. A write that began before the
   month was closed can land just after. Closing is rare and the accountant checks the month's figures after it; the
-  limit is written in ADR 0068 and revisited if it ever bites.
+  limit is written in ADR 0069 and revisited if it ever bites.
 
 ### The DRE
 
@@ -149,7 +149,7 @@ The **managerial income statement** is derived on every read, never stored, from
   the entry's competence date), **settlements** (one row each, by `settled_on`, the cash basis), **transfers**, and **the
   files attached to the entries** of the span, zipped. Entries cancelled and settlements and transfers reversed are left
   out: they have no effect on the books, and the audit trail ([ADR 0008](0008-audit-trail.md)) keeps them. The layout of
-  each file's columns is written in ADR 0070 and does not change without a new ADR.
+  each file's columns is written in ADR 0071 and does not change without a new ADR.
 - **Formats.** CSV, UTF-8 with a byte-order mark, `;` as separator, `.` as decimal point, dates `YYYY-MM-DD`, amounts exactly as
   stored (never through a float), a cell that a spreadsheet would run as a formula quoted the way the web app's CSV does.
   XLSX of the same columns. **No new crate**: an XLSX is a zip of five small XML parts and a zip may store its files
