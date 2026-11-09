@@ -125,6 +125,7 @@ export function AccountingPage() {
                 desfeitos.
               </p>
             </HelpTitle>
+            <p className="muted">Nada datado nos meses fechados pode ser criado, alterado ou desfeito.</p>
             <p>
               {through === null ? (
                 "Nenhum mês está fechado."

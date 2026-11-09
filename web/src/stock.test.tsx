@@ -427,8 +427,7 @@ describe("stock settings", () => {
 
     const toggle = await screen.findByRole("switch", { name: "Bloquear venda sem saldo" });
     expect(toggle).not.toBeChecked();
-    await userEvent.click(screen.getByRole("button", { name: "Sobre bloquear venda sem saldo" }));
-    expect(screen.getByRole("tooltip")).toHaveTextContent(/concluir uma venda que o estoque não cobre é recusado/);
+    expect(screen.getByText(/concluir uma venda que o estoque não cobre é recusado/)).toBeInTheDocument();
     expect(await screen.findByText(/Desligado → Ligado/)).toBeInTheDocument();
     await userEvent.click(toggle);
 

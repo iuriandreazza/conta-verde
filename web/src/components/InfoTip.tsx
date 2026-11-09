@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "motion/react";
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
 /**
  * The explanation of a card behind an (i) button, so the card shows what it is for and the
@@ -18,9 +18,31 @@ export function InfoTip({
 }) {
   const [pinned, setPinned] = useState(false);
   const [hovered, setHovered] = useState(false);
+  const [anchor, setAnchor] = useState<CSSProperties>({});
   const root = useRef<HTMLSpanElement>(null);
   const id = useId();
   const visible = pinned || hovered;
+
+  // The text is fixed to the window, placed from the button, so a card or a table that clips its overflow cannot cut it.
+  useLayoutEffect(() => {
+    if (!visible) return;
+    function place() {
+      const box = root.current?.getBoundingClientRect();
+      if (!box) return;
+      setAnchor({
+        "--tip-top": `${box.bottom}px`,
+        "--tip-left": `${box.left}px`,
+        "--tip-right": `${window.innerWidth - box.right}px`,
+      } as CSSProperties);
+    }
+    place();
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    return () => {
+      window.removeEventListener("scroll", place, true);
+      window.removeEventListener("resize", place);
+    };
+  }, [visible]);
 
   useEffect(() => {
     if (!visible) return;
@@ -70,6 +92,7 @@ export function InfoTip({
             id={id}
             role="tooltip"
             className={`info-tip-text info-tip-${align}`}
+            style={anchor}
             initial={{ opacity: 0, y: -4 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -4 }}

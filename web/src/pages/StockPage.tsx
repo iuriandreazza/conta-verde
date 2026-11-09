@@ -38,7 +38,6 @@ import { useCounts } from "../lib/useCounts";
 import { usePagedList } from "../lib/usePagedList";
 import { useStockProducts } from "../lib/useStockProducts";
 import { useParams } from "react-router-dom";
-import { InfoTip } from "../components/InfoTip";
 
 type View = "positions" | "movements" | "alerts" | "settings";
 
@@ -609,24 +608,20 @@ function SettingsView({ companyId, canWrite }: { companyId: string; canWrite: bo
         )
       ) : (
         <>
-          <div className="action-with-tip">
-            <label className="inline">
-              <input
-                type="checkbox"
-                role="switch"
-                checked={settings.block_sale_without_balance}
-                disabled={!canWrite || saving}
-                onChange={(event) => void change(event.target.checked)}
-              />{" "}
-              Bloquear venda sem saldo
-            </label>
-            <InfoTip label="Sobre bloquear venda sem saldo" align="start">
-              <p>
-                Ligado, concluir uma venda que o estoque não cobre é recusado: o pedido continua aberto e nada é lançado.
-                Desligado, a venda sai e o saldo do produto pode ficar negativo.
-              </p>
-            </InfoTip>
-          </div>
+          <label className="inline">
+            <input
+              type="checkbox"
+              role="switch"
+              checked={settings.block_sale_without_balance}
+              disabled={!canWrite || saving}
+              onChange={(event) => void change(event.target.checked)}
+            />{" "}
+            Bloquear venda sem saldo
+          </label>
+          <p className="muted">
+            Ligado, concluir uma venda que o estoque não cobre é recusado: o pedido continua aberto e nada é lançado.
+            Desligado, a venda sai e o saldo do produto pode ficar negativo.
+          </p>
           <h3>Histórico</h3>
           <History
             load={historyLoader}

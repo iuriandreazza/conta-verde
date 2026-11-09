@@ -2552,8 +2552,8 @@ input[type="file"]:disabled::file-selector-button {
 
 /* Below the button, wide enough to read, never wider than the window. */
 .info-tip-text {
-  position: absolute;
-  top: 100%;
+  position: fixed;
+  top: var(--tip-top);
   z-index: 15;
   display: grid;
   gap: 0.5rem;
@@ -2582,11 +2582,11 @@ input[type="file"]:disabled::file-selector-button {
 }
 
 .info-tip-end {
-  right: 0;
+  right: max(0.5rem, min(var(--tip-right), calc(100vw - min(28rem, 82vw) - 0.5rem)));
 }
 
 .info-tip-start {
-  left: 0;
+  left: max(0.5rem, min(var(--tip-left), calc(100vw - min(28rem, 82vw) - 0.5rem)));
 }
 
 .title-with-tip {
@@ -2642,8 +2642,6 @@ input[type="file"]:disabled::file-selector-button {
 /* On a phone the text takes the width of the window under the button, whichever side the button is on. */
 @media (max-width: 40rem) {
   .info-tip-text {
-    position: fixed;
-    top: auto;
     right: 1rem;
     left: 1rem;
     width: auto;

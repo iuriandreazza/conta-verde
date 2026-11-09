@@ -99,6 +99,7 @@ nothing needed to finish the task, because a person may never open it.
 
 - Errors, refusals and consequences to know before pressing (a sent quote that goes back to a draft when changed, a
   link that is shown only once, a contract that cannot be reopened) are `Notice`s or plain text, never an (i).
+- What a person needs to fill a form in correctly or to understand a control that acts at once (a switch that saves on change, the difference between a blank and a zero, a size or format limit before a file is chosen, why fields appear or vanish) stays as visible text; the (i) keeps the longer reasons.
 - Empty states: the call to action and its one line stay.
 - Text that carries data: periods, totals, counts, the "Atualizado em" stamp, an account's details, a note on a record.
 - A format hint directly under a field ("0,00", "até 6 casas decimais") stays as helper text: it is read while typing.

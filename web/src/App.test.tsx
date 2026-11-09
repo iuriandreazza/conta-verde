@@ -1324,8 +1324,7 @@ describe("bank accounts", () => {
     expect(screen.getByLabelText("Banco emissor")).toBeInTheDocument();
     expect(screen.queryByLabelText("Agência")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Conta")).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Sobre Dados da conta" }));
-    expect(screen.getByRole("tooltip")).toHaveTextContent(/o número do cartão nunca é salvo/);
+    expect(screen.getByText(/o número do cartão nunca é salvo/)).toBeInTheDocument();
 
     // Cash is asked for nothing of the bank, and what was typed for another kind is gone.
     await userEvent.selectOptions(screen.getByLabelText("Tipo"), "checking");

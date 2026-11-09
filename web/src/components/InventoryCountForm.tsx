@@ -12,7 +12,6 @@ import { CheckIcon } from "./icons/check";
 import { PlusIcon } from "./icons/plus";
 import { Notice } from "./Notice";
 import { useSheetDirty } from "./Sheet";
-import { HelpTitle } from "./HelpTitle";
 
 /** The most lines a count has (the API's bound). */
 const MAX_LINES = 500;
@@ -140,11 +139,10 @@ export function InventoryCountForm({ products, count, viaSheet = false, pending,
       </section>
       {count === null && (
         <section className="form-section" aria-labelledby="count-sheet">
-          <HelpTitle id="count-sheet" title="Planilha">
-            <p>
-              Baixe o modelo, preencha a coluna Contado de cada produto (deixe em branco o que ainda não foi contado) e escolha o arquivo.
-            </p>
-          </HelpTitle>
+          <h3 id="count-sheet">Planilha</h3>
+          <p className="muted">
+            Baixe o modelo, preencha a coluna Contado de cada produto (deixe em branco o que ainda não foi contado) e escolha o arquivo.
+          </p>
           <div className="form-actions">
             <Button
               type="button"
@@ -186,11 +184,10 @@ export function InventoryCountForm({ products, count, viaSheet = false, pending,
       )}
       {typing && (
       <section className="form-section" aria-labelledby="count-lines">
-        <HelpTitle id="count-lines" title="Produtos contados">
-          <p>
-            Informe o que foi encontrado em cada produto, zero se não há nada. O que ficar em branco não entra no inventário.
-          </p>
-        </HelpTitle>
+        <h3 id="count-lines">Produtos contados</h3>
+        <p className="muted">
+          Informe o que foi encontrado em cada produto, zero se não há nada. O que ficar em branco não entra no inventário.
+        </p>
         <fieldset className="lines">
           <legend>Itens</legend>
           {rows.map((row, index) => (

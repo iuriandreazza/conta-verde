@@ -341,9 +341,7 @@ function EnterInvoice({ companyId, targets, preview, pending, error, onEnter, on
       )}
       {step === 4 && (
         <section className="form-section" aria-labelledby="invoice-done">
-          <HelpTitle id="invoice-done" title="Concluir a entrada">
-            <p>Ao entrar, a compra é criada como recebida: as contas a pagar são lançadas e o estoque aumenta.</p>
-          </HelpTitle>
+          <h3 id="invoice-done">Concluir a entrada</h3>
           <dl className="summary">
             <dt>Fornecedor</dt>
             <dd>{preview.issuer.name}</dd>
@@ -364,6 +362,7 @@ function EnterInvoice({ companyId, targets, preview, pending, error, onEnter, on
             <dt>Chegou em</dt>
             <dd>{formatDate(receivedOn)}</dd>
           </dl>
+          <p className="muted">Ao entrar, a compra é criada como recebida: as contas a pagar são lançadas e o estoque aumenta.</p>
         </section>
       )}
       {stepProblem[step] !== null && stepProblem[step] !== undefined && step !== 1 && <p className="muted">{stepProblem[step]}</p>}
