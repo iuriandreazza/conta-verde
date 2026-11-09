@@ -36,6 +36,7 @@ mod tests {
             to: Email::parse("bia@example.com").unwrap(),
             subject: "Convite".into(),
             body: "https://erp.example/invitations/abc".into(),
+            html: None,
         };
         assert_eq!(LogEmailSender.send(&message).await, Err(EmailError));
     }

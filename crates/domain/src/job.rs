@@ -3,7 +3,8 @@ use crate::{DomainError, JobId};
 /// What a job asks to be done. The key is stored, so it does not change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobKind {
-    /// Sends one e-mail: `to`, `subject`, `body`.
+    /// Sends one e-mail: `to`, `subject`, `body`, and the `html` of the layout when it has one (a job queued before the
+    /// layout has only the first three).
     SendEmail,
 }
 
@@ -21,10 +22,10 @@ impl JobKind {
         }
     }
 
-    /// How many arguments the kind takes.
-    fn arity(self) -> usize {
+    /// How many arguments the kind takes, at least and at most.
+    fn arity(self) -> std::ops::RangeInclusive<usize> {
         match self {
-            Self::SendEmail => 3,
+            Self::SendEmail => 3..=4,
         }
     }
 }
@@ -48,7 +49,7 @@ pub struct NewJob {
 impl NewJob {
     /// `run_at` is a moment in Unix seconds: the job is not tried before it.
     pub fn new(kind: JobKind, args: Vec<String>, run_at: i64) -> Result<Self, DomainError> {
-        if args.len() != kind.arity() {
+        if !kind.arity().contains(&args.len()) {
             return Err(DomainError::InvalidJob("wrong number of arguments"));
         }
         if args

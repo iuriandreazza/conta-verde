@@ -5,8 +5,9 @@ use conta_verde_domain::{
 };
 
 use crate::audit::audit_entry;
+use crate::text::br_date;
 use crate::{
-    ApplicationError, Claim, DunningPlanRepository, EmailMessage, EmailSender,
+    ApplicationError, Claim, DunningPlanRepository, EmailContent, EmailSender,
     FinancialEntryRepository, IdentityRepository, InstallmentLinks, MessageSender,
     NotificationRepository, OverdueItem, PartyRepository, TextMessage,
 };
@@ -266,11 +267,7 @@ where
             DunningChannel::Email => match Email::parse(&address) {
                 Ok(to) => self
                     .emails
-                    .send(&EmailMessage {
-                        to,
-                        subject: text.subject(),
-                        body: text.body(),
-                    })
+                    .send_content(to, text.subject(), &text.content())
                     .await
                     .is_ok(),
                 Err(_) => false,
@@ -353,22 +350,28 @@ impl ReminderText<'_> {
         )
     }
 
-    fn body(&self) -> String {
-        let mut body = format!(
-            "Olá, {}.\n\nPassando para lembrar: a parcela {} de \"{}\" ({}) {}.\nValor: {}\nVencimento: {}\n",
-            one_line(self.customer),
+    fn content(&self) -> EmailContent {
+        let company = one_line(self.company);
+        let mut content = EmailContent::new(
+            format!("A parcela {} {}", self.installment, self.when()),
+            format!("Você recebeu este lembrete de {company} por uma parcela em aberto."),
+        )
+        .company(company.clone())
+        .paragraph(format!("Olá, {}.", one_line(self.customer)))
+        .paragraph(format!(
+            "Passando para lembrar: a parcela {} de \"{}\" ({company}) {}.",
             self.installment,
             one_line(self.description),
-            one_line(self.company),
             self.when(),
-            brl(self.owed),
-            brazilian_date(self.due),
-        );
+        ))
+        .details(vec![
+            ("Valor".to_owned(), brl(self.owed)),
+            ("Vencimento".to_owned(), br_date(self.due)),
+        ]);
         if let Some(link) = self.link {
-            body.push_str(&format!("\nPara pagar, abra o link:\n{link}\n"));
+            content = content.button("Pagar agora", link);
         }
-        body.push_str("\nSe você já pagou, desconsidere esta mensagem.\n");
-        body
+        content.note("Se você já pagou, desconsidere esta mensagem.")
     }
 
     fn one_line(&self) -> String {
@@ -380,7 +383,7 @@ impl ReminderText<'_> {
             one_line(self.description),
             self.when(),
             brl(self.owed),
-            brazilian_date(self.due),
+            br_date(self.due),
         );
         if let Some(link) = self.link {
             text.push_str(&format!(" Pague em {link}"));
@@ -392,10 +395,6 @@ impl ReminderText<'_> {
 /// A name or description as one line, so it cannot break the message it is put in.
 fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-fn brazilian_date(day: CalendarDate) -> String {
-    format!("{:02}/{:02}/{}", day.day(), day.month(), day.year())
 }
 
 /// `R$ 1.234,56`.
@@ -425,10 +424,6 @@ mod tests {
         assert_eq!(
             brl(Decimal::from_str("1000000").unwrap()),
             "R$ 1.000.000,00"
-        );
-        assert_eq!(
-            brazilian_date(CalendarDate::parse("2026-12-09").unwrap()),
-            "09/12/2026"
         );
     }
 
@@ -483,7 +478,9 @@ mod tests {
         assert_eq!(text(0).when(), "vence hoje");
         assert_eq!(text(1).when(), "venceu ontem");
         assert_eq!(text(7).when(), "venceu há 7 dias");
-        assert!(text(7).body().contains("Valor: R$ 100,00"));
-        assert!(!text(7).body().contains("Para pagar"));
+        let body = text(7).content().to_text();
+        assert!(body.contains("Valor: R$ 100,00"));
+        // Without an open charge there is nothing to pay with, so there is no button and no link.
+        assert!(!body.contains("Pagar agora") && !body.contains("https://"));
     }
 }

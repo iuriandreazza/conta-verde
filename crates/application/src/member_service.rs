@@ -4,9 +4,9 @@ use conta_verde_domain::{
     Actor, CompanyId, Email, Invitation, InvitationId, Role, User, UserId, validate_password,
 };
 
-use crate::text::one_line;
+use crate::text::{in_days, one_line};
 use crate::{
-    ApplicationError, AuthError, EmailMessage, EmailSender, IdentityRepository,
+    ApplicationError, AuthError, EmailContent, EmailSender, IdentityRepository,
     InvitationRepository, InvitationState, Member, NewInvitation, NewUser, RepositoryError,
     SecretService, StoredInvitation,
 };
@@ -98,20 +98,30 @@ where
         if !made {
             return Ok(());
         }
-        let message = EmailMessage {
-            to: email,
-            subject: "Redefinição de senha no conta-verde".to_owned(),
-            body: format!(
-                "Recebemos um pedido para redefinir a senha da sua conta no conta-verde.\n\n\
-                 Para escolher uma nova senha, abra o link:\n{}/reset-password/{token}\n\n\
-                 O link vale por {} minutos e só pode ser usado uma vez. Se não foi você, ignore este e-mail: \
-                 sua senha continua a mesma.\n",
-                self.public_url,
-                RESET_LIFETIME.as_secs() / 60
-            ),
-        };
+        let content = EmailContent::new(
+            "Redefinição de senha",
+            "Você recebeu este e-mail porque alguém pediu a redefinição da senha desta conta.",
+        )
+        .paragraph("Recebemos um pedido para redefinir a senha da sua conta no conta-verde.")
+        .paragraph("Para escolher uma nova senha, abra o link.")
+        .button(
+            "Escolher nova senha",
+            format!("{}/reset-password/{token}", self.public_url),
+        )
+        .notice(format!(
+            "O link vale por {} minutos e só pode ser usado uma vez. Se não foi você, ignore este e-mail: \
+             sua senha continua a mesma.",
+            RESET_LIFETIME.as_secs() / 60
+        ));
         // A message that cannot be sent is the mail server's to say in the log: the person can ask again.
-        let _ = self.emails.send(&message).await;
+        let _ = self
+            .emails
+            .send_content(
+                email,
+                "Redefinição de senha no conta-verde".to_owned(),
+                &content,
+            )
+            .await;
         Ok(())
     }
 
@@ -141,15 +151,20 @@ where
         self.identities.mark_email_verified(user_id).await?;
         // Whoever changed it, the owner of the address is told: if it was not them, this is how they find out.
         if let Some(user) = self.identities.find_user(user_id).await? {
+            let content = EmailContent::new(
+                "Sua senha foi alterada",
+                "Você recebeu este aviso porque a senha desta conta mudou.",
+            )
+            .paragraph(
+                "A senha da sua conta no conta-verde foi alterada e você foi desconectado de todos os aparelhos.",
+            )
+            .paragraph("Se foi você, não precisa fazer nada.")
+            .notice("Se não foi você, peça uma nova redefinição de senha agora.")
+            .button("Redefinir senha", format!("{}/forgot-password", self.public_url));
             self.notify(
                 user.email().clone(),
                 "Sua senha no conta-verde foi alterada".to_owned(),
-                format!(
-                    "A senha da sua conta no conta-verde foi alterada e você foi desconectado de todos os \
-                     aparelhos.\n\nSe foi você, não precisa fazer nada. Se não foi, peça uma nova redefinição \
-                     de senha em {}/forgot-password agora.\n",
-                    self.public_url
-                ),
+                content,
             )
             .await;
         }
@@ -173,16 +188,24 @@ where
             )
             .await?;
         if made {
+            let content = EmailContent::new(
+                "Confirme seu e-mail",
+                "Você recebeu este e-mail porque uma conta foi criada com este endereço.",
+            )
+            .paragraph(format!("Olá, {}.", one_line(user.name())))
+            .paragraph("Para confirmar que este endereço é seu, abra o link.")
+            .button(
+                "Confirmar e-mail",
+                format!("{}/confirm-email/{token}", self.public_url),
+            )
+            .note(format!(
+                "O link vale por {}. Se você não criou uma conta no conta-verde, ignore este e-mail.",
+                in_days(CONFIRMATION_LIFETIME)
+            ));
             self.notify(
                 user.email().clone(),
                 "Confirme seu e-mail no conta-verde".to_owned(),
-                format!(
-                    "Olá, {}.\n\nPara confirmar que este endereço é seu, abra o link:\n{}/confirm-email/{token}\n\n\
-                     O link vale por {} dias. Se você não criou uma conta no conta-verde, ignore este e-mail.\n",
-                    one_line(user.name()),
-                    self.public_url,
-                    CONFIRMATION_LIFETIME.as_secs() / 86_400
-                ),
+                content,
             )
             .await;
         }
@@ -224,8 +247,8 @@ where
     }
 
     /// A notice nobody waits for: if it cannot be queued the mail server's log says so, and what happened stands.
-    async fn notify(&self, to: Email, subject: String, body: String) {
-        let _ = self.emails.send(&EmailMessage { to, subject, body }).await;
+    async fn notify(&self, to: Email, subject: String, content: EmailContent) {
+        let _ = self.emails.send_content(to, subject, &content).await;
     }
 
     /// The company's members, with what each is, ordered by name ignoring case.
@@ -343,17 +366,28 @@ where
         // forge lines in a log.
         let inviter_name = one_line(inviter_name);
         let company_name = one_line(&company_name);
-        let message = EmailMessage {
-            to: invitation.email().clone(),
-            subject: format!("{inviter_name} convidou você para {company_name} no conta-verde"),
-            body: format!(
-                "{inviter_name} convidou você para participar de {company_name} no conta-verde.\n\n\
-                 Para aceitar, entre com este endereço de e-mail e abra o link:\n{link}\n\n\
-                 O convite vale por {} dias.\n",
-                self.invitation_lifetime.as_secs() / 86_400
-            ),
-        };
-        let emailed = self.emails.send(&message).await.is_ok();
+        let content = EmailContent::new(
+            format!("{inviter_name} convidou você para {company_name}"),
+            "Você recebeu este e-mail porque alguém convidou este endereço para o conta-verde. Se não esperava, pode ignorá-lo.",
+        )
+        .paragraph(format!(
+            "{inviter_name} convidou você para participar de {company_name} no conta-verde."
+        ))
+        .paragraph("Para aceitar, entre com este endereço de e-mail e abra o convite.")
+        .button("Aceitar convite", link.clone())
+        .note(format!(
+            "O convite vale por {}.",
+            in_days(self.invitation_lifetime)
+        ));
+        let emailed = self
+            .emails
+            .send_content(
+                invitation.email().clone(),
+                format!("{inviter_name} convidou você para {company_name} no conta-verde"),
+                &content,
+            )
+            .await
+            .is_ok();
         Ok(Invited {
             invitation,
             link,
@@ -476,13 +510,22 @@ where
             .await?
             .unwrap_or_default();
         let (person, company) = (one_line(user.name()), one_line(&company_name));
+        let content = EmailContent::new(
+            format!("{person} aceitou seu convite"),
+            "Você recebeu este aviso porque convidou esta pessoa.",
+        )
+        .paragraph(format!(
+            "{person} aceitou seu convite e agora faz parte de {company} no conta-verde."
+        ))
+        .details(vec![
+            ("Pessoa".to_owned(), person.clone()),
+            ("E-mail".to_owned(), user.email().as_str().to_owned()),
+        ])
+        .note("Você não precisa fazer nada. O que cada pessoa pode fazer na empresa se define na página de membros.");
         self.notify(
             inviter.email().clone(),
             format!("{person} aceitou seu convite para {company}"),
-            format!(
-                "{person} ({}) aceitou seu convite e agora faz parte de {company} no conta-verde.\n",
-                user.email().as_str()
-            ),
+            content,
         )
         .await;
         Ok(())

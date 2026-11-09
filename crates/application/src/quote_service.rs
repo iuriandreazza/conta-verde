@@ -5,8 +5,9 @@ use conta_verde_domain::{
 
 use crate::audit::audit_entry;
 use crate::list_query::{clamp_limit, split_page};
+use crate::text::br_date;
 use crate::{
-    ApplicationError, DocumentReferences, EmailMessage, EmailSender, LinkChange, NumberCursor,
+    ApplicationError, DocumentReferences, EmailContent, EmailSender, LinkChange, NumberCursor,
     QuoteQuery, QuoteRepository, RepositoryError, SecretService,
 };
 
@@ -142,22 +143,30 @@ where
             .await
             .map_err(changed_or_missing)?;
         let link = format!("{}/quote/{token}", self.public_url);
-        let message = EmailMessage {
-            to,
-            subject: format!(
-                "Orçamento nº {} de {}",
-                after.number(),
-                one_line(company_name)
-            ),
-            body: format!(
-                "{} enviou um orçamento para você.\n\n\
-                 Para ver os itens e aprovar ou recusar, abra o link:\n{link}\n\n\
-                 O orçamento vale até {}.\n",
-                one_line(company_name),
-                after.valid_until()
-            ),
-        };
-        let emailed = self.emails.send(&message).await.is_ok();
+        let company = one_line(company_name);
+        let valid_until = after.valid_until();
+        let content = EmailContent::new(
+            format!("Orçamento nº {}", after.number()),
+            format!("Você recebeu este e-mail porque {company} enviou um orçamento para este endereço."),
+        )
+        .company(company.clone())
+        .paragraph(format!(
+            "{company} enviou um orçamento para você. Para ver os itens e aprovar ou recusar, abra o link."
+        ))
+        .details(vec![
+            ("Orçamento".to_owned(), format!("nº {}", after.number())),
+            ("Válido até".to_owned(), br_date(valid_until)),
+        ])
+        .button("Ver orçamento", link.clone());
+        let emailed = self
+            .emails
+            .send_content(
+                to,
+                format!("Orçamento nº {} de {company}", after.number()),
+                &content,
+            )
+            .await
+            .is_ok();
         Ok(SentQuote {
             quote: after,
             link,

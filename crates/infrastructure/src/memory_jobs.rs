@@ -129,6 +129,7 @@ mod tests {
             to: Email::parse("bia@example.com").unwrap(),
             subject: "Convite".into(),
             body: "link".into(),
+            html: None,
         }
     }
 
@@ -162,6 +163,47 @@ mod tests {
         assert_eq!(mail.sent(), [message()]);
         assert_eq!(runner.run_due(10, 10).await.unwrap(), JobReport::default());
         assert_eq!(queue.open(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_message_keeps_its_html_through_the_queue() {
+        let (queue, mail) = (InMemoryJobQueue::default(), InMemoryEmailSender::default());
+        let message = EmailMessage {
+            html: Some("<p>layout</p>".into()),
+            ..message()
+        };
+        QueuedEmailSender::new(queue.clone(), true)
+            .send(&message)
+            .await
+            .unwrap();
+
+        JobRunner::new(queue, mail.clone())
+            .run_due(10, 10)
+            .await
+            .unwrap();
+
+        assert_eq!(mail.sent(), [message]);
+    }
+
+    #[tokio::test]
+    async fn a_job_queued_before_the_layout_has_three_arguments_and_still_runs() {
+        let (queue, mail) = (InMemoryJobQueue::default(), InMemoryEmailSender::default());
+        let old = conta_verde_domain::NewJob::new(
+            JobKind::SendEmail,
+            vec!["bia@example.com".into(), "Convite".into(), "link".into()],
+            0,
+        )
+        .unwrap();
+        queue.enqueue(&old).await.unwrap();
+
+        assert_eq!(
+            JobRunner::new(queue, mail.clone())
+                .run_due(1, 10)
+                .await
+                .unwrap(),
+            DONE
+        );
+        assert_eq!(mail.sent(), [message()]);
     }
 
     #[tokio::test]

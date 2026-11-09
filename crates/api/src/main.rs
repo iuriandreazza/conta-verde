@@ -10,10 +10,10 @@ use conta_verde_application::{
     SalesReportService, StockService, TransferService,
 };
 use conta_verde_application::{
-    ChargeService, CollectionService, DunningService, EmailError, EmailMessage, EmailSender,
-    MessageError, MessageSender, PaymentPageService, PaymentProvider, PaymentWebhookService,
-    ProviderCharge, ProviderChargeRequest, ProviderError, ProviderEvent, QueuedEmailSender,
-    TextMessage, WebhookError, WebhookHeaders,
+    BrandedEmailSender, ChargeService, CollectionService, DunningService, EmailError, EmailMessage,
+    EmailSender, MessageError, MessageSender, PaymentPageService, PaymentProvider,
+    PaymentWebhookService, ProviderCharge, ProviderChargeRequest, ProviderError, ProviderEvent,
+    QueuedEmailSender, TextMessage, WebhookError, WebhookHeaders,
 };
 use conta_verde_infrastructure::{
     Argon2SecretService, BrasilApiCnpjRegistry, BrasilApiPostalCodeDirectory, CachedCnpjRegistry,
@@ -91,7 +91,7 @@ impl Ports for PostgresPorts {
     type Statements = PostgresStatementLineRepository;
     type PostalCodes = Option<BrasilApiPostalCodeDirectory>;
     type Invitations = PostgresInvitationRepository;
-    type Emails = QueuedEmailSender<PostgresJobQueue>;
+    type Emails = BrandedEmailSender<QueuedEmailSender<PostgresJobQueue>>;
     type DocumentMails = PostgresDocumentMailRepository;
 }
 
@@ -154,6 +154,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         );
         "http://localhost:5173".to_owned()
     });
+    refuse_a_link_without_a_scheme("PUBLIC_URL", &public_url)?;
     let payment_provider = payment_provider_from_env(&public_url)?;
     let charges = ChargeService::new(
         PostgresChargeRepository::new(pool.clone()),
@@ -696,13 +697,40 @@ impl EmailSender for ConfiguredEmailSender {
 
 /// What asks for an e-mail (an invitation, a quote) hands it to the queue ([ADR 0059]); the worker sends it. With no
 /// mail server configured nothing is queued, and the page shows the link to pass on.
+/// It is drawn in the HTML layout on the way (ADR 0068), with the link to the source code that AGPL section 13 asks
+/// the footer to carry: a fork running modified code sets `SOURCE_URL` to its own.
 fn queued_emails(
     queue: PostgresJobQueue,
-) -> Result<QueuedEmailSender<PostgresJobQueue>, Box<dyn std::error::Error + Send + Sync>> {
-    Ok(QueuedEmailSender::new(
-        queue,
-        email_sender_from_env()?.is_enabled(),
+) -> Result<
+    BrandedEmailSender<QueuedEmailSender<PostgresJobQueue>>,
+    Box<dyn std::error::Error + Send + Sync>,
+> {
+    let source_url = std::env::var("SOURCE_URL")
+        .ok()
+        .filter(|url| !url.is_empty())
+        .unwrap_or_else(|| "https://github.com/iuriandreazza/conta-verde".to_owned());
+    // Without a scheme the footer would lose the link AGPL section 13 asks for, so it is refused here.
+    refuse_a_link_without_a_scheme("SOURCE_URL", &source_url)?;
+    Ok(BrandedEmailSender::new(
+        QueuedEmailSender::new(queue, email_sender_from_env()?.is_enabled()),
+        source_url,
     ))
+}
+
+/// A link in an e-mail must be a web address: the layout draws no button or link for anything else.
+fn refuse_a_link_without_a_scheme(
+    name: &str,
+    url: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let scheme = url.split_once("://").map(|(scheme, _)| scheme);
+    match scheme {
+        Some(scheme)
+            if scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https") =>
+        {
+            Ok(())
+        }
+        _ => Err(format!("{name} must start with http:// or https:// (it is {url:?})").into()),
+    }
 }
 
 /// The worker of ADR 0059: every few seconds, does the jobs that are due. Safe to run in several instances, since a

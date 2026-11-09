@@ -1,15 +1,22 @@
 use conta_verde_domain::{
-    Actor, COOLDOWN_MILLIS, CalendarDate, CompanyId, DAILY_CAP, DAY_MILLIS, Decimal, DocumentMail,
+    Actor, COOLDOWN_MILLIS, CompanyId, DAILY_CAP, DAY_MILLIS, Decimal, DocumentMail,
     DocumentMailId, DocumentMailKind, Email, EntryId, EntryKind, Party, PartyId, PurchaseOrderId,
     PurchaseStatus, SettlementId,
 };
 use uuid::Uuid;
 
-use crate::text::one_line;
+use crate::text::{br_date, one_line};
 use crate::{
-    ApplicationError, DocumentMailRepository, EmailMessage, EmailSender, FinancialEntryRepository,
-    PartyRepository, PurchaseOrderRepository, Reservation,
+    ApplicationError, DocumentMailRepository, EmailContent, EmailSender, FinancialEntryRepository,
+    ItemRow, Items, PartyRepository, PurchaseOrderRepository, Reservation,
 };
+
+/// What goes out: to whom, under what subject, and what it says.
+struct Draft {
+    to: Email,
+    subject: String,
+    content: EmailContent,
+}
 
 /// An e-mail that was asked for: to whom, and whether it was taken for sending (queued, [ADR 0059]).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,15 +87,20 @@ where
         now_millis: i64,
         kind: DocumentMailKind,
         document_id: Uuid,
-        message: EmailMessage,
+        draft: Draft,
     ) -> Result<Mailed, ApplicationError> {
+        let Draft {
+            to,
+            subject,
+            content,
+        } = draft;
         let Actor::User { id: sent_by, .. } = actor;
         let mail = DocumentMail {
             id: DocumentMailId::generate(),
             company_id,
             kind,
             document_id,
-            to: message.to.clone(),
+            to: to.clone(),
             sent_by: *sent_by,
             sent_at_millis: now_millis,
         };
@@ -109,14 +121,15 @@ where
                 ));
             }
         }
-        let emailed = self.emails.send(&message).await.is_ok();
+        let emailed = self
+            .emails
+            .send_content(to.clone(), subject, &content)
+            .await
+            .is_ok();
         if !emailed {
             self.log.release(company_id, mail.id).await?;
         }
-        Ok(Mailed {
-            to: message.to,
-            emailed,
-        })
+        Ok(Mailed { to, emailed })
     }
 
     /// E-mails an approved or partly received purchase order to `to`, or to its supplier's address.
@@ -147,42 +160,50 @@ where
         }
         let supplier = self.party(company_id, Some(order.supplier_id())).await?;
         let to = recipient(to, supplier.as_ref())?;
-        let mut body = format!(
-            "{} enviou o pedido de compra nº {}.\n\nItens:\n",
-            one_line(company_name),
+        let company = one_line(company_name);
+        let mut content = EmailContent::new(
+            format!("Pedido de compra nº {}", order.number()),
+            format!("Você recebeu este pedido de {company}, seu cliente."),
+        )
+        .company(company.clone())
+        .paragraph(format!(
+            "{company} enviou o pedido de compra nº {}.",
             order.number()
-        );
-        for line in order.lines() {
-            body.push_str(&format!(
-                "- {} x {}: R$ {} cada\n",
-                quantity(line.quantity().as_decimal()),
-                one_line(line.description()),
-                money(line.unit_price().as_decimal())
-            ));
-        }
-        body.push_str(&format!("\nTotal: R$ {}\n", money(order.total())));
+        ))
+        .items(Items {
+            title: "Itens".to_owned(),
+            rows: order
+                .lines()
+                .iter()
+                .map(|line| ItemRow {
+                    quantity: quantity(line.quantity().as_decimal()),
+                    description: one_line(line.description()),
+                    price: format!("R$ {}", money(line.unit_price().as_decimal())),
+                })
+                .collect(),
+            total: Some(("Total".to_owned(), format!("R$ {}", money(order.total())))),
+        });
+        let mut details = Vec::new();
         if let Some(day) = order.expected_on() {
-            body.push_str(&format!("Entrega prevista: {}\n", br_date(day)));
+            details.push(("Entrega prevista".to_owned(), br_date(day)));
         }
         if let Some(notes) = order.notes() {
-            body.push_str(&format!("\nObservações: {}\n", one_line(notes)));
+            details.push(("Observações".to_owned(), one_line(notes)));
         }
-        let message = EmailMessage {
-            to: to.clone(),
-            subject: format!(
-                "Pedido de compra nº {} de {}",
-                order.number(),
-                one_line(company_name)
-            ),
-            body,
-        };
+        if !details.is_empty() {
+            content = content.details(details);
+        }
         self.deliver(
             company_id,
             actor,
             now_millis,
             DocumentMailKind::PurchaseOrder,
             id.as_uuid(),
-            message,
+            Draft {
+                to,
+                subject: format!("Pedido de compra nº {} de {company}", order.number()),
+                content,
+            },
         )
         .await
     }
@@ -225,40 +246,59 @@ where
         }
         let customer = self.party(company_id, entry.party_id()).await?;
         let to = recipient(to, customer.as_ref())?;
-        let greeting = customer.as_ref().map_or_else(
-            || "Olá.".to_owned(),
-            |party| format!("Olá, {}.", one_line(party.name())),
-        );
-        let mut body = format!(
-            "{greeting}\n\n{} confirma o recebimento do seu pagamento.\n\nReferente a: {}\nParcela: {} de {}\nData: {}\n",
-            one_line(company_name),
-            one_line(entry.description()),
-            settlement.installment(),
-            entry.installments().len(),
-            br_date(settlement.settled_on()),
-        );
+        let company = one_line(company_name);
+        let mut rows = vec![
+            ("Referente a".to_owned(), one_line(entry.description())),
+            (
+                "Parcela".to_owned(),
+                format!(
+                    "{} de {}",
+                    settlement.installment(),
+                    entry.installments().len()
+                ),
+            ),
+            ("Data".to_owned(), br_date(settlement.settled_on())),
+        ];
         for (label, amount) in [
             ("Juros", settlement.interest().as_decimal()),
             ("Multa", settlement.fine().as_decimal()),
             ("Desconto", settlement.discount().as_decimal()),
         ] {
             if !amount.is_zero() {
-                body.push_str(&format!("{label}: R$ {}\n", money(amount)));
+                rows.push((label.to_owned(), format!("R$ {}", money(amount))));
             }
         }
-        body.push_str(&format!("Valor pago: R$ {}\n", money(settlement.cash())));
-        let message = EmailMessage {
-            to: to.clone(),
-            subject: format!("Comprovante de pagamento de {}", one_line(company_name)),
-            body,
-        };
+        rows.push((
+            "Valor pago".to_owned(),
+            format!("R$ {}", money(settlement.cash())),
+        ));
+        let mut content = EmailContent::new(
+            "Comprovante de pagamento",
+            format!("Você recebeu este comprovante de {company} por um pagamento registrado."),
+        )
+        .company(company.clone());
+        if let Some(party) = customer.as_ref() {
+            content = content.paragraph(format!("Olá, {}.", one_line(party.name())));
+        } else {
+            content = content.paragraph("Olá.");
+        }
+        let content = content
+            .paragraph(format!(
+                "{company} confirma o recebimento do seu pagamento."
+            ))
+            .details(rows)
+            .note("Guarde este e-mail como comprovante.");
         self.deliver(
             company_id,
             actor,
             now_millis,
             DocumentMailKind::PaymentReceipt,
             settlement_id.as_uuid(),
-            message,
+            Draft {
+                to,
+                subject: format!("Comprovante de pagamento de {company}"),
+                content,
+            },
         )
         .await
     }
@@ -314,10 +354,6 @@ fn money(value: Decimal) -> String {
     format!("{sign}{grouped},{cents}")
 }
 
-fn br_date(day: CalendarDate) -> String {
-    format!("{:02}/{:02}/{}", day.day(), day.month(), day.year())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,9 +368,5 @@ mod tests {
         assert_eq!(money(Decimal::new(-100000, 2)), "-1.000,00");
         assert_eq!(quantity(Decimal::new(1500, 3)), "1,5");
         assert_eq!(quantity(Decimal::from(20)), "20");
-        assert_eq!(
-            br_date(CalendarDate::parse("2026-11-06").unwrap()),
-            "06/11/2026"
-        );
     }
 }
