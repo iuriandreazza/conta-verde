@@ -1,6 +1,6 @@
-"""Tests of conta-azul-to-entries-csv.py, on small workbooks made here, never on real data.
+"""Tests of export-to-entries-csv.py, on small workbooks made here, never on real data.
 
-    uv run --with openpyxl python -m unittest scripts/test_conta_azul_to_entries_csv.py
+    uv run --with openpyxl python -m unittest scripts/test_export_to_entries_csv.py
 """
 
 import importlib.util
@@ -11,8 +11,8 @@ from pathlib import Path
 
 import openpyxl
 
-SCRIPT = Path(__file__).with_name("conta-azul-to-entries-csv.py")
-spec = importlib.util.spec_from_file_location("conta_azul_to_entries_csv", SCRIPT)
+SCRIPT = Path(__file__).with_name("export-to-entries-csv.py")
+spec = importlib.util.spec_from_file_location("export_to_entries_csv", SCRIPT)
 tool = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = tool
 spec.loader.exec_module(tool)
