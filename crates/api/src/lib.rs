@@ -2758,7 +2758,15 @@ mod tests {
             .find(|(path, _)| path == "/companies/{company_id}/parties/{party_id}")
             .unwrap();
         assert_eq!(party.1, ["PUT"]);
-        // Every family in the table is a family of the router, and the router has no family outside it.
+        // No company route was missed by the reader (a route built another way would not be walked), and
+        // every route belongs to an area.
+        let source = include_str!("lib.rs");
+        let source = &source[..source.find("#[cfg(test)]").unwrap()];
+        assert_eq!(
+            routes.len(),
+            source.matches("\"/companies/{company_id}").count(),
+            "a company route is registered in a way the walker does not read"
+        );
         for (path, _) in &routes {
             assert!(access::area_of(path).is_some(), "{path} has no area");
         }
