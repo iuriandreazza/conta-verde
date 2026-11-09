@@ -26,7 +26,9 @@ impl From<&PeriodLock> for PeriodLockResponse {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PeriodLockRequest {
-    /// The last day of the month to close through, or `null` to reopen everything.
+    /// The last day of the month to close through, or `null` to reopen everything. It is said every time: a
+    /// request that leaves it out is refused instead of reopening what it never mentioned.
+    #[serde(deserialize_with = "Option::deserialize")]
     locked_through: Option<String>,
     /// Why, when this opens days that were closed; the trail keeps it.
     reason: Option<String>,

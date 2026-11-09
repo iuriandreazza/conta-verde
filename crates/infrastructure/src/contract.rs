@@ -15639,6 +15639,11 @@ pub async fn a_closed_month_refuses_what_the_books_hold<E, F, T, A, EO, TO, O, L
         closed,
         "the opening it replaces is of a closed day"
     );
+    // The same opening again changes nothing, so a closed month does not refuse it.
+    balances
+        .set_opening(company, &ana, seed.bank_account, "100", "2026-10-01")
+        .await
+        .unwrap();
     assert_eq!(
         balances
             .set_opening(company, &ana, seed.other_bank_account, "7", "2026-10-31")
@@ -15898,7 +15903,14 @@ pub async fn a_closed_month_refuses_stock_and_documents<P, E, F, R, T, S, Q, M, 
         .await
         .unwrap();
     sales.complete(company, &ana, open.id()).await.unwrap();
-    sales.cancel(company, &ana, completed.id()).await.ok();
+    // Past the lock it reaches the sale's own rule: the return made above stands.
+    assert_eq!(
+        sales
+            .cancel(company, &ana, completed.id())
+            .await
+            .unwrap_err(),
+        ApplicationError::SaleHasReturns
+    );
     stock
         .record(company, &ana, bought("1", "2026-10-28"))
         .await

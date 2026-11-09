@@ -7,6 +7,7 @@ use sqlx::{PgPool, Row};
 use crate::postgres::storage_error;
 use crate::postgres_audit;
 
+#[derive(Clone)]
 pub struct PostgresPeriodLockRepository {
     pool: PgPool,
 }
@@ -14,13 +15,6 @@ pub struct PostgresPeriodLockRepository {
 impl PostgresPeriodLockRepository {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
-    }
-}
-
-// Cloning shares the pool, which is how every service of the API sees the same lock.
-impl Clone for PostgresPeriodLockRepository {
-    fn clone(&self) -> Self {
-        Self::new(self.pool.clone())
     }
 }
 

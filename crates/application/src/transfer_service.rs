@@ -211,12 +211,11 @@ where
         on: &str,
     ) -> Result<AccountOpening, ApplicationError> {
         let opening = AccountOpening::new(company_id, account, balance, on)?;
-        let through = self.locks.locked_through(company_id).await?;
-        ensure_open(through, opening.on())?;
         if self.accounts.find(company_id, account).await?.is_none() {
             return Err(ApplicationError::BankAccountNotFound);
         }
-        let audit = match self.openings.find(company_id, account).await? {
+        let stored = self.openings.find(company_id, account).await?;
+        let audit = match &stored {
             None => audit_entry(
                 &opening,
                 actor,
@@ -224,14 +223,19 @@ where
                 opening_creation_changes(&opening),
             ),
             Some(before) => {
-                let changes = opening_changes(&before, &opening);
+                let changes = opening_changes(before, &opening);
                 if changes.is_empty() {
                     return Ok(opening);
                 }
-                ensure_open(through, before.on())?;
                 audit_entry(&opening, actor, AuditAction::Updated, changes)
             }
         };
+        // What would change is checked after what would not: the same opening again is nothing, closed or not.
+        let through = self.locks.locked_through(company_id).await?;
+        ensure_open(through, opening.on())?;
+        if let Some(before) = &stored {
+            ensure_open(through, before.on())?;
+        }
         self.openings.set(&opening, &audit).await?;
         Ok(opening)
     }

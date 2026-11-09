@@ -1103,11 +1103,12 @@ mod tests {
         /// The closed period every service built in a test sees: a test runs on one thread, so a test that
         /// builds an app and then closes a month through it, or through the handle `locks()` gives, is
         /// talking about one lock, without every helper below having to be told which.
-        static LOCKS: InMemoryPeriodLockRepository = InMemoryPeriodLockRepository::default();
+        static LOCKS: std::cell::RefCell<InMemoryPeriodLockRepository> =
+            std::cell::RefCell::new(InMemoryPeriodLockRepository::default());
     }
 
     fn locks() -> InMemoryPeriodLockRepository {
-        LOCKS.with(Clone::clone)
+        LOCKS.with(|locks| locks.borrow().clone())
     }
 
     type TestEntries = FinancialEntryService<InMemoryFinancialEntryRepository, TestReferences>;
@@ -3167,6 +3168,23 @@ mod tests {
         ] {
             assert_eq!(reply.status, StatusCode::CREATED, "{what}: {}", reply.body);
         }
+
+        // A request that does not say the day is refused, not read as reopening everything.
+        let silent = send(
+            &app,
+            json_request(
+                "PUT",
+                &lock,
+                Some(&accountant),
+                json!({ "reason": "forgot the day" }),
+            ),
+        )
+        .await;
+        assert!(silent.status.is_client_error(), "{}", silent.body);
+        assert_eq!(
+            send(&app, get_request(&lock, Some(&viewer))).await.body["locked_through"],
+            "2026-10-31"
+        );
 
         // Reopening says why; the trail names who closed and who reopened.
         let no_reason = send(
@@ -6141,6 +6159,8 @@ mod tests {
     }
 
     fn entry_app_over(identities: InMemoryIdentityRepository) -> (Router, InMemoryEmailSender) {
+        // Each app starts with nothing closed, even on a thread an earlier test used (`--test-threads=1`).
+        LOCKS.with(|locks| locks.replace(InMemoryPeriodLockRepository::default()));
         let mailbox = InMemoryEmailSender::default();
         let purchase_store = InMemoryPurchaseOrderRepository::default();
         let categories = InMemoryCategoryRepository::default();

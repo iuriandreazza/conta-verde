@@ -33,7 +33,7 @@ export function AccountingPage() {
     };
   }, [companyId]);
 
-  async function change(through: string | null, reason: string | undefined, done: string) {
+  async function change(through: string | null, reason: string | undefined, done: string): Promise<boolean> {
     setSaving(true);
     setError(null);
     setSaved(null);
@@ -41,8 +41,10 @@ export function AccountingPage() {
       setLock(await api.replacePeriodLock(companyId, { locked_through: through, reason }));
       setTrail((count) => count + 1);
       setSaved(done);
+      return true;
     } catch (failure) {
       setError(errorMessage(failure));
+      return false;
     } finally {
       setSaving(false);
     }
@@ -71,7 +73,8 @@ export function AccountingPage() {
     if (saving || lock === null || lock.locked_through === null) {
       return;
     }
-    const form = new FormData(event.currentTarget);
+    const target = event.currentTarget;
+    const form = new FormData(target);
     const month = String(form.get("month") ?? "");
     const reason = String(form.get("reason") ?? "").trim();
     if (reason === "") {
@@ -83,12 +86,12 @@ export function AccountingPage() {
       setError("Para reabrir, escolha um mês anterior ao último mês fechado.");
       return;
     }
+    // The reason is kept in the form when the server refuses, so it need not be typed again.
     void change(
       through,
       reason,
       through === null ? "Período reaberto: nenhum mês está fechado." : `Período reaberto: fechado até ${formatDate(through)}.`,
-    );
-    event.currentTarget.reset();
+    ).then((done) => done && target.reset());
   }
 
   const through = lock?.locked_through ?? null;
