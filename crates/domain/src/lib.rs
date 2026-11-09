@@ -21,6 +21,7 @@ mod dunning;
 mod email;
 mod error;
 mod financial_entry;
+mod fiscal_settings;
 mod ids;
 mod inventory_count;
 mod invitation;
@@ -62,15 +63,15 @@ pub use audit::{
     commission_rule_changes, commission_rule_creation_changes, contract_changes,
     contract_creation_changes, cost_center_changes, cost_center_creation_changes, creation_changes,
     document_check_changes, dunning_plan_changes, dunning_plan_creation_changes, entry_changes,
-    entry_creation_changes, inventory_count_changes, inventory_count_creation_changes,
-    opening_changes, opening_creation_changes, package_schedule_changes,
-    package_schedule_creation_changes, party_changes, payment_method_changes,
-    payment_method_creation_changes, payment_term_changes, payment_term_creation_changes,
-    period_lock_changes, period_lock_creation_changes, price_list_changes,
-    price_list_creation_changes, product_changes, product_creation_changes, purchase_order_changes,
-    purchase_order_creation_changes, purchase_receipt_creation_changes, quote_changes,
-    quote_creation_changes, recurrence_changes, recurrence_creation_changes, sale_changes,
-    sale_creation_changes, sale_return_creation_changes, settlement_changes,
+    entry_creation_changes, fiscal_settings_changes, fiscal_settings_creation_changes,
+    inventory_count_changes, inventory_count_creation_changes, opening_changes,
+    opening_creation_changes, package_schedule_changes, package_schedule_creation_changes,
+    party_changes, payment_method_changes, payment_method_creation_changes, payment_term_changes,
+    payment_term_creation_changes, period_lock_changes, period_lock_creation_changes,
+    price_list_changes, price_list_creation_changes, product_changes, product_creation_changes,
+    purchase_order_changes, purchase_order_creation_changes, purchase_receipt_creation_changes,
+    quote_changes, quote_creation_changes, recurrence_changes, recurrence_creation_changes,
+    sale_changes, sale_creation_changes, sale_return_creation_changes, settlement_changes,
     settlement_creation_changes, statement_line_changes, statement_line_creation_changes,
     stock_movement_creation_changes, stock_settings_changes, stock_settings_creation_changes,
     transfer_changes, transfer_creation_changes,
@@ -100,6 +101,11 @@ pub use financial_entry::{
     EntryInstallment, EntryInstallmentDraft, EntryKind, EntryOrigin, FinancialEntry,
     FinancialEntryDraft, ImportId, MAX_ENTRY_INSTALLMENTS, MAX_IMPORT_REFERENCE_CHARS,
     RecurrenceOrigin,
+};
+pub use fiscal_settings::{
+    FiscalEnvironment, FiscalSettings, FiscalSettingsDraft, MAX_NATURES, MAX_RULES_PER_NATURE,
+    MAX_SERIES, MIN_SERIES, NatureKind, OperationNature, OperationNatureDraft, TaxRate, TaxRegime,
+    TaxRule, TaxRuleDraft,
 };
 pub use ids::{
     AttachmentId, BankAccountId, CategoryId, ChargeId, CommissionRuleId, CompanyId, ContractId,

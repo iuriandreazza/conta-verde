@@ -4,8 +4,8 @@ use conta_verde_api::{ApiConfig, Ports, Services, router};
 use conta_verde_application::{
     AccountingExportService, AttachmentService, AuthService, BalanceService, BankAccountService,
     CategoryService, CommissionService, ContractService, CostCenterService, DocumentMailService,
-    DreService, FinancialEntryService, InventoryCountService, JobRunner, MemberService,
-    PackageScheduleService, PartyService, PaymentMethodService, PaymentTermService,
+    DreService, FinancialEntryService, FiscalSettingsService, InventoryCountService, JobRunner,
+    MemberService, PackageScheduleService, PartyService, PaymentMethodService, PaymentTermService,
     PeriodLockService, PostalCodeService, PriceListService, ProductService, PurchaseService,
     QuoteService, ReconciliationService, RecurrenceService, SaleService, SalesReportService,
     StockService, TransferService,
@@ -21,14 +21,14 @@ use conta_verde_infrastructure::{
     LocalBlobStore, LogEmailSender, PostgresAttachmentRepository, PostgresBankAccountRepository,
     PostgresCategoryRepository, PostgresCommissionRuleRepository, PostgresContractRepository,
     PostgresCostCenterRepository, PostgresDocumentMailRepository, PostgresFinancialEntryRepository,
-    PostgresIdentityRepository, PostgresInventoryCountRepository, PostgresInvitationRepository,
-    PostgresJobQueue, PostgresOpeningRepository, PostgresPackageScheduleRepository,
-    PostgresPartyRepository, PostgresPaymentMethodRepository, PostgresPaymentTermRepository,
-    PostgresPeriodLockRepository, PostgresPriceListRepository, PostgresProductRepository,
-    PostgresPurchaseOrderRepository, PostgresQuoteRepository, PostgresRecurrenceRepository,
-    PostgresSaleRepository, PostgresStatementLineRepository, PostgresStockMovementRepository,
-    PostgresStockSettingsRepository, PostgresTransferRepository, RegisterDocumentReferences,
-    RegisterReferences, SmtpEmailSender, connect_and_migrate,
+    PostgresFiscalSettingsRepository, PostgresIdentityRepository, PostgresInventoryCountRepository,
+    PostgresInvitationRepository, PostgresJobQueue, PostgresOpeningRepository,
+    PostgresPackageScheduleRepository, PostgresPartyRepository, PostgresPaymentMethodRepository,
+    PostgresPaymentTermRepository, PostgresPeriodLockRepository, PostgresPriceListRepository,
+    PostgresProductRepository, PostgresPurchaseOrderRepository, PostgresQuoteRepository,
+    PostgresRecurrenceRepository, PostgresSaleRepository, PostgresStatementLineRepository,
+    PostgresStockMovementRepository, PostgresStockSettingsRepository, PostgresTransferRepository,
+    RegisterDocumentReferences, RegisterReferences, SmtpEmailSender, connect_and_migrate,
 };
 use conta_verde_infrastructure::{
     AsaasProvider, NoMessageSender, PostgresDunningPlanRepository, PostgresNotificationRepository,
@@ -67,6 +67,7 @@ impl Ports for PostgresPorts {
     >;
     type PeriodLocks = PostgresPeriodLockRepository;
     type PackageSchedules = PostgresPackageScheduleRepository;
+    type FiscalSettings = PostgresFiscalSettingsRepository;
     type Attachments = PostgresAttachmentRepository;
     type Blobs = LocalBlobStore;
     type Charges = PostgresChargeRepository;
@@ -361,6 +362,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         queued_emails(PostgresJobQueue::new(pool.clone()))?,
         PostgresDocumentMailRepository::new(pool.clone()),
     );
+    let fiscal_settings =
+        FiscalSettingsService::new(PostgresFiscalSettingsRepository::new(pool.clone()));
     let auth = AuthService::new(
         PostgresIdentityRepository::new(pool),
         Argon2SecretService::new()?,
@@ -403,6 +406,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 period_locks,
                 exports,
                 packages,
+                fiscal_settings,
                 postal_codes,
                 members,
                 documents,

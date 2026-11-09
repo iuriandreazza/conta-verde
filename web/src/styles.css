@@ -2742,3 +2742,21 @@ tr.subtotal + tr.below-the-line td {
 .income-statement td {
   white-space: nowrap;
 }
+
+/* The fiscal settings: a fieldset that only carries `disabled` for its fields, with no frame of its own. */
+.fieldset-plain {
+  display: grid;
+  gap: 1.25rem;
+  padding: 0;
+  border: 0;
+}
+
+.address-fields > label.span-6 {
+  grid-column: span 6;
+}
+
+/* A tax rule inside a nature's form. */
+.tax-rule {
+  display: grid;
+  gap: 0.75rem;
+}

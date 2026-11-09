@@ -37,6 +37,7 @@ use conta_verde_application::{
 use conta_verde_application::{
     StockMovementQuery, StockMovementRepository, StockService, StockSettingsRepository,
 };
+use conta_verde_domain::FiscalSettingsDraft;
 use conta_verde_domain::{
     Account, AccountDraft, Actor, AddressDraft, AuditAction, AuditEntity, AuditEntry, BankAccount,
     BankAccountDraft, BankAccountId, BankAccountKind, CashFlowGroup, Category, CategoryId,
@@ -16925,4 +16926,256 @@ pub async fn claims_nothing_without_a_way_to_send<R, I, E>(
         store.claim(company, may, 2).await.unwrap(),
         "May was left alone"
     );
+}
+
+/// The fiscal settings of a company ([ADR 0074]), on every adapter: none until saved; saved with their natures and rules
+/// and read back exactly (the order, the rates, the codes); replaced as a whole with the trail saying what changed;
+/// nothing of another company's; and a write whose audit entry describes something else leaves no trace.
+pub async fn stores_the_fiscal_settings<R: conta_verde_application::FiscalSettingsRepository>(
+    store: &R,
+    company: CompanyId,
+    other_company: CompanyId,
+) {
+    use conta_verde_domain::{
+        FiscalEnvironment, FiscalSettings, NatureKind, OperationNatureDraft, TaxRegime,
+        TaxRuleDraft, fiscal_settings_changes, fiscal_settings_creation_changes,
+    };
+
+    let ana = actor();
+    let audit_entry = |settings: &FiscalSettings, action, changes| AuditEntry {
+        company_id: settings.company_id(),
+        actor: ana.clone(),
+        entity: AuditEntity::FiscalSettings,
+        entity_id: settings.company_id().as_uuid(),
+        action,
+        changes,
+    };
+    assert_eq!(store.find(company).await.unwrap(), None);
+
+    let rule = |regime, ncm: Option<&str>, icms: &str, rate: Option<&str>| TaxRuleDraft {
+        regime,
+        ncm_prefix: ncm.map(Into::into),
+        icms_code: icms.into(),
+        pis_code: "01".into(),
+        cofins_code: "01".into(),
+        icms_rate: rate.map(Into::into),
+        pis_rate: Some("0.65".into()),
+        cofins_rate: Some("0".into()),
+    };
+    let sale = OperationNatureDraft {
+        code: "sale".into(),
+        name: "Venda de mercadoria".into(),
+        kind: NatureKind::Product,
+        cfop_in_state: Some("5102".into()),
+        cfop_interstate: Some("6102".into()),
+        active: true,
+        rules: vec![
+            rule(TaxRegime::SimplesNacional, None, "102", None),
+            rule(
+                TaxRegime::SimplesNacional,
+                Some("1905"),
+                "101",
+                Some("1.25"),
+            ),
+            rule(TaxRegime::LucroPresumido, None, "00", Some("18")),
+        ],
+    };
+    let service = OperationNatureDraft {
+        code: "service".into(),
+        name: "Prestação de serviço".into(),
+        kind: NatureKind::Service,
+        cfop_in_state: None,
+        cfop_interstate: None,
+        active: false,
+        rules: vec![],
+    };
+    let draft = |natures: Vec<OperationNatureDraft>, regime| FiscalSettingsDraft {
+        legal_name: "Verde Comércio Ltda".into(),
+        cnpj: ACTIVE_CNPJ.into(),
+        state_registration: Some("110.042.490.114".into()),
+        municipal_registration: Some("4567".into()),
+        address: AddressDraft {
+            postal_code: "01310-100".into(),
+            street: "Avenida Paulista".into(),
+            number: Some("1000".into()),
+            complement: Some("Sala 2".into()),
+            district: Some("Bela Vista".into()),
+            city: "São Paulo".into(),
+            state: "SP".into(),
+        },
+        regime,
+        environment: FiscalEnvironment::Production,
+        nfe_series: 1,
+        nfce_series: 2,
+        nfse_series: 3,
+        certificate_valid_until: Some("2033-03-31".into()),
+        natures,
+    };
+
+    let first = FiscalSettings::new(
+        company,
+        draft(vec![sale.clone(), service], TaxRegime::SimplesNacional),
+    )
+    .unwrap();
+    // A write whose audit entry is about another company's settings is refused and leaves nothing.
+    let foreign = audit_entry(
+        &FiscalSettings::new(other_company, draft(vec![], TaxRegime::SimplesNacional)).unwrap(),
+        AuditAction::Created,
+        fiscal_settings_creation_changes(&first),
+    );
+    assert!(store.save(&first, &foreign).await.is_err());
+    assert_eq!(store.find(company).await.unwrap(), None);
+    assert!(store.history(company).await.unwrap().is_empty());
+
+    store
+        .save(
+            &first,
+            &audit_entry(
+                &first,
+                AuditAction::Created,
+                fiscal_settings_creation_changes(&first),
+            ),
+        )
+        .await
+        .unwrap();
+    // Read back exactly: the order of the natures and of their rules, the rates, the codes, the optional fields.
+    let read = store.find(company).await.unwrap().unwrap();
+    assert_eq!(read, first);
+    assert_eq!(read.natures()[0].rules().len(), 3);
+    assert_eq!(read.natures()[0].rules()[1].ncm_prefix(), Some("1905"));
+    assert_eq!(
+        read.natures()[0].rules()[1]
+            .icms_rate()
+            .unwrap()
+            .to_string(),
+        "1.25"
+    );
+    assert_eq!(
+        read.natures()[0].rules()[0]
+            .cofins_rate()
+            .unwrap()
+            .to_string(),
+        "0"
+    );
+    assert_eq!(read.natures()[1].name(), "Prestação de serviço");
+    assert!(!read.natures()[1].is_active());
+    assert_eq!(read.cnpj(), "11222333000181");
+    assert_eq!(store.find(other_company).await.unwrap(), None);
+
+    // Replaced as a whole: another regime, one nature fewer; the trail says what changed.
+    let second =
+        FiscalSettings::new(company, draft(vec![sale], TaxRegime::LucroPresumido)).unwrap();
+    store
+        .save(
+            &second,
+            &audit_entry(
+                &second,
+                AuditAction::Updated,
+                fiscal_settings_changes(&first, &second),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(store.find(company).await.unwrap(), Some(second.clone()));
+    assert_eq!(
+        store.find(company).await.unwrap().unwrap().natures().len(),
+        1
+    );
+    let trail = store.history(company).await.unwrap();
+    assert_eq!(trail.len(), 2);
+    assert_eq!(trail[1].entry.action, AuditAction::Updated);
+    let fields: Vec<&str> = trail[1]
+        .entry
+        .changes
+        .iter()
+        .map(|change| change.field.as_str())
+        .collect();
+    assert_eq!(fields, ["regime", "natures"]);
+    assert!(store.history(other_company).await.unwrap().is_empty());
+}
+
+/// The use case on top of the port: the settings are validated before anything is written, the same settings again
+/// write nothing, and each real change is one entry of the trail.
+pub async fn fiscal_settings_are_replaced_and_audited<
+    R: conta_verde_application::FiscalSettingsRepository,
+>(
+    service: &conta_verde_application::FiscalSettingsService<R>,
+    company: CompanyId,
+) {
+    use conta_verde_domain::{FiscalEnvironment, NatureKind, OperationNatureDraft, TaxRegime};
+
+    let ana = actor();
+    let draft = || FiscalSettingsDraft {
+        legal_name: "Verde Comércio Ltda".into(),
+        cnpj: ACTIVE_CNPJ.into(),
+        state_registration: None,
+        municipal_registration: None,
+        address: AddressDraft {
+            postal_code: "01310100".into(),
+            street: "Avenida Paulista".into(),
+            number: None,
+            complement: None,
+            district: None,
+            city: "São Paulo".into(),
+            state: "SP".into(),
+        },
+        regime: TaxRegime::SimplesNacional,
+        environment: FiscalEnvironment::Homologation,
+        nfe_series: 1,
+        nfce_series: 1,
+        nfse_series: 1,
+        certificate_valid_until: None,
+        natures: vec![OperationNatureDraft {
+            code: "service".into(),
+            name: "Serviço".into(),
+            kind: NatureKind::Service,
+            cfop_in_state: None,
+            cfop_interstate: None,
+            active: true,
+            rules: vec![],
+        }],
+    };
+
+    assert_eq!(service.get(company).await.unwrap(), None);
+
+    // Refused before anything is written: production without the certificate's day, and a CFOP that is not one.
+    let mut production = draft();
+    production.environment = FiscalEnvironment::Production;
+    assert_eq!(
+        service
+            .replace(company, &ana, production)
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::ProductionNeedsCertificate)
+    );
+    let mut bad_cfop = draft();
+    bad_cfop.natures[0].kind = NatureKind::Product;
+    bad_cfop.natures[0].cfop_in_state = Some("6102".into());
+    bad_cfop.natures[0].cfop_interstate = Some("6102".into());
+    assert_eq!(
+        service.replace(company, &ana, bad_cfop).await.unwrap_err(),
+        ApplicationError::Domain(DomainError::InvalidFiscalField("cfop_in_state"))
+    );
+    assert_eq!(service.get(company).await.unwrap(), None);
+    assert!(service.history(company).await.unwrap().is_empty());
+
+    // The first save is a creation; the same settings again write nothing; a change is one more entry.
+    service.replace(company, &ana, draft()).await.unwrap();
+    service.replace(company, &ana, draft()).await.unwrap();
+    assert_eq!(service.history(company).await.unwrap().len(), 1);
+    let mut changed = draft();
+    changed.nfe_series = 2;
+    changed.legal_name = "Verde Comércio e Serviços Ltda".into();
+    let saved = service.replace(company, &ana, changed).await.unwrap();
+    assert_eq!(saved.nfe_series(), 2);
+    assert_eq!(service.get(company).await.unwrap(), Some(saved));
+    let trail = service.history(company).await.unwrap();
+    assert_eq!(trail.len(), 2);
+    let fields: Vec<&str> = trail[1]
+        .entry
+        .changes
+        .iter()
+        .map(|change| change.field.as_str())
+        .collect();
+    assert_eq!(fields, ["legal_name", "nfe_series"]);
 }

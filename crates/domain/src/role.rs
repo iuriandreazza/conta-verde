@@ -32,6 +32,9 @@ pub enum Area {
     /// Closing a month and getting the books out: the period lock, the exports and the schedule of the
     /// monthly package ([ADR 0067]). Everyone who reaches the company reads it; the accountant writes it.
     Accounting,
+    /// Issuing fiscal documents: the settings, the documents, their events and the manifestation of the ones received
+    /// ([ADR 0073]). Whoever handles the company's money writes it; everyone else reads and downloads.
+    Fiscal,
     /// Who is a member of the company, and their invitations.
     Members,
 }
@@ -72,21 +75,21 @@ impl Role {
 
     /// How far this role reaches into an area, `None` for not at all. The table of [ADR 0026]:
     ///
-    /// | role       | parties | products | finance | sales | purchases | accounting | members |
-    /// |------------|---------|----------|---------|-------|-----------|------------|---------|
-    /// | owner      | write   | write    | write   | write | write     | write      | write   |
-    /// | admin      | write   | write    | write   | write | write     | write      | write   |
-    /// | financial  | write   | read     | write   | read  | read      | read       | -       |
-    /// | sales      | write   | read     | read    | write | read      | read       | -       |
-    /// | stock      | read    | write    | read    | read  | write     | read       | -       |
-    /// | accountant | read    | read     | read    | read  | read      | write      | -       |
-    /// | viewer     | read    | read     | read    | read  | read      | read       | -       |
+    /// | role       | parties | products | finance | sales | purchases | accounting | fiscal | members |
+    /// |------------|---------|----------|---------|-------|-----------|------------|--------|---------|
+    /// | owner      | write   | write    | write   | write | write     | write      | write  | write   |
+    /// | admin      | write   | write    | write   | write | write     | write      | write  | write   |
+    /// | financial  | write   | read     | write   | read  | read      | read       | write  | -       |
+    /// | sales      | write   | read     | read    | write | read      | read       | read   | -       |
+    /// | stock      | read    | write    | read    | read  | write     | read       | read   | -       |
+    /// | accountant | read    | read     | read    | read  | read      | write      | read   | -       |
+    /// | viewer     | read    | read     | read    | read  | read      | read       | read   | -       |
     pub fn access_to(self, area: Area) -> Option<Access> {
         use Access::{Read, Write};
         match (self, area) {
             (Self::Owner | Self::Admin, _) => Some(Write),
             (_, Area::Members) => None,
-            (Self::Financial, Area::Parties | Area::Finance) => Some(Write),
+            (Self::Financial, Area::Parties | Area::Finance | Area::Fiscal) => Some(Write),
             (Self::Sales, Area::Parties | Area::Sales) => Some(Write),
             (Self::Stock, Area::Products | Area::Purchases) => Some(Write),
             (Self::Accountant, Area::Accounting) => Some(Write),
@@ -101,13 +104,14 @@ impl Role {
 }
 
 impl Area {
-    pub const ALL: [Area; 7] = [
+    pub const ALL: [Area; 8] = [
         Self::Parties,
         Self::Products,
         Self::Finance,
         Self::Sales,
         Self::Purchases,
         Self::Accounting,
+        Self::Fiscal,
         Self::Members,
     ];
 
@@ -119,6 +123,7 @@ impl Area {
             Self::Sales => "sales",
             Self::Purchases => "purchases",
             Self::Accounting => "accounting",
+            Self::Fiscal => "fiscal",
             Self::Members => "members",
         }
     }
@@ -166,15 +171,15 @@ mod tests {
         const W: Option<Access> = Some(Access::Write);
         const R: Option<Access> = Some(Access::Read);
         const N: Option<Access> = None;
-        // parties, products, finance, sales, purchases, accounting, members
+        // parties, products, finance, sales, purchases, accounting, fiscal, members
         let expected = [
-            (Role::Owner, [W, W, W, W, W, W, W]),
-            (Role::Admin, [W, W, W, W, W, W, W]),
-            (Role::Financial, [W, R, W, R, R, R, N]),
-            (Role::Sales, [W, R, R, W, R, R, N]),
-            (Role::Stock, [R, W, R, R, W, R, N]),
-            (Role::Accountant, [R, R, R, R, R, W, N]),
-            (Role::Viewer, [R, R, R, R, R, R, N]),
+            (Role::Owner, [W, W, W, W, W, W, W, W]),
+            (Role::Admin, [W, W, W, W, W, W, W, W]),
+            (Role::Financial, [W, R, W, R, R, R, W, N]),
+            (Role::Sales, [W, R, R, W, R, R, R, N]),
+            (Role::Stock, [R, W, R, R, W, R, R, N]),
+            (Role::Accountant, [R, R, R, R, R, W, R, N]),
+            (Role::Viewer, [R, R, R, R, R, R, R, N]),
         ];
         for (role, levels) in expected {
             let found = Area::ALL.map(|area| role.access_to(area));

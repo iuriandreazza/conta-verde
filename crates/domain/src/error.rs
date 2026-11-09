@@ -45,6 +45,15 @@ pub enum DomainError {
     InvalidReopenReason,
     /// The day of the month the monthly package goes out on is from 1 to 28.
     InvalidPackageDay,
+    /// Names the field: the fiscal settings are many small fields, each with its own shape.
+    InvalidFiscalField(&'static str),
+    ProductionNeedsCertificate,
+    ServiceNatureHasNoCfop,
+    ServiceNatureHasNoRules,
+    TooManyNatures,
+    DuplicateNature,
+    TooManyTaxRules,
+    DuplicateTaxRule,
     InvalidInstallmentAmount,
     InstallmentDatesDecrease,
     NoEntryInstallments,
@@ -212,6 +221,27 @@ impl fmt::Display for DomainError {
             }
             Self::InvalidPeriodLock => f.write_str(
                 "a period is closed through the last day of a month, written YYYY-MM-DD",
+            ),
+            Self::InvalidFiscalField(field) => write!(
+                f,
+                "{field} is not valid: only its shape is checked (CNPJ, series 1 to 999, CFOP 5xxx inside the state and 6xxx to another, CSOSN 3 digits, CST, PIS and COFINS 2 digits, rates 0 to 100 with two decimals, NCM prefix 2 to 8 digits)"
+            ),
+            Self::ProductionNeedsCertificate => f.write_str(
+                "the production environment needs the day the A1 certificate expires",
+            ),
+            Self::ServiceNatureHasNoCfop => {
+                f.write_str("a service has no CFOP")
+            }
+            Self::ServiceNatureHasNoRules => f.write_str(
+                "tax rules are for the natures of goods; a service's tax is decided with the NFS-e",
+            ),
+            Self::TooManyNatures => f.write_str("a company keeps at most 50 operation natures"),
+            Self::DuplicateNature => {
+                f.write_str("an operation nature's code and name are used once each")
+            }
+            Self::TooManyTaxRules => f.write_str("a nature has at most 20 tax rules"),
+            Self::DuplicateTaxRule => f.write_str(
+                "a nature has one tax rule for each regime and NCM prefix",
             ),
             Self::InvalidPackageDay => {
                 f.write_str("the package goes out on a day of the month from 1 to 28")

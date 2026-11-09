@@ -32,6 +32,8 @@ mod entry_import;
 mod entry_repository;
 mod error;
 mod financial_entry_service;
+mod fiscal_settings_repository;
+mod fiscal_settings_service;
 mod identity_repository;
 mod import;
 mod inventory_count_repository;
@@ -131,6 +133,8 @@ pub use entry_repository::{
 };
 pub use error::{ApplicationError, AuthError, RepositoryError};
 pub use financial_entry_service::{FinancialEntryPage, FinancialEntryService};
+pub use fiscal_settings_repository::FiscalSettingsRepository;
+pub use fiscal_settings_service::FiscalSettingsService;
 pub use identity_repository::{
     CompanyMembership, IdentityRepository, NewAccount, NewUser, StoredCredentials,
 };

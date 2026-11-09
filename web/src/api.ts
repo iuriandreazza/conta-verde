@@ -9,7 +9,7 @@ export interface User {
 export type Role = "owner" | "admin" | "financial" | "sales" | "stock" | "accountant" | "viewer";
 
 /** A part of the product a permission is about (ADR 0026). */
-export type Area = "parties" | "products" | "finance" | "sales" | "purchases" | "accounting" | "members";
+export type Area = "parties" | "products" | "finance" | "sales" | "purchases" | "accounting" | "fiscal" | "members";
 
 export interface Company {
   id: string;
@@ -601,6 +601,52 @@ export interface PackageSchedule {
   day: number;
   /** How many members it would reach: the ones whose role is accountant. With none, nothing is sent. */
   accountants: number;
+}
+
+export type TaxRegime = "simples_nacional" | "lucro_presumido";
+export type FiscalEnvironment = "homologation" | "production";
+export type NatureKind = "product" | "service";
+
+/** The codes and rates a company puts on the items of a nature, for one regime and, optionally, an NCM prefix (ADR 0073). */
+export interface TaxRule {
+  regime: TaxRegime;
+  ncm_prefix: string | null;
+  /** A CSOSN (3 digits) for the Simples Nacional, a CST (2 digits) otherwise. */
+  icms_code: string;
+  pis_code: string;
+  cofins_code: string;
+  /** Percentages as decimal text, never a number. */
+  icms_rate: string | null;
+  pis_rate: string | null;
+  cofins_rate: string | null;
+}
+
+/** What a company calls an operation, with the CFOPs of its goods and its tax rules; a service has neither. */
+export interface OperationNature {
+  code: string;
+  name: string;
+  kind: NatureKind;
+  cfop_in_state: string | null;
+  cfop_interstate: string | null;
+  active: boolean;
+  rules: TaxRule[];
+}
+
+/** How the company issues fiscal documents (ADR 0073): the whole settings are replaced by one `PUT`. */
+export interface FiscalSettings {
+  legal_name: string;
+  cnpj: string;
+  state_registration: string | null;
+  municipal_registration: string | null;
+  address: Address;
+  regime: TaxRegime;
+  environment: FiscalEnvironment;
+  nfe_series: number;
+  nfce_series: number;
+  nfse_series: number;
+  /** The day the A1 certificate expires, as typed: the certificate itself stays at the gateway. */
+  certificate_valid_until: string | null;
+  natures: OperationNature[];
 }
 
 /** Where the money of a paid charge lands, and what the provider's fee is entered under (ADR 0046). */
@@ -1991,6 +2037,16 @@ export const api = {
     }),
   periodLockHistory: (companyId: string) =>
     request<HistoryEntry[]>(`/companies/${companyId}/accounting/period-lock/history`),
+  /** `null` while the company has not set them: no document can be issued then. */
+  getFiscalSettings: (companyId: string) =>
+    request<FiscalSettings | null>(`/companies/${companyId}/fiscal/settings`),
+  replaceFiscalSettings: (companyId: string, settings: FiscalSettings) =>
+    request<FiscalSettings>(`/companies/${companyId}/fiscal/settings`, {
+      method: "PUT",
+      body: JSON.stringify(settings),
+    }),
+  fiscalSettingsHistory: (companyId: string) =>
+    request<HistoryEntry[]>(`/companies/${companyId}/fiscal/settings/history`),
   getCollection: (companyId: string) =>
     request<{ provider: string | null }>(`/companies/${companyId}/collection`),
   getCollectionSettings: (companyId: string) =>
