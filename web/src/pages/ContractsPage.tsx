@@ -33,6 +33,7 @@ import { formatDate, isIsoDate } from "../lib/entryInstallments";
 import { todayIso } from "../lib/settlement";
 import { useCanWrite } from "../lib/useCanWrite";
 import { usePagedList } from "../lib/usePagedList";
+import { InfoTip } from "../components/InfoTip";
 
 const FIELD_LABELS: Record<string, string> = {
   name: "Nome",
@@ -311,13 +312,17 @@ export function ContractsPage() {
                                 Reajuste (%)
                                 <input name="percent" inputMode="decimal" autoComplete="off" placeholder="5,5" required />
                               </label>
-                              <Button type="submit" icon={CheckIcon} pending={acting}>
-                                Aplicar reajuste
-                              </Button>
-                              <p className="muted">
-                                Muda o preço de cada item (arredondado ao centavo) a partir do próximo ciclo; o que já foi
-                                cobrado não muda.
-                              </p>
+                              <div className="action-with-tip">
+                                <Button type="submit" icon={CheckIcon} pending={acting}>
+                                  Aplicar reajuste
+                                </Button>
+                                <InfoTip label="Sobre o reajuste" align="start">
+                                  <p>
+                                    Muda o preço de cada item (arredondado ao centavo) a partir do próximo ciclo; o que já foi
+                                    cobrado não muda.
+                                  </p>
+                                </InfoTip>
+                              </div>
                               <Notice message={actionError} />
                             </form>
                           </td>

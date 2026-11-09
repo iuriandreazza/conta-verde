@@ -7,6 +7,7 @@ import { CheckIcon } from "./icons/check";
 import { PlusIcon } from "./icons/plus";
 import { useSheetDirty } from "./Sheet";
 import { Notice } from "./Notice";
+import { InfoTip } from "./InfoTip";
 
 /** The most prices a list holds (the API's bound). */
 const MAX_PRICES = 1000;
@@ -164,11 +165,15 @@ export function PriceListForm({ list, products, pending, error, onSubmit, onCanc
             >
               Adicionar produto
             </Button>
-            <Button type="button" variant="ghost" className="btn-small" disabled={missing.length === 0} onClick={addAllProducts}>
-              Incluir todos os produtos
-            </Button>
+            <div className="action-with-tip">
+              <Button type="button" variant="ghost" className="btn-small" disabled={missing.length === 0} onClick={addAllProducts}>
+                Incluir todos os produtos
+              </Button>
+              <InfoTip label="Sobre incluir todos os produtos" align="start">
+                <p>Incluir todos traz o preço de venda de cada produto que ainda não está na tabela.</p>
+              </InfoTip>
+            </div>
           </div>
-          <p className="muted">Incluir todos traz o preço de venda de cada produto que ainda não está na tabela.</p>
         </fieldset>
       </section>
       <Notice message={fieldError ?? error} />

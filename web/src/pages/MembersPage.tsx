@@ -10,6 +10,7 @@ import { useCreation, useOnCreated } from "../creation/CreationProvider";
 import { useCanWrite } from "../lib/useCanWrite";
 import { UserPlusIcon } from "../components/icons/user-plus";
 import { ASSIGNABLE_ROLES, ROLE_LABELS } from "../lib/roles";
+import { HelpTitle } from "../components/HelpTitle";
 
 const formatDate = (millis: number) => new Date(millis).toLocaleDateString("pt-BR");
 
@@ -209,7 +210,9 @@ export function MembersPage() {
           </section>
 
           <section className="card list-card" aria-labelledby="open-invitations">
-            <h2 id="open-invitations">Convites em aberto</h2>
+            <HelpTitle level={2} id="open-invitations" title="Convites em aberto">
+              <p>Um convite expirado ou retirado não vale mais: convide de novo para mandar outro link.</p>
+            </HelpTitle>
             {invitations.length === 0 ? (
               <p className="muted">Nenhum convite em aberto.</p>
             ) : (
@@ -256,9 +259,6 @@ export function MembersPage() {
                 </table>
               </div>
             )}
-            <p className="muted">
-              Um convite expirado ou retirado não vale mais: convide de novo para mandar outro link.
-            </p>
           </section>
         </div>
 

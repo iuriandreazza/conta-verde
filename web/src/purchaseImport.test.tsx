@@ -359,7 +359,8 @@ describe("purchase entry from an NF-e", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Novo" }));
     await userEvent.click(await screen.findByRole("menuitem", { name: "Entrar NF-e (XML)" }));
     const sheet = within((await screen.findByRole("heading", { name: "Entrada por XML (NF-e)" })).closest("aside")!);
-    expect(sheet.getByText(/A NF-e fica salva no seu computador/)).toBeInTheDocument();
+    await userEvent.click(sheet.getByRole("button", { name: "Sobre Arquivo da nota" }));
+    expect(sheet.getByRole("tooltip")).toHaveTextContent(/A NF-e fica salva no seu computador/);
     expect(sheet.getByText("Ou arraste o XML para este espaço")).toBeInTheDocument();
     const zone = sheet.getByTestId("invoice-dropzone");
 

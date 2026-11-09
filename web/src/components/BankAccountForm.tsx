@@ -6,6 +6,7 @@ import { BackButton } from "./BackButton";
 import { CheckIcon } from "./icons/check";
 import { PlusIcon } from "./icons/plus";
 import { Notice } from "./Notice";
+import { HelpTitle } from "./HelpTitle";
 
 interface BankAccountFormProps {
   /** The account being changed, or `null` to register one. */
@@ -26,6 +27,11 @@ export function BankAccountForm({ account, pending, error, onSubmit, onCancel }:
   const kind = account?.kind ?? chosen;
   const takesBank = kind !== "cash";
   const takesNumber = kind === "checking" || kind === "savings";
+  const kindNote = !takesBank
+    ? "O caixa não tem banco, agência nem número."
+    : !takesNumber
+      ? "Do cartão guardamos só o banco emissor: o número do cartão nunca é salvo."
+      : null;
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -46,7 +52,13 @@ export function BankAccountForm({ account, pending, error, onSubmit, onCancel }:
   return (
     <form className="record-form" onSubmit={handleSubmit}>
       <section className="form-section" aria-labelledby="account-info">
-        <h3 id="account-info">Dados da conta</h3>
+        {kindNote === null ? (
+          <h3 id="account-info">Dados da conta</h3>
+        ) : (
+          <HelpTitle id="account-info" title="Dados da conta">
+            <p>{kindNote}</p>
+          </HelpTitle>
+        )}
         <div className="field-grid">
           <label>
             Tipo
@@ -98,10 +110,6 @@ export function BankAccountForm({ account, pending, error, onSubmit, onCancel }:
             <input name="active" type="checkbox" defaultChecked={account?.active ?? true} /> Ativa
           </label>
         </div>
-        {!takesBank && <p className="muted">O caixa não tem banco, agência nem número.</p>}
-        {takesBank && !takesNumber && (
-          <p className="muted">Do cartão guardamos só o banco emissor: o número do cartão nunca é salvo.</p>
-        )}
       </section>
       <Notice message={error} />
       <div className="form-footer">

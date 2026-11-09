@@ -9,6 +9,7 @@ import { BackButton } from "./BackButton";
 import { CheckIcon } from "./icons/check";
 import { PlusIcon } from "./icons/plus";
 import { Notice } from "./Notice";
+import { HelpTitle } from "./HelpTitle";
 
 /** What a recurrence may point at, as the page or the sheet loaded it. */
 export interface RecurrenceTargets {
@@ -139,7 +140,9 @@ export function RecurrenceForm({ recurrence, targets, pending, error, onSubmit, 
         </div>
       </section>
       <section className="form-section" aria-labelledby="recurrence-when">
-        <h3 id="recurrence-when">Valor e frequência</h3>
+        <HelpTitle id="recurrence-when" title="Valor e frequência">
+          <p>Mudar a recorrência vale para os próximos lançamentos; os que já foram gerados não mudam.</p>
+        </HelpTitle>
         <div className="field-grid">
           <label>
             Valor de cada vez
@@ -174,9 +177,6 @@ export function RecurrenceForm({ recurrence, targets, pending, error, onSubmit, 
             <input name="active" type="checkbox" defaultChecked={recurrence?.active ?? true} /> Ativa
           </label>
         </div>
-        <p className="muted">
-          Mudar a recorrência vale para os próximos lançamentos; os que já foram gerados não mudam.
-        </p>
       </section>
       <Notice message={fieldError ?? error} />
       <div className="form-footer">

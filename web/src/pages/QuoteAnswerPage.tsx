@@ -81,7 +81,7 @@ export function QuoteAnswerPage() {
     <>
       <PageHeader
         title={`Orçamento nº ${quote.number}`}
-        description={`${quote.company_name} para ${quote.customer_name}`}
+        subtitle={`${quote.company_name} para ${quote.customer_name}`}
       />
       <section className="card">
         <p>

@@ -16,6 +16,7 @@ import { toQuantity } from "../lib/saleLines";
 import { sumSigned } from "../lib/signedAmount";
 import { todayIso } from "../lib/settlement";
 import { signedQuantity, trimCost } from "../lib/stock";
+import { HelpTitle } from "../components/HelpTitle";
 
 type View = "valuation" | "movements";
 
@@ -252,9 +253,9 @@ function MovementsTable({ report }: { report: StockMovementSummary }) {
   const rows = report.items;
   return (
     <section className="card list-card">
-      <h2>
-        Movimentações de {formatDate(report.from)} a {formatDate(report.to)}
-      </h2>
+      <HelpTitle level={2} title={`Movimentações de ${formatDate(report.from)} a ${formatDate(report.to)}`}>
+        <p>Saldo inicial mais entradas, menos saídas, mais ajustes, é o saldo final. Os ajustes têm sinal.</p>
+      </HelpTitle>
       <div className="table-wrap">
         <table>
           <thead>
@@ -294,7 +295,6 @@ function MovementsTable({ report }: { report: StockMovementSummary }) {
           </tfoot>
         </table>
       </div>
-      <p className="muted">Saldo inicial mais entradas, menos saídas, mais ajustes, é o saldo final. Os ajustes têm sinal.</p>
     </section>
   );
 }

@@ -10,6 +10,7 @@ import { Button } from "./Button";
 import { PlusIcon } from "./icons/plus";
 import { Notice } from "./Notice";
 import { Spinner } from "./Spinner";
+import { InfoTip } from "./InfoTip";
 
 interface AttachmentsPanelProps {
   companyId: string;
@@ -146,20 +147,25 @@ export function AttachmentsPanel({ companyId, entryId, canWrite }: AttachmentsPa
             aria-label="Arquivo"
             onChange={(event) => void attach(event)}
           />
-          <Button
-            type="button"
-            icon={PlusIcon}
-            pending={sending}
-            disabled={full || removingId !== null}
-            onClick={() => picker.current?.click()}
-          >
-            Anexar arquivo
-          </Button>
-          <p className="muted">
-            {full
-              ? `Este lançamento já tem ${MAX_ENTRY_ATTACHMENTS} arquivos: remova um para anexar outro.`
-              : `Até ${MAX_ENTRY_ATTACHMENTS} arquivos de 10 MB: PDF, imagem, texto, CSV ou XML.`}
-          </p>
+          <div className="action-with-tip">
+            <Button
+              type="button"
+              icon={PlusIcon}
+              pending={sending}
+              disabled={full || removingId !== null}
+              onClick={() => picker.current?.click()}
+            >
+              Anexar arquivo
+            </Button>
+            <InfoTip label="Sobre os anexos" align="start">
+              <p>Até {MAX_ENTRY_ATTACHMENTS} arquivos de 10 MB: PDF, imagem, texto, CSV ou XML.</p>
+            </InfoTip>
+          </div>
+          {full && (
+            <p className="muted">
+              Este lançamento já tem {MAX_ENTRY_ATTACHMENTS} arquivos: remova um para anexar outro.
+            </p>
+          )}
         </>
       )}
     </div>

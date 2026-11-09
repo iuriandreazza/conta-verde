@@ -62,7 +62,7 @@ export function PaymentPage() {
     <>
       <PageHeader
         title={`Pagamento para ${charge.company_name}`}
-        description={`${charge.description}${charge.installments > 1 ? ` — parcela ${charge.installment} de ${charge.installments}` : ""}`}
+        subtitle={`${charge.description}${charge.installments > 1 ? ` — parcela ${charge.installment} de ${charge.installments}` : ""}`}
       />
       <section className="card">
         <p>

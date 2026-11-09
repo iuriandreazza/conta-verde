@@ -8,6 +8,7 @@ import { Button } from "./Button";
 import { CheckIcon } from "./icons/check";
 import { PlusIcon } from "./icons/plus";
 import { Notice } from "./Notice";
+import { HelpTitle } from "./HelpTitle";
 
 interface CommissionRuleFormProps {
   /** The rule being changed, or `null` to register one. */
@@ -58,7 +59,12 @@ export function CommissionRuleForm({ rule, parties, products, pending, error, on
   return (
     <form className="record-form" onSubmit={handleSubmit}>
       <section className="form-section" aria-labelledby="rule-who">
-        <h3 id="rule-who">A quem e a quê vale</h3>
+        <HelpTitle id="rule-who" title="A quem e a quê vale">
+          <p>
+            Vale a regra mais específica: vendedor e produto, depois só o vendedor, depois só o produto, depois a geral.
+            O dia que conta é o da venda.
+          </p>
+        </HelpTitle>
         <div className="field-grid">
           <label>
             Vendedor
@@ -103,10 +109,6 @@ export function CommissionRuleForm({ rule, parties, products, pending, error, on
             <input name="active" type="checkbox" defaultChecked={rule?.active ?? true} /> Ativa
           </label>
         </div>
-        <p className="muted">
-          Vale a regra mais específica: vendedor e produto, depois só o vendedor, depois só o produto, depois a geral.
-          O dia que conta é o da venda.
-        </p>
       </section>
       <Notice message={fieldError ?? error} />
       <div className="form-footer">

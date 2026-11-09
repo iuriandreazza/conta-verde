@@ -72,7 +72,39 @@ that matter: **overdue** and **due today**. Charts follow the dataviz rules in t
 
 **Relatórios de estoque** follow the same anatomy as **Relatórios**: a segmented switch (Valorização, Movimentações do período), one filter row (the day "Em", or the period navigator), the total and the products with stock as tiles, the eight biggest values as a bar chart with its table, and the full table; the movements report is one table with opening, in, out, adjustments and closing, and a totals row of the values.
 
-## 4. Components
+## 4. Explanations behind an (i)
+
+A screen shows what the person works with: data, the controls and the states that ask for something. **How a thing
+works** (what a screen is for, what a card adds up, what a section's fields do, what changing a record leaves
+untouched) sits behind an (i) button next to the title it explains, never in a paragraph under it. That keeps the
+screen short for people who know it and one hover away for people who do not.
+
+**How it behaves** (`InfoTip`): the (i) is a real button with the accessible name "Sobre …" (the title it explains).
+Hover or keyboard focus-then-press shows the text, a press **pins** it, a second press, Escape (wherever the focus
+is) or a press outside puts it away; the pointer can move onto the text without it vanishing. The text opens below
+the button, lined up with its start (`align="start"`, where the (i) follows a title) or its end (where the (i) sits at
+the right of a card); on a phone it takes the width of the window. It holds short paragraphs, no links to act on and
+nothing needed to finish the task, because a person may never open it.
+
+**Where it goes:**
+
+| Explains | Component | Placement |
+|----------|-----------|-----------|
+| A screen | `PageHeader` `description` | Beside the page title. Facts about what the page shows (a customer, a charge) are the `subtitle`, always visible |
+| A card or a section of a form | `HelpTitle` (`level` 2 or 3) | Beside the heading, with the heading's own spacing and rule kept |
+| A chart | `ChartCard` `description` | Beside the chart's title |
+| A control or a switch | `InfoTip` in a row with it (`action-with-tip`, `field-with-tip`) | At the side of the button, switch or field, never alone on a line |
+
+**What stays in sight**, because hiding it would cost the person something:
+
+- Errors, refusals and consequences to know before pressing (a sent quote that goes back to a draft when changed, a
+  link that is shown only once, a contract that cannot be reopened) are `Notice`s or plain text, never an (i).
+- Empty states: the call to action and its one line stay.
+- Text that carries data: periods, totals, counts, the "Atualizado em" stamp, an account's details, a note on a record.
+- A format hint directly under a field ("0,00", "até 6 casas decimais") stays as helper text: it is read while typing.
+- A state that depends on the installation or the record ("provider is off", "this entry already has 20 files").
+
+## 5. Components
 
 | Component | State | Notes |
 |-----------|-------|-------|
@@ -82,11 +114,12 @@ that matter: **overdue** and **due today**. Charts follow the dataviz rules in t
 | `FilterBar`, `SummaryStrip` | to build | Layout of the filter row; the state tiles as a radio group |
 | `CreationProvider` | built (Lançamentos; the other registers follow) | The host of "Novo registro": `openCreate(kind)`, one creator per kind in `web/src/creation/`, `useOnCreated(kind, reload)` for the page |
 | `Sheet` | built (Lançamentos; the other registers follow) | The bottom sheet for a form; its panel is an `<aside role="dialog">` named by its title |
-| `InfoTip` | built (import cards, chart cards, reminders) | A card's explanation behind an (i) button next to its title, not a paragraph under it: hover shows it, a press pins it, Escape or a press elsewhere puts it away. `CsvImport` keeps its card to the file field, the check and import buttons and the template link at the far end of the same row |
-| `PageHeader` | exists | Moves its title into the top bar; keeps the description and, for now, the page-level actions |
+| `InfoTip` | built (every screen, section and chart that explains itself) | The (i) button and its text, as in section 4. `CsvImport` keeps its card to the file field, the check and import buttons and the template link at the far end of the same row |
+| `HelpTitle` | built | A card's or form section's heading with its `InfoTip` on the same line |
+| `PageHeader` | built | The title, the page's `description` behind an (i) beside it, an optional visible `subtitle`, and the page-level actions |
 | `Layout`, `AppTopbar`, `CompanyNav` | built | The top bar (menu on a phone, "Novo registro", user, sign out) and the grouped sidebar. A new section is one entry in `SECTIONS` of `CompanyNav` |
 
-## 5. Order of work
+## 6. Order of work
 
 1. Accessibility basics (done).
 2. Top bar, `MenuButton` and the grouped sidebar (done).

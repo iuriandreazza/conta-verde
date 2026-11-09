@@ -11,6 +11,7 @@ import { PlusIcon } from "./icons/plus";
 import { LinesEditor, linesProblem, linesToInput, newLine, rowsFromLines, type LineRow } from "./LinesEditor";
 import { Notice } from "./Notice";
 import { useSheetDirty } from "./Sheet";
+import { HelpTitle } from "./HelpTitle";
 
 /** What a contract may point at, as the page or the sheet loaded it. */
 export interface ContractTargets {
@@ -141,7 +142,9 @@ export function ContractForm({ companyId, contract, targets, pending, error, onS
         </div>
       </section>
       <section className="form-section" aria-labelledby="contract-billing">
-        <h3 id="contract-billing">Como cobrar</h3>
+        <HelpTitle id="contract-billing" title="Como cobrar">
+          <p>Mudar o contrato vale para as próximas cobranças; o que já foi cobrado não muda.</p>
+        </HelpTitle>
         <div className="field-grid">
           <label>
             Prazo de pagamento
@@ -194,7 +197,6 @@ export function ContractForm({ companyId, contract, targets, pending, error, onS
         <label className="inline">
           <input name="active" type="checkbox" defaultChecked={contract ? contract.status === "active" : true} /> Ativo
         </label>
-        <p className="muted">Mudar o contrato vale para as próximas cobranças; o que já foi cobrado não muda.</p>
       </section>
       <Notice message={fieldError ?? error} />
       <div className="form-footer">
