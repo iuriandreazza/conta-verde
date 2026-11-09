@@ -10,6 +10,7 @@ import { Spinner } from "../components/Spinner";
 import { lastDayOfMonth, monthLabel } from "../lib/closing";
 import { formatDate } from "../lib/entryInstallments";
 import { useCanWrite } from "../lib/useCanWrite";
+import { HelpTitle } from "../components/HelpTitle";
 
 // What a month input holds; a browser without a month picker leaves whatever was typed.
 const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -117,7 +118,14 @@ export function AccountingPage() {
       ) : (
         lock !== null && (
           <section className="card">
-            <h2>Fechamento de período</h2>
+            <HelpTitle level={2} title="Fechamento de período">
+              <p>
+                Lançamentos, baixas, transferências, saldos iniciais, movimentos de estoque, vendas concluídas e
+                recebimentos de compra com data dentro dos meses fechados não podem ser criados, alterados nem
+                desfeitos.
+              </p>
+            </HelpTitle>
+            <p className="muted">Nada datado nos meses fechados pode ser criado, alterado ou desfeito.</p>
             <p>
               {through === null ? (
                 "Nenhum mês está fechado."
@@ -126,11 +134,6 @@ export function AccountingPage() {
                   Fechado até <strong>{formatDate(through)}</strong> ({monthLabel(through)} inclusive).
                 </>
               )}
-            </p>
-            <p className="muted">
-              Lançamentos, baixas, transferências, saldos iniciais, movimentos de estoque, vendas concluídas e
-              recebimentos de compra com data dentro dos meses fechados não podem ser criados, alterados nem
-              desfeitos.
             </p>
             {canWrite && (
               <>

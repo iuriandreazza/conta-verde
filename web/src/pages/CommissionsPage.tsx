@@ -35,6 +35,7 @@ import { readUpTo } from "../lib/readUpTo";
 import { todayIso } from "../lib/settlement";
 import { useCanWrite } from "../lib/useCanWrite";
 import { usePagedList } from "../lib/usePagedList";
+import { HelpTitle } from "../components/HelpTitle";
 
 const FIELD_LABELS: Record<string, string> = {
   seller_id: "Vendedor",
@@ -137,7 +138,9 @@ function StatementCard({ companyId, sellers, names }: { companyId: string; selle
 
   return (
     <section className="card list-card" aria-label="Extrato de comissões">
-      <h2>Extrato</h2>
+      <HelpTitle level={2} title="Extrato">
+        <p>A base é o valor líquido dos itens, menos o que voltou em devoluções.</p>
+      </HelpTitle>
       <div className="filters" role="search">
         <label>
           De
@@ -214,7 +217,6 @@ function StatementCard({ companyId, sellers, names }: { companyId: string; selle
           </div>
         )
       )}
-      <p className="muted">A base é o valor líquido dos itens, menos o que voltou em devoluções.</p>
     </section>
   );
 }

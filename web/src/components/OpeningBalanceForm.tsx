@@ -6,6 +6,7 @@ import { toSignedApi } from "../lib/signedAmount";
 import { Button } from "./Button";
 import { CheckIcon } from "./icons/check";
 import { Notice } from "./Notice";
+import { InfoTip } from "./InfoTip";
 
 interface OpeningBalanceFormProps {
   companyId: string;
@@ -72,13 +73,17 @@ export function OpeningBalanceForm({ companyId, item, onSaved }: OpeningBalanceF
         Dia
         <input name="on" type="date" required defaultValue={item.opening?.on ?? ""} />
       </label>
-      <Button type="submit" icon={CheckIcon} pending={saving}>
-        Salvar saldo inicial
-      </Button>
-      <p className="muted opening-hint">
-        O saldo da conta soma o que foi baixado e transferido a partir desse dia. Antes dele, o saldo
-        aparece zerado.
-      </p>
+      <div className="action-with-tip">
+        <Button type="submit" icon={CheckIcon} pending={saving}>
+          Salvar saldo inicial
+        </Button>
+        <InfoTip label="Sobre o saldo inicial" align="start">
+          <p>
+            O saldo da conta soma o que foi baixado e transferido a partir desse dia. Antes dele, o saldo
+            aparece zerado.
+          </p>
+        </InfoTip>
+      </div>
       <Notice message={error} />
       <Notice message={saved} tone="success" />
     </form>

@@ -10,6 +10,7 @@ import { CheckIcon } from "./icons/check";
 import { Notice } from "./Notice";
 import { Stepper } from "./Stepper";
 import { useSheetDirty } from "./Sheet";
+import { HelpTitle } from "./HelpTitle";
 
 /** The most the API reads of an invoice: a bigger file is refused before it is sent. */
 export const MAX_INVOICE_BYTES = 1024 * 1024;
@@ -81,10 +82,11 @@ function ChooseFile({ pending, error, onRead, onCancel }: PurchaseImportFormProp
     <form className="record-form" onSubmit={submit}>
       <Stepper steps={STEPS} current={0} />
       <section className="form-section" aria-labelledby="import-file">
-        <h3 id="import-file">Arquivo da nota</h3>
-        <p className="muted">
-          A NF-e fica salva no seu computador como um arquivo XML. Ao ler o arquivo, você vê a nota, o fornecedor e os produtos antes de lançar a compra.
-        </p>
+        <HelpTitle id="import-file" title="Arquivo da nota">
+          <p>
+            A NF-e fica salva no seu computador como um arquivo XML. Ao ler o arquivo, você vê a nota, o fornecedor e os produtos antes de lançar a compra.
+          </p>
+        </HelpTitle>
         <div
           className={dragging ? "dropzone dropzone-active" : "dropzone"}
           data-testid="invoice-dropzone"

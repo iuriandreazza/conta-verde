@@ -6,6 +6,7 @@ import { readUpTo } from "../lib/readUpTo";
 import { linesTotalCents, lineTotalCents } from "../lib/saleLines";
 import { Button } from "./Button";
 import { PlusIcon } from "./icons/plus";
+import { InfoTip } from "./InfoTip";
 
 /** The most lines a document has (the API's bound). */
 export const MAX_LINES = 100;
@@ -140,18 +141,22 @@ export function LinesEditor({ companyId, rows, onChange, products, pricing = "sa
       <legend>Itens</legend>
       {priceLists.length > 0 && (
         <>
-          <label className="span-all">
-            Tabela de preços
-            <select value={priceListId} onChange={(event) => choosePriceList(event.target.value)}>
-              <option value="">Preço de venda de cada produto</option>
-              {priceLists.map((list) => (
-                <option key={list.id} value={list.id}>
-                  {list.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <p className="muted">Trocar a tabela refaz o preço dos itens que já têm produto.</p>
+          <div className="span-all field-with-tip">
+            <label>
+              Tabela de preços
+              <select value={priceListId} onChange={(event) => choosePriceList(event.target.value)}>
+                <option value="">Preço de venda de cada produto</option>
+                {priceLists.map((list) => (
+                  <option key={list.id} value={list.id}>
+                    {list.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <InfoTip label="Sobre a tabela de preços">
+              <p>Trocar a tabela refaz o preço dos itens que já têm produto.</p>
+            </InfoTip>
+          </div>
         </>
       )}
       {rows.map((row, index) => {

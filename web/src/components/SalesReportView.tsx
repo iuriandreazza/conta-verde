@@ -12,6 +12,7 @@ import { StatTile } from "./charts/StatTile";
 import { Notice } from "./Notice";
 import { PeriodFilter } from "./PeriodFilter";
 import { Spinner } from "./Spinner";
+import { HelpTitle } from "./HelpTitle";
 
 const SERIES = [{ name: "Vendido", color: "var(--series-1)" }];
 const MAX_BARS = 8;
@@ -150,7 +151,9 @@ export function SalesReportView({ companyId, names: registers }: { companyId: st
                 />
               </ChartCard>
               <section className="card list-card">
-                <h2>{group.label}</h2>
+                <HelpTitle level={2} title={group.label}>
+                  <p>Curva ABC. {CLASS_HINT}</p>
+                </HelpTitle>
                 <div className="table-wrap">
                   <table>
                     <thead>
@@ -177,7 +180,6 @@ export function SalesReportView({ companyId, names: registers }: { companyId: st
                     </tbody>
                   </table>
                 </div>
-                <p className="muted">Curva ABC. {CLASS_HINT}</p>
               </section>
             </>
           )}
