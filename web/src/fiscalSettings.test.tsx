@@ -361,3 +361,31 @@ it("writes the natures out in the history so a changed rate or CFOP shows", asyn
     screen.getByText(/Lucro Presumido NCM 19\*: ICMS 00 a 18%, PIS 01 a 0.65%, COFINS 01 a 3%/),
   ).toBeInTheDocument();
 });
+
+it.each([
+  [null, /Nenhum gateway fiscal está configurado/],
+  ["fake", /O gateway é o de teste/],
+])("tells which gateway issues (%s)", async (gateway, message) => {
+  mockApi((url) => {
+    if (url === "/api/auth/me") return { status: 200, body: profile };
+    if (url.endsWith("/fiscal/gateway")) return { status: 200, body: { gateway } };
+    if (url.endsWith("/history")) return { status: 200, body: [] };
+    return { status: 200, body: stored };
+  });
+  renderAt("/companies/c1/fiscal/settings");
+
+  expect(await screen.findByText(message)).toBeInTheDocument();
+});
+
+it("says nothing of the gateway when it cannot be read or is a real one", async () => {
+  mockApi((url) => {
+    if (url === "/api/auth/me") return { status: 200, body: profile };
+    if (url.endsWith("/fiscal/gateway")) return { status: 200, body: { gateway: "focus" } };
+    if (url.endsWith("/history")) return { status: 200, body: [] };
+    return { status: 200, body: stored };
+  });
+  renderAt("/companies/c1/fiscal/settings");
+
+  await screen.findByLabelText("Razão social");
+  expect(screen.queryByText(/gateway/i)).toBeNull();
+});

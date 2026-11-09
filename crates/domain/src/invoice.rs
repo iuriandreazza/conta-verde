@@ -40,6 +40,35 @@ impl AccessKey {
         Ok(Self(text))
     }
 
+    /// The key of a document an issuer makes, from what it is made of: the state's IBGE code, the month, the issuer's
+    /// CNPJ (14 characters), the model (55 for an NF-e), series, number, the emission type (1 is normal) and an
+    /// eight-digit code the issuer picks. The check digit is worked out, so only a right key is built.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_parts(
+        state_code: u8,
+        issued_on: CalendarDate,
+        issuer: &str,
+        model: u8,
+        series: u16,
+        number: u32,
+        emission_type: u8,
+        numeric_code: u32,
+    ) -> Result<Self, DomainError> {
+        let body = format!(
+            "{state_code:02}{:02}{:02}{issuer}{model:02}{series:03}{number:09}{emission_type}{numeric_code:08}",
+            issued_on.year() % 100,
+            issued_on.month()
+        );
+        if body.len() != KEY_LEN - 1 {
+            return Err(DomainError::InvalidAccessKey);
+        }
+        let values: Vec<u32> = body
+            .chars()
+            .map(|c| u32::from(c.to_ascii_uppercase()).wrapping_sub(u32::from('0')))
+            .collect();
+        Self::parse(&format!("{body}{}", check_digit(&values)))
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -497,6 +526,50 @@ pub(crate) mod tests {
     }
 
     const CNPJ: &str = "11222333000181";
+
+    #[test]
+    fn a_key_is_made_from_its_parts_with_the_right_check_digit() {
+        let made = AccessKey::from_parts(
+            35,
+            CalendarDate::parse("2026-11-09").unwrap(),
+            CNPJ,
+            55,
+            1,
+            4321,
+            1,
+            12_345_678,
+        )
+        .unwrap();
+        assert_eq!(made.as_str(), key_for(CNPJ, 1, 4321));
+        assert_eq!(made.number_field(), "000004321");
+        assert_eq!(made.series_field(), "001");
+        // An alphanumeric CNPJ counts like its own check digits do, and one of the wrong length is refused.
+        let alphanumeric = AccessKey::from_parts(
+            35,
+            CalendarDate::parse("2026-11-09").unwrap(),
+            "12ABC34501DE35",
+            55,
+            1,
+            1,
+            1,
+            1,
+        )
+        .unwrap();
+        assert_eq!(alphanumeric.issuer_field(), "12ABC34501DE35");
+        assert!(
+            AccessKey::from_parts(
+                35,
+                CalendarDate::parse("2026-11-09").unwrap(),
+                "123",
+                55,
+                1,
+                1,
+                1,
+                1
+            )
+            .is_err()
+        );
+    }
 
     fn item(code: &str, quantity: &str, value: &str) -> InvoiceItemDraft {
         InvoiceItemDraft {

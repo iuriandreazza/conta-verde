@@ -11,16 +11,19 @@ use conta_verde_application::{
     StockService, TransferService,
 };
 use conta_verde_application::{
-    BrandedEmailSender, ChargeService, CollectionService, DunningService, EmailError, EmailMessage,
-    EmailSender, MessageError, MessageSender, PaymentPageService, PaymentProvider,
-    PaymentWebhookService, ProviderCharge, ProviderChargeRequest, ProviderError, ProviderEvent,
-    QueuedEmailSender, TextMessage, WebhookError, WebhookHeaders,
+    BrandedEmailSender, ChargeService, CollectionService, DocumentOutcome, DunningService,
+    EmailError, EmailMessage, EmailSender, EventOutcome, FiscalGateway, GatewayError, MessageError,
+    MessageSender, NfeRequest, PaymentPageService, PaymentProvider, PaymentWebhookService,
+    ProviderCharge, ProviderChargeRequest, ProviderError, ProviderEvent, QueuedEmailSender,
+    TextMessage, WebhookError, WebhookHeaders,
 };
+use conta_verde_domain::FiscalSettings;
 use conta_verde_infrastructure::{
     Argon2SecretService, BrasilApiCnpjRegistry, BrasilApiPostalCodeDirectory, CachedCnpjRegistry,
-    LocalBlobStore, LogEmailSender, PostgresAttachmentRepository, PostgresBankAccountRepository,
-    PostgresCategoryRepository, PostgresCommissionRuleRepository, PostgresContractRepository,
-    PostgresCostCenterRepository, PostgresDocumentMailRepository, PostgresFinancialEntryRepository,
+    FakeFiscalGateway, FocusNfeGateway, LocalBlobStore, LogEmailSender, NoFiscalGateway,
+    PostgresAttachmentRepository, PostgresBankAccountRepository, PostgresCategoryRepository,
+    PostgresCommissionRuleRepository, PostgresContractRepository, PostgresCostCenterRepository,
+    PostgresDocumentMailRepository, PostgresFinancialEntryRepository,
     PostgresFiscalSettingsRepository, PostgresIdentityRepository, PostgresInventoryCountRepository,
     PostgresInvitationRepository, PostgresJobQueue, PostgresOpeningRepository,
     PostgresPackageScheduleRepository, PostgresPartyRepository, PostgresPaymentMethodRepository,
@@ -68,6 +71,7 @@ impl Ports for PostgresPorts {
     type PeriodLocks = PostgresPeriodLockRepository;
     type PackageSchedules = PostgresPackageScheduleRepository;
     type FiscalSettings = PostgresFiscalSettingsRepository;
+    type Gateway = ConfiguredFiscalGateway;
     type Attachments = PostgresAttachmentRepository;
     type Blobs = LocalBlobStore;
     type Charges = PostgresChargeRepository;
@@ -364,6 +368,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     );
     let fiscal_settings =
         FiscalSettingsService::new(PostgresFiscalSettingsRepository::new(pool.clone()));
+    let fiscal_gateway = fiscal_gateway_from_env()?;
     let auth = AuthService::new(
         PostgresIdentityRepository::new(pool),
         Argon2SecretService::new()?,
@@ -407,6 +412,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 exports,
                 packages,
                 fiscal_settings,
+                fiscal_gateway,
                 postal_codes,
                 members,
                 documents,
@@ -543,6 +549,131 @@ where
             Ok(_) => {}
             Err(error) => tracing::error!(%error, "billing contracts failed"),
         }
+    }
+}
+
+/// The fiscal gateway the operator chose with `FISCAL_GATEWAY` (ADR 0073, ADR 0075): `fake` for development, `focus`
+/// for Focus NFe, and off when it is not set.
+#[derive(Clone)]
+enum ConfiguredFiscalGateway {
+    Off(NoFiscalGateway),
+    Fake(FakeFiscalGateway),
+    Focus(Box<FocusNfeGateway>),
+}
+
+/// Calls the same method of whichever gateway is configured.
+macro_rules! on_gateway {
+    ($self:expr, $gateway:ident => $call:expr) => {
+        match $self {
+            ConfiguredFiscalGateway::Off($gateway) => $call,
+            ConfiguredFiscalGateway::Fake($gateway) => $call,
+            ConfiguredFiscalGateway::Focus($gateway) => $call,
+        }
+    };
+}
+
+impl FiscalGateway for ConfiguredFiscalGateway {
+    fn key(&self) -> &str {
+        on_gateway!(self, gateway => gateway.key())
+    }
+
+    fn is_enabled(&self) -> bool {
+        on_gateway!(self, gateway => gateway.is_enabled())
+    }
+
+    async fn submit_nfe(&self, request: &NfeRequest) -> Result<DocumentOutcome, GatewayError> {
+        on_gateway!(self, gateway => gateway.submit_nfe(request).await)
+    }
+
+    async fn query_nfe(
+        &self,
+        issuer: &FiscalSettings,
+        reference: &str,
+    ) -> Result<DocumentOutcome, GatewayError> {
+        on_gateway!(self, gateway => gateway.query_nfe(issuer, reference).await)
+    }
+
+    async fn cancel_nfe(
+        &self,
+        issuer: &FiscalSettings,
+        reference: &str,
+        reason: &str,
+    ) -> Result<EventOutcome, GatewayError> {
+        on_gateway!(self, gateway => gateway.cancel_nfe(issuer, reference, reason).await)
+    }
+
+    async fn correct_nfe(
+        &self,
+        issuer: &FiscalSettings,
+        reference: &str,
+        text: &str,
+    ) -> Result<EventOutcome, GatewayError> {
+        on_gateway!(self, gateway => gateway.correct_nfe(issuer, reference, text).await)
+    }
+
+    async fn invalidate_nfe_numbers(
+        &self,
+        issuer: &FiscalSettings,
+        series: u16,
+        first: u32,
+        last: u32,
+        reason: &str,
+    ) -> Result<EventOutcome, GatewayError> {
+        on_gateway!(self, gateway => gateway
+            .invalidate_nfe_numbers(issuer, series, first, last, reason)
+            .await)
+    }
+}
+
+fn fiscal_gateway_from_env()
+-> Result<ConfiguredFiscalGateway, Box<dyn std::error::Error + Send + Sync>> {
+    let setting = |name: &str| {
+        std::env::var(name)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+    };
+    match setting("FISCAL_GATEWAY").as_deref().map(str::trim) {
+        None | Some("off") => {
+            tracing::warn!("FISCAL_GATEWAY is not set: fiscal documents are switched off");
+            Ok(ConfiguredFiscalGateway::Off(NoFiscalGateway))
+        }
+        Some("fake") => {
+            tracing::warn!(
+                "FISCAL_GATEWAY=fake: fiscal documents are made up and have no fiscal value"
+            );
+            Ok(ConfiguredFiscalGateway::Fake(FakeFiscalGateway::default()))
+        }
+        Some("focus") => {
+            let (homologation, production) = (
+                setting("FOCUS_NFE_TOKEN_HOMOLOGATION"),
+                setting("FOCUS_NFE_TOKEN_PRODUCTION"),
+            );
+            if homologation.is_none() && production.is_none() {
+                return Err(
+                    "FISCAL_GATEWAY=focus needs FOCUS_NFE_TOKEN_HOMOLOGATION or FOCUS_NFE_TOKEN_PRODUCTION"
+                        .into(),
+                );
+            }
+            // A token belongs to one company at the gateway: the CNPJ is what keeps another company of this
+            // installation from issuing under it.
+            let Some(cnpj) = setting("FOCUS_NFE_ISSUER_CNPJ") else {
+                return Err("FISCAL_GATEWAY=focus needs FOCUS_NFE_ISSUER_CNPJ".into());
+            };
+            let cnpj = match conta_verde_domain::Document::parse(&cnpj) {
+                Ok(conta_verde_domain::Document::Cnpj(cnpj)) => cnpj,
+                _ => return Err("FOCUS_NFE_ISSUER_CNPJ is not a valid CNPJ".into()),
+            };
+            tracing::info!("fiscal documents are issued through Focus NFe");
+            Ok(ConfiguredFiscalGateway::Focus(Box::new(
+                FocusNfeGateway::new(
+                    setting("FOCUS_NFE_API_URL").as_deref(),
+                    homologation.as_deref(),
+                    production.as_deref(),
+                    &cnpj,
+                )?,
+            )))
+        }
+        Some(other) => Err(format!("FISCAL_GATEWAY={other} is not a known gateway").into()),
     }
 }
 

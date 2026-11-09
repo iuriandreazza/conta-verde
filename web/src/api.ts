@@ -2037,6 +2037,9 @@ export const api = {
     }),
   periodLockHistory: (companyId: string) =>
     request<HistoryEntry[]>(`/companies/${companyId}/accounting/period-lock/history`),
+  /** The gateway this installation issues through, or `null` when the operator configured none. */
+  getFiscalGateway: (companyId: string) =>
+    request<{ gateway: string | null }>(`/companies/${companyId}/fiscal/gateway`),
   /** `null` while the company has not set them: no document can be issued then. */
   getFiscalSettings: (companyId: string) =>
     request<FiscalSettings | null>(`/companies/${companyId}/fiscal/settings`),

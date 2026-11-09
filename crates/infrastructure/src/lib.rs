@@ -6,7 +6,9 @@ mod cached_registry;
 mod contract;
 mod document_references;
 mod entry_references;
+mod fake_fiscal_gateway;
 mod fake_payment_provider;
+mod focus_nfe;
 mod local_blob_store;
 mod log_email_sender;
 mod memory;
@@ -86,9 +88,11 @@ pub use brasil_api_postal_code::BrasilApiPostalCodeDirectory;
 pub use cached_registry::CachedCnpjRegistry;
 pub use document_references::RegisterDocumentReferences;
 pub use entry_references::RegisterReferences;
+pub use fake_fiscal_gateway::{FakeFiscalGateway, NoFiscalGateway};
 pub use fake_payment_provider::{
     FAKE_SIGNATURE_HEADER, FAKE_WEBHOOK_SECRET, FakePaymentProvider, NoPaymentProvider,
 };
+pub use focus_nfe::FocusNfeGateway;
 pub use local_blob_store::LocalBlobStore;
 pub use log_email_sender::LogEmailSender;
 pub use memory::{InMemoryCnpjRegistry, InMemoryIdentityRepository, InMemoryPartyRepository};

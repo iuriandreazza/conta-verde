@@ -60,16 +60,16 @@ use conta_verde_application::{
     ContractRepository, ContractService, CostCenterRepository, CostCenterService,
     DocumentMailRepository, DocumentMailService, DocumentReferences, DreService, EmailSender,
     EntryLookups, EntryReferences, ExportLookups, FinancialEntryRepository, FinancialEntryService,
-    FiscalSettingsRepository, FiscalSettingsService, IdentityRepository, InventoryCountRepository,
-    InventoryCountService, InvitationRepository, MemberService, OpeningRepository,
-    PackageScheduleRepository, PackageScheduleService, PartyRepository, PartyService,
-    PaymentMethodRepository, PaymentMethodService, PaymentProvider, PaymentTermRepository,
-    PaymentTermService, PostalCodeDirectory, PostalCodeService, PriceListRepository,
-    PriceListService, ProductRepository, ProductService, PurchaseOrderRepository, PurchaseService,
-    QuoteRepository, QuoteService, ReconciliationService, RecurrenceRepository, RecurrenceService,
-    SaleRepository, SaleService, SalesReportService, SecretService, StatementLineRepository,
-    StockMovementRepository, StockService, StockSettingsRepository, TransferRepository,
-    TransferService,
+    FiscalGateway, FiscalSettingsRepository, FiscalSettingsService, IdentityRepository,
+    InventoryCountRepository, InventoryCountService, InvitationRepository, MemberService,
+    OpeningRepository, PackageScheduleRepository, PackageScheduleService, PartyRepository,
+    PartyService, PaymentMethodRepository, PaymentMethodService, PaymentProvider,
+    PaymentTermRepository, PaymentTermService, PostalCodeDirectory, PostalCodeService,
+    PriceListRepository, PriceListService, ProductRepository, ProductService,
+    PurchaseOrderRepository, PurchaseService, QuoteRepository, QuoteService, ReconciliationService,
+    RecurrenceRepository, RecurrenceService, SaleRepository, SaleService, SalesReportService,
+    SecretService, StatementLineRepository, StockMovementRepository, StockService,
+    StockSettingsRepository, TransferRepository, TransferService,
 };
 use conta_verde_application::{
     CollectionService, CollectionSettingsRepository, DunningPlanRepository, DunningService,
@@ -105,6 +105,7 @@ pub trait Ports: 'static {
     type PeriodLocks: PeriodLockRepository + 'static;
     type PackageSchedules: PackageScheduleRepository + 'static;
     type FiscalSettings: FiscalSettingsRepository + 'static;
+    type Gateway: FiscalGateway + 'static;
     type Attachments: AttachmentRepository + 'static;
     type Blobs: BlobStore + 'static;
     type Charges: ChargeRepository + 'static;
@@ -296,6 +297,7 @@ pub struct Services<X: Ports> {
     pub exports: ExportsOf<X>,
     pub packages: PackagesOf<X>,
     pub fiscal_settings: FiscalSettingsService<X::FiscalSettings>,
+    pub fiscal_gateway: X::Gateway,
     pub postal_codes: PostalCodeService<X::PostalCodes>,
     pub members: MemberService<X::Invitations, X::Identity, X::Emails, X::Secrets>,
     pub documents: DocumentsOf<X>,
@@ -336,6 +338,7 @@ pub(crate) struct AppState<X: Ports> {
     exports: ExportsOf<X>,
     packages: PackagesOf<X>,
     fiscal_settings: FiscalSettingsService<X::FiscalSettings>,
+    fiscal_gateway: X::Gateway,
     postal_codes: PostalCodeService<X::PostalCodes>,
     members: MemberService<X::Invitations, X::Identity, X::Emails, X::Secrets>,
     documents: DocumentsOf<X>,
@@ -380,6 +383,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         exports: services.exports,
         packages: services.packages,
         fiscal_settings: services.fiscal_settings,
+        fiscal_gateway: services.fiscal_gateway,
         postal_codes: services.postal_codes,
         members: services.members,
         documents: services.documents,
@@ -647,6 +651,10 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         .route(
             "/companies/{company_id}/accounting/package-schedule/history",
             get(accounting::package_schedule_history::<X>),
+        )
+        .route(
+            "/companies/{company_id}/fiscal/gateway",
+            get(fiscal::get_gateway::<X>),
         )
         .route(
             "/companies/{company_id}/fiscal/settings",
@@ -1004,7 +1012,7 @@ mod tests {
     use axum::http::{Request, StatusCode, header};
     use conta_verde_application::PostalCodeEntry;
     use conta_verde_infrastructure::{
-        Argon2SecretService, FakePaymentProvider, InMemoryAttachmentRepository,
+        Argon2SecretService, FakeFiscalGateway, FakePaymentProvider, InMemoryAttachmentRepository,
         InMemoryBankAccountRepository, InMemoryBlobStore, InMemoryCategoryRepository,
         InMemoryChargeRepository, InMemoryCnpjRegistry, InMemoryCollectionSettingsRepository,
         InMemoryCommissionRuleRepository, InMemoryContractRepository, InMemoryCostCenterRepository,
@@ -1089,6 +1097,7 @@ mod tests {
         type PeriodLocks = InMemoryPeriodLockRepository;
         type PackageSchedules = InMemoryPackageScheduleRepository;
         type FiscalSettings = InMemoryFiscalSettingsRepository;
+        type Gateway = FakeFiscalGateway;
         type Attachments = InMemoryAttachmentRepository;
         type Blobs = InMemoryBlobStore;
         type Charges = InMemoryChargeRepository;
@@ -1138,6 +1147,7 @@ mod tests {
         type PeriodLocks = InMemoryPeriodLockRepository;
         type PackageSchedules = InMemoryPackageScheduleRepository;
         type FiscalSettings = InMemoryFiscalSettingsRepository;
+        type Gateway = FakeFiscalGateway;
         type Attachments = InMemoryAttachmentRepository;
         type Blobs = InMemoryBlobStore;
         type Charges = InMemoryChargeRepository;
@@ -1897,6 +1907,7 @@ mod tests {
                 period_locks: PeriodLockService::new(locks()),
                 exports: standalone_exports(),
                 packages: standalone_packages(),
+                fiscal_gateway: FakeFiscalGateway::default(),
                 fiscal_settings: FiscalSettingsService::new(
                     InMemoryFiscalSettingsRepository::default(),
                 ),
@@ -2562,6 +2573,7 @@ mod tests {
                 period_locks: PeriodLockService::new(locks()),
                 exports: standalone_exports(),
                 packages: standalone_packages(),
+                fiscal_gateway: FakeFiscalGateway::default(),
                 fiscal_settings: FiscalSettingsService::new(
                     InMemoryFiscalSettingsRepository::default(),
                 ),
@@ -4789,6 +4801,7 @@ mod tests {
                 period_locks: PeriodLockService::new(locks()),
                 exports: standalone_exports(),
                 packages: standalone_packages(),
+                fiscal_gateway: FakeFiscalGateway::default(),
                 fiscal_settings: FiscalSettingsService::new(
                     InMemoryFiscalSettingsRepository::default(),
                 ),
@@ -6456,6 +6469,7 @@ mod tests {
                     mailbox.clone(),
                     "http://localhost:5173",
                 ),
+                fiscal_gateway: FakeFiscalGateway::default(),
                 fiscal_settings: FiscalSettingsService::new(
                     InMemoryFiscalSettingsRepository::default(),
                 ),
@@ -7005,6 +7019,25 @@ mod tests {
         );
         assert_eq!(
             send(&app, get_request(&theirs, None)).await.status,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    /// Which gateway the installation issues through ([ADR 0075]): anyone who reaches the company may ask, and the
+    /// answer is the adapter's name (or `null` for none, which the in-memory test ports never are).
+    #[tokio::test]
+    async fn the_fiscal_gateway_is_told_to_those_who_read_the_fiscal_area() {
+        use conta_verde_domain::Role;
+
+        let (app, identities) = app_with_identities();
+        let (_, company_id) = sign_up(&app, "dona@example.com").await;
+        let viewer = member_with_role(&app, &identities, company_id, Role::Viewer).await;
+        let uri = format!("/companies/{company_id}/fiscal/gateway");
+        let reply = send(&app, get_request(&uri, Some(&viewer))).await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert_eq!(reply.body, json!({ "gateway": "fake" }));
+        assert_eq!(
+            send(&app, get_request(&uri, None)).await.status,
             StatusCode::UNAUTHORIZED
         );
     }
