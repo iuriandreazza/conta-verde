@@ -29,6 +29,7 @@ mod job;
 mod line;
 mod name;
 mod notification;
+mod package_schedule;
 mod party;
 mod payment_event;
 mod payment_method;
@@ -62,7 +63,8 @@ pub use audit::{
     contract_creation_changes, cost_center_changes, cost_center_creation_changes, creation_changes,
     document_check_changes, dunning_plan_changes, dunning_plan_creation_changes, entry_changes,
     entry_creation_changes, inventory_count_changes, inventory_count_creation_changes,
-    opening_changes, opening_creation_changes, party_changes, payment_method_changes,
+    opening_changes, opening_creation_changes, package_schedule_changes,
+    package_schedule_creation_changes, party_changes, payment_method_changes,
     payment_method_creation_changes, payment_term_changes, payment_term_creation_changes,
     period_lock_changes, period_lock_creation_changes, price_list_changes,
     price_list_creation_changes, product_changes, product_creation_changes, purchase_order_changes,
@@ -117,6 +119,7 @@ pub use invoice::{
 pub use job::{Job, JobKind, MAX_ATTEMPTS, NewJob};
 pub use line::{Line, LineDraft, MAX_LINES, lines_total};
 pub use notification::{MAX_NOTIFICATION_ATTEMPTS, Notification, NotificationStatus};
+pub use package_schedule::{PackageSchedule, month_to_package};
 pub use party::{Party, PartyDraft};
 pub use payment_event::{
     MAX_EVENT_BYTES, PaymentEvent, PaymentEventKind, PaymentEventOutcome, event_note,

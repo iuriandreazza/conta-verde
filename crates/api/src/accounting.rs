@@ -71,3 +71,64 @@ pub(crate) async fn period_lock_history<X: Ports>(
         history.iter().map(HistoryEntryResponse::from).collect(),
     ))
 }
+
+#[derive(Serialize)]
+pub(crate) struct PackageScheduleResponse {
+    /// Whether the previous month's package is announced to the accountants.
+    enabled: bool,
+    /// The day of the month, 1 to 28, from which it is.
+    day: u8,
+    /// How many members the announcement reaches: the ones whose role is accountant. With none, nothing is sent.
+    accountants: usize,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PackageScheduleRequest {
+    /// Both are said every time: a request that leaves one out is refused, so it cannot switch the schedule by
+    /// forgetting what it was.
+    enabled: bool,
+    day: u8,
+}
+
+/// The schedule of the monthly package and who it would reach ([ADR 0072]).
+pub(crate) async fn get_package_schedule<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, _): CompanyAccess,
+) -> Result<Json<PackageScheduleResponse>, ApiError> {
+    let schedule = state.packages.get(company_id).await?;
+    let accountants = state.packages.accountants(company_id).await?;
+    Ok(Json(PackageScheduleResponse {
+        enabled: schedule.is_enabled(),
+        day: schedule.day(),
+        accountants,
+    }))
+}
+
+pub(crate) async fn put_package_schedule<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, actor): CompanyAccess,
+    ApiJson(request): ApiJson<PackageScheduleRequest>,
+) -> Result<Json<PackageScheduleResponse>, ApiError> {
+    let schedule = state
+        .packages
+        .replace(company_id, &actor, request.enabled, request.day)
+        .await?;
+    let accountants = state.packages.accountants(company_id).await?;
+    Ok(Json(PackageScheduleResponse {
+        enabled: schedule.is_enabled(),
+        day: schedule.day(),
+        accountants,
+    }))
+}
+
+/// Who chose what, oldest first.
+pub(crate) async fn package_schedule_history<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, _): CompanyAccess,
+) -> Result<Json<Vec<HistoryEntryResponse>>, ApiError> {
+    let history = state.packages.history(company_id).await?;
+    Ok(Json(
+        history.iter().map(HistoryEntryResponse::from).collect(),
+    ))
+}

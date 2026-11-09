@@ -9,6 +9,12 @@ afterEach(() => vi.unstubAllGlobals());
 
 const closedThroughOctober: PeriodLock = { locked_through: "2026-10-31" };
 
+/** What the API says about the schedule of the monthly package; a PUT answers with what it was asked. */
+function scheduleReply(init: RequestInit | undefined, accountants = 2) {
+  if (init?.method === "PUT") return { status: 200, body: { ...JSON.parse(String(init.body)), accountants } };
+  return { status: 200, body: { enabled: false, day: 5, accountants } };
+}
+
 const trail: HistoryEntry[] = [
   {
     at: Date.UTC(2026, 10, 2, 15, 0),
@@ -22,6 +28,7 @@ const trail: HistoryEntry[] = [
 function serve(lock: PeriodLock, me: Profile = profile) {
   return mockApi((url, init) => {
     if (url === "/api/auth/me") return { status: 200, body: me };
+    if (url.endsWith("/accounting/package-schedule")) return scheduleReply(init);
     if (url.endsWith("/accounting/period-lock/history")) return { status: 200, body: trail };
     if (url.endsWith("/accounting/period-lock") && init?.method === "PUT") {
       return { status: 200, body: { locked_through: JSON.parse(String(init.body)).locked_through } };
@@ -152,6 +159,7 @@ describe("the accountant's files", () => {
     return mockApi((url, init) => {
       if (url === "/api/auth/me") return { status: 200, body: profile };
       if (url.includes("/accounting/exports/")) return answer(url);
+      if (url.endsWith("/accounting/package-schedule")) return scheduleReply(init);
       if (url.endsWith("/accounting/period-lock/history")) return { status: 200, body: trail };
       if (url.endsWith("/accounting/period-lock") && init?.method !== "PUT") return { status: 200, body: closedThroughOctober };
       return { status: 404, body: { error: "not found" } };
@@ -212,6 +220,7 @@ describe("the accountant's files", () => {
     mockApi((url, init) => {
       if (url === "/api/auth/me") return { status: 200, body: reader };
       if (url.includes("/accounting/exports/")) return { status: 200, text: "x" };
+      if (url.endsWith("/accounting/package-schedule")) return { status: 200, body: { enabled: true, day: 10, accountants: 1 } };
       if (url.endsWith("/history")) return { status: 200, body: trail };
       if (init?.method === "PUT") return { status: 403, body: { error: "forbidden" } };
       return { status: 200, body: closedThroughOctober };
@@ -222,6 +231,103 @@ describe("the accountant's files", () => {
     expect(screen.getByText(/não guarda o XML das notas de compra/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Transferências" }));
     await waitFor(() => expect(saved[0]?.name).toBe("transfers-2026-10-01-a-2026-10-31.csv"));
+  });
+});
+
+describe("the monthly package notice", () => {
+  /** The lock and the schedule; `accountants` is how many members the notice would reach. */
+  function serveSchedule(accountants: number, me: Profile = profile) {
+    return mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: me };
+      if (url.endsWith("/accounting/package-schedule")) return scheduleReply(init, accountants);
+      if (url.endsWith("/history")) return { status: 200, body: trail };
+      return { status: 200, body: closedThroughOctober };
+    });
+  }
+
+  it("says how many accountants it reaches and what it sends", async () => {
+    serveSchedule(2);
+    renderAt("/companies/c1/accounting");
+
+    expect(await screen.findByText("O aviso vai para 2 contadores.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Sobre Aviso mensal aos contadores/ }));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(/não traz dados da empresa nem anexos/);
+  });
+
+  it("says that nothing is sent when there is no accountant, and where to invite one", async () => {
+    serveSchedule(0);
+    renderAt("/companies/c1/accounting");
+
+    expect(await screen.findByText(/Nenhum contador foi convidado: nada será enviado/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Convidar um contador" })).toHaveAttribute("href", "/companies/c1/members");
+  });
+
+  it("switches it on from a day and says so", async () => {
+    const fetchMock = serveSchedule(1);
+    renderAt("/companies/c1/accounting");
+    await screen.findByText("O aviso vai para 1 contador.");
+
+    await userEvent.click(screen.getByRole("checkbox", { name: "Avisar todo mês" }));
+    await userEvent.selectOptions(screen.getByLabelText("A partir do dia"), "12");
+    await userEvent.click(screen.getByRole("button", { name: "Salvar aviso" }));
+
+    expect(await screen.findByText("Aviso ligado: todo mês, a partir do dia 12.")).toBeInTheDocument();
+    const puts = fetchMock.mock.calls.filter(([url, init]) => String(url).endsWith("/package-schedule") && init?.method === "PUT");
+    expect(puts.map(([, init]) => JSON.parse(String(init?.body)))).toEqual([{ enabled: true, day: 12 }]);
+  });
+
+  it("shows a reader what is set and offers no way to change it", async () => {
+    const reader: Profile = {
+      ...profile,
+      companies: [{ id: "c1", name: "Padaria", role: "viewer", permissions: { ...OWNER_PERMISSIONS, accounting: "read" } }],
+    };
+    mockApi((url) => {
+      if (url === "/api/auth/me") return { status: 200, body: reader };
+      if (url.endsWith("/accounting/package-schedule")) return { status: 200, body: { enabled: true, day: 10, accountants: 1 } };
+      if (url.endsWith("/history")) return { status: 200, body: trail };
+      return { status: 200, body: closedThroughOctober };
+    });
+    renderAt("/companies/c1/accounting");
+
+    expect(await screen.findByText("Ligado: todo mês, a partir do dia 10.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Salvar aviso" })).not.toBeInTheDocument();
+  });
+
+  it("brings a signed-out accountant back to the page of the e-mail's link after signing in", async () => {
+    const id = "0b9a6f0e-3b3a-4d57-8f0e-0123456789ab";
+    const me: Profile = {
+      ...profile,
+      companies: [{ id, name: "Padaria", role: "accountant", permissions: { ...OWNER_PERMISSIONS } }],
+    };
+    let signedIn = false;
+    mockApi((url, init) => {
+      if (url === "/api/auth/me") {
+        return signedIn ? { status: 200, body: me } : { status: 401, body: { error: "authentication required" } };
+      }
+      if (url === "/api/auth/login") {
+        signedIn = true;
+        return { status: 200, body: me };
+      }
+      if (url.endsWith("/accounting/package-schedule")) return scheduleReply(init);
+      if (url.endsWith("/history")) return { status: 200, body: trail };
+      return { status: 200, body: closedThroughOctober };
+    });
+    renderAt(`/companies/${id}/accounting?month=2026-02`);
+
+    await userEvent.type(await screen.findByLabelText("E-mail"), "contadora@example.com");
+    await userEvent.type(screen.getByLabelText("Senha"), "correct horse");
+    await userEvent.click(screen.getByRole("button", { name: "Entrar" }));
+
+    // Not the first page of the app: the Contador page, on the month of the link.
+    expect(await screen.findByLabelText("Mês")).toHaveValue("2026-02");
+  });
+
+  it("opens the downloads on the month the e-mail links to", async () => {
+    serveSchedule(1);
+    renderAt("/companies/c1/accounting?month=2026-02");
+    await screen.findByText("31/10/2026");
+
+    expect(screen.getByLabelText("Mês")).toHaveValue("2026-02");
   });
 });
 

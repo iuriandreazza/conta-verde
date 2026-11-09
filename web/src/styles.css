@@ -913,6 +913,13 @@ input[type="checkbox"] {
   accent-color: var(--green);
 }
 
+/* A checkbox beside its words, where the label's grid would put it above them. */
+.inline-check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 fieldset {
   min-width: 0;
   margin: 0;

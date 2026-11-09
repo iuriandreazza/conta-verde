@@ -13,11 +13,16 @@ import { ROLE_LABELS } from "../lib/roles";
 import { usePageTitle } from "../lib/usePageTitle";
 
 /**
- * Where to go after signing in, when the page was opened from a link that needs an account: only an
- * invitation's page, so a crafted `next` cannot send anyone anywhere else.
+ * Where to go after signing in, when the page was opened from a link that needs an account: an invitation's page or a
+ * page of a company (the link of an e-mail), so a crafted `next` cannot send anyone anywhere else.
  */
+const NEXT_AFTER_SIGN_IN = [
+  /^\/invitations\/[A-Za-z0-9_-]+$/,
+  /^\/companies\/[0-9a-f-]{36}\/[a-z-]+(\?[A-Za-z0-9=&_-]*)?$/,
+];
+
 function nextAfterSignIn(raw: string | null): string {
-  return raw !== null && /^\/invitations\/[A-Za-z0-9_-]+$/.test(raw) ? raw : "/";
+  return raw !== null && NEXT_AFTER_SIGN_IN.some((allowed) => allowed.test(raw)) ? raw : "/";
 }
 
 /** The token of the invitation a `next` leads to, if it leads to one. */

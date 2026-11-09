@@ -4,9 +4,9 @@ use crate::line::lines_text;
 use crate::{
     AccountOpening, Attachment, BankAccount, Category, Charge, CollectionSettings, CommissionRule,
     CompanyId, Contract, CostCenter, DocumentCheck, DunningPlan, FinancialEntry, InventoryCount,
-    LineMatch, Party, PaymentMethod, PaymentTerm, PeriodLock, PriceList, Product, PurchaseOrder,
-    PurchaseReceipt, Quote, Recurrence, Sale, SaleReturn, Settlement, StatementLine, StockMovement,
-    StockSettings, Tag, Transfer, UserId,
+    LineMatch, PackageSchedule, Party, PaymentMethod, PaymentTerm, PeriodLock, PriceList, Product,
+    PurchaseOrder, PurchaseReceipt, Quote, Recurrence, Sale, SaleReturn, Settlement, StatementLine,
+    StockMovement, StockSettings, Tag, Transfer, UserId,
 };
 
 /// Who made a change. The name is a snapshot: history must keep reading the same after the user is
@@ -53,6 +53,8 @@ pub enum AuditEntity {
     InventoryCount,
     /// One per company: the audit id is the company's.
     PeriodLock,
+    /// One per company: the audit id is the company's.
+    PackageSchedule,
 }
 
 impl AuditEntity {
@@ -84,6 +86,7 @@ impl AuditEntity {
             Self::StockSettings => "stock_settings",
             Self::InventoryCount => "inventory_count",
             Self::PeriodLock => "period_lock",
+            Self::PackageSchedule => "package_schedule",
             Self::Settlement => "settlement",
             Self::Transfer => "transfer",
             Self::AccountOpening => "account_opening",
@@ -466,6 +469,20 @@ impl Audited for StockSettings {
 impl Audited for PeriodLock {
     fn audit_entity(&self) -> AuditEntity {
         AuditEntity::PeriodLock
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.company_id().as_uuid()
+    }
+}
+
+impl Audited for PackageSchedule {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::PackageSchedule
     }
 
     fn audit_company(&self) -> CompanyId {
@@ -1286,6 +1303,29 @@ pub fn period_lock_changes(
         changes.push(set("reason", reason));
     }
     changes
+}
+
+fn package_schedule_fields(schedule: &PackageSchedule) -> Fields {
+    vec![
+        ("enabled", Some(schedule.is_enabled().to_string())),
+        ("day", Some(schedule.day().to_string())),
+    ]
+}
+
+/// What choosing the schedule for the first time records.
+pub fn package_schedule_creation_changes(schedule: &PackageSchedule) -> Vec<FieldChange> {
+    creation_from(package_schedule_fields(schedule))
+}
+
+/// What replacing the schedule records: the switch and the day, those that changed.
+pub fn package_schedule_changes(
+    before: &PackageSchedule,
+    after: &PackageSchedule,
+) -> Vec<FieldChange> {
+    changes_between(
+        package_schedule_fields(before),
+        package_schedule_fields(after),
+    )
 }
 
 fn stock_settings_fields(settings: &StockSettings) -> Fields {
