@@ -3893,6 +3893,26 @@ describe("transfers", () => {
     expect(screen.queryByRole("button", { name: "Nova transferência" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Estornar a transferência/ })).not.toBeInTheDocument();
   });
+
+  it("offers no form to the accountant either: they read the finance pages and change none", async () => {
+    const accountant: Profile = {
+      ...profile,
+      companies: [
+        {
+          id: "c1",
+          name: "Padaria",
+          role: "accountant",
+          permissions: { ...OWNER_PERMISSIONS, parties: "read", products: "read", finance: "read", sales: "read", purchases: "read", members: undefined },
+        },
+      ],
+    };
+    mockApi((url, init) => (url === "/api/auth/me" ? { status: 200, body: accountant } : answer([deposit])(url, init)));
+    renderAt("/companies/c1/transfers");
+
+    await screen.findByRole("row", { name: /Depósito/ });
+    expect(screen.queryByRole("button", { name: "Nova transferência" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Estornar a transferência/ })).not.toBeInTheDocument();
+  });
 });
 
 describe("the balance of the bank accounts", () => {

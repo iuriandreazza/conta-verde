@@ -22,28 +22,54 @@ use crate::{Ports, SharedState};
 /// refused to everyone until it is given one.
 pub(crate) struct CompanyAccess(pub CompanyId, pub Actor);
 
+/// The route segment after `{company_id}` of every family of company routes, and the area it belongs
+/// to. A single table, so that a test can walk every family and a new one has to be placed in an area.
+pub(crate) const SEGMENT_AREAS: &[(&str, Area)] = &[
+    ("parties", Area::Parties),
+    ("postal-codes", Area::Parties),
+    ("products", Area::Products),
+    ("categories", Area::Finance),
+    ("cost-centers", Area::Finance),
+    ("bank-accounts", Area::Finance),
+    ("payment-methods", Area::Finance),
+    ("payment-terms", Area::Finance),
+    ("entries", Area::Finance),
+    ("transfers", Area::Finance),
+    ("balances", Area::Finance),
+    ("cash-flow", Area::Finance),
+    ("recurrences", Area::Finance),
+    ("statement-lines", Area::Finance),
+    ("reports", Area::Finance),
+    ("collection", Area::Finance),
+    ("delinquency", Area::Finance),
+    ("quotes", Area::Sales),
+    ("sales", Area::Sales),
+    ("contracts", Area::Sales),
+    ("commission-rules", Area::Sales),
+    ("commissions", Area::Sales),
+    ("price-lists", Area::Sales),
+    ("sales-reports", Area::Sales),
+    ("purchase-orders", Area::Purchases),
+    ("purchase-imports", Area::Purchases),
+    ("stock", Area::Purchases),
+    ("stock-reports", Area::Purchases),
+    ("inventory-counts", Area::Purchases),
+    ("accounting", Area::Accounting),
+    ("members", Area::Members),
+    ("invitations", Area::Members),
+];
+
 /// The area a route of a company belongs to: the segment that follows `{company_id}`.
-fn area_of(pattern: &str) -> Option<Area> {
+pub(crate) fn area_of(pattern: &str) -> Option<Area> {
     let mut segments = pattern.split('/').filter(|segment| !segment.is_empty());
-    let (Some("companies"), Some("{company_id}"), Some(area)) =
+    let (Some("companies"), Some("{company_id}"), Some(segment)) =
         (segments.next(), segments.next(), segments.next())
     else {
         return None;
     };
-    match area {
-        "parties" | "postal-codes" => Some(Area::Parties),
-        "products" => Some(Area::Products),
-        "categories" | "cost-centers" | "bank-accounts" | "payment-methods" | "payment-terms"
-        | "entries" | "transfers" | "balances" | "cash-flow" | "recurrences"
-        | "statement-lines" | "reports" | "collection" | "delinquency" => Some(Area::Finance),
-        "quotes" | "sales" | "contracts" | "commission-rules" | "commissions" | "price-lists"
-        | "sales-reports" => Some(Area::Sales),
-        "purchase-orders" | "purchase-imports" | "stock" | "stock-reports" | "inventory-counts" => {
-            Some(Area::Purchases)
-        }
-        "members" | "invitations" => Some(Area::Members),
-        _ => None,
-    }
+    SEGMENT_AREAS
+        .iter()
+        .find_map(|(known, area)| (*known == segment).then_some(*area))
 }
 
 /// A request that only looks reads; anything else changes something.
@@ -183,6 +209,10 @@ mod tests {
         assert_eq!(
             area_of("/companies/{company_id}/stock-reports/valuation"),
             Some(Area::Purchases)
+        );
+        assert_eq!(
+            area_of("/companies/{company_id}/accounting/period-lock"),
+            Some(Area::Accounting)
         );
         assert_eq!(
             area_of("/companies/{company_id}/members"),
