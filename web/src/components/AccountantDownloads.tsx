@@ -1,14 +1,11 @@
 import { useState } from "react";
 import { api, errorMessage, type ExportFile, type ExportFormat } from "../api";
 import { saveFile } from "../lib/csv";
-import { lastDayOfMonth, monthToExport } from "../lib/closing";
+import { MONTH, lastDayOfMonth, monthToExport } from "../lib/closing";
 import { todayIso } from "../lib/settlement";
 import { Button } from "./Button";
 import { HelpTitle } from "./HelpTitle";
 import { Notice } from "./Notice";
-
-// What a month input holds; a browser without a month picker leaves whatever was typed.
-const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 const FILES: { file: ExportFile; label: string }[] = [
   { file: "entries", label: "Lançamentos" },

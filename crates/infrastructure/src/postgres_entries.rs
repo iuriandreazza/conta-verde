@@ -1382,6 +1382,24 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires DATABASE_URL"]
+    async fn names_everything_for_the_export() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let other_company = contract::create_company(&pool).await;
+        let (seed, other_seed) = (seed(&pool, company).await, seed(&pool, other_company).await);
+        contract::names_everything_for_the_export(
+            &references(&pool),
+            &PostgresCategoryRepository::new(pool.clone()),
+            company,
+            other_company,
+            &seed,
+            &other_seed,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
     async fn reports_the_entries() {
         let pool = contract::test_pool().await;
         let company = contract::create_company(&pool).await;

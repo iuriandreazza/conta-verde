@@ -585,16 +585,16 @@ export interface PublicCharge {
   paid_on: string | null;
 }
 
-/** Where the money of a paid charge lands, and what the provider's fee is entered under (ADR 0046). */
-/** The company's closed period (ADR 0069): everything dated on or before the day is closed. */
 /** What the accountant can download: one file per table, or all of them with the attachments in a zip. */
 export type ExportFile = "entries" | "settlements" | "transfers" | "package";
 export type ExportFormat = "csv" | "xlsx";
 
+/** The company's closed period (ADR 0069): everything dated on or before the day is closed. */
 export interface PeriodLock {
   locked_through: string | null;
 }
 
+/** Where the money of a paid charge lands, and what the provider's fee is entered under (ADR 0046). */
 export interface CollectionSettings {
   bank_account_id: string | null;
   fee_category_id: string | null;
@@ -1682,6 +1682,10 @@ async function fetchFile(path: string, fallbackName: string): Promise<SavedFile>
       onSessionLost?.();
     }
     throw failureOf(response, parseJson(await response.text()));
+  }
+  // A 2xx that is a page did not come from the API (a fallback serving the app for /api): it would be saved as a file.
+  if ((response.headers.get("Content-Type") ?? "").startsWith("text/html")) {
+    throw new ApiError(response.status, "Resposta inesperada do servidor: confira se o endereço da API está certo.");
   }
   const named = /filename="([^"]+)"/.exec(response.headers.get("Content-Disposition") ?? "");
   return { blob: await response.blob(), filename: named?.[1] ?? fallbackName };

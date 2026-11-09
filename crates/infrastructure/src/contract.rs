@@ -16454,3 +16454,70 @@ pub async fn exports_the_books_of_a_span<R, F>(
     );
     let _ = after;
 }
+
+/// The names the accountant's export prints ([ADR 0071]): every register, **inactive records included**, a
+/// subcategory by its whole path, the parties asked for and nobody else's, and nothing of another company's.
+pub async fn names_everything_for_the_export<L, C>(
+    lookups: &L,
+    categories: &C,
+    company: CompanyId,
+    other_company: CompanyId,
+    seed: &EntrySeed,
+    other_seed: &EntrySeed,
+) where
+    L: conta_verde_application::ExportLookups,
+    C: CategoryRepository,
+{
+    let expenses = root_category(company, "Despesas");
+    let staff = child_category(&expenses, "Pessoal");
+    let salaries = child_category(&staff, "Salários");
+    for category in [&expenses, &staff, &salaries] {
+        save_category(categories, category).await;
+    }
+
+    let names = lookups
+        .export_names(company, &[seed.party, other_seed.party])
+        .await
+        .unwrap();
+    for category in [seed.category, seed.inactive_category] {
+        assert!(names.categories.contains_key(&category), "{category:?}");
+    }
+    assert_eq!(names.categories[&expenses.id()], "Despesas");
+    assert_eq!(names.categories[&staff.id()], "Despesas > Pessoal");
+    assert_eq!(
+        names.categories[&salaries.id()],
+        "Despesas > Pessoal > Salários",
+        "the whole path, so two Salários under different roots are not the same text"
+    );
+    for cost_center in [seed.cost_center, seed.inactive_cost_center] {
+        assert!(names.cost_centers.contains_key(&cost_center));
+    }
+    for account in [
+        seed.bank_account,
+        seed.other_bank_account,
+        seed.inactive_bank_account,
+    ] {
+        assert!(names.bank_accounts.contains_key(&account));
+    }
+    for method in [seed.payment_method, seed.inactive_payment_method] {
+        assert!(names.payment_methods.contains_key(&method));
+    }
+    assert_eq!(
+        names.parties.keys().copied().collect::<Vec<_>>(),
+        vec![seed.party],
+        "the party asked for that is the company's, not another company's"
+    );
+
+    // Another company's records are not named for this one, and it names its own.
+    assert!(!names.categories.contains_key(&other_seed.category));
+    assert!(!names.cost_centers.contains_key(&other_seed.cost_center));
+    assert!(!names.bank_accounts.contains_key(&other_seed.bank_account));
+    assert!(
+        !names
+            .payment_methods
+            .contains_key(&other_seed.payment_method)
+    );
+    let theirs = lookups.export_names(other_company, &[]).await.unwrap();
+    assert!(theirs.categories.contains_key(&other_seed.category));
+    assert!(!theirs.categories.contains_key(&seed.category));
+}

@@ -13,6 +13,9 @@ const MONTHS = [
   "dezembro",
 ];
 
+/** What a month input holds; a browser without a month picker leaves whatever was typed. */
+export const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
+
 /** The last day of a month written `YYYY-MM`, which is what the period lock closes through (ADR 0069). */
 export function lastDayOfMonth(month: string): string {
   const [year, number] = month.split("-").map(Number);

@@ -6641,6 +6641,7 @@ mod tests {
             }
         };
         let note = attach(&sale, "Nota%20%C3%A7.pdf", b"%PDF-1.4 nota").await;
+        let lease = attach(&rent, "Contrato%3A%20aluguel.pdf", b"%PDF-1.4 contrato").await;
         attach(&september, "Antigo.pdf", b"%PDF-1.4 velho").await;
 
         let span = "from=2026-10-01&to=2026-10-31";
@@ -6696,10 +6697,14 @@ mod tests {
             headers[header::CONTENT_DISPOSITION],
             "attachment; filename=\"package-2026-10-01-a-2026-10-31.zip\""
         );
-        let path = format!("attachments/{sale}/{note}-Nota ç.pdf");
+        // In the order of the entries file (the sale, then the rent), whatever the order of their ids; a name that
+        // Windows cannot unpack is made one it can.
+        let note_path = format!("attachments/{sale}/{note}-Nota ç.pdf");
+        let lease_path = format!("attachments/{rent}/{lease}-Contrato_ aluguel.pdf");
         let attachments_csv = format!(
             "\u{feff}attachment_id;entry_id;file_name;content_type;size;path\r\n\
-             {note};{sale};Nota ç.pdf;application/pdf;13;{path}\r\n"
+             {note};{sale};Nota ç.pdf;application/pdf;13;{note_path}\r\n\
+             {lease};{rent};Contrato: aluguel.pdf;application/pdf;17;{lease_path}\r\n"
         );
         let files = crate::export_files::tests::unzip(&bytes);
         assert_eq!(
@@ -6709,7 +6714,26 @@ mod tests {
                 ("settlements.csv".to_owned(), settlements_csv.into_bytes()),
                 ("transfers.csv".to_owned(), transfers_csv.into_bytes()),
                 ("attachments.csv".to_owned(), attachments_csv.into_bytes()),
-                (path, b"%PDF-1.4 nota".to_vec()),
+                (note_path, b"%PDF-1.4 nota".to_vec()),
+                (lease_path, b"%PDF-1.4 contrato".to_vec()),
+            ]
+        );
+
+        // The package as spreadsheets: the same files by name, the list of attachments still a CSV.
+        let (status, _, bytes) = get("package", &format!("{span}&format=xlsx"), &accountant).await;
+        assert_eq!(status, StatusCode::OK);
+        let names: Vec<String> = crate::export_files::tests::unzip(&bytes)
+            .into_iter()
+            .map(|(name, _)| name)
+            .take(4)
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "entries.xlsx",
+                "settlements.xlsx",
+                "transfers.xlsx",
+                "attachments.csv"
             ]
         );
 

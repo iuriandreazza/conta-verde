@@ -34,9 +34,9 @@ impl ExportFormat {
         }
     }
 
-    pub fn file_of(self, table: &ExportTable) -> Vec<u8> {
+    pub fn file_of(self, table: &ExportTable) -> Result<Vec<u8>, ZipTooBig> {
         match self {
-            Self::Csv => csv_of(table),
+            Self::Csv => Ok(csv_of(table)),
             Self::Xlsx => xlsx_of(table),
         }
     }
@@ -173,7 +173,7 @@ fn sheet_xml(table: &ExportTable) -> String {
 }
 
 /// An XLSX is a zip of five parts; the same columns as the CSV, amounts as numbers and everything else as text.
-pub fn xlsx_of(table: &ExportTable) -> Vec<u8> {
+pub fn xlsx_of(table: &ExportTable) -> Result<Vec<u8>, ZipTooBig> {
     let content_types = format!(
         "{XML_HEAD}<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\
          <Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>\
@@ -205,25 +205,37 @@ pub fn xlsx_of(table: &ExportTable) -> Vec<u8> {
         ("xl/_rels/workbook.xml.rels", workbook_rels.into_bytes()),
         ("xl/worksheets/sheet1.xml", sheet_xml(table).into_bytes()),
     ];
-    // Five small parts are far below what a zip without ZIP64 holds, unless a sheet is gigabytes: the row limit
-    // keeps it at some megabytes.
-    zip_of(&parts).unwrap_or_default()
+    zip_of(Vec::from(parts))
 }
 
 // ---- ZIP ----
 
-/// The CRC-32 of a zip (the reflected polynomial `0xEDB88320`).
-pub fn crc32(bytes: &[u8]) -> u32 {
-    let mut crc = 0xFFFF_FFFF_u32;
-    for byte in bytes {
-        crc ^= u32::from(*byte);
-        for _ in 0..8 {
+/// The table of the CRC-32 of a zip (the reflected polynomial `0xEDB88320`), made when the program is built.
+const CRC_TABLE: [u32; 256] = {
+    let mut table = [0_u32; 256];
+    let mut n = 0;
+    while n < 256 {
+        let mut crc = n as u32;
+        let mut bit = 0;
+        while bit < 8 {
             crc = if crc & 1 == 1 {
                 (crc >> 1) ^ 0xEDB8_8320
             } else {
                 crc >> 1
             };
+            bit += 1;
         }
+        table[n] = crc;
+        n += 1;
+    }
+    table
+};
+
+/// The CRC-32 of a zip.
+pub fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFF_u32;
+    for byte in bytes {
+        crc = CRC_TABLE[usize::from((crc as u8) ^ byte)] ^ (crc >> 8);
     }
     !crc
 }
@@ -243,12 +255,18 @@ fn push_u32(out: &mut Vec<u8>, value: u32) {
 }
 
 /// A zip that stores each file as it is: local headers and data, the central directory, the end record. No ZIP64:
-/// at most 65,535 files of less than 4 GiB, far above the limits of a package.
-pub fn zip_of<N: AsRef<str>, D: AsRef<[u8]>>(files: &[(N, D)]) -> Result<Vec<u8>, ZipTooBig> {
+/// at most 65,535 files of less than 4 GiB, far above the limits of a package. The files are taken by value, so each
+/// is dropped as soon as it is copied in, and the buffer is made at its final size.
+pub fn zip_of<N: AsRef<str>, D: AsRef<[u8]>>(files: Vec<(N, D)>) -> Result<Vec<u8>, ZipTooBig> {
     let count = u16::try_from(files.len()).map_err(|_| ZipTooBig)?;
-    let mut out = Vec::new();
+    let size = files
+        .iter()
+        .map(|(name, data)| 76 + 2 * name.as_ref().len() + data.as_ref().len())
+        .sum::<usize>()
+        + 22;
+    let mut out = Vec::with_capacity(size);
     // (name, crc, size, offset of the local header)
-    let mut directory: Vec<(&str, u32, u32, u32)> = Vec::new();
+    let mut directory: Vec<(String, u32, u32, u32)> = Vec::with_capacity(files.len());
     for (name, data) in files {
         let (name, data) = (name.as_ref(), data.as_ref());
         let offset = u32::try_from(out.len()).map_err(|_| ZipTooBig)?;
@@ -268,7 +286,7 @@ pub fn zip_of<N: AsRef<str>, D: AsRef<[u8]>>(files: &[(N, D)]) -> Result<Vec<u8>
         push_u16(&mut out, 0);
         out.extend_from_slice(name.as_bytes());
         out.extend_from_slice(data);
-        directory.push((name, crc, size, offset));
+        directory.push((name.to_owned(), crc, size, offset));
     }
     let directory_start = u32::try_from(out.len()).map_err(|_| ZipTooBig)?;
     for (name, crc, size, offset) in &directory {
@@ -313,15 +331,15 @@ pub fn package_zip(package: ExportPackage, format: ExportFormat) -> Result<Vec<u
     let mut files: Vec<(String, Vec<u8>)> = vec![
         (
             format!("entries.{extension}"),
-            format.file_of(&package.entries),
+            format.file_of(&package.entries)?,
         ),
         (
             format!("settlements.{extension}"),
-            format.file_of(&package.settlements),
+            format.file_of(&package.settlements)?,
         ),
         (
             format!("transfers.{extension}"),
-            format.file_of(&package.transfers),
+            format.file_of(&package.transfers)?,
         ),
         // The list of the attached files is always a CSV: it is read by people more than by software.
         ("attachments.csv".to_owned(), csv_of(&package.attachments)),
@@ -332,7 +350,7 @@ pub fn package_zip(package: ExportPackage, format: ExportFormat) -> Result<Vec<u
             .into_iter()
             .map(|file| (file.path, file.bytes)),
     );
-    zip_of(&files)
+    zip_of(files)
 }
 
 #[cfg(test)]
@@ -448,7 +466,11 @@ pub(crate) mod tests {
 
     #[test]
     fn a_zip_stores_each_file_with_its_checksum_and_a_fixed_day() {
-        let bytes = zip_of(&[("a.txt", b"hello".to_vec()), ("dir/ç.txt", b"".to_vec())]).unwrap();
+        let bytes = zip_of(vec![
+            ("a.txt", b"hello".to_vec()),
+            ("dir/ç.txt", b"".to_vec()),
+        ])
+        .unwrap();
         let files = unzip(&bytes);
         assert_eq!(
             files,
@@ -461,14 +483,18 @@ pub(crate) mod tests {
         assert_eq!(&bytes[10..14], &[0, 0, 0x21, 0]);
         assert_eq!(
             bytes,
-            zip_of(&[("a.txt", b"hello".to_vec()), ("dir/ç.txt", b"".to_vec())]).unwrap()
+            zip_of(vec![
+                ("a.txt", b"hello".to_vec()),
+                ("dir/ç.txt", b"".to_vec())
+            ])
+            .unwrap()
         );
     }
 
     #[test]
     fn a_zip_of_nothing_is_just_the_end_record() {
-        let none: [(&str, &[u8]); 0] = [];
-        let bytes = zip_of(&none).unwrap();
+        let none: Vec<(&str, Vec<u8>)> = Vec::new();
+        let bytes = zip_of(none).unwrap();
         assert_eq!(bytes.len(), 22);
         assert!(unzip(&bytes).is_empty());
     }
@@ -478,7 +504,8 @@ pub(crate) mod tests {
         let bytes = xlsx_of(&table(vec![vec![
             text("A & <B>\u{0}\u{b}"),
             amount("1200.50"),
-        ]]));
+        ]]))
+        .unwrap();
         let parts = unzip(&bytes);
         let names: Vec<&str> = parts.iter().map(|(name, _)| name.as_str()).collect();
         assert_eq!(

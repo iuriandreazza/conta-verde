@@ -47,7 +47,7 @@ entry id, then installment.
 | 3 | `description` | as typed |
 | 4 | `party` | the party's name, empty when none |
 | 5 | `party_document` | its CPF or CNPJ without punctuation, empty when none |
-| 6 | `category` | `Root > Child` for a subcategory, the name for a root |
+| 6 | `category` | the whole path of a subcategory, `Root > Child > Grandchild`; the name for a root |
 | 7 | `cost_center` | the name, empty when none |
 | 8 | `competence_date` | the entry's |
 | 9 | `installment` | this installment's number |
@@ -89,11 +89,13 @@ entry id, then installment.
 
 **The package** is a zip, stored without compression, holding `entries.{csv|xlsx}`, `settlements.{csv|xlsx}`,
 `transfers.{csv|xlsx}`, `attachments.csv` and the files attached to the entries of the span, each at
-`attachments/{entry_id}/{attachment_id}-{name}` (the name typed by a person, with `/`, `\` and control characters turned
-into `_` and a leading `.` removed, so it cannot leave its folder or collide with another). `attachments.csv` has
-`attachment_id`, `entry_id`, `file_name`, `content_type`, `size` and `path`. An attachment that was removed is not in it.
-The entries are those the `entries` file lists, by competence date. The zip's timestamps are fixed (1980-01-01): the
-server reads no clock.
+`attachments/{entry_id}/{attachment_id}-{name}`. The name is typed by a person, so `/`, `\`, `:`, `*`, `?`, `"`, `<`,
+`>`, `|` and control characters become `_` (it cannot leave its folder, and Windows, where an accountant most likely
+unpacks it, can write it), a leading `.` and a trailing `.` or space are dropped, and the attachment's id in front keeps
+two files of the same name apart. `attachments.csv` has `attachment_id`, `entry_id`, `file_name`, `content_type`, `size`
+and `path`, in the order of the `entries` file (and, within an entry, the order the files were attached), and so are the
+files in the zip. An attachment that was removed is not in it. The zip's timestamps are fixed (1980-01-01): the server
+reads no clock.
 
 ### Formats
 
@@ -104,7 +106,7 @@ server reads no clock.
 - **XLSX**: the same columns, five parts (`[Content_Types].xml`, `_rels/.rels`, `xl/workbook.xml`,
   `xl/_rels/workbook.xml.rels`, `xl/worksheets/sheet1.xml`), text as inline strings, **amounts as numeric cells** carrying
   the decimal text as stored (no float is ever made), dates as text. Characters XML 1.0 forbids are dropped. No styles.
-- **Zip and XLSX are written by hand** in `api` (`export_files.rs`): a zip writer with the CRC-32 table, ZIP64 not needed
+- **Zip and XLSX are written by hand** in `api` (`export_files.rs`): a zip writer with a table-driven CRC-32, ZIP64 not needed
   (a package is at most 200 MiB and each file smaller than 4 GiB), UTF-8 names flagged. Tests compare the bytes and read
   the zip back with a small reader written for the test.
 
@@ -112,7 +114,10 @@ server reads no clock.
 
 At most **50,000 rows per file**, **500 attached files** and **200 MiB** of attachments: past any of them the answer is
 `422` saying to narrow the span. The row limit is checked by asking for one row more than the limit; the attachment
-limits are checked from the records (count and size) **before any file is read** from the blob store.
+limits are checked from the records (count and size) **before any file is read** from the blob store. The package is
+built off the async executor (it copies and sums up to 200 MiB) with the attached files moved into the zip, not copied;
+there is no cap on packages built at once, so a deployment that fears many readers asking for the biggest span at the
+same time limits them in front of the API. The limits are the defaults of `ExportLimits`, which a test lowers.
 
 ### Where the work lives
 
@@ -132,7 +137,11 @@ on `TransferQuery`, and `AttachmentRepository::list_by_entries`; each is held to
   entry (a supplier's XML, a boleto or invoice PDF). The Contador page says it plainly. Phase 7's XMLs are to reach this
   package.
 - A name is looked up per distinct party of the span: a company with many thousands of parties in one month pays that many
-  reads. Acceptable at the sizes the limits allow; a batch read is the next step if it shows.
+  reads. Acceptable at the sizes the limits allow; a batch read is the next step if it shows. The registers are read
+  once per request, and the settlements' entries are read whole (installments included) only to name their rows.
+- **An attached file whose bytes are gone** (the store lost it, or it was removed between the list and the read) makes the
+  package answer `500` with the attachment named in the log, and asking again once it is gone from the list works: the
+  record says the file exists, so a package without it would be a silent hole in what the accountant relies on.
 - Files are bigger than compressed ones and the spreadsheet has no styles; nothing new is audited and nothing is built
   natively.
 - Not in the package, on purpose: the audit log, the stock position, SPED files and any vendor's own layout (ADR 0067).

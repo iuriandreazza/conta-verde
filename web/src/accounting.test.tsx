@@ -53,8 +53,9 @@ it("offers the month after the closed one, so closing the next month is one clic
 
   expect(await screen.findByText("Período fechado até 29/02/2020.")).toBeInTheDocument();
   expect(putsOf(fetchMock)).toEqual([{ locked_through: "2020-02-29" }]);
-  // The offer moves on with the lock.
+  // The offer moves on with the lock, and so does the month the files are for.
   expect(screen.getByLabelText("Fechar até o fim de")).toHaveValue("2020-03");
+  expect(screen.getByLabelText("Mês")).toHaveValue("2020-02");
 });
 
 it("closes through the last day of the month that is chosen", async () => {

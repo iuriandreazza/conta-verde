@@ -67,7 +67,15 @@ fn download(bytes: Vec<u8>, content_type: &'static str, filename: &str) -> Respo
     response
 }
 
-fn table_download(table: &ExportTable, span: &Span) -> Response {
+/// A file that does not fit a zip is a fault of ours, far below the limits of a package: logged, not shown.
+fn unwritable(_: impl std::any::Any) -> ApiError {
+    ApplicationError::from(RepositoryError::Storage(
+        "an export does not fit in a zip".to_owned(),
+    ))
+    .into()
+}
+
+fn table_download(table: &ExportTable, span: &Span) -> Result<Response, ApiError> {
     let name = format!(
         "{}-{}-a-{}.{}",
         table.name,
@@ -75,11 +83,8 @@ fn table_download(table: &ExportTable, span: &Span) -> Response {
         span.to,
         span.format.extension()
     );
-    download(
-        span.format.file_of(table),
-        span.format.content_type(),
-        &name,
-    )
+    let bytes = span.format.file_of(table).map_err(unwritable)?;
+    Ok(download(bytes, span.format.content_type(), &name))
 }
 
 pub(crate) async fn entries_file<X: Ports>(
@@ -92,7 +97,7 @@ pub(crate) async fn entries_file<X: Ports>(
         .exports
         .entries_table(company_id, span.from, span.to)
         .await?;
-    Ok(table_download(&table, &span))
+    table_download(&table, &span)
 }
 
 pub(crate) async fn settlements_file<X: Ports>(
@@ -105,7 +110,7 @@ pub(crate) async fn settlements_file<X: Ports>(
         .exports
         .settlements_table(company_id, span.from, span.to)
         .await?;
-    Ok(table_download(&table, &span))
+    table_download(&table, &span)
 }
 
 pub(crate) async fn transfers_file<X: Ports>(
@@ -118,7 +123,7 @@ pub(crate) async fn transfers_file<X: Ports>(
         .exports
         .transfers_table(company_id, span.from, span.to)
         .await?;
-    Ok(table_download(&table, &span))
+    table_download(&table, &span)
 }
 
 /// The three tables, the list of attachments and the attached files, in one zip.
@@ -132,12 +137,12 @@ pub(crate) async fn package_file<X: Ports>(
         .exports
         .package(company_id, span.from, span.to)
         .await?;
-    // A package is limited far below what a zip without ZIP64 holds, so this is a storage-sized fault: logged, not shown.
-    let bytes = package_zip(package, span.format).map_err(|_| {
-        ApplicationError::from(RepositoryError::Storage(
-            "a package does not fit in a zip".to_owned(),
-        ))
-    })?;
+    // Built off the executor: it copies up to 200 MiB and sums them.
+    let format = span.format;
+    let bytes = tokio::task::spawn_blocking(move || package_zip(package, format))
+        .await
+        .map_err(unwritable)?
+        .map_err(unwritable)?;
     Ok(download(
         bytes,
         "application/zip",

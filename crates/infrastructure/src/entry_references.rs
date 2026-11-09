@@ -160,18 +160,26 @@ where
     ) -> Result<ExportNames, RepositoryError> {
         let mut names = ExportNames::default();
 
-        // Every category, inactive ones too: an entry of last year may still point at one.
+        // Every category, inactive ones too: an entry of last year may still point at one. The whole path is
+        // named, so `Despesas > Pessoal > Salários` and `Custos > Pessoal > Salários` are not the same text.
         let categories = self.categories.list_by_company(company_id, None).await?;
-        let by_id: HashMap<CategoryId, String> = categories
+        let by_id: HashMap<CategoryId, &conta_verde_domain::Category> = categories
             .iter()
-            .map(|category| (category.id(), category.name().to_owned()))
+            .map(|category| (category.id(), category))
             .collect();
         for category in &categories {
-            let path = match category.parent_id().and_then(|parent| by_id.get(&parent)) {
-                Some(parent) => format!("{parent} > {}", category.name()),
-                None => category.name().to_owned(),
-            };
-            names.categories.insert(category.id(), path);
+            let mut path = vec![category.name()];
+            let mut parent = category.parent_id();
+            // The tree is at most five deep; the bound only keeps a cycle, which cannot be stored, from looping.
+            while let Some(above) = parent
+                .and_then(|id| by_id.get(&id))
+                .filter(|_| path.len() < 16)
+            {
+                path.push(above.name());
+                parent = above.parent_id();
+            }
+            path.reverse();
+            names.categories.insert(category.id(), path.join(" > "));
         }
 
         let cost_centers = every_row(

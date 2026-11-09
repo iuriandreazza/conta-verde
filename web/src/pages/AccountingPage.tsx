@@ -8,14 +8,11 @@ import { Notice } from "../components/Notice";
 import { PageHeader } from "../components/PageHeader";
 import { PeriodLockHistory } from "../components/PeriodLockHistory";
 import { Spinner } from "../components/Spinner";
-import { lastDayOfMonth, monthLabel, suggestedMonthToClose } from "../lib/closing";
+import { MONTH, lastDayOfMonth, monthLabel, suggestedMonthToClose } from "../lib/closing";
 import { formatDate } from "../lib/entryInstallments";
 import { todayIso } from "../lib/settlement";
 import { useCanWrite } from "../lib/useCanWrite";
 import { HelpTitle } from "../components/HelpTitle";
-
-// What a month input holds; a browser without a month picker leaves whatever was typed.
-const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one instance.
 export function AccountingPage() {
@@ -182,7 +179,7 @@ export function AccountingPage() {
                 )}
               </div>
             )}
-            <AccountantDownloads companyId={companyId} lockedThrough={through} />
+            <AccountantDownloads key={through ?? "open"} companyId={companyId} lockedThrough={through} />
             <section className="card">
               <h2>Histórico</h2>
               <PeriodLockHistory key={trail} companyId={companyId} />
