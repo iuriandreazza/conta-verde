@@ -50,6 +50,7 @@ impl<R: FinancialEntryRepository, F: EntryReferences> FinancialEntryService<R, F
         draft: FinancialEntryDraft,
     ) -> Result<FinancialEntry, ApplicationError> {
         let record = FinancialEntry::new(EntryId::generate(), company_id, draft)?;
+        self.check_period(&record, None).await?;
         self.check_references(&record, None).await?;
         let audit = audit_entry(
             &record,
@@ -72,6 +73,7 @@ impl<R: FinancialEntryRepository, F: EntryReferences> FinancialEntryService<R, F
     ) -> Result<FinancialEntry, ApplicationError> {
         let record =
             FinancialEntry::new(EntryId::generate(), company_id, draft)?.with_origin(origin);
+        self.check_period(&record, None).await?;
         self.check_references(&record, None).await?;
         let audit = audit_entry(
             &record,
@@ -92,6 +94,7 @@ impl<R: FinancialEntryRepository, F: EntryReferences> FinancialEntryService<R, F
         draft: FinancialEntryDraft,
     ) -> Result<(), ApplicationError> {
         let record = FinancialEntry::new(EntryId::generate(), company_id, draft)?;
+        self.check_period(&record, None).await?;
         self.check_references(&record, None).await
     }
 
@@ -104,6 +107,9 @@ impl<R: FinancialEntryRepository, F: EntryReferences> FinancialEntryService<R, F
         id: EntryId,
     ) -> Result<FinancialEntry, ApplicationError> {
         let before = self.find(company_id, id).await?;
+        self.references
+            .ensure_open(company_id, before.competence_date())
+            .await?;
         let after = before.voided()?;
         let audit = audit_entry(
             &after,
@@ -222,6 +228,7 @@ impl<R: FinancialEntryRepository, F: EntryReferences> FinancialEntryService<R, F
         if changes.is_empty() {
             return Ok(after);
         }
+        self.check_period(&after, Some(&before)).await?;
         self.check_references(&after, Some(&before)).await?;
         let audit = audit_entry(&after, actor, AuditAction::Updated, changes);
         self.repository
@@ -279,6 +286,9 @@ impl<R: FinancialEntryRepository, F: EntryReferences> FinancialEntryService<R, F
         }
         let settlement = Settlement::new(SettlementId::generate(), company_id, entry_id, draft)?
             .with_charge(charge_id);
+        self.references
+            .ensure_open(company_id, settlement.settled_on())
+            .await?;
         if entry.installment(settlement.installment()).is_none() {
             return Err(ApplicationError::UnusableReference("installment"));
         }
@@ -330,6 +340,9 @@ impl<R: FinancialEntryRepository, F: EntryReferences> FinancialEntryService<R, F
             .await?
             .filter(|settlement| !settlement.is_reversed())
             .ok_or(ApplicationError::SettlementNotFound)?;
+        self.references
+            .ensure_open(company_id, stored.settled_on())
+            .await?;
         let reversed = stored.clone().with_reversed(true);
         let audit = audit_entry(
             &reversed,
@@ -417,6 +430,25 @@ impl<R: FinancialEntryRepository, F: EntryReferences> FinancialEntryService<R, F
             .find(company_id, id)
             .await?
             .ok_or(ApplicationError::EntryNotFound)
+    }
+
+    /// The competence date of an entry, and of what it replaces, must be on an open day ([ADR 0069]): taking an
+    /// entry out of a closed month changes that month as much as putting one in.
+    async fn check_period(
+        &self,
+        entry: &FinancialEntry,
+        before: Option<&FinancialEntry>,
+    ) -> Result<(), ApplicationError> {
+        let company = entry.company_id();
+        self.references
+            .ensure_open(company, entry.competence_date())
+            .await?;
+        if let Some(stored) = before {
+            self.references
+                .ensure_open(company, stored.competence_date())
+                .await?;
+        }
+        Ok(())
     }
 
     /// The category, cost center and party must be usable in the company, the answer naming the

@@ -3,7 +3,7 @@ use conta_verde_domain::{
     PaymentTermId, ProductId, PurchaseOrder, PurchaseOrderDraft, PurchaseReceiptDraft,
     PurchaseStatus, ReceiptItemDraft, ScheduleDraft, purchase_order_creation_changes,
 };
-use conta_verde_domain::{AuditAction, PurchaseOrderId};
+use conta_verde_domain::{AuditAction, CalendarDate, PurchaseOrderId};
 
 use crate::audit::audit_entry;
 use crate::{
@@ -105,21 +105,32 @@ where
             .await?
         {
             Some(order) => (order, true),
-            None => match self
-                .claim_invoice(company_id, actor, &invoice, &entry)
-                .await
-            {
-                Ok(order) => (order, false),
-                // Entered by someone else at the same moment: this is the repeat.
-                Err(ApplicationError::Repository(RepositoryError::DuplicateInvoice)) => (
-                    self.purchases()
-                        .find_by_invoice_key(company_id, invoice.access_key())
-                        .await?
-                        .ok_or(ApplicationError::PurchaseNotFound)?,
-                    true,
-                ),
-                Err(error) => return Err(error),
-            },
+            None => {
+                // Before the order that claims the key is stored: a day in a closed month would otherwise leave
+                // an approved order behind a refused request ([ADR 0069]).
+                let arrived = match entry.received_on.as_deref() {
+                    Some(raw) => CalendarDate::parse(raw),
+                    None => Some(invoice.issued_on()),
+                };
+                if let Some(day) = arrived {
+                    self.ensure_open(company_id, day).await?;
+                }
+                match self
+                    .claim_invoice(company_id, actor, &invoice, &entry)
+                    .await
+                {
+                    Ok(order) => (order, false),
+                    // Entered by someone else at the same moment: this is the repeat.
+                    Err(ApplicationError::Repository(RepositoryError::DuplicateInvoice)) => (
+                        self.purchases()
+                            .find_by_invoice_key(company_id, invoice.access_key())
+                            .await?
+                            .ok_or(ApplicationError::PurchaseNotFound)?,
+                        true,
+                    ),
+                    Err(error) => return Err(error),
+                }
+            }
         };
         let receipt = self
             .complete_invoice(company_id, actor, &invoice, &entry, order.id())

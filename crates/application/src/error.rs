@@ -1,6 +1,6 @@
 use std::fmt;
 
-use conta_verde_domain::DomainError;
+use conta_verde_domain::{CalendarDate, DomainError};
 
 use crate::{ProviderError, SecretError, WebhookError};
 
@@ -161,6 +161,10 @@ pub enum ApplicationError {
     StockMovementNotFound,
     /// The stock changed under the write and could not be valued again in a few tries.
     StockChanged,
+    /// The day is in a closed period ([ADR 0069]): the last day that is closed.
+    PeriodLocked {
+        through: CalendarDate,
+    },
     /// A product would be left with less than nothing: the name and what is on hand.
     StockInsufficient {
         product: String,
@@ -397,6 +401,10 @@ impl fmt::Display for ApplicationError {
             Self::CountChanged => f.write_str("the count was changed meanwhile: read it again"),
             Self::StockMovementNotFound => f.write_str("stock movement not found"),
             Self::StockChanged => f.write_str("the stock changed meanwhile: try again"),
+            Self::PeriodLocked { through } => write!(
+                f,
+                "the period through {through} is closed: reopen it to change what is dated on or before it"
+            ),
             Self::StockInsufficient { product, available } => {
                 write!(f, "not enough stock of {product}: {available} on hand")
             }

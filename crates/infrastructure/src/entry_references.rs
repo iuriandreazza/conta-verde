@@ -3,10 +3,11 @@ use std::collections::HashMap;
 use conta_verde_application::{
     BankAccountQuery, BankAccountRepository, CategoryRepository, CostCenterQuery,
     CostCenterRepository, EntryLookups, EntryReferences, ImportNames, NameCursor, PartyQuery,
-    PartyRepository, PaymentMethodRepository, RepositoryError,
+    PartyRepository, PaymentMethodRepository, PeriodLockRepository, RepositoryError,
 };
 use conta_verde_domain::{
-    BankAccountId, CategoryId, CompanyId, CostCenterId, DreGroup, PartyId, PaymentMethodId,
+    BankAccountId, CalendarDate, CategoryId, CompanyId, CostCenterId, DreGroup, PartyId,
+    PaymentMethodId,
 };
 
 /// How many rows of a register are read at a time when a whole register is needed.
@@ -15,21 +16,23 @@ const PAGE: usize = 200;
 /// Answers what an entry and its settlements may point at by asking the registers themselves, so one
 /// implementation serves every adapter: Postgres, and the in-memory ones that tests share between the
 /// services. A record of another company is not found, so it answers like one that does not exist.
-pub struct RegisterReferences<C, K, P, B, M> {
+pub struct RegisterReferences<C, K, P, B, M, L> {
     categories: C,
     cost_centers: K,
     parties: P,
     bank_accounts: B,
     payment_methods: M,
+    period_locks: L,
 }
 
-impl<C, K, P, B, M> RegisterReferences<C, K, P, B, M> {
+impl<C, K, P, B, M, L> RegisterReferences<C, K, P, B, M, L> {
     pub fn new(
         categories: C,
         cost_centers: K,
         parties: P,
         bank_accounts: B,
         payment_methods: M,
+        period_locks: L,
     ) -> Self {
         Self {
             categories,
@@ -37,18 +40,27 @@ impl<C, K, P, B, M> RegisterReferences<C, K, P, B, M> {
             parties,
             bank_accounts,
             payment_methods,
+            period_locks,
         }
     }
 }
 
-impl<C, K, P, B, M> EntryReferences for RegisterReferences<C, K, P, B, M>
+impl<C, K, P, B, M, L> EntryReferences for RegisterReferences<C, K, P, B, M, L>
 where
     C: CategoryRepository,
     K: CostCenterRepository,
     P: PartyRepository,
     B: BankAccountRepository,
     M: PaymentMethodRepository,
+    L: PeriodLockRepository,
 {
+    async fn locked_through(
+        &self,
+        company_id: CompanyId,
+    ) -> Result<Option<CalendarDate>, RepositoryError> {
+        self.period_locks.locked_through(company_id).await
+    }
+
     async fn category_is_usable(
         &self,
         company_id: CompanyId,
@@ -108,13 +120,14 @@ where
     }
 }
 
-impl<C, K, P, B, M> EntryLookups for RegisterReferences<C, K, P, B, M>
+impl<C, K, P, B, M, L> EntryLookups for RegisterReferences<C, K, P, B, M, L>
 where
     C: CategoryRepository,
     K: CostCenterRepository,
     P: PartyRepository,
     B: BankAccountRepository,
     M: PaymentMethodRepository,
+    L: Send + Sync,
 {
     async fn import_names(&self, company_id: CompanyId) -> Result<ImportNames, RepositoryError> {
         let mut names = ImportNames::default();

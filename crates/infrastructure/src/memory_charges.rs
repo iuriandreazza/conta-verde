@@ -297,6 +297,7 @@ mod tests {
             &charges,
             &entries,
             &settings,
+            &conta_verde_application::PeriodLockService::new(registers.period_locks.clone()),
             &events,
             company,
             other_company,

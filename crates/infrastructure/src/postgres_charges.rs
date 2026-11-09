@@ -285,6 +285,7 @@ mod tests {
         PostgresPartyRepository,
         PostgresBankAccountRepository,
         PostgresPaymentMethodRepository,
+        crate::PostgresPeriodLockRepository,
     >;
     use crate::contract;
     use crate::{
@@ -300,6 +301,7 @@ mod tests {
             PostgresPartyRepository::new(pool.clone()),
             PostgresBankAccountRepository::new(pool.clone()),
             PostgresPaymentMethodRepository::new(pool.clone()),
+            crate::PostgresPeriodLockRepository::new(pool.clone()),
         )
     }
 
@@ -430,6 +432,9 @@ mod tests {
             &charge_service(&pool, &provider),
             &entry_service(&pool),
             &settings_service(&pool),
+            &conta_verde_application::PeriodLockService::new(
+                crate::PostgresPeriodLockRepository::new(pool.clone()),
+            ),
             &events,
             company,
             other_company,
@@ -461,6 +466,7 @@ mod tests {
                 PostgresPartyRepository::new(pool.clone()),
                 PostgresBankAccountRepository::new(pool.clone()),
                 PostgresPaymentMethodRepository::new(pool.clone()),
+                crate::PostgresPeriodLockRepository::new(pool.clone()),
             ),
         );
         let entry = entries

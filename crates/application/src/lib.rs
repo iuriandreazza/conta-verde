@@ -53,6 +53,8 @@ mod payment_provider;
 mod payment_term_repository;
 mod payment_term_service;
 mod payment_webhook_service;
+mod period_lock_repository;
+mod period_lock_service;
 mod postal_code_directory;
 mod postal_code_service;
 mod price_list_repository;
@@ -151,6 +153,8 @@ pub use payment_provider::{
 pub use payment_term_repository::{PaymentTermQuery, PaymentTermRepository};
 pub use payment_term_service::{PaymentTermPage, PaymentTermService};
 pub use payment_webhook_service::PaymentWebhookService;
+pub use period_lock_repository::{NoPeriodLock, PeriodLockRepository};
+pub use period_lock_service::PeriodLockService;
 pub use postal_code_directory::{PostalCodeDirectory, PostalCodeEntry, PostalCodeLookupError};
 pub use postal_code_service::PostalCodeService;
 pub use price_list_repository::{PriceListQuery, PriceListRepository};

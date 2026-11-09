@@ -4,7 +4,7 @@ use crate::line::lines_text;
 use crate::{
     AccountOpening, Attachment, BankAccount, Category, Charge, CollectionSettings, CommissionRule,
     CompanyId, Contract, CostCenter, DocumentCheck, DunningPlan, FinancialEntry, InventoryCount,
-    LineMatch, Party, PaymentMethod, PaymentTerm, PriceList, Product, PurchaseOrder,
+    LineMatch, Party, PaymentMethod, PaymentTerm, PeriodLock, PriceList, Product, PurchaseOrder,
     PurchaseReceipt, Quote, Recurrence, Sale, SaleReturn, Settlement, StatementLine, StockMovement,
     StockSettings, Tag, Transfer, UserId,
 };
@@ -51,6 +51,8 @@ pub enum AuditEntity {
     /// One per company: the audit id is the company's.
     StockSettings,
     InventoryCount,
+    /// One per company: the audit id is the company's.
+    PeriodLock,
 }
 
 impl AuditEntity {
@@ -81,6 +83,7 @@ impl AuditEntity {
             Self::StockMovement => "stock_movement",
             Self::StockSettings => "stock_settings",
             Self::InventoryCount => "inventory_count",
+            Self::PeriodLock => "period_lock",
             Self::Settlement => "settlement",
             Self::Transfer => "transfer",
             Self::AccountOpening => "account_opening",
@@ -449,6 +452,20 @@ impl Audited for CollectionSettings {
 impl Audited for StockSettings {
     fn audit_entity(&self) -> AuditEntity {
         AuditEntity::StockSettings
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.company_id().as_uuid()
+    }
+}
+
+impl Audited for PeriodLock {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::PeriodLock
     }
 
     fn audit_company(&self) -> CompanyId {
@@ -1244,6 +1261,31 @@ pub fn collection_settings_changes(
         collection_settings_fields(before),
         collection_settings_fields(after),
     )
+}
+
+fn period_lock_fields(lock: &PeriodLock) -> Fields {
+    vec![(
+        "locked_through",
+        lock.locked_through().map(|day| day.to_string()),
+    )]
+}
+
+/// What closing a month for the first time records.
+pub fn period_lock_creation_changes(lock: &PeriodLock) -> Vec<FieldChange> {
+    creation_from(period_lock_fields(lock))
+}
+
+/// What replacing the lock records: the date, and the reason when the lock was reopened.
+pub fn period_lock_changes(
+    before: &PeriodLock,
+    after: &PeriodLock,
+    reason: Option<&str>,
+) -> Vec<FieldChange> {
+    let mut changes = changes_between(period_lock_fields(before), period_lock_fields(after));
+    if let Some(reason) = reason.filter(|_| !changes.is_empty()) {
+        changes.push(set("reason", reason));
+    }
+    changes
 }
 
 fn stock_settings_fields(settings: &StockSettings) -> Fields {

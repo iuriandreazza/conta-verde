@@ -499,6 +499,7 @@ mod tests {
                 PostgresPartyRepository::new(pool.clone()),
                 PostgresBankAccountRepository::new(pool.clone()),
                 PostgresPaymentMethodRepository::new(pool.clone()),
+                crate::PostgresPeriodLockRepository::new(pool.clone()),
             )
         };
         let documents = || {
@@ -576,6 +577,7 @@ mod tests {
                 PostgresPartyRepository::new(pool.clone()),
                 PostgresBankAccountRepository::new(pool.clone()),
                 PostgresPaymentMethodRepository::new(pool.clone()),
+                crate::PostgresPeriodLockRepository::new(pool.clone()),
             )
         };
         let stock_of = || {

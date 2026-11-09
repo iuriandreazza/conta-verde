@@ -123,7 +123,7 @@ links to a login-gated page). One slice per pull request, in this order:
 
 - [x] Plan ([ADR 0067](adr/0067-accountant-and-reporting-plan.md))
 - [x] Accountant role: read access to every company that invites them, no write ([ADR 0067](adr/0067-accountant-and-reporting-plan.md)) — the `accountant` role reads every area but members and writes only the new `accounting` area (the lock, the exports, the schedule), the one table of route segments is `SEGMENT_AREAS`, and a test walks every route of the router with the accountant and the viewer
-- [ ] Period lock: entries before the lock date cannot change without reopening
+- [x] Period lock: entries before the lock date cannot change without reopening ([ADR 0069](adr/0069-period-lock.md)) — the company closes whole months (the owner, admins and the accountant), and what is dated on or before the lock cannot be made, changed or undone: entries by competence date, settlements, transfers, openings, stock movements, completed sales, returns and receipts; reopening needs a reason and every change is in the trail; a payment on a closed day is kept paid with a note; a Contador page closes and reopens
 - [ ] DRE (managerial income statement) by month and cost center ([ADR 0012](adr/0012-managerial-accounting-model.md))
 - [ ] Exports: entries and settlements (CSV/XLSX), fiscal XMLs and PDFs by period ([ADR 0013](adr/0013-accountant-access-and-exports.md))
 - [ ] Report scheduling by e-mail (monthly package to the accountant)

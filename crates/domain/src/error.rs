@@ -41,6 +41,8 @@ pub enum DomainError {
     InvalidImportReference,
     /// Names the date: an entry has a competence date and a due date for each installment.
     InvalidDate(&'static str),
+    InvalidPeriodLock,
+    InvalidReopenReason,
     InvalidInstallmentAmount,
     InstallmentDatesDecrease,
     NoEntryInstallments,
@@ -206,6 +208,12 @@ impl fmt::Display for DomainError {
             Self::InvalidDate(field) => {
                 write!(f, "{field} must be a real date written YYYY-MM-DD, from 1900 to 2200")
             }
+            Self::InvalidPeriodLock => f.write_str(
+                "a period is closed through the last day of a month, written YYYY-MM-DD",
+            ),
+            Self::InvalidReopenReason => f.write_str(
+                "reopening a period needs a reason of 1 to 200 characters, on one line",
+            ),
             Self::InvalidInstallmentAmount => f.write_str(
                 "an installment amount must be more than 0, in cents (at most two decimals)",
             ),
