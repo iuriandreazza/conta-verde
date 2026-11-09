@@ -57,7 +57,7 @@ check) and an import control on the entries page.
 - **Never recreated:** sales, quotes, invoices, recurrences (a generated entry would duplicate the imported ones) and
   transfers between own accounts (they are not entries: they go through `/transfers`).
 
-The conversion of a foreign export into this file is `scripts/conta-azul-to-entries-csv.py`, outside the application.
+The conversion of a foreign export into this file is `scripts/export-to-entries-csv.py`, outside the application.
 
 ## Consequences
 
