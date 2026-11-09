@@ -2689,6 +2689,194 @@ mod tests {
         cookie
     }
 
+    /// Every route of a company in the router, with the methods it answers, read from the source of
+    /// `router` itself so that a route added without a decision is walked by the tests below.
+    fn company_routes() -> Vec<(String, Vec<&'static str>)> {
+        let source = include_str!("lib.rs");
+        let source = &source[..source.find("#[cfg(test)]").unwrap()];
+        let mut routes = Vec::new();
+        for (at, _) in source.match_indices(".route(") {
+            let body = &source[at + ".route(".len()..];
+            let mut depth = 1;
+            let mut end = body.len();
+            for (index, character) in body.char_indices() {
+                match character {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = index;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let body = &body[..end];
+            let opening = body.find('"').unwrap();
+            let closing = opening + 1 + body[opening + 1..].find('"').unwrap();
+            let path = &body[opening + 1..closing];
+            if !path.starts_with("/companies/{company_id}") {
+                continue;
+            }
+            let chain = &body[closing + 1..];
+            let methods: Vec<&'static str> = [
+                ("get", "GET"),
+                ("post", "POST"),
+                ("put", "PUT"),
+                ("patch", "PATCH"),
+                ("delete", "DELETE"),
+            ]
+            .into_iter()
+            .filter(|(name, _)| {
+                chain.match_indices(&format!("{name}(")).any(|(index, _)| {
+                    !chain[..index]
+                        .chars()
+                        .next_back()
+                        .is_some_and(|before| before.is_alphanumeric() || before == '_')
+                })
+            })
+            .map(|(_, method)| method)
+            .collect();
+            assert!(!methods.is_empty(), "no method found for {path}");
+            routes.push((path.to_owned(), methods));
+        }
+        routes
+    }
+
+    #[test]
+    fn the_route_walker_finds_the_routes_of_the_router() {
+        let routes = company_routes();
+        assert!(routes.len() > 100, "{} routes", routes.len());
+        let entries = routes
+            .iter()
+            .find(|(path, _)| path == "/companies/{company_id}/entries")
+            .unwrap();
+        assert_eq!(entries.1, ["GET", "POST"]);
+        let party = routes
+            .iter()
+            .find(|(path, _)| path == "/companies/{company_id}/parties/{party_id}")
+            .unwrap();
+        assert_eq!(party.1, ["PUT"]);
+        // No company route was missed by the reader (a route built another way would not be walked), and
+        // every route belongs to an area.
+        let source = include_str!("lib.rs");
+        let source = &source[..source.find("#[cfg(test)]").unwrap()];
+        assert_eq!(
+            routes.len(),
+            source.matches("\"/companies/{company_id}").count(),
+            "a company route is registered in a way the walker does not read"
+        );
+        for (path, _) in &routes {
+            assert!(access::area_of(path).is_some(), "{path} has no area");
+        }
+    }
+
+    /// Whatever the area, a role that only looks reads and a role that closes months writes the
+    /// accounting area and nothing else ([ADR 0067]): every route of the router, every method it
+    /// answers, written out here apart from the domain's table.
+    #[tokio::test]
+    async fn the_accountant_and_the_viewer_read_every_area_and_write_none_but_accounting() {
+        use conta_verde_domain::Role;
+
+        let (app, identities) = app_with_identities();
+        let (_, company_id) = sign_up(&app, "dona@example.com").await;
+        let denied = "your role in this company does not allow this";
+        for (role, may_write_accounting) in [(Role::Accountant, true), (Role::Viewer, false)] {
+            let cookie = member_with_role(&app, &identities, company_id, role).await;
+            for (pattern, methods) in company_routes() {
+                let area = access::area_of(&pattern).unwrap();
+                let mut path = pattern.replace("{company_id}", &company_id.to_string());
+                while let Some(open) = path.find('{') {
+                    let close = path[open..].find('}').unwrap() + open;
+                    path.replace_range(open..=close, &Uuid::new_v4().to_string());
+                }
+                for method in methods {
+                    let reply = if method == "GET" {
+                        send(&app, get_request(&path, Some(&cookie))).await
+                    } else {
+                        send(&app, json_request(method, &path, Some(&cookie), json!({}))).await
+                    };
+                    let reaches = match (area, method == "GET") {
+                        (conta_verde_domain::Area::Members, _) => false,
+                        (conta_verde_domain::Area::Accounting, false) => may_write_accounting,
+                        (_, reading) => reading,
+                    };
+                    if reaches {
+                        assert_ne!(
+                            reply.status,
+                            StatusCode::FORBIDDEN,
+                            "{role:?} {method} {pattern}"
+                        );
+                    } else {
+                        assert_eq!(
+                            reply.status,
+                            StatusCode::FORBIDDEN,
+                            "{role:?} {method} {pattern}"
+                        );
+                        assert_eq!(reply.body["error"], denied, "{role:?} {method} {pattern}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn the_accountant_reads_the_books_of_every_area() {
+        use conta_verde_domain::Role;
+
+        let (app, identities) = app_with_identities();
+        let (_, company_id) = sign_up(&app, "dona@example.com").await;
+        let cookie = member_with_role(&app, &identities, company_id, Role::Accountant).await;
+        for path in [
+            "/parties",
+            "/products",
+            "/categories",
+            "/cost-centers",
+            "/bank-accounts",
+            "/payment-methods",
+            "/payment-terms",
+            "/entries",
+            "/transfers",
+            "/recurrences",
+            "/statement-lines",
+            "/quotes",
+            "/sales",
+            "/contracts",
+            "/commission-rules",
+            "/price-lists",
+            "/purchase-orders",
+            "/inventory-counts",
+            "/stock/movements",
+            "/stock/positions",
+            "/stock/alerts",
+        ] {
+            let reply = send(
+                &app,
+                get_request(&format!("/companies/{company_id}{path}"), Some(&cookie)),
+            )
+            .await;
+            assert_eq!(
+                reply.status,
+                StatusCode::OK,
+                "reads {path}: {:?}",
+                reply.body
+            );
+        }
+        let me = send(&app, get_request("/auth/me", Some(&cookie))).await;
+        let theirs = me.body["companies"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|company| company["id"] == company_id.to_string())
+            .unwrap();
+        let permissions = &theirs["permissions"];
+        assert_eq!(permissions["accounting"], "write");
+        assert_eq!(permissions["finance"], "read");
+        assert_eq!(permissions["purchases"], "read");
+        assert!(permissions["members"].is_null());
+    }
+
     #[tokio::test]
     async fn what_a_member_may_do_follows_their_role_on_every_route_family() {
         use conta_verde_domain::Role;
@@ -2950,7 +3138,7 @@ mod tests {
         assert_eq!(me.body["companies"][0]["role"], "owner");
         assert_eq!(
             me.body["companies"][0]["permissions"],
-            json!({ "parties": "write", "products": "write", "finance": "write", "sales": "write", "purchases": "write", "members": "write" })
+            json!({ "parties": "write", "products": "write", "finance": "write", "sales": "write", "purchases": "write", "accounting": "write", "members": "write" })
         );
 
         let viewer = member_with_role(&app, &identities, company_id, Role::Viewer).await;
@@ -2967,7 +3155,7 @@ mod tests {
         // Members is out of reach, so the area is not there at all.
         assert_eq!(
             theirs["permissions"],
-            json!({ "parties": "read", "products": "read", "finance": "read", "sales": "read", "purchases": "read" })
+            json!({ "parties": "read", "products": "read", "finance": "read", "sales": "read", "purchases": "read", "accounting": "read" })
         );
     }
 

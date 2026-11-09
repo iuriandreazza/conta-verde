@@ -1,6 +1,6 @@
 ---
 title: "ADR 0013: Accountant access and exports"
-status: proposed
+status: accepted
 date: 2026-11-04
 tags: [adr, accounting, integrations]
 ---
@@ -42,6 +42,13 @@ with accounting software vendors and their import formats are proprietary or sem
 - Period lock is enforced in `application` for every write on dated records, which touches
   finance, sales, purchases, stock and fiscal.
 - No SPED or statutory files are produced by the product.
+
+## Implementation notes
+
+Accepted when Phase 6 started ([ADR 0067](0067-accountant-and-reporting-plan.md)), which fixes what this decision left open:
+the `accounting` area where the accountant writes (the lock, the exports, the schedule) and nothing else, which date locks each
+record, the contents and limits of the package (entries, settlements, transfers and entry attachments; the audit log and the
+stock position are not in it), and a monthly e-mail that links to the login-gated page instead of carrying files.
 
 ## Revisit when
 
