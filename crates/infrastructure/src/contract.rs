@@ -15192,7 +15192,7 @@ pub async fn limits_and_logs_the_documents_that_are_mailed<
     log.release(other_company, gone.id).await.unwrap();
 }
 
-/// The managerial income statement ([ADR 0012], [ADR 0069]): by competence date, each entry by its total in the month of
+/// The managerial income statement ([ADR 0012], [ADR 0070]): by competence date, each entry by its total in the month of
 /// its date, a receivable positive and a payable negative in the group of its category, cancelled entries and what is
 /// outside the span left out, the subtotals worked out from the groups, one column per month (an empty month is a column
 /// of zeros) or per cost center (the entries that have none last), narrowed to one cost center or to none, a span of at

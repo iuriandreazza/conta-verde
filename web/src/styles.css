@@ -2634,7 +2634,7 @@ tr.below-the-line td {
   color: var(--muted);
 }
 
-tr.below-the-line:first-of-type th,
-tr.below-the-line:first-of-type td {
+tr.subtotal + tr.below-the-line th,
+tr.subtotal + tr.below-the-line td {
   border-top: 1px dashed var(--line-strong);
 }

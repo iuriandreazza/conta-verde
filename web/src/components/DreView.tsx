@@ -92,7 +92,7 @@ export function DreView({ companyId }: { companyId: string }) {
   function exportStatement() {
     if (dre === null) return;
     const header = ["Linha", ...columns.map((column) => columnLabel(column.key)), "Total"];
-    const rows = DRE_ROWS.map((row) => [row.label, ...columns.map((column) => column.lines[row.key]), dre.total[row.key]]);
+    const rows = DRE_ROWS.map((row) => [row.label.replace(/^= /, ""), ...columns.map((column) => column.lines[row.key]), dre.total[row.key]]);
     downloadCsv(`dre-${dre.from}-a-${dre.to}.csv`, toCsv(header, rows));
   }
 
@@ -174,15 +174,18 @@ export function DreView({ companyId }: { companyId: string }) {
             </h2>
             <div className="table-wrap">
               <table>
+                <caption className="visually-hidden">Demonstração do resultado</caption>
                 <thead>
                   <tr>
-                    <th>Linha</th>
+                    <th scope="col">Linha</th>
                     {columns.map((column) => (
-                      <th key={column.key ?? "none"} className="num">
+                      <th key={column.key ?? "none"} scope="col" className="num">
                         {columnLabel(column.key)}
                       </th>
                     ))}
-                    <th className="num">Total</th>
+                    <th scope="col" className="num">
+                      Total
+                    </th>
                   </tr>
                 </thead>
                 <tbody>

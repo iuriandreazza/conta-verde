@@ -67,7 +67,7 @@ pub struct ReportRow {
 }
 
 /// What the entries whose competence date falls in a calendar month added up to for one category and cost center,
-/// by their total ([ADR 0069]): the rows the income statement is made of. `cost_center_id` is `None` for entries that
+/// by their total ([ADR 0070]): the rows the income statement is made of. `cost_center_id` is `None` for entries that
 /// have none; `month` is the month's first day.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompetenceTotal {
@@ -307,7 +307,7 @@ pub trait FinancialEntryRepository: Send + Sync {
 
     /// The entries that are not cancelled with a competence date from `since` through `until`, by their total,
     /// added up by month, category and cost center: one row per combination that has any, by month, then category,
-    /// then cost center with the entries that have none first ([ADR 0069]).
+    /// then cost center with the entries that have none first ([ADR 0070]).
     fn competence_totals(
         &self,
         company_id: CompanyId,

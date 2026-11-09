@@ -1,6 +1,6 @@
 use crate::{CalendarDate, CostCenterId, Decimal, DreGroup};
 
-/// What each group of the managerial income statement added up to ([ADR 0012], [ADR 0069]): the amount of a receivable
+/// What each group of the managerial income statement added up to ([ADR 0012], [ADR 0070]): the amount of a receivable
 /// counts positive and of a payable negative, so a group's figure is what it contributed to the result (revenue positive,
 /// costs negative). The subtotals are worked out from the groups here and never typed. `investments` and
 /// `outside_result` are shown below the line: they move cash and are not part of the result.

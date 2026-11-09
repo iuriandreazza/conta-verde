@@ -10,7 +10,7 @@ use crate::{ApplicationError, CategoryRepository, FinancialEntryRepository};
 /// The most calendar months a statement covers.
 pub const MAX_DRE_MONTHS: u32 = 24;
 
-/// What the columns of a statement are ([ADR 0069]).
+/// What the columns of a statement are ([ADR 0070]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DreBy {
     Month,
@@ -37,7 +37,7 @@ pub struct Dre {
     pub total: DreLines,
 }
 
-/// The income statement ([ADR 0012], [ADR 0069]): derived on every read from the entries by **competence date**, each
+/// The income statement ([ADR 0012], [ADR 0070]): derived on every read from the entries by **competence date**, each
 /// counted by its total in the month of that date, cancelled ones left out, a receivable positive and a payable negative.
 /// It composes the entries' totals with the categories (which say each one's DRE group), so both adapters give the same.
 pub struct DreService<E, C> {
