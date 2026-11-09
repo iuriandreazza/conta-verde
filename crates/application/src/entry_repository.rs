@@ -8,7 +8,7 @@ use conta_verde_domain::{
 use uuid::Uuid;
 
 use crate::list_query::clean_search;
-use crate::{AccountMovement, DayMovement, RepositoryError};
+use crate::{AccountMovement, ApplicationError, DayMovement, RepositoryError};
 
 /// Position of the last row of a list ordered by a day, then by id (both reversed for a descending
 /// sort): the day and id of the last row are enough to resume right after it in either direction.
@@ -384,4 +384,22 @@ pub trait EntryReferences: Send + Sync {
         company_id: CompanyId,
         id: PaymentMethodId,
     ) -> impl Future<Output = Result<bool, RepositoryError>> + Send;
+
+    /// The last day that is closed, if the company closed a month ([ADR 0068]).
+    fn locked_through(
+        &self,
+        company_id: CompanyId,
+    ) -> impl Future<Output = Result<Option<CalendarDate>, RepositoryError>> + Send;
+
+    /// Refuses, with `PeriodLocked`, a day that is closed: what every write of a dated record asks before it
+    /// writes anything.
+    fn ensure_open(
+        &self,
+        company_id: CompanyId,
+        day: CalendarDate,
+    ) -> impl Future<Output = Result<(), ApplicationError>> + Send {
+        async move {
+            crate::period_lock_service::ensure_open(self.locked_through(company_id).await?, day)
+        }
+    }
 }

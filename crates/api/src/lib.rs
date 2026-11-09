@@ -1,4 +1,5 @@
 mod access;
+mod accounting;
 mod attachments;
 mod auth;
 mod bank_accounts;
@@ -67,7 +68,7 @@ use conta_verde_application::{
 use conta_verde_application::{
     CollectionService, CollectionSettingsRepository, DunningPlanRepository, DunningService,
     MessageSender, NotificationRepository, PaymentEventRepository, PaymentLinkRepository,
-    PaymentPageService, PaymentWebhookService,
+    PaymentPageService, PaymentWebhookService, PeriodLockRepository, PeriodLockService,
 };
 use serde::Serialize;
 
@@ -95,6 +96,7 @@ pub trait Ports: 'static {
     type PriceLists: PriceListRepository + 'static;
     type Entries: FinancialEntryRepository + 'static;
     type EntryReferences: EntryReferences + EntryLookups + 'static;
+    type PeriodLocks: PeriodLockRepository + 'static;
     type Attachments: AttachmentRepository + 'static;
     type Blobs: BlobStore + 'static;
     type Charges: ChargeRepository + 'static;
@@ -164,8 +166,21 @@ type WebhooksOf<X> = PaymentWebhookService<
 >;
 
 /// The stock use case over the adapters of `X`.
-type StockOf<X> =
-    StockService<<X as Ports>::StockMovements, <X as Ports>::Products, <X as Ports>::StockSettings>;
+type StockOf<X> = StockService<
+    <X as Ports>::StockMovements,
+    <X as Ports>::Products,
+    <X as Ports>::StockSettings,
+    <X as Ports>::PeriodLocks,
+>;
+
+/// The balances use case over the adapters of `X`.
+type BalancesOf<X> = BalanceService<
+    <X as Ports>::BankAccounts,
+    <X as Ports>::Entries,
+    <X as Ports>::Transfers,
+    <X as Ports>::Openings,
+    <X as Ports>::PeriodLocks,
+>;
 
 /// The inventory counts use case over the adapters of `X`.
 type CountsOf<X> = InventoryCountService<<X as Ports>::Counts, StockOf<X>>;
@@ -251,7 +266,8 @@ pub struct Services<X: Ports> {
     pub commissions: CommissionsOf<X>,
     pub reconciliation:
         ReconciliationService<X::Statements, X::Entries, X::Transfers, X::EntryReferences>,
-    pub balances: BalanceService<X::BankAccounts, X::Entries, X::Transfers, X::Openings>,
+    pub balances: BalancesOf<X>,
+    pub period_locks: PeriodLockService<X::PeriodLocks>,
     pub postal_codes: PostalCodeService<X::PostalCodes>,
     pub members: MemberService<X::Invitations, X::Identity, X::Emails, X::Secrets>,
     pub documents: DocumentsOf<X>,
@@ -286,7 +302,8 @@ pub(crate) struct AppState<X: Ports> {
     commissions: CommissionsOf<X>,
     reconciliation:
         ReconciliationService<X::Statements, X::Entries, X::Transfers, X::EntryReferences>,
-    balances: BalanceService<X::BankAccounts, X::Entries, X::Transfers, X::Openings>,
+    balances: BalancesOf<X>,
+    period_locks: PeriodLockService<X::PeriodLocks>,
     postal_codes: PostalCodeService<X::PostalCodes>,
     members: MemberService<X::Invitations, X::Identity, X::Emails, X::Secrets>,
     documents: DocumentsOf<X>,
@@ -326,6 +343,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         commissions: services.commissions,
         reconciliation: services.reconciliation,
         balances: services.balances,
+        period_locks: services.period_locks,
         postal_codes: services.postal_codes,
         members: services.members,
         documents: services.documents,
@@ -577,6 +595,14 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
             "/companies/{company_id}/collection/settings",
             get(charges::get_collection_settings::<X>)
                 .put(charges::replace_collection_settings::<X>),
+        )
+        .route(
+            "/companies/{company_id}/accounting/period-lock",
+            get(accounting::get_period_lock::<X>).put(accounting::put_period_lock::<X>),
+        )
+        .route(
+            "/companies/{company_id}/accounting/period-lock/history",
+            get(accounting::period_lock_history::<X>),
         )
         .route(
             "/companies/{company_id}/delinquency",
@@ -916,11 +942,11 @@ mod tests {
         InMemoryNotificationRepository, InMemoryOpeningRepository, InMemoryPartyRepository,
         InMemoryPaymentEventRepository, InMemoryPaymentLinkRepository,
         InMemoryPaymentMethodRepository, InMemoryPaymentTermRepository,
-        InMemoryPostalCodeDirectory, InMemoryPriceListRepository, InMemoryProductRepository,
-        InMemoryPurchaseOrderRepository, InMemoryQuoteRepository, InMemoryRecurrenceRepository,
-        InMemorySaleRepository, InMemoryStatementLineRepository, InMemoryStockMovementRepository,
-        InMemoryStockSettingsRepository, InMemoryTransferRepository, RegisterDocumentReferences,
-        RegisterReferences,
+        InMemoryPeriodLockRepository, InMemoryPostalCodeDirectory, InMemoryPriceListRepository,
+        InMemoryProductRepository, InMemoryPurchaseOrderRepository, InMemoryQuoteRepository,
+        InMemoryRecurrenceRepository, InMemorySaleRepository, InMemoryStatementLineRepository,
+        InMemoryStockMovementRepository, InMemoryStockSettingsRepository,
+        InMemoryTransferRepository, RegisterDocumentReferences, RegisterReferences,
     };
     use http_body_util::BodyExt;
     use serde_json::{Value, json};
@@ -987,6 +1013,7 @@ mod tests {
         type PriceLists = InMemoryPriceListRepository;
         type Entries = InMemoryFinancialEntryRepository;
         type EntryReferences = TestReferences;
+        type PeriodLocks = InMemoryPeriodLockRepository;
         type Attachments = InMemoryAttachmentRepository;
         type Blobs = InMemoryBlobStore;
         type Charges = InMemoryChargeRepository;
@@ -1033,6 +1060,7 @@ mod tests {
         type PriceLists = InMemoryPriceListRepository;
         type Entries = InMemoryFinancialEntryRepository;
         type EntryReferences = TestReferences;
+        type PeriodLocks = InMemoryPeriodLockRepository;
         type Attachments = InMemoryAttachmentRepository;
         type Blobs = InMemoryBlobStore;
         type Charges = InMemoryChargeRepository;
@@ -1068,7 +1096,19 @@ mod tests {
         InMemoryPartyRepository,
         InMemoryBankAccountRepository,
         InMemoryPaymentMethodRepository,
+        InMemoryPeriodLockRepository,
     >;
+
+    thread_local! {
+        /// The closed period every service built in a test sees: a test runs on one thread, so a test that
+        /// builds an app and then closes a month through it, or through the handle `locks()` gives, is
+        /// talking about one lock, without every helper below having to be told which.
+        static LOCKS: InMemoryPeriodLockRepository = InMemoryPeriodLockRepository::default();
+    }
+
+    fn locks() -> InMemoryPeriodLockRepository {
+        LOCKS.with(Clone::clone)
+    }
 
     type TestEntries = FinancialEntryService<InMemoryFinancialEntryRepository, TestReferences>;
 
@@ -1120,6 +1160,7 @@ mod tests {
             parties.clone(),
             bank_accounts.clone(),
             payment_methods.clone(),
+            locks(),
         )
     }
 
@@ -1243,6 +1284,7 @@ mod tests {
         InMemoryFinancialEntryRepository,
         InMemoryTransferRepository,
         InMemoryOpeningRepository,
+        InMemoryPeriodLockRepository,
     >;
 
     /// Transfers and balances over registers that the app's own services do not share.
@@ -1369,6 +1411,7 @@ mod tests {
             InMemoryTransferRepository::default(),
             InMemoryOpeningRepository::default(),
         )
+        .with_period_lock(locks())
     }
 
     type TestDocumentReferences = RegisterDocumentReferences<
@@ -1427,6 +1470,7 @@ mod tests {
         InMemoryStockMovementRepository,
         InMemoryProductRepository,
         InMemoryStockSettingsRepository,
+        InMemoryPeriodLockRepository,
     >;
 
     /// Sales over the registers, the quotes and the entries a test keeps a handle to, so that a quote can be
@@ -1465,7 +1509,7 @@ mod tests {
                 products.clone(),
                 payment_terms.clone(),
             ),
-            StockService::new(ledger, products.clone(), settings),
+            StockService::new(ledger, products.clone(), settings).with_period_lock(locks()),
         )
     }
 
@@ -1529,7 +1573,7 @@ mod tests {
                 products.clone(),
                 payment_terms.clone(),
             ),
-            StockService::new(ledger, products.clone(), settings),
+            StockService::new(ledger, products.clone(), settings).with_period_lock(locks()),
         )
     }
 
@@ -1569,6 +1613,7 @@ mod tests {
             InMemoryProductRepository::default(),
             InMemoryStockSettingsRepository::default(),
         )
+        .with_period_lock(locks())
     }
 
     type TestPriceLists = PriceListService<InMemoryPriceListRepository, TestDocumentReferences>;
@@ -1742,6 +1787,7 @@ mod tests {
                 sales_reports: SalesReportService::new(InMemorySaleRepository::default()),
                 reconciliation: standalone_reconciliation(),
                 balances: standalone_balances(),
+                period_locks: PeriodLockService::new(locks()),
                 postal_codes: PostalCodeService::new(postal_codes),
                 members,
                 documents: standalone_documents(),
@@ -2397,6 +2443,7 @@ mod tests {
                 sales_reports: SalesReportService::new(InMemorySaleRepository::default()),
                 reconciliation: standalone_reconciliation(),
                 balances: standalone_balances(),
+                period_locks: PeriodLockService::new(locks()),
                 postal_codes: PostalCodeService::new(None),
                 members: standalone_members(),
                 documents: standalone_documents(),
@@ -2875,6 +2922,298 @@ mod tests {
         assert_eq!(permissions["finance"], "read");
         assert_eq!(permissions["purchases"], "read");
         assert!(permissions["members"].is_null());
+    }
+
+    fn period_lock_uri(company_id: Uuid) -> String {
+        format!("/companies/{company_id}/accounting/period-lock")
+    }
+
+    /// The exit criterion of Phase 6 for the lock: the accountant closes a month from their own login, and from then
+    /// on the books of that month refuse changes with a clear `409`, on every route that writes a dated record,
+    /// until the month is reopened; the lock is audited and a reader may see it but not change it.
+    #[tokio::test]
+    async fn an_accountant_closes_a_month_and_the_books_of_it_refuse_changes() {
+        use conta_verde_domain::Role;
+
+        let (app, identities) = entry_app_with_identities();
+        let (owner, company_id) = sign_up(&app, "dona@example.com").await;
+        let accountant = member_with_role(&app, &identities, company_id, Role::Accountant).await;
+        let viewer = member_with_role(&app, &identities, company_id, Role::Viewer).await;
+        let targets = entry_targets(&app, &owner, company_id).await;
+        let product = post_to(&app, &products_uri(company_id), &owner, product_body()).await;
+        assert_eq!(product.status, StatusCode::CREATED, "{}", product.body);
+        let product = product.body["id"].as_str().unwrap().to_owned();
+        let account = registered_account(&app, &owner, company_id, "Caixa").await;
+        let other_account = registered_account(&app, &owner, company_id, "Banco").await;
+        let lock = period_lock_uri(company_id);
+        let entry_in = |competence: &str| {
+            let mut body = entry_body(&targets, "Fatura", &[("2026-11-30", "100")]);
+            body["competence_date"] = json!(competence);
+            body
+        };
+        let closed = "the period through 2026-10-31 is closed: reopen it to change what is dated on or before it";
+
+        // Before anything is closed everything is written, and an October entry and payment exist.
+        let october = post_to(
+            &app,
+            &entries_uri(company_id),
+            &owner,
+            entry_in("2026-10-15"),
+        )
+        .await;
+        assert_eq!(october.status, StatusCode::CREATED, "{}", october.body);
+        let october_id = october.body["id"].as_str().unwrap().to_owned();
+        let settlements = format!("{}/{}/settlements", entries_uri(company_id), october_id);
+        let payment = post_to(
+            &app,
+            &settlements,
+            &owner,
+            json!({ "installment": 1, "settled_on": "2026-10-20", "applied": "40", "bank_account_id": account }),
+        )
+        .await;
+        assert_eq!(payment.status, StatusCode::CREATED, "{}", payment.body);
+        let payment_id = payment.body["id"].as_str().unwrap().to_owned();
+        let none = send(&app, get_request(&lock, Some(&viewer))).await;
+        assert_eq!(none.body["locked_through"], Value::Null);
+
+        // A reader sees the lock and cannot change it; only a whole month can be closed.
+        let denied = send(
+            &app,
+            json_request(
+                "PUT",
+                &lock,
+                Some(&viewer),
+                json!({ "locked_through": "2026-10-31" }),
+            ),
+        )
+        .await;
+        assert_eq!(denied.status, StatusCode::FORBIDDEN);
+        let half = send(
+            &app,
+            json_request(
+                "PUT",
+                &lock,
+                Some(&accountant),
+                json!({ "locked_through": "2026-10-30" }),
+            ),
+        )
+        .await;
+        assert_eq!(
+            half.status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{}",
+            half.body
+        );
+        let not_a_date = send(
+            &app,
+            json_request(
+                "PUT",
+                &lock,
+                Some(&accountant),
+                json!({ "locked_through": "october" }),
+            ),
+        )
+        .await;
+        assert_eq!(not_a_date.status, StatusCode::UNPROCESSABLE_ENTITY);
+
+        // The accountant closes October.
+        let closing = send(
+            &app,
+            json_request(
+                "PUT",
+                &lock,
+                Some(&accountant),
+                json!({ "locked_through": "2026-10-31" }),
+            ),
+        )
+        .await;
+        assert_eq!(closing.status, StatusCode::OK, "{}", closing.body);
+        assert_eq!(closing.body["locked_through"], "2026-10-31");
+        assert_eq!(
+            send(&app, get_request(&lock, Some(&viewer))).await.body["locked_through"],
+            "2026-10-31"
+        );
+
+        // Every write of a dated record in October is a 409 that says why; the first day after is open.
+        let refused = |reply: Reply, what: &str| {
+            assert_eq!(reply.status, StatusCode::CONFLICT, "{what}: {}", reply.body);
+            assert_eq!(reply.body["error"], closed, "{what}");
+        };
+        refused(
+            post_to(
+                &app,
+                &entries_uri(company_id),
+                &owner,
+                entry_in("2026-10-31"),
+            )
+            .await,
+            "register an entry",
+        );
+        refused(
+            send(
+                &app,
+                json_request(
+                    "PUT",
+                    &format!("{}/{}", entries_uri(company_id), october_id),
+                    Some(&owner),
+                    {
+                        let mut body = entry_in("2026-10-15");
+                        body["description"] = json!("Fatura corrigida");
+                        body
+                    },
+                ),
+            )
+            .await,
+            "change an entry",
+        );
+        refused(
+            post_to(
+                &app,
+                &settlements,
+                &owner,
+                json!({ "installment": 1, "settled_on": "2026-10-31", "applied": "10", "bank_account_id": account }),
+            )
+            .await,
+            "settle on a closed day",
+        );
+        refused(
+            send(
+                &app,
+                json_request(
+                    "DELETE",
+                    &format!("{settlements}/{payment_id}"),
+                    Some(&owner),
+                    Value::Null,
+                ),
+            )
+            .await,
+            "reverse a payment of a closed day",
+        );
+        refused(
+            post_to(
+                &app,
+                &transfers_uri(company_id),
+                &owner,
+                json!({ "from_account_id": account, "to_account_id": other_account, "amount": "5", "occurred_on": "2026-10-20" }),
+            )
+            .await,
+            "transfer",
+        );
+        refused(
+            send(
+                &app,
+                json_request(
+                    "PUT",
+                    &format!("/companies/{company_id}/bank-accounts/{account}/opening-balance"),
+                    Some(&owner),
+                    json!({ "balance": "10", "on": "2026-10-01" }),
+                ),
+            )
+            .await,
+            "opening balance",
+        );
+        refused(
+            post_to(
+                &app,
+                &format!("{}/movements", stock_uri(company_id)),
+                &owner,
+                json!({ "product_id": product, "kind": "in", "quantity": "2", "unit_cost": "5", "occurred_on": "2026-10-10" }),
+            )
+            .await,
+            "stock movement",
+        );
+        let imported = send(
+            &app,
+            csv_request(
+                &format!("/companies/{company_id}/entries/import"),
+                Some(&owner),
+                "reference,kind,description,amount,competence_date,due_date,category\n\
+                 r-1,receivable,Venda,10,2026-10-20,2026-11-20,Vendas\n",
+            ),
+        )
+        .await;
+        assert!(
+            imported.body.to_string().contains("is closed"),
+            "{}",
+            imported.body
+        );
+
+        // After the lock, and a payment in November of the October invoice, which changes October nothing.
+        for (what, reply) in [
+            (
+                "an entry of the first day after",
+                post_to(&app, &entries_uri(company_id), &owner, entry_in("2026-11-01")).await,
+            ),
+            (
+                "a payment of an October invoice made in November",
+                post_to(
+                    &app,
+                    &settlements,
+                    &owner,
+                    json!({ "installment": 1, "settled_on": "2026-11-02", "applied": "10", "bank_account_id": account }),
+                )
+                .await,
+            ),
+            (
+                "a stock movement of the first day after",
+                post_to(
+                    &app,
+                    &format!("{}/movements", stock_uri(company_id)),
+                    &owner,
+                    json!({ "product_id": product, "kind": "in", "quantity": "2", "unit_cost": "5", "occurred_on": "2026-11-01" }),
+                )
+                .await,
+            ),
+        ] {
+            assert_eq!(reply.status, StatusCode::CREATED, "{what}: {}", reply.body);
+        }
+
+        // Reopening says why; the trail names who closed and who reopened.
+        let no_reason = send(
+            &app,
+            json_request(
+                "PUT",
+                &lock,
+                Some(&accountant),
+                json!({ "locked_through": null }),
+            ),
+        )
+        .await;
+        assert_eq!(
+            no_reason.status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{}",
+            no_reason.body
+        );
+        let reopened = send(
+            &app,
+            json_request(
+                "PUT",
+                &lock,
+                Some(&accountant),
+                json!({ "locked_through": null, "reason": "a supplier invoice came late" }),
+            ),
+        )
+        .await;
+        assert_eq!(reopened.body["locked_through"], Value::Null);
+        let again = post_to(
+            &app,
+            &entries_uri(company_id),
+            &owner,
+            entry_in("2026-10-31"),
+        )
+        .await;
+        assert_eq!(again.status, StatusCode::CREATED, "{}", again.body);
+        let history = send(&app, get_request(&format!("{lock}/history"), Some(&viewer))).await;
+        let history = history.body.as_array().unwrap();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0]["action"], "created");
+        assert_eq!(history[0]["changes"][0]["to"], "2026-10-31");
+        assert_eq!(history[1]["action"], "updated");
+        assert_eq!(
+            history[1]["changes"][1]["to"],
+            "a supplier invoice came late"
+        );
     }
 
     #[tokio::test]
@@ -4304,6 +4643,7 @@ mod tests {
                 sales_reports: SalesReportService::new(InMemorySaleRepository::default()),
                 reconciliation: standalone_reconciliation(),
                 balances: standalone_balances(),
+                period_locks: PeriodLockService::new(locks()),
                 postal_codes: PostalCodeService::new(None),
                 members: standalone_members(),
                 documents: standalone_documents(),
@@ -5791,6 +6131,16 @@ mod tests {
 
     /// Like `entry_app`, and the mailbox the e-mails of its documents go to; its purchases and documents share a store.
     fn entry_app_with_mailbox() -> (Router, InMemoryEmailSender) {
+        entry_app_over(InMemoryIdentityRepository::default())
+    }
+
+    /// Like `entry_app`, and the identities it signs people in from, so a test can give a member a role.
+    fn entry_app_with_identities() -> (Router, InMemoryIdentityRepository) {
+        let identities = InMemoryIdentityRepository::default();
+        (entry_app_over(identities.clone()).0, identities)
+    }
+
+    fn entry_app_over(identities: InMemoryIdentityRepository) -> (Router, InMemoryEmailSender) {
         let mailbox = InMemoryEmailSender::default();
         let purchase_store = InMemoryPurchaseOrderRepository::default();
         let categories = InMemoryCategoryRepository::default();
@@ -5921,12 +6271,12 @@ mod tests {
                     ledger.clone(),
                     stock_settings.clone(),
                 ),
-                stock: StockService::new(ledger.clone(), products.clone(), stock_settings.clone()),
-                counts: counts_over(StockService::new(
-                    ledger.clone(),
-                    products.clone(),
-                    stock_settings.clone(),
-                )),
+                stock: StockService::new(ledger.clone(), products.clone(), stock_settings.clone())
+                    .with_period_lock(locks()),
+                counts: counts_over(
+                    StockService::new(ledger.clone(), products.clone(), stock_settings.clone())
+                        .with_period_lock(locks()),
+                ),
                 contracts: ContractService::new(InMemoryContractRepository::default(), sales()),
                 commissions: commissions_over(
                     sale_store.clone(),
@@ -5941,7 +6291,9 @@ mod tests {
                     entry_store.clone(),
                     transfer_store,
                     InMemoryOpeningRepository::default(),
-                ),
+                )
+                .with_period_lock(locks()),
+                period_locks: PeriodLockService::new(locks()),
                 postal_codes: PostalCodeService::new(known_postal_codes()),
                 members: standalone_members(),
                 documents: DocumentMailService::new(
@@ -5951,7 +6303,11 @@ mod tests {
                     mailbox.clone(),
                     InMemoryDocumentMailRepository::default(),
                 ),
-                auth: auth_service(),
+                auth: AuthService::new(
+                    identities,
+                    Argon2SecretService::new().unwrap(),
+                    Duration::from_secs(3600),
+                ),
             },
             ApiConfig::default(),
         );

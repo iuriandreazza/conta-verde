@@ -12,9 +12,11 @@ use uuid::Uuid;
 
 use crate::audit::audit_entry;
 use crate::list_query::{clamp_limit, split_page};
+use crate::period_lock_service::ensure_open;
 use crate::{
-    ApplicationError, DateCursor, NameCursor, ProductQuery, ProductRepository, RepositoryError,
-    StockFloor, StockMovementQuery, StockMovementRepository, StockSettingsRepository,
+    ApplicationError, DateCursor, NameCursor, NoPeriodLock, PeriodLockRepository, ProductQuery,
+    ProductRepository, RepositoryError, StockFloor, StockMovementQuery, StockMovementRepository,
+    StockSettingsRepository,
 };
 use conta_verde_domain::AuditRecord;
 
@@ -217,26 +219,42 @@ enum Undo {
 
 /// The stock of a company ([ADR 0054]): the ledger of its movements, what each product has, and what the documents
 /// do to it.
-pub struct StockService<M, P, S> {
+pub struct StockService<M, P, S, L = NoPeriodLock> {
     movements: M,
     products: P,
     settings: S,
+    locks: L,
 }
 
-impl<M, P, S> StockService<M, P, S>
-where
-    M: StockMovementRepository,
-    P: ProductRepository,
-    S: StockSettingsRepository,
-{
+impl<M, P, S> StockService<M, P, S> {
     pub fn new(movements: M, products: P, settings: S) -> Self {
         Self {
             movements,
             products,
             settings,
+            locks: NoPeriodLock,
         }
     }
 
+    /// The service with the lock of the company's closed period: no movement is written, or undone, on a day
+    /// that is closed ([ADR 0068]).
+    pub fn with_period_lock<L>(self, locks: L) -> StockService<M, P, S, L> {
+        StockService {
+            movements: self.movements,
+            products: self.products,
+            settings: self.settings,
+            locks,
+        }
+    }
+}
+
+impl<M, P, S, L> StockService<M, P, S, L>
+where
+    M: StockMovementRepository,
+    P: ProductRepository,
+    S: StockSettingsRepository,
+    L: PeriodLockRepository,
+{
     /// How the company's stock behaves; a company that never said has the default.
     pub async fn settings(&self, company_id: CompanyId) -> Result<StockSettings, ApplicationError> {
         Ok(self
@@ -802,6 +820,9 @@ where
             if to_undo.is_empty() {
                 return Ok(Vec::new());
             }
+            // Undoing what was booked on a closed day changes that day, whatever day the undoing is made on.
+            self.ensure_open(company_id, to_undo.iter().map(|m| m.occurred_on()))
+                .await?;
             let mut products: Vec<ProductId> = to_undo.iter().map(|m| m.product_id()).collect();
             products.sort_by_key(|id| id.as_uuid());
             products.dedup();
@@ -833,6 +854,19 @@ where
         Err(ApplicationError::StockChanged)
     }
 
+    /// Refuses, with `PeriodLocked`, any of the days that is closed.
+    async fn ensure_open(
+        &self,
+        company_id: CompanyId,
+        days: impl Iterator<Item = CalendarDate>,
+    ) -> Result<(), ApplicationError> {
+        let through = self.locks.locked_through(company_id).await?;
+        for day in days {
+            ensure_open(through, day)?;
+        }
+        Ok(())
+    }
+
     /// Stores valued movements, after refusing a floor they break with the name of the product and what it has.
     async fn record_valued(
         &self,
@@ -843,6 +877,9 @@ where
         books: &HashMap<ProductId, StockBalance>,
         floor: StockFloor,
     ) -> Result<(), ApplicationError> {
+        // Before the floor, so that a closed day is what is said: nothing of it is written either way.
+        self.ensure_open(company_id, movements.iter().map(StockMovement::occurred_on))
+            .await?;
         if floor == StockFloor::Zero {
             for (product_id, before) in seen {
                 let after = books.get(product_id).copied().unwrap_or(*before);
@@ -876,11 +913,12 @@ fn quantity_text(quantity: Decimal) -> String {
     quantity.normalize().to_string()
 }
 
-impl<M, P, S> DocumentStock for StockService<M, P, S>
+impl<M, P, S, L> DocumentStock for StockService<M, P, S, L>
 where
     M: StockMovementRepository,
     P: ProductRepository,
     S: StockSettingsRepository,
+    L: PeriodLockRepository,
 {
     async fn ensure_available_for_sale(
         &self,
@@ -1076,11 +1114,12 @@ where
     }
 }
 
-impl<M, P, S> CountStock for StockService<M, P, S>
+impl<M, P, S, L> CountStock for StockService<M, P, S, L>
 where
     M: StockMovementRepository,
     P: ProductRepository,
     S: StockSettingsRepository,
+    L: PeriodLockRepository,
 {
     async fn ensure_stocked(
         &self,

@@ -110,6 +110,7 @@ const AREAS: NavArea[] = [
     ],
   },
   { key: "reports", label: "Relatórios", icon: FileTextIcon, link: { path: "/reports", label: "Relatórios", icon: FileTextIcon } },
+  { key: "accounting", label: "Contador", icon: CheckIcon, link: { path: "/accounting", label: "Contador", icon: CheckIcon } },
 ];
 
 const SETTINGS: NavArea = {

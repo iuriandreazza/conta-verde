@@ -319,6 +319,9 @@ where
             Err(ApplicationError::UnusableReference(_)) => {
                 return Ok(Some("the fee category can no longer be used".to_owned()));
             }
+            Err(error @ ApplicationError::PeriodLocked { .. }) => {
+                return Ok(Some(error.to_string()));
+            }
             Err(other) => return Err(other),
         };
         if !self
@@ -383,6 +386,8 @@ fn settled_or_why<T>(
             Ok(Some(format!("the {what} can no longer be used")))
         }
         Err(ApplicationError::Domain(error)) => Ok(Some(error.to_string())),
+        // The day of the payment is in a closed month: the charge is kept paid with this note ([ADR 0068]).
+        Err(error @ ApplicationError::PeriodLocked { .. }) => Ok(Some(error.to_string())),
         Err(other) => Err(other),
     }
 }

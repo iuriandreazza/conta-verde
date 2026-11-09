@@ -220,6 +220,11 @@ where
         if !schedule.is_empty() {
             receipt = receipt.paid_in(schedule)?;
         }
+        // Before the receipt is stored: the goods and the payable of a closed day are not made ([ADR 0068]).
+        self.entries
+            .references()
+            .ensure_open(company_id, receipt.received_on())
+            .await?;
         if let Some(payable) = self.payable_of(&order, &receipt).await? {
             self.entries.validate(company_id, payable).await?;
         }

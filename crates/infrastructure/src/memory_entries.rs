@@ -612,7 +612,8 @@ pub(crate) mod tests {
     use crate::contract::{self, EntrySeed};
     use crate::{
         InMemoryBankAccountRepository, InMemoryCategoryRepository, InMemoryCostCenterRepository,
-        InMemoryPartyRepository, InMemoryPaymentMethodRepository, RegisterReferences,
+        InMemoryPartyRepository, InMemoryPaymentMethodRepository, InMemoryPeriodLockRepository,
+        RegisterReferences,
     };
 
     /// The registers an entry points at, shared by handle with the references that read them.
@@ -622,6 +623,8 @@ pub(crate) mod tests {
         pub(crate) parties: InMemoryPartyRepository,
         pub(crate) bank_accounts: InMemoryBankAccountRepository,
         pub(crate) payment_methods: InMemoryPaymentMethodRepository,
+        /// The closed period every service of a test built from these registers sees.
+        pub(crate) period_locks: InMemoryPeriodLockRepository,
     }
 
     impl Registers {
@@ -632,6 +635,7 @@ pub(crate) mod tests {
                 parties: InMemoryPartyRepository::default(),
                 bank_accounts: InMemoryBankAccountRepository::default(),
                 payment_methods: InMemoryPaymentMethodRepository::default(),
+                period_locks: InMemoryPeriodLockRepository::default(),
             }
         }
 
@@ -655,6 +659,7 @@ pub(crate) mod tests {
             InMemoryPartyRepository,
             InMemoryBankAccountRepository,
             InMemoryPaymentMethodRepository,
+            InMemoryPeriodLockRepository,
         > {
             RegisterReferences::new(
                 self.categories.clone(),
@@ -662,6 +667,7 @@ pub(crate) mod tests {
                 self.parties.clone(),
                 self.bank_accounts.clone(),
                 self.payment_methods.clone(),
+                self.period_locks.clone(),
             )
         }
     }

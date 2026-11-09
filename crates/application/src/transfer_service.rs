@@ -6,10 +6,11 @@ use conta_verde_domain::{
 
 use crate::audit::audit_entry;
 use crate::list_query::{clamp_limit, split_page};
+use crate::period_lock_service::ensure_open;
 use crate::{
     ApplicationError, BankAccountQuery, BankAccountRepository, DateCursor, EntryReferences,
-    FinancialEntryRepository, NameCursor, OpeningRepository, RepositoryError, TransferQuery,
-    TransferRepository,
+    FinancialEntryRepository, NameCursor, NoPeriodLock, OpeningRepository, PeriodLockRepository,
+    RepositoryError, TransferQuery, TransferRepository,
 };
 
 #[derive(Debug, Clone)]
@@ -42,6 +43,9 @@ impl<R: TransferRepository, F: EntryReferences> TransferService<R, F> {
         draft: TransferDraft,
     ) -> Result<Transfer, ApplicationError> {
         let transfer = Transfer::new(TransferId::generate(), company_id, draft)?;
+        self.references
+            .ensure_open(company_id, transfer.occurred_on())
+            .await?;
         for (account, field) in [(transfer.from(), "from"), (transfer.to(), "to")] {
             if !self
                 .references
@@ -75,6 +79,9 @@ impl<R: TransferRepository, F: EntryReferences> TransferService<R, F> {
             .await?
             .filter(|transfer| !transfer.is_reversed())
             .ok_or(ApplicationError::TransferNotFound)?;
+        self.references
+            .ensure_open(company_id, stored.occurred_on())
+            .await?;
         let reversed = stored.clone().with_reversed(true);
         let audit = audit_entry(
             &reversed,
@@ -153,29 +160,46 @@ const ACCOUNT_PAGE: usize = 200;
 /// Balances per account and the opening balance they start from ([ADR 0031]). It composes the answer
 /// from the ports of the accounts, of the entries (which own the settlements), of the transfers and of
 /// the opening balances, so every adapter gives the same answer.
-pub struct BalanceService<A, E, T, O> {
+pub struct BalanceService<A, E, T, O, L = NoPeriodLock> {
     pub(crate) accounts: A,
     pub(crate) entries: E,
     pub(crate) transfers: T,
     pub(crate) openings: O,
+    locks: L,
 }
 
-impl<A, E, T, O> BalanceService<A, E, T, O>
-where
-    A: BankAccountRepository,
-    E: FinancialEntryRepository,
-    T: TransferRepository,
-    O: OpeningRepository,
-{
+impl<A, E, T, O> BalanceService<A, E, T, O> {
     pub fn new(accounts: A, entries: E, transfers: T, openings: O) -> Self {
         Self {
             accounts,
             entries,
             transfers,
             openings,
+            locks: NoPeriodLock,
         }
     }
 
+    /// The service with the lock of the company's closed period, which an opening balance's day is checked
+    /// against ([ADR 0068]).
+    pub fn with_period_lock<L>(self, locks: L) -> BalanceService<A, E, T, O, L> {
+        BalanceService {
+            accounts: self.accounts,
+            entries: self.entries,
+            transfers: self.transfers,
+            openings: self.openings,
+            locks,
+        }
+    }
+}
+
+impl<A, E, T, O, L> BalanceService<A, E, T, O, L>
+where
+    A: BankAccountRepository,
+    E: FinancialEntryRepository,
+    T: TransferRepository,
+    O: OpeningRepository,
+    L: PeriodLockRepository,
+{
     /// Sets or replaces the opening balance of an account of the company, which need not be active.
     /// The same balance and day again writes nothing and records nothing.
     pub async fn set_opening(
@@ -187,6 +211,8 @@ where
         on: &str,
     ) -> Result<AccountOpening, ApplicationError> {
         let opening = AccountOpening::new(company_id, account, balance, on)?;
+        let through = self.locks.locked_through(company_id).await?;
+        ensure_open(through, opening.on())?;
         if self.accounts.find(company_id, account).await?.is_none() {
             return Err(ApplicationError::BankAccountNotFound);
         }
@@ -202,6 +228,7 @@ where
                 if changes.is_empty() {
                     return Ok(opening);
                 }
+                ensure_open(through, before.on())?;
                 audit_entry(&opening, actor, AuditAction::Updated, changes)
             }
         };

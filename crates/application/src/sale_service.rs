@@ -252,6 +252,10 @@ where
         match sale.status() {
             SaleStatus::Open => {
                 let completed = sale.completed()?;
+                // The books of the day are what a completed sale changes: a closed day refuses it ([ADR 0068]).
+                self.entry_references
+                    .ensure_open(company_id, completed.sold_on())
+                    .await?;
                 let receivable = self.receivable_of(&completed).await?;
                 self.entries.validate(company_id, receivable).await?;
                 // A company that refuses a sale without balance finds out before the sale changes.
@@ -343,6 +347,9 @@ where
         let before = self.find(company_id, id).await?;
         let after = before.cancelled()?;
         if before.status() == SaleStatus::Completed {
+            self.entry_references
+                .ensure_open(company_id, before.sold_on())
+                .await?;
             if !self.sales.returns_of(company_id, id).await?.is_empty() {
                 return Err(ApplicationError::SaleHasReturns);
             }
@@ -398,6 +405,11 @@ where
             .flat_map(|made| made.items().iter().map(|(line, q)| (*line, q.as_decimal())))
             .collect();
         let sale_return = SaleReturn::new(SaleReturnId::generate(), &sale, draft, &before)?;
+        // Before the return is stored: it is stored first, and a refund that a closed day then refused would be
+        // left without one.
+        self.entry_references
+            .ensure_open(company_id, sale_return.returned_on())
+            .await?;
         let payable = sale_return.refund_entry(&sale, refund.category_id, &refund.due_on)?;
         self.entries.validate(company_id, payable.clone()).await?;
         let audit = audit_entry(

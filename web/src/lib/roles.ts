@@ -18,7 +18,7 @@ export const ROLE_HINTS: Record<Role, string> = {
   financial: "Cadastra clientes, fornecedores e os cadastros financeiros; só consulta produtos.",
   sales: "Cadastra clientes e fornecedores; só consulta o resto.",
   stock: "Cadastra produtos e serviços; só consulta o resto.",
-  accountant: "Consulta tudo, menos quem faz parte da empresa; não altera cadastros nem lançamentos.",
+  accountant: "Consulta tudo, menos quem faz parte da empresa, e fecha e reabre meses; não altera cadastros nem lançamentos.",
   viewer: "Só consulta.",
 };
 
