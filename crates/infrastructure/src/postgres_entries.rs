@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use conta_verde_application::{
-    AccountMovement, DayMovement, DayOpen, EntryCursor, EntrySort, FinancialEntryQuery,
-    FinancialEntryRepository, OverdueItem, OverdueReport, ReportBasis, ReportGroup, ReportRow,
-    RepositoryError, ensure_audit_describes,
+    AccountMovement, CompetenceTotal, DayMovement, DayOpen, EntryCursor, EntrySort,
+    FinancialEntryQuery, FinancialEntryRepository, OverdueItem, OverdueReport, ReportBasis,
+    ReportGroup, ReportRow, RepositoryError, ensure_audit_describes,
 };
 use conta_verde_domain::{
     Amount, AuditEntity, AuditEntry, AuditRecord, BankAccountId, CalendarDate, CategoryId,
@@ -525,6 +525,52 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
             .collect::<Result<Vec<_>, RepositoryError>>()?;
         sort_report(&mut found);
         Ok(found)
+    }
+
+    async fn competence_totals(
+        &self,
+        company_id: CompanyId,
+        since: CalendarDate,
+        until: CalendarDate,
+    ) -> Result<Vec<CompetenceTotal>, RepositoryError> {
+        // The total of an entry is the sum of its installments, which is never stored.
+        let rows = sqlx::query(
+            "SELECT to_char(e.competence_date, 'YYYY-MM-01') AS month, e.category_id, e.cost_center_id, \
+               COALESCE(SUM(t.total) FILTER (WHERE e.kind = 'receivable'), 0)::text AS receivable, \
+               COALESCE(SUM(t.total) FILTER (WHERE e.kind = 'payable'), 0)::text AS payable \
+             FROM financial_entries e \
+             JOIN (SELECT company_id, entry_id, SUM(amount) AS total \
+                   FROM financial_entry_installments GROUP BY company_id, entry_id) t \
+               ON t.company_id = e.company_id AND t.entry_id = e.id \
+             WHERE e.company_id = $1 AND NOT e.voided \
+               AND e.competence_date BETWEEN CAST($2 AS DATE) AND CAST($3 AS DATE) \
+             GROUP BY 1, e.category_id, e.cost_center_id \
+             ORDER BY 1, e.category_id, e.cost_center_id NULLS FIRST",
+        )
+        .bind(company_id.as_uuid())
+        .bind(since.to_string())
+        .bind(until.to_string())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        rows.iter()
+            .map(|row| {
+                let month: String = row.try_get("month").map_err(storage_error)?;
+                let cost_center: Option<Uuid> =
+                    row.try_get("cost_center_id").map_err(storage_error)?;
+                Ok(CompetenceTotal {
+                    month: CalendarDate::parse(&month).ok_or_else(|| {
+                        RepositoryError::Storage(format!("a month that is not a date: {month}"))
+                    })?,
+                    category_id: CategoryId::from_uuid(
+                        row.try_get("category_id").map_err(storage_error)?,
+                    ),
+                    cost_center_id: cost_center.map(CostCenterId::from_uuid),
+                    receivable: sum_of(row, "receivable")?,
+                    payable: sum_of(row, "payable")?,
+                })
+            })
+            .collect()
     }
 
     async fn receivable_installments_due(
@@ -1228,6 +1274,34 @@ mod tests {
             company,
             other_company,
             &seed,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn reports_the_income_statement() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let other_company = contract::create_company(&pool).await;
+        let (seed, other_seed) = (seed(&pool, company).await, seed(&pool, other_company).await);
+        let entries = FinancialEntryService::new(
+            PostgresFinancialEntryRepository::new(pool.clone()),
+            references(&pool),
+        );
+        let categories = PostgresCategoryRepository::new(pool.clone());
+        let dre = conta_verde_application::DreService::new(
+            PostgresFinancialEntryRepository::new(pool.clone()),
+            PostgresCategoryRepository::new(pool.clone()),
+        );
+        contract::reports_the_income_statement(
+            &dre,
+            &entries,
+            &categories,
+            company,
+            other_company,
+            &seed,
+            &other_seed,
         )
         .await;
     }

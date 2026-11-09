@@ -2,13 +2,14 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use conta_verde_application::{
-    AccountMovement, DayMovement, DayOpen, EntryCursor, EntrySort, FinancialEntryQuery,
-    FinancialEntryRepository, OverdueItem, OverdueReport, ReportBasis, ReportGroup, ReportRow,
-    RepositoryError, ensure_audit_describes,
+    AccountMovement, CompetenceTotal, DayMovement, DayOpen, EntryCursor, EntrySort,
+    FinancialEntryQuery, FinancialEntryRepository, OverdueItem, OverdueReport, ReportBasis,
+    ReportGroup, ReportRow, RepositoryError, ensure_audit_describes,
 };
 use conta_verde_domain::{
-    AuditEntity, AuditEntry, AuditRecord, BankAccountId, CalendarDate, CompanyId, Decimal, EntryId,
-    EntryKind, EntryOrigin, FinancialEntry, Settlement, SettlementId, settled_of,
+    AuditEntity, AuditEntry, AuditRecord, BankAccountId, CalendarDate, CategoryId, CompanyId,
+    CostCenterId, Decimal, EntryId, EntryKind, EntryOrigin, FinancialEntry, Settlement,
+    SettlementId, settled_of,
 };
 
 use crate::memory_audit::AuditLog;
@@ -326,6 +327,48 @@ impl FinancialEntryRepository for InMemoryFinancialEntryRepository {
             .collect();
         crate::postgres_entries::sort_report(&mut rows);
         Ok(rows)
+    }
+
+    async fn competence_totals(
+        &self,
+        company_id: CompanyId,
+        since: CalendarDate,
+        until: CalendarDate,
+    ) -> Result<Vec<CompetenceTotal>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        // Ordered by the same key as the Postgres query: month, category, then cost center with none first.
+        let mut totals: BTreeMap<
+            (CalendarDate, uuid::Uuid, Option<uuid::Uuid>),
+            (Decimal, Decimal),
+        > = BTreeMap::new();
+        for entry in state.entries.iter().filter(|entry| {
+            entry.company_id() == company_id
+                && !entry.is_voided()
+                && (since..=until).contains(&entry.competence_date())
+        }) {
+            let key = (
+                entry.competence_date().first_of_month(),
+                entry.category_id().as_uuid(),
+                entry.cost_center_id().map(|id| id.as_uuid()),
+            );
+            let total = totals.entry(key).or_default();
+            match entry.kind() {
+                EntryKind::Receivable => total.0 += entry.total(),
+                EntryKind::Payable => total.1 += entry.total(),
+            }
+        }
+        Ok(totals
+            .into_iter()
+            .map(
+                |((month, category, cost_center), (receivable, payable))| CompetenceTotal {
+                    month,
+                    category_id: CategoryId::from_uuid(category),
+                    cost_center_id: cost_center.map(CostCenterId::from_uuid),
+                    receivable: receivable.normalize(),
+                    payable: payable.normalize(),
+                },
+            )
+            .collect())
     }
 
     async fn receivable_installments_due(
@@ -768,6 +811,29 @@ pub(crate) mod tests {
         );
         contract::reports_delinquency(&entries, &registers.parties, company, other_company, &seed)
             .await;
+    }
+
+    #[tokio::test]
+    async fn reports_the_income_statement() {
+        let registers = Registers::new();
+        let (company, other_company) = (CompanyId::generate(), CompanyId::generate());
+        let (seed, other_seed) = (
+            registers.seed(company).await,
+            registers.seed(other_company).await,
+        );
+        let store = InMemoryFinancialEntryRepository::default();
+        let entries = FinancialEntryService::new(store.clone(), registers.references());
+        let dre = conta_verde_application::DreService::new(store, registers.categories.clone());
+        contract::reports_the_income_statement(
+            &dre,
+            &entries,
+            &registers.categories,
+            company,
+            other_company,
+            &seed,
+            &other_seed,
+        )
+        .await;
     }
 
     #[tokio::test]

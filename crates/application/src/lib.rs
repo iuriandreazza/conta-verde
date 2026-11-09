@@ -22,6 +22,7 @@ mod cost_center_service;
 mod document_mail_repository;
 mod document_mail_service;
 mod document_references;
+mod dre_service;
 mod dunning_plan_repository;
 mod dunning_service;
 mod email_content;
@@ -106,6 +107,7 @@ pub use cost_center_service::{CostCenterPage, CostCenterService};
 pub use document_mail_repository::{DocumentMailRepository, Reservation};
 pub use document_mail_service::{DocumentMailService, MailAsk, Mailed};
 pub use document_references::DocumentReferences;
+pub use dre_service::{CostCenterFilter, Dre, DreBy, DreService, MAX_DRE_MONTHS};
 pub use dunning_plan_repository::DunningPlanRepository;
 pub use dunning_service::{DunningReport, DunningService};
 pub use email_content::{EmailContent, ItemRow, Items};
@@ -114,8 +116,9 @@ pub use entry_import::{
     EntryImportDraft, EntryLookups, ImportNames, MAX_ENTRY_IMPORT_ROWS, SettlementImport,
 };
 pub use entry_repository::{
-    DateCursor, DayOpen, EntryCursor, EntryReferences, EntrySort, FinancialEntryQuery,
-    FinancialEntryRepository, OverdueItem, OverdueReport, ReportBasis, ReportGroup, ReportRow,
+    CompetenceTotal, DateCursor, DayOpen, EntryCursor, EntryReferences, EntrySort,
+    FinancialEntryQuery, FinancialEntryRepository, OverdueItem, OverdueReport, ReportBasis,
+    ReportGroup, ReportRow,
 };
 pub use error::{ApplicationError, AuthError, RepositoryError};
 pub use financial_entry_service::{FinancialEntryPage, FinancialEntryService};
