@@ -830,6 +830,11 @@ main {
   margin-bottom: 0.9rem;
 }
 
+/* A title with its (i) sits where a bare title does. */
+.list-card > .card-title {
+  margin: 1.25rem 1.5rem 0.9rem;
+}
+
 .list-card > .btn {
   margin-bottom: 1.25rem;
 }
@@ -2637,4 +2642,23 @@ tr.below-the-line td {
 tr.subtotal + tr.below-the-line th,
 tr.subtotal + tr.below-the-line td {
   border-top: 1px dashed var(--line-strong);
+}
+
+/* With many months the table scrolls sideways; the name of the line stays in view so every figure keeps its label.
+   Each cell paints its own background, or the figures would show through it. */
+.income-statement th[scope="row"],
+.income-statement thead th:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: #f8faf9;
+  box-shadow: 1px 0 0 var(--line);
+}
+
+.income-statement tr.subtotal th[scope="row"] {
+  background: var(--green-soft);
+}
+
+.income-statement td {
+  white-space: nowrap;
 }
