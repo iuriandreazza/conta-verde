@@ -11,6 +11,7 @@ import { BarChart } from "./charts/BarChart";
 import { ChartCard } from "./charts/ChartCard";
 import { Legend, type LegendItem } from "./charts/Legend";
 import { Button } from "./Button";
+import { InfoTip } from "./InfoTip";
 import { Notice } from "./Notice";
 import { PeriodFilter } from "./PeriodFilter";
 import { Spinner } from "./Spinner";
@@ -169,11 +170,20 @@ export function DreView({ companyId }: { companyId: string }) {
             />
           </ChartCard>
           <section className="card list-card">
-            <h2>
-              Demonstração do resultado de {formatDate(dre.from)} a {formatDate(dre.to)}
-            </h2>
+            <div className="card-title">
+              <h2>
+                Demonstração do resultado de {formatDate(dre.from)} a {formatDate(dre.to)}
+              </h2>
+              <InfoTip label="Sobre esta demonstração">
+                <p>
+                  Demonstração gerencial: vem das datas de competência dos lançamentos e de como eles foram
+                  classificados. Não substitui a demonstração contábil. Investimentos e empréstimos ficam abaixo da
+                  linha, fora do resultado.
+                </p>
+              </InfoTip>
+            </div>
             <div className="table-wrap">
-              <table>
+              <table className="income-statement">
                 <caption className="visually-hidden">Demonstração do resultado</caption>
                 <thead>
                   <tr>
@@ -205,10 +215,6 @@ export function DreView({ companyId }: { companyId: string }) {
                 </tbody>
               </table>
             </div>
-            <p className="muted">
-              Demonstração gerencial: vem das datas de competência dos lançamentos e de como eles foram classificados. Não
-              substitui a demonstração contábil. Investimentos e empréstimos ficam abaixo da linha, fora do resultado.
-            </p>
           </section>
             </>
           )}

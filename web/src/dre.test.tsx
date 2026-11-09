@@ -112,7 +112,10 @@ describe("the income statement", () => {
 
     expect(await screen.findByRole("row", { name: /Investimentos/ })).toHaveClass("below-the-line");
     expect(screen.getByRole("row", { name: /Empréstimos e capital/ })).toHaveTextContent("R$ 5.000,00");
-    expect(screen.getByText(/Demonstração gerencial/)).toBeInTheDocument();
+    // The explanation is behind the (i) of the table's title, not loose on the page.
+    expect(screen.queryByText(/Demonstração gerencial/)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Sobre esta demonstração" }));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(/Demonstração gerencial.*Não substitui a demonstração contábil/);
   });
 
   it("asks again by cost center and names each column, the entries without one last", async () => {
