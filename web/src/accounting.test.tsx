@@ -43,6 +43,20 @@ it("says through which day the books are closed and who closed them", async () =
   expect(await screen.findByText("Carla Contadora")).toBeInTheDocument();
 });
 
+it("offers the month after the closed one, so closing the next month is one click", async () => {
+  const fetchMock = serve({ locked_through: "2020-01-31" });
+  renderAt("/companies/c1/accounting");
+  await screen.findByText("31/01/2020");
+
+  expect(screen.getByLabelText("Fechar até o fim de")).toHaveValue("2020-02");
+  await userEvent.click(screen.getByRole("button", { name: "Fechar período" }));
+
+  expect(await screen.findByText("Período fechado até 29/02/2020.")).toBeInTheDocument();
+  expect(putsOf(fetchMock)).toEqual([{ locked_through: "2020-02-29" }]);
+  // The offer moves on with the lock.
+  expect(screen.getByLabelText("Fechar até o fim de")).toHaveValue("2020-03");
+});
+
 it("closes through the last day of the month that is chosen", async () => {
   const fetchMock = serve({ locked_through: null });
   renderAt("/companies/c1/accounting");

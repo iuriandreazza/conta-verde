@@ -7,8 +7,9 @@ import { Notice } from "../components/Notice";
 import { PageHeader } from "../components/PageHeader";
 import { PeriodLockHistory } from "../components/PeriodLockHistory";
 import { Spinner } from "../components/Spinner";
-import { lastDayOfMonth, monthLabel } from "../lib/closing";
+import { lastDayOfMonth, monthLabel, suggestedMonthToClose } from "../lib/closing";
 import { formatDate } from "../lib/entryInstallments";
+import { todayIso } from "../lib/settlement";
 import { useCanWrite } from "../lib/useCanWrite";
 import { HelpTitle } from "../components/HelpTitle";
 
@@ -19,6 +20,8 @@ const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
 export function AccountingPage() {
   const { companyId = "" } = useParams();
   const canWrite = useCanWrite("accounting");
+  // The server reads no clock, so the month to suggest is told with the day where the person is.
+  const [today] = useState(() => todayIso());
   const [lock, setLock] = useState<PeriodLock | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
@@ -117,40 +120,54 @@ export function AccountingPage() {
         </p>
       ) : (
         lock !== null && (
-          <section className="card">
-            <HelpTitle level={2} title="Fechamento de período">
-              <p>
-                Lançamentos, baixas, transferências, saldos iniciais, movimentos de estoque, vendas concluídas e
-                recebimentos de compra com data dentro dos meses fechados não podem ser criados, alterados nem
-                desfeitos.
-              </p>
-            </HelpTitle>
-            <p className="muted">Nada datado nos meses fechados pode ser criado, alterado ou desfeito.</p>
-            <p>
+          <>
+            <section className="card lock-status">
+              <HelpTitle level={2} title="Fechamento de período">
+                <p>
+                  Lançamentos, baixas, transferências, saldos iniciais, movimentos de estoque, vendas concluídas e
+                  recebimentos de compra com data dentro dos meses fechados não podem ser criados, alterados nem
+                  desfeitos.
+                </p>
+              </HelpTitle>
               {through === null ? (
-                "Nenhum mês está fechado."
+                <p className="lock-through">
+                  <span className="badge badge-dot badge-muted">Aberto</span>
+                  <span>Nenhum mês está fechado.</span>
+                </p>
               ) : (
-                <>
-                  Fechado até <strong>{formatDate(through)}</strong> ({monthLabel(through)} inclusive).
-                </>
+                <p className="lock-through">
+                  <span className="badge badge-dot badge-ok">Fechado</span>
+                  <span>Fechado até</span>
+                  <strong className="lock-date">{formatDate(through)}</strong>
+                  <span className="muted">{monthLabel(through)} inclusive</span>
+                </p>
               )}
-            </p>
+              <p className="muted">Nada datado nos meses fechados pode ser criado, alterado ou desfeito.</p>
+            </section>
             {canWrite && (
-              <>
-                <form onSubmit={close} className="settle-form">
+              <div className="lock-actions">
+                <form onSubmit={close} className="card lock-form" key={`close-${through}`}>
+                  <HelpTitle title="Fechar um mês">
+                    <p>O período fica fechado até o último dia do mês escolhido, e os meses anteriores com ele.</p>
+                  </HelpTitle>
                   <label>
                     Fechar até o fim de
-                    <input type="month" name="month" />
+                    <input type="month" name="month" defaultValue={suggestedMonthToClose(through, today)} />
                   </label>
                   <Button type="submit" icon={CheckIcon} pending={saving}>
                     Fechar período
                   </Button>
                 </form>
                 {through !== null && (
-                  <form onSubmit={reopen} className="settle-form">
-                    <h3>Reabrir</h3>
+                  <form onSubmit={reopen} className="card lock-form">
+                    <HelpTitle title="Reabrir">
+                      <p>
+                        Escolha até que mês continua fechado, ou deixe vazio para reabrir tudo. O motivo fica no
+                        histórico.
+                      </p>
+                    </HelpTitle>
                     <label>
-                      Manter fechado até o fim de (vazio reabre tudo)
+                      Manter fechado até o fim de
                       <input type="month" name="month" />
                     </label>
                     <label>
@@ -162,11 +179,13 @@ export function AccountingPage() {
                     </Button>
                   </form>
                 )}
-              </>
+              </div>
             )}
-            <h3>Histórico</h3>
-            <PeriodLockHistory key={trail} companyId={companyId} />
-          </section>
+            <section className="card">
+              <h2>Histórico</h2>
+              <PeriodLockHistory key={trail} companyId={companyId} />
+            </section>
+          </>
         )
       )}
     </>
