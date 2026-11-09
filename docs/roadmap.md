@@ -140,7 +140,7 @@ the gateway, no tax law embedded in the code, the document's state machine, the 
 accepted and no other proposed ADR belongs to the phase. One slice per pull request, in this order:
 
 - [x] Plan ([ADR 0073](adr/0073-fiscal-module-plan.md))
-- [ ] Fiscal settings per company: tax regime (Simples Nacional first, then Lucro Presumido), A1 certificate, series and numbering, operation natures (CFOP), CST/CSOSN rules
+- [x] Fiscal settings per company: tax regime (Simples Nacional first, then Lucro Presumido), A1 certificate, series and numbering, operation natures (CFOP), CST/CSOSN rules ([ADR 0074](adr/0074-fiscal-settings.md)) — one audited record per company in the new `fiscal` area (owner, admin and `financial` write): the issuer (CNPJ, IE, address), the regime and the gateway's environment (production needs the certificate's day), the series of each kind, and up to 50 operation natures with their CFOPs and tax rules (CSOSN/CST, PIS, COFINS, rates held as decimals), all codes the company's own since the product embeds no tax table; the A1 certificate is **not uploaded** (it stays at the gateway, ADR 0073): only the day it expires is kept, with a warning on the page; the number of a document is the gateway's, so there is no counter
 - [ ] Emission port with a gateway adapter and a fake ([ADR 0006](adr/0006-fiscal-last.md))
 - [ ] NF-e: issue from a sale, DANFE PDF, cancellation, correction letter, number invalidation, contingency
 - [ ] NFS-e through the national standard; municipal adapters only when the standard is not available

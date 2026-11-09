@@ -12,6 +12,7 @@ export const OWNER_PERMISSIONS = {
   sales: "write",
   purchases: "write",
   accounting: "write",
+  fiscal: "write",
   members: "write",
 } as const;
 

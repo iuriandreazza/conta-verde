@@ -3,10 +3,10 @@ use uuid::Uuid;
 use crate::line::lines_text;
 use crate::{
     AccountOpening, Attachment, BankAccount, Category, Charge, CollectionSettings, CommissionRule,
-    CompanyId, Contract, CostCenter, DocumentCheck, DunningPlan, FinancialEntry, InventoryCount,
-    LineMatch, PackageSchedule, Party, PaymentMethod, PaymentTerm, PeriodLock, PriceList, Product,
-    PurchaseOrder, PurchaseReceipt, Quote, Recurrence, Sale, SaleReturn, Settlement, StatementLine,
-    StockMovement, StockSettings, Tag, Transfer, UserId,
+    CompanyId, Contract, CostCenter, DocumentCheck, DunningPlan, FinancialEntry, FiscalSettings,
+    InventoryCount, LineMatch, PackageSchedule, Party, PaymentMethod, PaymentTerm, PeriodLock,
+    PriceList, Product, PurchaseOrder, PurchaseReceipt, Quote, Recurrence, Sale, SaleReturn,
+    Settlement, StatementLine, StockMovement, StockSettings, Tag, Transfer, UserId,
 };
 
 /// Who made a change. The name is a snapshot: history must keep reading the same after the user is
@@ -55,6 +55,8 @@ pub enum AuditEntity {
     PeriodLock,
     /// One per company: the audit id is the company's.
     PackageSchedule,
+    /// One per company: the audit id is the company's.
+    FiscalSettings,
 }
 
 impl AuditEntity {
@@ -87,6 +89,7 @@ impl AuditEntity {
             Self::InventoryCount => "inventory_count",
             Self::PeriodLock => "period_lock",
             Self::PackageSchedule => "package_schedule",
+            Self::FiscalSettings => "fiscal_settings",
             Self::Settlement => "settlement",
             Self::Transfer => "transfer",
             Self::AccountOpening => "account_opening",
@@ -469,6 +472,20 @@ impl Audited for StockSettings {
 impl Audited for PeriodLock {
     fn audit_entity(&self) -> AuditEntity {
         AuditEntity::PeriodLock
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.company_id().as_uuid()
+    }
+}
+
+impl Audited for FiscalSettings {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::FiscalSettings
     }
 
     fn audit_company(&self) -> CompanyId {
@@ -1303,6 +1320,67 @@ pub fn period_lock_changes(
         changes.push(set("reason", reason));
     }
     changes
+}
+
+fn fiscal_settings_fields(settings: &FiscalSettings) -> Fields {
+    let address = settings.address();
+    vec![
+        ("legal_name", Some(settings.legal_name().to_owned())),
+        ("cnpj", Some(settings.cnpj().to_owned())),
+        (
+            "state_registration",
+            settings.state_registration().map(str::to_owned),
+        ),
+        (
+            "municipal_registration",
+            settings.municipal_registration().map(str::to_owned),
+        ),
+        (
+            "address",
+            Some(
+                [
+                    Some(address.street()),
+                    address.number(),
+                    address.complement(),
+                    address.district(),
+                ]
+                .into_iter()
+                .flatten()
+                .chain([address.city()])
+                .collect::<Vec<_>>()
+                .join(", ")
+                    + &format!("-{} {}", address.state(), address.postal_code()),
+            ),
+        ),
+        ("regime", Some(settings.regime().key().to_owned())),
+        ("environment", Some(settings.environment().key().to_owned())),
+        ("nfe_series", Some(settings.nfe_series().to_string())),
+        ("nfce_series", Some(settings.nfce_series().to_string())),
+        ("nfse_series", Some(settings.nfse_series().to_string())),
+        (
+            "certificate_valid_until",
+            settings
+                .certificate_valid_until()
+                .map(|day| day.to_string()),
+        ),
+        ("natures", Some(settings.natures_text())),
+    ]
+}
+
+/// What choosing the fiscal settings for the first time records.
+pub fn fiscal_settings_creation_changes(settings: &FiscalSettings) -> Vec<FieldChange> {
+    creation_from(fiscal_settings_fields(settings))
+}
+
+/// What replacing the fiscal settings records: the fields that changed.
+pub fn fiscal_settings_changes(
+    before: &FiscalSettings,
+    after: &FiscalSettings,
+) -> Vec<FieldChange> {
+    changes_between(
+        fiscal_settings_fields(before),
+        fiscal_settings_fields(after),
+    )
 }
 
 fn package_schedule_fields(schedule: &PackageSchedule) -> Fields {

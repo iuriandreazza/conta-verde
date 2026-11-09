@@ -21,6 +21,7 @@ mod entries_import;
 mod error;
 mod export_files;
 mod exports;
+mod fiscal;
 mod history;
 mod inventory_counts;
 mod json;
@@ -59,15 +60,16 @@ use conta_verde_application::{
     ContractRepository, ContractService, CostCenterRepository, CostCenterService,
     DocumentMailRepository, DocumentMailService, DocumentReferences, DreService, EmailSender,
     EntryLookups, EntryReferences, ExportLookups, FinancialEntryRepository, FinancialEntryService,
-    IdentityRepository, InventoryCountRepository, InventoryCountService, InvitationRepository,
-    MemberService, OpeningRepository, PackageScheduleRepository, PackageScheduleService,
-    PartyRepository, PartyService, PaymentMethodRepository, PaymentMethodService, PaymentProvider,
-    PaymentTermRepository, PaymentTermService, PostalCodeDirectory, PostalCodeService,
-    PriceListRepository, PriceListService, ProductRepository, ProductService,
-    PurchaseOrderRepository, PurchaseService, QuoteRepository, QuoteService, ReconciliationService,
-    RecurrenceRepository, RecurrenceService, SaleRepository, SaleService, SalesReportService,
-    SecretService, StatementLineRepository, StockMovementRepository, StockService,
-    StockSettingsRepository, TransferRepository, TransferService,
+    FiscalSettingsRepository, FiscalSettingsService, IdentityRepository, InventoryCountRepository,
+    InventoryCountService, InvitationRepository, MemberService, OpeningRepository,
+    PackageScheduleRepository, PackageScheduleService, PartyRepository, PartyService,
+    PaymentMethodRepository, PaymentMethodService, PaymentProvider, PaymentTermRepository,
+    PaymentTermService, PostalCodeDirectory, PostalCodeService, PriceListRepository,
+    PriceListService, ProductRepository, ProductService, PurchaseOrderRepository, PurchaseService,
+    QuoteRepository, QuoteService, ReconciliationService, RecurrenceRepository, RecurrenceService,
+    SaleRepository, SaleService, SalesReportService, SecretService, StatementLineRepository,
+    StockMovementRepository, StockService, StockSettingsRepository, TransferRepository,
+    TransferService,
 };
 use conta_verde_application::{
     CollectionService, CollectionSettingsRepository, DunningPlanRepository, DunningService,
@@ -102,6 +104,7 @@ pub trait Ports: 'static {
     type EntryReferences: EntryReferences + EntryLookups + ExportLookups + 'static;
     type PeriodLocks: PeriodLockRepository + 'static;
     type PackageSchedules: PackageScheduleRepository + 'static;
+    type FiscalSettings: FiscalSettingsRepository + 'static;
     type Attachments: AttachmentRepository + 'static;
     type Blobs: BlobStore + 'static;
     type Charges: ChargeRepository + 'static;
@@ -292,6 +295,7 @@ pub struct Services<X: Ports> {
     pub period_locks: PeriodLockService<X::PeriodLocks>,
     pub exports: ExportsOf<X>,
     pub packages: PackagesOf<X>,
+    pub fiscal_settings: FiscalSettingsService<X::FiscalSettings>,
     pub postal_codes: PostalCodeService<X::PostalCodes>,
     pub members: MemberService<X::Invitations, X::Identity, X::Emails, X::Secrets>,
     pub documents: DocumentsOf<X>,
@@ -331,6 +335,7 @@ pub(crate) struct AppState<X: Ports> {
     period_locks: PeriodLockService<X::PeriodLocks>,
     exports: ExportsOf<X>,
     packages: PackagesOf<X>,
+    fiscal_settings: FiscalSettingsService<X::FiscalSettings>,
     postal_codes: PostalCodeService<X::PostalCodes>,
     members: MemberService<X::Invitations, X::Identity, X::Emails, X::Secrets>,
     documents: DocumentsOf<X>,
@@ -374,6 +379,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         period_locks: services.period_locks,
         exports: services.exports,
         packages: services.packages,
+        fiscal_settings: services.fiscal_settings,
         postal_codes: services.postal_codes,
         members: services.members,
         documents: services.documents,
@@ -641,6 +647,14 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         .route(
             "/companies/{company_id}/accounting/package-schedule/history",
             get(accounting::package_schedule_history::<X>),
+        )
+        .route(
+            "/companies/{company_id}/fiscal/settings",
+            get(fiscal::get_settings::<X>).put(fiscal::replace_settings::<X>),
+        )
+        .route(
+            "/companies/{company_id}/fiscal/settings/history",
+            get(fiscal::settings_history::<X>),
         )
         .route(
             "/companies/{company_id}/accounting/exports/entries",
@@ -995,9 +1009,9 @@ mod tests {
         InMemoryChargeRepository, InMemoryCnpjRegistry, InMemoryCollectionSettingsRepository,
         InMemoryCommissionRuleRepository, InMemoryContractRepository, InMemoryCostCenterRepository,
         InMemoryDocumentMailRepository, InMemoryDunningPlanRepository, InMemoryEmailSender,
-        InMemoryFinancialEntryRepository, InMemoryIdentityRepository,
-        InMemoryInventoryCountRepository, InMemoryInvitationRepository, InMemoryMessageSender,
-        InMemoryNotificationRepository, InMemoryOpeningRepository,
+        InMemoryFinancialEntryRepository, InMemoryFiscalSettingsRepository,
+        InMemoryIdentityRepository, InMemoryInventoryCountRepository, InMemoryInvitationRepository,
+        InMemoryMessageSender, InMemoryNotificationRepository, InMemoryOpeningRepository,
         InMemoryPackageScheduleRepository, InMemoryPartyRepository, InMemoryPaymentEventRepository,
         InMemoryPaymentLinkRepository, InMemoryPaymentMethodRepository,
         InMemoryPaymentTermRepository, InMemoryPeriodLockRepository, InMemoryPostalCodeDirectory,
@@ -1074,6 +1088,7 @@ mod tests {
         type EntryReferences = TestReferences;
         type PeriodLocks = InMemoryPeriodLockRepository;
         type PackageSchedules = InMemoryPackageScheduleRepository;
+        type FiscalSettings = InMemoryFiscalSettingsRepository;
         type Attachments = InMemoryAttachmentRepository;
         type Blobs = InMemoryBlobStore;
         type Charges = InMemoryChargeRepository;
@@ -1122,6 +1137,7 @@ mod tests {
         type EntryReferences = TestReferences;
         type PeriodLocks = InMemoryPeriodLockRepository;
         type PackageSchedules = InMemoryPackageScheduleRepository;
+        type FiscalSettings = InMemoryFiscalSettingsRepository;
         type Attachments = InMemoryAttachmentRepository;
         type Blobs = InMemoryBlobStore;
         type Charges = InMemoryChargeRepository;
@@ -1881,6 +1897,9 @@ mod tests {
                 period_locks: PeriodLockService::new(locks()),
                 exports: standalone_exports(),
                 packages: standalone_packages(),
+                fiscal_settings: FiscalSettingsService::new(
+                    InMemoryFiscalSettingsRepository::default(),
+                ),
                 dre: DreService::new(
                     InMemoryFinancialEntryRepository::default(),
                     InMemoryCategoryRepository::default(),
@@ -2543,6 +2562,9 @@ mod tests {
                 period_locks: PeriodLockService::new(locks()),
                 exports: standalone_exports(),
                 packages: standalone_packages(),
+                fiscal_settings: FiscalSettingsService::new(
+                    InMemoryFiscalSettingsRepository::default(),
+                ),
                 dre: DreService::new(
                     InMemoryFinancialEntryRepository::default(),
                     InMemoryCategoryRepository::default(),
@@ -2950,6 +2972,7 @@ mod tests {
                     let reaches = match (area, method == "GET") {
                         (conta_verde_domain::Area::Members, _) => false,
                         (conta_verde_domain::Area::Accounting, false) => may_write_accounting,
+                        (conta_verde_domain::Area::Fiscal, false) => false,
                         (_, reading) => reading,
                     };
                     if reaches {
@@ -3597,7 +3620,7 @@ mod tests {
         assert_eq!(me.body["companies"][0]["role"], "owner");
         assert_eq!(
             me.body["companies"][0]["permissions"],
-            json!({ "parties": "write", "products": "write", "finance": "write", "sales": "write", "purchases": "write", "accounting": "write", "members": "write" })
+            json!({ "parties": "write", "products": "write", "finance": "write", "sales": "write", "purchases": "write", "accounting": "write", "fiscal": "write", "members": "write" })
         );
 
         let viewer = member_with_role(&app, &identities, company_id, Role::Viewer).await;
@@ -3614,7 +3637,7 @@ mod tests {
         // Members is out of reach, so the area is not there at all.
         assert_eq!(
             theirs["permissions"],
-            json!({ "parties": "read", "products": "read", "finance": "read", "sales": "read", "purchases": "read", "accounting": "read" })
+            json!({ "parties": "read", "products": "read", "finance": "read", "sales": "read", "purchases": "read", "accounting": "read", "fiscal": "read" })
         );
     }
 
@@ -4766,6 +4789,9 @@ mod tests {
                 period_locks: PeriodLockService::new(locks()),
                 exports: standalone_exports(),
                 packages: standalone_packages(),
+                fiscal_settings: FiscalSettingsService::new(
+                    InMemoryFiscalSettingsRepository::default(),
+                ),
                 dre: DreService::new(
                     InMemoryFinancialEntryRepository::default(),
                     InMemoryCategoryRepository::default(),
@@ -6430,6 +6456,9 @@ mod tests {
                     mailbox.clone(),
                     "http://localhost:5173",
                 ),
+                fiscal_settings: FiscalSettingsService::new(
+                    InMemoryFiscalSettingsRepository::default(),
+                ),
                 exports: AccountingExportService::new(
                     entry_store.clone(),
                     transfer_store.clone(),
@@ -6832,6 +6861,150 @@ mod tests {
             send(&app, get_request(&format!("{base}/entries?{span}"), None))
                 .await
                 .status,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    fn fiscal_settings_body() -> Value {
+        json!({
+            "legal_name": "Verde Comércio Ltda",
+            "cnpj": "11.222.333/0001-81",
+            "state_registration": "110.042.490.114",
+            "municipal_registration": null,
+            "address": {
+                "postal_code": "01310-100",
+                "street": "Avenida Paulista",
+                "number": "1000",
+                "complement": null,
+                "district": "Bela Vista",
+                "city": "São Paulo",
+                "state": "SP"
+            },
+            "regime": "simples_nacional",
+            "environment": "homologation",
+            "nfe_series": 1,
+            "nfce_series": 1,
+            "nfse_series": 1,
+            "certificate_valid_until": "2027-03-31",
+            "natures": [{
+                "code": "sale",
+                "name": "Venda de mercadoria",
+                "kind": "product",
+                "cfop_in_state": "5102",
+                "cfop_interstate": "6102",
+                "active": true,
+                "rules": [{
+                    "regime": "simples_nacional",
+                    "ncm_prefix": null,
+                    "icms_code": "102",
+                    "pis_code": "07",
+                    "cofins_code": "07",
+                    "icms_rate": null,
+                    "pis_rate": null,
+                    "cofins_rate": null
+                }]
+            }]
+        })
+    }
+
+    /// The fiscal settings ([ADR 0074]): `null` until set, written by whoever writes the fiscal area (the owner and
+    /// the financial member), read by the others, refused for a shape the domain rejects, and every change in the trail.
+    #[tokio::test]
+    async fn the_fiscal_settings_are_set_by_those_who_write_the_fiscal_area() {
+        use conta_verde_domain::Role;
+
+        let (app, identities) = app_with_identities();
+        let (owner, company_id) = sign_up(&app, "dona@example.com").await;
+        let financial = member_with_role(&app, &identities, company_id, Role::Financial).await;
+        let seller = member_with_role(&app, &identities, company_id, Role::Sales).await;
+        let accountant = member_with_role(&app, &identities, company_id, Role::Accountant).await;
+        let (stranger, _) = sign_up(&app, "outra@example.com").await;
+        let uri = format!("/companies/{company_id}/fiscal/settings");
+
+        // Nothing set yet, for everyone who may look.
+        for cookie in [&owner, &seller, &accountant] {
+            let read = send(&app, get_request(&uri, Some(cookie))).await;
+            assert_eq!(read.status, StatusCode::OK, "{}", read.body);
+            assert_eq!(read.body, Value::Null);
+        }
+
+        // The ones who only read are refused; the financial member and the owner write.
+        for cookie in [&seller, &accountant] {
+            let denied = send(
+                &app,
+                json_request("PUT", &uri, Some(cookie), fiscal_settings_body()),
+            )
+            .await;
+            assert_eq!(denied.status, StatusCode::FORBIDDEN);
+        }
+        let saved = send(
+            &app,
+            json_request("PUT", &uri, Some(&financial), fiscal_settings_body()),
+        )
+        .await;
+        assert_eq!(saved.status, StatusCode::OK, "{}", saved.body);
+        // Stored without punctuation, and read back as sent otherwise.
+        assert_eq!(saved.body["cnpj"], "11222333000181");
+        assert_eq!(saved.body["state_registration"], "110042490114");
+        assert_eq!(saved.body["address"]["postal_code"], "01310100");
+        assert_eq!(saved.body["natures"][0]["rules"][0]["icms_code"], "102");
+        let read = send(&app, get_request(&uri, Some(&seller))).await;
+        assert_eq!(read.body, saved.body);
+
+        // A shape the domain refuses is a 422 that says which field; a value that is no key of ours too; an unknown
+        // field is refused; and nothing of it was kept.
+        let mut bad_cfop = fiscal_settings_body();
+        bad_cfop["natures"][0]["cfop_in_state"] = json!("6102");
+        let refused = send(&app, json_request("PUT", &uri, Some(&owner), bad_cfop)).await;
+        assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            refused.body["error"]
+                .as_str()
+                .unwrap()
+                .contains("cfop_in_state"),
+            "{}",
+            refused.body
+        );
+        let mut mei = fiscal_settings_body();
+        mei["regime"] = json!("mei");
+        let refused = send(&app, json_request("PUT", &uri, Some(&owner), mei)).await;
+        assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY);
+        let mut production = fiscal_settings_body();
+        production["environment"] = json!("production");
+        production["certificate_valid_until"] = Value::Null;
+        let refused = send(&app, json_request("PUT", &uri, Some(&owner), production)).await;
+        assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY);
+        let mut extra = fiscal_settings_body();
+        extra["certificate_password"] = json!("never");
+        let refused = send(&app, json_request("PUT", &uri, Some(&owner), extra)).await;
+        assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            send(&app, get_request(&uri, Some(&owner))).await.body,
+            saved.body
+        );
+
+        // The owner changes the regime and the series; the trail has the creation and the change.
+        let mut changed = fiscal_settings_body();
+        changed["nfe_series"] = json!(2);
+        let updated = send(&app, json_request("PUT", &uri, Some(&owner), changed)).await;
+        assert_eq!(updated.status, StatusCode::OK, "{}", updated.body);
+        let history = send(&app, get_request(&format!("{uri}/history"), Some(&seller))).await;
+        assert_eq!(history.status, StatusCode::OK);
+        let trail = history.body.as_array().unwrap();
+        assert_eq!(trail.len(), 2);
+        assert_eq!(trail[1]["action"], "updated");
+        assert_eq!(trail[1]["changes"][0]["field"], "nfe_series");
+
+        // Another company's member sees none of it, and neither can write it.
+        let theirs = format!("/companies/{company_id}/fiscal/settings");
+        assert_eq!(
+            send(&app, get_request(&theirs, Some(&stranger)))
+                .await
+                .status,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            send(&app, get_request(&theirs, None)).await.status,
             StatusCode::UNAUTHORIZED
         );
     }

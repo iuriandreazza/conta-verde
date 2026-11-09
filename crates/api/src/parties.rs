@@ -48,7 +48,7 @@ struct ContactRequest {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct AddressRequest {
+pub(crate) struct AddressRequest {
     postal_code: String,
     street: String,
     number: Option<String>,
@@ -56,6 +56,20 @@ struct AddressRequest {
     district: Option<String>,
     city: String,
     state: String,
+}
+
+impl From<AddressRequest> for AddressDraft {
+    fn from(address: AddressRequest) -> Self {
+        Self {
+            postal_code: address.postal_code,
+            street: address.street,
+            number: address.number,
+            complement: address.complement,
+            district: address.district,
+            city: address.city,
+            state: address.state,
+        }
+    }
 }
 
 impl PartyRequest {
@@ -91,15 +105,7 @@ impl PartyRequest {
             is_supplier: self.is_supplier,
             is_carrier,
             is_seller,
-            address: self.address.map(|address| AddressDraft {
-                postal_code: address.postal_code,
-                street: address.street,
-                number: address.number,
-                complement: address.complement,
-                district: address.district,
-                city: address.city,
-                state: address.state,
-            }),
+            address: self.address.map(AddressDraft::from),
             contacts: contacts
                 .into_iter()
                 .map(|contact| ContactDraft {
@@ -194,7 +200,7 @@ impl From<&Contact> for ContactResponse {
 }
 
 #[derive(Serialize)]
-struct AddressResponse {
+pub(crate) struct AddressResponse {
     postal_code: String,
     street: String,
     number: Option<String>,
