@@ -271,7 +271,7 @@ describe("the monthly package notice", () => {
     await userEvent.selectOptions(screen.getByLabelText("A partir do dia"), "12");
     await userEvent.click(screen.getByRole("button", { name: "Salvar aviso" }));
 
-    expect(await screen.findByText("Aviso ligado: todo dia 12.")).toBeInTheDocument();
+    expect(await screen.findByText("Aviso ligado: todo mês, a partir do dia 12.")).toBeInTheDocument();
     const puts = fetchMock.mock.calls.filter(([url, init]) => String(url).endsWith("/package-schedule") && init?.method === "PUT");
     expect(puts.map(([, init]) => JSON.parse(String(init?.body)))).toEqual([{ enabled: true, day: 12 }]);
   });
@@ -291,6 +291,35 @@ describe("the monthly package notice", () => {
 
     expect(await screen.findByText("Ligado: todo mês, a partir do dia 10.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Salvar aviso" })).not.toBeInTheDocument();
+  });
+
+  it("brings a signed-out accountant back to the page of the e-mail's link after signing in", async () => {
+    const id = "0b9a6f0e-3b3a-4d57-8f0e-0123456789ab";
+    const me: Profile = {
+      ...profile,
+      companies: [{ id, name: "Padaria", role: "accountant", permissions: { ...OWNER_PERMISSIONS } }],
+    };
+    let signedIn = false;
+    mockApi((url, init) => {
+      if (url === "/api/auth/me") {
+        return signedIn ? { status: 200, body: me } : { status: 401, body: { error: "authentication required" } };
+      }
+      if (url === "/api/auth/login") {
+        signedIn = true;
+        return { status: 200, body: me };
+      }
+      if (url.endsWith("/accounting/package-schedule")) return scheduleReply(init);
+      if (url.endsWith("/history")) return { status: 200, body: trail };
+      return { status: 200, body: closedThroughOctober };
+    });
+    renderAt(`/companies/${id}/accounting?month=2026-02`);
+
+    await userEvent.type(await screen.findByLabelText("E-mail"), "contadora@example.com");
+    await userEvent.type(screen.getByLabelText("Senha"), "correct horse");
+    await userEvent.click(screen.getByRole("button", { name: "Entrar" }));
+
+    // Not the first page of the app: the Contador page, on the month of the link.
+    expect(await screen.findByLabelText("Mês")).toHaveValue("2026-02");
   });
 
   it("opens the downloads on the month the e-mail links to", async () => {

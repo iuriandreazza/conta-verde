@@ -57,7 +57,7 @@ impl PackageScheduleRepository for InMemoryPackageScheduleRepository {
         let mut due: Vec<CompanyId> = state
             .schedules
             .values()
-            .filter(|schedule| schedule.is_enabled() && schedule.day() <= day_of_month)
+            .filter(|schedule| schedule.is_due_on_day(day_of_month))
             .map(PackageSchedule::company_id)
             .collect();
         due.sort_by_key(|company| company.as_uuid());
@@ -133,5 +133,20 @@ mod tests {
         );
         contract::gives_the_month_back_when_nothing_could_be_queued(&service, &store, &identities)
             .await;
+    }
+
+    #[tokio::test]
+    async fn claims_nothing_without_a_way_to_send() {
+        let (store, identities) = (
+            InMemoryPackageScheduleRepository::default(),
+            InMemoryIdentityRepository::default(),
+        );
+        let service = PackageScheduleService::new(
+            store.clone(),
+            identities.clone(),
+            crate::LogEmailSender,
+            "https://contas.example.com",
+        );
+        contract::claims_nothing_without_a_way_to_send(&service, &store, &identities).await;
     }
 }

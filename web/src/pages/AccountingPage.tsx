@@ -180,7 +180,7 @@ export function AccountingPage() {
                 )}
               </div>
             )}
-            <AccountantDownloads key={through ?? "open"} companyId={companyId} lockedThrough={through} />
+            <AccountantDownloads companyId={companyId} lockedThrough={through} />
             <PackageScheduleCard companyId={companyId} />
             <section className="card">
               <h2>Histórico</h2>

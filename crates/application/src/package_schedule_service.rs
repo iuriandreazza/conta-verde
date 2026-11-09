@@ -100,54 +100,82 @@ where
 
     /// The pass of the hourly task: for every company whose schedule is due on `today`, announces the previous month
     /// to its accountants, once. The month is claimed in one statement before anything is queued; a pass that queued
-    /// nothing gives the claim back, so the next one tries again.
+    /// nothing gives the claim back, so the next one tries again. A company whose turn fails is logged and counted, and
+    /// the others go on. With no way to send e-mail at all nothing is claimed or tried, so the month is still there
+    /// when there is one.
     pub async fn send_due(
         &self,
         today: CalendarDate,
         now_millis: i64,
     ) -> Result<PackageReport, ApplicationError> {
-        let month = month_to_package(today);
         let mut report = PackageReport::default();
+        if !self.emails.is_enabled() {
+            return Ok(report);
+        }
+        let month = month_to_package(today);
         for company_id in self.repository.due(today.day()).await? {
-            let recipients = self.recipients(company_id).await?;
-            if recipients.is_empty() {
-                report.without_accountant += 1;
-                continue;
-            }
-            if !self.repository.claim(company_id, month, now_millis).await? {
-                report.already_sent += 1;
-                continue;
-            }
-            let company_name = self
-                .identities
-                .company_name(company_id)
-                .await?
-                .unwrap_or_default();
-            let (subject, content) = self.message(company_id, &company_name, month);
-            let mut queued = 0;
-            for to in recipients {
-                match self
-                    .emails
-                    .send_content(to, subject.clone(), &content)
-                    .await
-                {
-                    Ok(()) => queued += 1,
-                    Err(_) => {
-                        tracing::warn!(
-                            company = %company_id.as_uuid(),
-                            "the monthly package could not be announced to an accountant"
-                        );
-                        report.failed += 1;
-                    }
-                }
-            }
-            report.sent += queued;
-            // Some may have gone out, so the month stays claimed then: a second pass would send them twice.
-            if queued == 0 {
-                self.repository.release(company_id, month).await?;
+            if let Err(error) = self
+                .announce(company_id, month, now_millis, &mut report)
+                .await
+            {
+                tracing::error!(
+                    company = %company_id.as_uuid(),
+                    %error,
+                    "the monthly package could not be announced for a company"
+                );
+                report.failed += 1;
             }
         }
         Ok(report)
+    }
+
+    /// One company's turn. Everything that can fail before the first message is read first, so once the month is
+    /// claimed the only thing left that can fail is the sending, and that gives the claim back.
+    async fn announce(
+        &self,
+        company_id: CompanyId,
+        month: CalendarDate,
+        now_millis: i64,
+        report: &mut PackageReport,
+    ) -> Result<(), ApplicationError> {
+        let recipients = self.recipients(company_id).await?;
+        if recipients.is_empty() {
+            report.without_accountant += 1;
+            return Ok(());
+        }
+        let company_name = self
+            .identities
+            .company_name(company_id)
+            .await?
+            .unwrap_or_default();
+        let (subject, content) = self.message(company_id, &company_name, month);
+        if !self.repository.claim(company_id, month, now_millis).await? {
+            report.already_sent += 1;
+            return Ok(());
+        }
+        let mut queued = 0;
+        for to in recipients {
+            match self
+                .emails
+                .send_content(to, subject.clone(), &content)
+                .await
+            {
+                Ok(()) => queued += 1,
+                Err(_) => {
+                    tracing::warn!(
+                        company = %company_id.as_uuid(),
+                        "the monthly package could not be announced to an accountant"
+                    );
+                    report.failed += 1;
+                }
+            }
+        }
+        report.sent += queued;
+        // Some may have gone out, so the month stays claimed then: a second pass would send them twice.
+        if queued == 0 {
+            self.repository.release(company_id, month).await?;
+        }
+        Ok(())
     }
 
     async fn recipients(&self, company_id: CompanyId) -> Result<Vec<Email>, ApplicationError> {

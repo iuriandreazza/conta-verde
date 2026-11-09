@@ -54,7 +54,7 @@ export function PackageScheduleCard({ companyId }: { companyId: string }) {
     try {
       const stored = await api.replacePackageSchedule(companyId, { enabled, day });
       setSchedule(stored);
-      setSaved(stored.enabled ? `Aviso ligado: todo dia ${stored.day}.` : "Aviso desligado.");
+      setSaved(stored.enabled ? `Aviso ligado: todo mês, a partir do dia ${stored.day}.` : "Aviso desligado.");
     } catch (failure) {
       setError(errorMessage(failure));
     } finally {

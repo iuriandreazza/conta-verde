@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api, errorMessage, type ExportFile, type ExportFormat } from "../api";
 import { saveFile } from "../lib/csv";
@@ -24,6 +24,15 @@ export function AccountantDownloads({ companyId, lockedThrough }: { companyId: s
   const linked = params.get("month") ?? "";
   const [month, setMonth] = useState(() => (MONTH.test(linked) ? linked : monthToExport(lockedThrough, todayIso())));
   const [format, setFormat] = useState<ExportFormat>("csv");
+  // The month follows the lock when a month is closed here, but the first one shown is the one the e-mail linked to.
+  const first = useRef(true);
+  useEffect(() => {
+    if (first.current) {
+      first.current = false;
+      return;
+    }
+    setMonth(monthToExport(lockedThrough, todayIso()));
+  }, [lockedThrough]);
   const [pending, setPending] = useState<ExportFile | null>(null);
   const [error, setError] = useState<string | null>(null);
 

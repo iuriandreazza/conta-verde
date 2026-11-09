@@ -64,9 +64,22 @@ The downloads card opens on the month in the link's `?month=` when it is a month
 
 ## Consequences
 
-- Delivery is **at least once per accountant** in one case: a pass that crashes between queuing the first message and the
-  last leaves the month claimed with some accountants not told. The accountant can always open the Contador page; the notice
-  is a convenience, not the only way to know.
+- Delivery is **at most once** per company and month, by design: the claim comes first, so a crash between the claim and
+  the last message leaves some accountants (in the worst case all) not told, and nothing sends that month again. Claiming
+  after sending would tell some accountants twice instead. The Contador page is always there: the notice is a convenience,
+  not the only way to know.
+- **Each company's turn is isolated**: an error reading one company (its members, its name) is logged and counted and the
+  others go on. What can fail is read **before** the claim, so once the month is claimed only the sending is left, and a pass
+  that queued nothing gives the claim back. If giving it back fails too, the month is lost for that company (logged with the
+  company's id).
+- **With no way to send e-mail** (the log-only setup, no `SMTP_URL`) the pass does nothing and claims nothing, so the month
+  is still there when there is one; the card still says whom the notice would reach.
+- The catch-up window ends with the month: a day-28 schedule in February has one day, and a server down from the 28th into
+  the next month never sends that one.
+- The day is the customers' (`customer_today()`, UTC turns it at 21:00 in Brazil), so a notice for day D first goes out at
+  about 21:00 Brazil time on D, not in the morning.
+- The link of the e-mail leads to a login-gated page: signing in brings the person back to it (`/login?next=`, which takes
+  an invitation's page or a page of a company and nothing else), with the month in the address.
 - The pass reaches **every** company of a database, so a test that shares one asserts on its own recipients, not on the pass's
   report.
 - Nothing about the package is stored but the schedule and the claims; the files are made when the accountant asks, exactly

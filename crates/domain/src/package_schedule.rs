@@ -49,10 +49,11 @@ impl PackageSchedule {
         self.day
     }
 
-    /// Whether the package of the previous month is due on `today`: the switch is on and the day has come. It stays
-    /// due for the rest of the month, so a server that was down on the day still sends it when it is back.
-    pub fn is_due_on(&self, today: CalendarDate) -> bool {
-        self.enabled && today.day() >= self.day
+    /// Whether the package of the previous month is due on this day of the month: the switch is on and the day has
+    /// come. It stays due for the rest of the month, so a server that was down on the day still sends it when it is
+    /// back. The database adapter says the same in SQL (`enabled AND day <= $1`).
+    pub fn is_due_on_day(&self, day_of_month: u8) -> bool {
+        self.enabled && day_of_month >= self.day
     }
 }
 
@@ -79,7 +80,7 @@ mod tests {
         let schedule = PackageSchedule::off(CompanyId::generate());
         assert!(!schedule.is_enabled());
         assert_eq!(schedule.day(), 5);
-        assert!(!schedule.is_due_on(day("2026-11-30")));
+        assert!(!schedule.is_due_on_day(30));
     }
 
     #[test]
@@ -99,11 +100,11 @@ mod tests {
     #[test]
     fn it_is_due_from_its_day_to_the_end_of_the_month_only_while_on() {
         let on = PackageSchedule::new(CompanyId::generate(), true, 10).unwrap();
-        assert!(!on.is_due_on(day("2026-11-09")));
-        assert!(on.is_due_on(day("2026-11-10")));
-        assert!(on.is_due_on(day("2026-11-30")));
+        assert!(!on.is_due_on_day(9));
+        assert!(on.is_due_on_day(10));
+        assert!(on.is_due_on_day(31));
         let off = PackageSchedule::new(CompanyId::generate(), false, 10).unwrap();
-        assert!(!off.is_due_on(day("2026-11-20")));
+        assert!(!off.is_due_on_day(20));
     }
 
     #[test]

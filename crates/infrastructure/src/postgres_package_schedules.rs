@@ -176,6 +176,21 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires DATABASE_URL"]
+    async fn claims_nothing_without_a_way_to_send() {
+        let pool = contract::test_pool().await;
+        let identities = PostgresIdentityRepository::new(pool.clone());
+        let store = PostgresPackageScheduleRepository::new(pool);
+        let service = PackageScheduleService::new(
+            store.clone(),
+            identities.clone(),
+            crate::LogEmailSender,
+            "https://contas.example.com",
+        );
+        contract::claims_nothing_without_a_way_to_send(&service, &store, &identities).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
     async fn the_database_refuses_a_day_the_domain_would() {
         let pool = contract::test_pool().await;
         let company = contract::create_company(&pool).await;

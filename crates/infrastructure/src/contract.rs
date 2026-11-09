@@ -16609,6 +16609,7 @@ pub async fn stores_the_package_schedule<R: conta_verde_application::PackageSche
             .is_err()
     );
     assert_eq!(store.find(other_company).await.unwrap(), None);
+    assert!(store.history(other_company).await.unwrap().is_empty());
 
     // Due on a day of the month: on, and the day has come. Another company's schedule is another's.
     let due = |of: u8| {
@@ -16716,7 +16717,7 @@ pub async fn announces_the_monthly_package<R, I>(
     let schedule = service.get(company).await.unwrap();
     assert!(!schedule.is_enabled() && schedule.day() == 5);
     assert_eq!(service.accountants(company).await.unwrap(), 2);
-    service.send_due(day("2026-11-20"), 1).await.unwrap();
+    service.send_due(day("2032-11-20"), 1).await.unwrap();
     assert!(
         received().is_empty(),
         "nothing is sent for a schedule that is off"
@@ -16737,19 +16738,23 @@ pub async fn announces_the_monthly_package<R, I>(
     assert_eq!(service.history(company).await.unwrap().len(), 2);
 
     // Before its day nothing goes; on it, the previous month goes to the accountants and to no one else.
-    service.send_due(day("2026-11-11"), 2).await.unwrap();
+    service.send_due(day("2032-11-11"), 2).await.unwrap();
     assert!(received().is_empty());
-    service.send_due(day("2026-11-12"), 3).await.unwrap();
+    service.send_due(day("2032-11-12"), 3).await.unwrap();
     let sent = received();
     let mut to: Vec<&str> = sent.iter().map(|message| message.to.as_str()).collect();
     to.sort_unstable();
     let mut expected = vec![contadora.as_str(), contador.as_str()];
     expected.sort_unstable();
     assert_eq!(to, expected);
-    let link = format!("/companies/{}/accounting?month=2026-10", company.as_uuid());
+    // The whole address, with the slash of the base trimmed: one `/` between the base and `companies`.
+    let link = format!(
+        "https://contas.example.com/companies/{}/accounting?month=2032-10",
+        company.as_uuid()
+    );
     for message in &sent {
         assert!(
-            message.subject.contains("outubro de 2026"),
+            message.subject.contains("outubro de 2032"),
             "{}",
             message.subject
         );
@@ -16764,16 +16769,16 @@ pub async fn announces_the_monthly_package<R, I>(
     }
 
     // Once per month, however often the pass runs, for the rest of the month too.
-    service.send_due(day("2026-11-12"), 4).await.unwrap();
-    service.send_due(day("2026-11-30"), 5).await.unwrap();
+    service.send_due(day("2032-11-12"), 4).await.unwrap();
+    service.send_due(day("2032-11-30"), 5).await.unwrap();
     assert_eq!(received().len(), 2);
 
     // The next month goes again, for November; switched off, nothing goes.
-    service.send_due(day("2026-12-12"), 6).await.unwrap();
+    service.send_due(day("2032-12-12"), 6).await.unwrap();
     assert_eq!(received().len(), 4);
-    assert!(received()[2].subject.contains("novembro de 2026"));
+    assert!(received()[2].subject.contains("novembro de 2032"));
     service.replace(company, &ana, false, 12).await.unwrap();
-    service.send_due(day("2027-01-20"), 7).await.unwrap();
+    service.send_due(day("2033-01-20"), 7).await.unwrap();
     assert_eq!(received().len(), 4);
 
     // A company with no accountant sends nothing and claims nothing: one invited later in the month still gets it.
@@ -16799,7 +16804,7 @@ pub async fn announces_the_monthly_package<R, I>(
         .replace(lonely_company, &ana, true, 1)
         .await
         .unwrap();
-    service.send_due(day("2027-02-10"), 8).await.unwrap();
+    service.send_due(day("2033-02-10"), 8).await.unwrap();
     assert!(mailbox.sent().iter().all(|m| m.to != *lonely.user.email()));
     assert_eq!(service.accountants(lonely_company).await.unwrap(), 0);
     let late = User::new(
@@ -16819,7 +16824,7 @@ pub async fn announces_the_monthly_package<R, I>(
         .add_membership(late.id(), lonely_company, Role::Accountant)
         .await
         .unwrap();
-    service.send_due(day("2027-02-15"), 9).await.unwrap();
+    service.send_due(day("2033-02-15"), 9).await.unwrap();
     assert_eq!(
         mailbox
             .sent()
@@ -16830,16 +16835,8 @@ pub async fn announces_the_monthly_package<R, I>(
     );
 }
 
-/// A pass that could queue nothing gives the month back, so the next pass tries it again ([ADR 0072]).
-pub async fn gives_the_month_back_when_nothing_could_be_queued<R, I>(
-    broken: &conta_verde_application::PackageScheduleService<R, I, InMemoryEmailSender>,
-    store: &R,
-    identities: &I,
-) where
-    R: conta_verde_application::PackageScheduleRepository,
-    I: IdentityRepository,
-{
-    let ana = actor();
+/// A company with one accountant, made through the identity port: what a pass has someone to write to.
+async fn company_with_an_accountant<I: IdentityRepository>(identities: &I) -> CompanyId {
     let unique = Uuid::new_v4();
     let owner = Account::new(
         UserId::generate(),
@@ -16876,7 +16873,20 @@ pub async fn gives_the_month_back_when_nothing_could_be_queued<R, I>(
         .add_membership(accountant.id(), company, Role::Accountant)
         .await
         .unwrap();
-    broken.replace(company, &ana, true, 1).await.unwrap();
+    company
+}
+
+/// A pass that could queue nothing gives the month back, so the next pass tries it again ([ADR 0072]).
+pub async fn gives_the_month_back_when_nothing_could_be_queued<R, I>(
+    broken: &conta_verde_application::PackageScheduleService<R, I, InMemoryEmailSender>,
+    store: &R,
+    identities: &I,
+) where
+    R: conta_verde_application::PackageScheduleRepository,
+    I: IdentityRepository,
+{
+    let company = company_with_an_accountant(identities).await;
+    broken.replace(company, &actor(), true, 1).await.unwrap();
 
     // A month no other test announces: the pass reaches every company of a shared database, so a test that ran at the
     // same moment with a working mailbox would claim this company's month first.
@@ -16889,4 +16899,30 @@ pub async fn gives_the_month_back_when_nothing_could_be_queued<R, I>(
     let may = CalendarDate::parse("2031-05-01").unwrap();
     assert!(store.claim(company, may, 2).await.unwrap());
     assert!(!store.claim(company, may, 3).await.unwrap());
+}
+
+/// With no way to send e-mail at all (the log adapter) a pass claims nothing and tries nothing, so the month is still
+/// there to announce once there is one ([ADR 0072]).
+pub async fn claims_nothing_without_a_way_to_send<R, I, E>(
+    service: &conta_verde_application::PackageScheduleService<R, I, E>,
+    store: &R,
+    identities: &I,
+) where
+    R: conta_verde_application::PackageScheduleRepository,
+    I: IdentityRepository,
+    E: EmailSender,
+{
+    let company = company_with_an_accountant(identities).await;
+    service.replace(company, &actor(), true, 1).await.unwrap();
+
+    let report = service
+        .send_due(CalendarDate::parse("2034-06-10").unwrap(), 1)
+        .await
+        .unwrap();
+    assert_eq!(report, conta_verde_application::PackageReport::default());
+    let may = CalendarDate::parse("2034-05-01").unwrap();
+    assert!(
+        store.claim(company, may, 2).await.unwrap(),
+        "May was left alone"
+    );
 }
