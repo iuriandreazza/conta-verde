@@ -234,9 +234,24 @@ describe("page shell", () => {
     await userEvent.click(screen.getByRole("button", { name: "Voltar às áreas" }));
 
     expect(shell).toHaveAttribute("data-level", "areas");
+    // The button that was clicked is gone from the screen: the focus goes to where the person was.
+    expect(screen.getByRole("button", { name: "Financeiro" })).toHaveFocus();
     await userEvent.click(screen.getByRole("button", { name: "Cadastros" }));
     expect(shell).toHaveAttribute("data-level", "items");
+    expect(screen.getByRole("button", { name: "Voltar às áreas" })).toHaveFocus();
     expect(screen.getByRole("navigation", { name: "Cadastros" })).toBeInTheDocument();
+  });
+
+  it("lets Escape put away a flyout that shows because of the focus", async () => {
+    stubApi();
+    renderAt("/companies/c1/entries");
+    await userEvent.click(await screen.findByRole("button", { name: "Recolher o menu" }));
+    const area = screen.getByRole("button", { name: "Comercial" });
+    area.focus();
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(area).not.toHaveFocus();
   });
 
   it("has no phone menu where there are no sections to open", async () => {

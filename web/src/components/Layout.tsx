@@ -176,7 +176,8 @@ export function Layout() {
           <CompanyNav
             companyId={companyId}
             collapsed={collapsed}
-            onExpand={() => changeCollapsed(false)}
+            // Choosing an area on the phone's drawer must not undo what was chosen for the wide menu.
+            onExpand={() => collapsed && window.matchMedia?.("(min-width: 52.0625rem)").matches !== false && changeCollapsed(false)}
             canSeeMembers={company?.permissions.members !== undefined}
           />
         )}

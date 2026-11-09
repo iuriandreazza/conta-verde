@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState, type FocusEvent, type PointerEvent } from "react";
 import { Link, NavLink, useLocation, type Location } from "react-router-dom";
 import { entryKindOf } from "../lib/entryKind";
 import type { AnimatedIcon } from "./Button";
@@ -213,14 +213,40 @@ export function CompanyNav({
 
   const open = areas.find((area) => area.key === browsing && area.items !== undefined);
 
+  // On a phone the screen a button is on goes away when the other one shows: the focus follows, or a
+  // keyboard would start again from the top of the page.
+  const shell = useRef<HTMLDivElement>(null);
+  const focusAfter = useRef<"panel" | "rail" | null>(null);
+  useEffect(() => {
+    const element = shell.current;
+    if (focusAfter.current === "panel") element?.querySelector<HTMLElement>(".panel-back")?.focus();
+    // The area just left, else the one the page is in: `querySelector` with a list takes the first in the page.
+    if (focusAfter.current === "rail") (element?.querySelector<HTMLElement>(".rail-item[data-open]") ?? element?.querySelector<HTMLElement>(".rail-item"))?.focus();
+    focusAfter.current = null;
+  }, [level]);
+
   function choose(area: NavArea) {
     setBrowsing(area.key);
     setLevel("items");
+    focusAfter.current = "panel";
     onExpand();
   }
 
+  function goBack() {
+    setLevel("areas");
+    focusAfter.current = "rail";
+  }
+
+  // A flyout is fixed (the rail scrolls and would clip it), so it is placed from its button when it is about
+  // to show and never runs past the bottom of the window.
+  function placeFlyout(event: PointerEvent<HTMLElement> | FocusEvent<HTMLElement>) {
+    const slot = event.currentTarget;
+    const top = Math.max(8, slot.getBoundingClientRect().top - 8);
+    slot.querySelector<HTMLElement>(".flyout")?.style.setProperty("--flyout-top", `${top}px`);
+  }
+
   return (
-    <div className="nav-shell" data-level={level}>
+    <div className="nav-shell" data-level={level} ref={shell}>
       <nav className="rail" aria-label="Áreas da empresa">
         {areas.map((area) => {
           const Icon = area.icon;
@@ -233,12 +259,20 @@ export function CompanyNav({
             );
           }
           return (
-            <div key={area.key} className="rail-slot">
+            <div
+              key={area.key}
+              className="rail-slot"
+              onPointerEnter={placeFlyout}
+              onFocus={placeFlyout}
+              // A flyout that shows only because it has the focus can be put away with Escape (WCAG 1.4.13).
+              onKeyDown={(event) => event.key === "Escape" && collapsed && (event.target as HTMLElement).blur()}
+            >
               <button
                 type="button"
                 className="rail-item"
                 aria-expanded={!collapsed && open?.key === area.key}
-                aria-controls="area-panel"
+                aria-controls={open?.key === area.key ? "area-panel" : undefined}
+                data-open={open?.key === area.key || undefined}
                 data-here={here === area.key || undefined}
                 onClick={() => choose(area)}
               >
@@ -259,7 +293,7 @@ export function CompanyNav({
       {open && (
         <nav className="panel" id="area-panel" aria-label={open.label}>
           <div className="panel-head">
-            <button type="button" className="panel-back" aria-label="Voltar às áreas" onClick={() => setLevel("areas")}>
+            <button type="button" className="panel-back" aria-label="Voltar às áreas" onClick={goBack}>
               <ChevronLeftIcon size={20} aria-hidden />
             </button>
             <h2 className="panel-title">{open.label}</h2>

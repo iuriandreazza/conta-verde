@@ -195,7 +195,7 @@ a {
   align-items: center;
   gap: 0.25rem;
   padding: 0.25rem 0;
-  overflow-y: auto;
+  overflow: hidden auto;
 }
 
 .rail-item {
@@ -211,7 +211,7 @@ a {
   background: transparent;
   color: #cfe3d6;
   font: inherit;
-  font-size: 0.6875rem;
+  font-size: 0.65rem;
   text-decoration: none;
   cursor: pointer;
   transition:
@@ -236,14 +236,14 @@ a {
   color: #fff;
 }
 
-.rail-item[aria-expanded="true"],
+.rail-item[data-open],
 .rail-item[aria-current="page"] {
   background: #ffffff1f;
   color: #fff;
   font-weight: 600;
 }
 
-.rail-item[aria-expanded="true"]::before,
+.rail-item[data-open]::before,
 .rail-item[aria-current="page"]::before {
   content: "";
   position: absolute;
@@ -367,10 +367,10 @@ button.nav-registers-toggle:hover {
     z-index: 20;
     display: grid;
     gap: 0.1rem;
+    top: var(--flyout-top, 0.5rem);
     width: 17rem;
-    max-height: calc(100vh - 1rem);
+    max-height: calc(100vh - var(--flyout-top, 0.5rem) - 0.5rem);
     overflow-y: auto;
-    margin-top: -3.4rem;
     padding: 0.5rem;
     border: 1px solid var(--line-strong);
     border-radius: var(--radius);
@@ -1791,7 +1791,7 @@ tbody tr:last-child td {
     gap: 0.75rem;
     width: min(19.9rem, 88vw);
     height: 100vh;
-    overflow-y: auto;
+    overflow: hidden;
     padding: 0.75rem 0.5rem 1rem;
     box-shadow: 8px 0 32px rgb(0 0 0 / 0.3);
   }
@@ -1878,7 +1878,7 @@ tbody tr:last-child td {
     color: #a9c7b6;
   }
 
-  .rail-item[aria-expanded="true"]::before,
+  .rail-item[data-open]::before,
   .rail-item[aria-current="page"]::before {
     left: 0;
   }
