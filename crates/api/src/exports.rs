@@ -133,7 +133,7 @@ pub(crate) async fn package_file<X: Ports>(
         .package(company_id, span.from, span.to)
         .await?;
     // A package is limited far below what a zip without ZIP64 holds, so this is a storage-sized fault: logged, not shown.
-    let bytes = package_zip(&package, span.format).map_err(|_| {
+    let bytes = package_zip(package, span.format).map_err(|_| {
         ApplicationError::from(RepositoryError::Storage(
             "a package does not fit in a zip".to_owned(),
         ))

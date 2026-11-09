@@ -306,8 +306,9 @@ pub fn zip_of<N: AsRef<str>, D: AsRef<[u8]>>(files: &[(N, D)]) -> Result<Vec<u8>
     Ok(out)
 }
 
-/// The month's package: the three tables in the chosen format, the list of attachments and the attached files.
-pub fn package_zip(package: &ExportPackage, format: ExportFormat) -> Result<Vec<u8>, ZipTooBig> {
+/// The month's package: the three tables in the chosen format, the list of attachments and the attached files. The
+/// package is taken by value so the attached files (up to 200 MiB) are moved into the zip, not copied.
+pub fn package_zip(package: ExportPackage, format: ExportFormat) -> Result<Vec<u8>, ZipTooBig> {
     let extension = format.extension();
     let mut files: Vec<(String, Vec<u8>)> = vec![
         (
@@ -328,8 +329,8 @@ pub fn package_zip(package: &ExportPackage, format: ExportFormat) -> Result<Vec<
     files.extend(
         package
             .files
-            .iter()
-            .map(|file| (file.path.clone(), file.bytes.clone())),
+            .into_iter()
+            .map(|file| (file.path, file.bytes)),
     );
     zip_of(&files)
 }
