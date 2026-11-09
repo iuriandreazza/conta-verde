@@ -9298,7 +9298,7 @@ pub async fn runs_the_quote_lifecycle<Q, R, E, S>(
     assert_eq!(message.to.as_str(), "cliente@exemplo.com");
     assert!(message.subject.contains("nº 1"));
     assert!(message.body.contains(&sent.link));
-    assert!(message.body.contains("2026-11-25"));
+    assert!(message.body.contains("25/11/2026"));
     let first_token = token_of(&sent.link).to_owned();
     assert_eq!(service.by_link(&first_token).await.unwrap(), sent.quote);
     assert_eq!(
@@ -14819,6 +14819,26 @@ pub async fn runs_the_job_queue<Q: conta_verde_application::JobQueue>(queue: &Q)
     assert!([d, e].contains(&x.id) && [d, e].contains(&y.id));
     queue.complete(d).await.unwrap();
     queue.complete(e).await.unwrap();
+
+    // An e-mail may carry the HTML of its layout as a fourth argument (ADR 0068), and comes back whole.
+    let with_html = NewJob::new(
+        JobKind::SendEmail,
+        vec![
+            "f@example.com".to_owned(),
+            "f".to_owned(),
+            "body".to_owned(),
+            "<p>html</p>".to_owned(),
+        ],
+        0,
+    )
+    .unwrap();
+    let f = queue.enqueue(&with_html).await.unwrap();
+    let taken = queue.claim_next(5, 60).await.unwrap().unwrap();
+    assert_eq!(
+        (taken.id, taken.args.len(), taken.args[3].as_str()),
+        (f, 4, "<p>html</p>")
+    );
+    queue.complete(f).await.unwrap();
 }
 
 fn import_row(reference: &str, category: &str, amount: &str) -> EntryImportDraft {

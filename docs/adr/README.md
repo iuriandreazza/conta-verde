@@ -83,6 +83,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0065](0065-document-mail-limits-and-log.md) | A limit and a log for documents sent by e-mail | accepted | — |
 | [0066](0066-recovering-an-unconfirmed-address.md) | Recovering an address held by an account nobody confirmed | accepted | — |
 | [0067](0067-accountant-and-reporting-plan.md) | Accountant and reporting: plan, shared rules and what it changes underneath | accepted | 6 |
+| [0068](0068-email-layout.md) | One layout for every e-mail | accepted | — |
 
 ## Template
 

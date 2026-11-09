@@ -72,8 +72,14 @@ where
     async fn execute(&self, job: &Job) -> Outcome {
         match job.kind {
             JobKind::SendEmail => {
-                let [to, subject, body] = job.args.as_slice() else {
-                    return Outcome::Unrunnable("a send_email job needs three arguments");
+                let (to, subject, body, html) = match job.args.as_slice() {
+                    [to, subject, body] => (to, subject, body, None),
+                    [to, subject, body, html] => (to, subject, body, Some(html)),
+                    _ => {
+                        return Outcome::Unrunnable(
+                            "a send_email job needs three or four arguments",
+                        );
+                    }
                 };
                 let Ok(to) = Email::parse(to) else {
                     return Outcome::Unrunnable("the address is not valid");
@@ -82,6 +88,7 @@ where
                     to,
                     subject: subject.clone(),
                     body: body.clone(),
+                    html: html.cloned(),
                 };
                 match self.emails.send(&message).await {
                     Ok(()) => Outcome::Done,
@@ -127,16 +134,13 @@ impl<Q: JobQueue> EmailSender for QueuedEmailSender<Q> {
             return Err(EmailError);
         }
         // Due at once: any moment already past is.
-        let job = NewJob::new(
-            JobKind::SendEmail,
-            vec![
-                message.to.as_str().to_owned(),
-                message.subject.clone(),
-                message.body.clone(),
-            ],
-            0,
-        )
-        .map_err(|_| EmailError)?;
+        let mut args = vec![
+            message.to.as_str().to_owned(),
+            message.subject.clone(),
+            message.body.clone(),
+        ];
+        args.extend(message.html.clone());
+        let job = NewJob::new(JobKind::SendEmail, args, 0).map_err(|_| EmailError)?;
         self.queue
             .enqueue(&job)
             .await

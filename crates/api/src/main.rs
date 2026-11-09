@@ -10,10 +10,10 @@ use conta_verde_application::{
     SalesReportService, StockService, TransferService,
 };
 use conta_verde_application::{
-    ChargeService, CollectionService, DunningService, EmailError, EmailMessage, EmailSender,
-    MessageError, MessageSender, PaymentPageService, PaymentProvider, PaymentWebhookService,
-    ProviderCharge, ProviderChargeRequest, ProviderError, ProviderEvent, QueuedEmailSender,
-    TextMessage, WebhookError, WebhookHeaders,
+    BrandedEmailSender, ChargeService, CollectionService, DunningService, EmailError, EmailMessage,
+    EmailSender, MessageError, MessageSender, PaymentPageService, PaymentProvider,
+    PaymentWebhookService, ProviderCharge, ProviderChargeRequest, ProviderError, ProviderEvent,
+    QueuedEmailSender, TextMessage, WebhookError, WebhookHeaders,
 };
 use conta_verde_infrastructure::{
     Argon2SecretService, BrasilApiCnpjRegistry, BrasilApiPostalCodeDirectory, CachedCnpjRegistry,
@@ -91,7 +91,7 @@ impl Ports for PostgresPorts {
     type Statements = PostgresStatementLineRepository;
     type PostalCodes = Option<BrasilApiPostalCodeDirectory>;
     type Invitations = PostgresInvitationRepository;
-    type Emails = QueuedEmailSender<PostgresJobQueue>;
+    type Emails = BrandedEmailSender<QueuedEmailSender<PostgresJobQueue>>;
     type DocumentMails = PostgresDocumentMailRepository;
 }
 
@@ -696,12 +696,19 @@ impl EmailSender for ConfiguredEmailSender {
 
 /// What asks for an e-mail (an invitation, a quote) hands it to the queue ([ADR 0059]); the worker sends it. With no
 /// mail server configured nothing is queued, and the page shows the link to pass on.
+/// It is drawn in the HTML layout on the way (ADR 0068), with the link to the source code that AGPL section 13 asks
+/// the footer to carry: a fork running modified code sets `SOURCE_URL` to its own.
 fn queued_emails(
     queue: PostgresJobQueue,
-) -> Result<QueuedEmailSender<PostgresJobQueue>, Box<dyn std::error::Error + Send + Sync>> {
-    Ok(QueuedEmailSender::new(
-        queue,
-        email_sender_from_env()?.is_enabled(),
+) -> Result<
+    BrandedEmailSender<QueuedEmailSender<PostgresJobQueue>>,
+    Box<dyn std::error::Error + Send + Sync>,
+> {
+    let source_url = std::env::var("SOURCE_URL")
+        .unwrap_or_else(|_| "https://github.com/iuriandreazza/conta-verde".to_owned());
+    Ok(BrandedEmailSender::new(
+        QueuedEmailSender::new(queue, email_sender_from_env()?.is_enabled()),
+        source_url,
     ))
 }
 

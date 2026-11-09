@@ -319,8 +319,56 @@ mod tests {
             "{:?}",
             message.subject
         );
-        // Only the template's own line breaks are left in the body.
-        assert!(!message.body.contains('\r'));
-        assert_eq!(message.body.matches('\n').count(), 6, "{:?}", message.body);
+        // The names were one line each: neither part of the message has a line that starts with the injected header.
+        let html = message.html.as_deref().unwrap_or_default();
+        assert!(!message.body.contains('\r') && !html.contains('\r'));
+        for line in message.body.lines() {
+            assert!(
+                !line.starts_with("Bcc:") && !line.starts_with("Subject:"),
+                "{line:?} in {:?}",
+                message.body
+            );
+        }
+    }
+
+    fn plain_content() -> conta_verde_application::EmailContent {
+        conta_verde_application::EmailContent::new("Olá", "Porque sim.").paragraph("Texto.")
+    }
+
+    #[tokio::test]
+    async fn content_goes_as_text_alone_by_default() {
+        let emails = InMemoryEmailSender::default();
+        emails
+            .send_content(
+                conta_verde_domain::Email::parse("bia@example.com").unwrap(),
+                "Assunto".into(),
+                &plain_content(),
+            )
+            .await
+            .unwrap();
+        let sent = emails.sent();
+        assert_eq!(sent[0].body, plain_content().to_text());
+        assert_eq!(sent[0].html, None);
+    }
+
+    #[tokio::test]
+    async fn the_branded_sender_adds_the_layout_with_the_source_link() {
+        let emails = InMemoryEmailSender::default();
+        let branded = conta_verde_application::BrandedEmailSender::new(
+            emails.clone(),
+            "https://example.org/source".into(),
+        );
+        branded
+            .send_content(
+                conta_verde_domain::Email::parse("bia@example.com").unwrap(),
+                "Assunto".into(),
+                &plain_content(),
+            )
+            .await
+            .unwrap();
+        let sent = emails.sent();
+        assert_eq!(sent[0].body, plain_content().to_text());
+        let html = sent[0].html.as_deref().unwrap();
+        assert!(html.contains("Texto.") && html.contains("https://example.org/source"));
     }
 }

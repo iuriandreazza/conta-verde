@@ -24,6 +24,7 @@ mod document_mail_service;
 mod document_references;
 mod dunning_plan_repository;
 mod dunning_service;
+mod email_content;
 mod email_sender;
 mod entry_import;
 mod entry_repository;
@@ -107,7 +108,8 @@ pub use document_mail_service::{DocumentMailService, MailAsk, Mailed};
 pub use document_references::DocumentReferences;
 pub use dunning_plan_repository::DunningPlanRepository;
 pub use dunning_service::{DunningReport, DunningService};
-pub use email_sender::{EmailError, EmailMessage, EmailSender};
+pub use email_content::{EmailContent, ItemRow, Items};
+pub use email_sender::{BrandedEmailSender, EmailError, EmailMessage, EmailSender};
 pub use entry_import::{
     EntryImportDraft, EntryLookups, ImportNames, MAX_ENTRY_IMPORT_ROWS, SettlementImport,
 };

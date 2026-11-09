@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use conta_verde_application::{EmailError, EmailMessage, EmailSender};
-use lettre::message::{Mailbox, header::ContentType};
+use lettre::message::{Mailbox, MultiPart, header::ContentType};
 use lettre::{Address, AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 
 // A request waits on the send, so a mail server that does not answer must not hold it for long.
@@ -79,13 +79,21 @@ impl SmtpEmailSender {
             .as_str()
             .parse()
             .map_err(|error| format!("the recipient is not a sendable address ({error})"))?;
-        Message::builder()
+        let builder = Message::builder()
             .from(self.from.clone())
             .to(Mailbox::new(None, to))
-            .subject(message.subject.clone())
-            .header(ContentType::TEXT_PLAIN)
-            .body(message.body.clone())
-            .map_err(|error| format!("the message could not be built ({error})"))
+            .subject(message.subject.clone());
+        // With the layout the text and the HTML go as alternatives of each other, the reader showing the better one.
+        match &message.html {
+            Some(html) => builder.multipart(MultiPart::alternative_plain_html(
+                message.body.clone(),
+                html.clone(),
+            )),
+            None => builder
+                .header(ContentType::TEXT_PLAIN)
+                .body(message.body.clone()),
+        }
+        .map_err(|error| format!("the message could not be built ({error})"))
     }
 }
 
@@ -213,6 +221,7 @@ mod tests {
             to: Email::parse("bia@example.com").unwrap(),
             subject: "Ana convidou você para Padaria no conta-verde".into(),
             body: "Você foi convidado. Para aceitar, abra o link:\nhttps://erp.example/invitations/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n".into(),
+            html: None,
         }
     }
 
@@ -355,6 +364,22 @@ mod tests {
             "Ana convidou você para Padaria no conta-verde",
             "{data}"
         );
+    }
+
+    #[tokio::test]
+    async fn a_message_with_the_layout_goes_as_text_and_html_alternatives() {
+        let (port, seen) = serve(Mood::Accepting).await;
+        let message = EmailMessage {
+            html: Some("<p>Ol\u{e1}, <a href=\"https://erp.example/x\">link</a></p>".into()),
+            ..message()
+        };
+        sender(port).send(&message).await.unwrap();
+
+        let seen = seen.lock().unwrap().clone();
+        let data = &seen.data[0];
+        assert!(data.contains("multipart/alternative"), "{data}");
+        assert!(data.contains("text/plain"), "{data}");
+        assert!(data.contains("text/html"), "{data}");
     }
 
     #[tokio::test]
