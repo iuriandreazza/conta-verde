@@ -130,14 +130,6 @@ impl FiscalSettingsRepository for PostgresFiscalSettingsRepository {
         let address = settings.address();
         // One transaction: the settings, every nature and rule, and the audit entry commit together or not at all.
         let mut tx = self.pool.begin().await.map_err(storage_error)?;
-        // The children are replaced as a whole: rules first, since they point at the natures.
-        for table in ["fiscal_tax_rules", "fiscal_natures"] {
-            sqlx::query(&format!("DELETE FROM {table} WHERE company_id = $1"))
-                .bind(company_id)
-                .execute(&mut *tx)
-                .await
-                .map_err(storage_error)?;
-        }
         sqlx::query(
             "INSERT INTO fiscal_settings (company_id, legal_name, cnpj, state_registration, \
              municipal_registration, postal_code, street, street_number, complement, district, city, \
@@ -176,6 +168,16 @@ impl FiscalSettingsRepository for PostgresFiscalSettingsRepository {
         .execute(&mut *tx)
         .await
         .map_err(storage_error)?;
+        // The upsert above took the settings row's lock, so a second writer waits for this transaction and then
+        // replaces what it wrote, instead of colliding with it. The children are replaced as a whole: rules first,
+        // since they point at the natures.
+        for table in ["fiscal_tax_rules", "fiscal_natures"] {
+            sqlx::query(&format!("DELETE FROM {table} WHERE company_id = $1"))
+                .bind(company_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(storage_error)?;
+        }
         for (index, nature) in settings.natures().iter().enumerate() {
             let nature_position = position(index, "natures")?;
             sqlx::query(

@@ -24,7 +24,7 @@ CREATE TABLE fiscal_settings (
     certificate_valid_until DATE,
     -- `btrim` only strips spaces, the domain trims every white space: the checks are patterns, like the parties' address.
     CONSTRAINT fiscal_settings_legal_name_valid CHECK (
-        char_length(legal_name) BETWEEN 1 AND 150 AND legal_name !~ '^\s|\s$'
+        char_length(legal_name) BETWEEN 1 AND 150 AND legal_name !~ '^\s|\s$' AND legal_name !~ '[[:cntrl:]]'
     ),
     CONSTRAINT fiscal_settings_cnpj_valid CHECK (cnpj ~ '^[0-9A-Z]{14}$'),
     CONSTRAINT fiscal_settings_state_registration_valid CHECK (
@@ -32,7 +32,8 @@ CREATE TABLE fiscal_settings (
     ),
     CONSTRAINT fiscal_settings_municipal_registration_valid CHECK (
         municipal_registration IS NULL
-        OR (char_length(municipal_registration) BETWEEN 1 AND 20 AND municipal_registration !~ '^\s|\s$')
+        OR (char_length(municipal_registration) BETWEEN 1 AND 20 AND municipal_registration !~ '^\s|\s$'
+            AND municipal_registration !~ '[[:cntrl:]]')
     ),
     CONSTRAINT fiscal_settings_postal_code_valid CHECK (postal_code ~ '^[0-9]{8}$'),
     CONSTRAINT fiscal_settings_state_valid CHECK (state IN (
@@ -73,7 +74,9 @@ CREATE TABLE fiscal_natures (
     CONSTRAINT fiscal_natures_code_key UNIQUE (company_id, code),
     CONSTRAINT fiscal_natures_position_valid CHECK (position BETWEEN 1 AND 50),
     CONSTRAINT fiscal_natures_code_valid CHECK (code ~ '^[a-z0-9_-]{1,30}$'),
-    CONSTRAINT fiscal_natures_name_valid CHECK (char_length(name) BETWEEN 1 AND 60 AND name !~ '^\s|\s$'),
+    CONSTRAINT fiscal_natures_name_valid CHECK (
+        char_length(name) BETWEEN 1 AND 60 AND name !~ '^\s|\s$' AND name !~ '[[:cntrl:]]'
+    ),
     CONSTRAINT fiscal_natures_kind_valid CHECK (kind IN ('product', 'service')),
     -- Goods carry the CFOP for inside the state (5xxx) and for another (6xxx); a service carries none.
     CONSTRAINT fiscal_natures_cfop_follows_kind CHECK (

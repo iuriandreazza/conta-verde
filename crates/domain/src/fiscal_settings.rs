@@ -1,6 +1,6 @@
 use rust_decimal::Decimal;
 
-use crate::name::{optional_text, required_text};
+use crate::name::{optional_line, required_text};
 use crate::{Address, AddressDraft, Amount, CalendarDate, CompanyId, Document, DomainError};
 
 /// How many operation natures a company keeps and how many tax rules each holds: bounds that keep the settings a
@@ -140,7 +140,7 @@ pub struct TaxRule {
 
 impl TaxRule {
     fn new(draft: &TaxRuleDraft) -> Result<Self, DomainError> {
-        let ncm_prefix = optional_text(
+        let ncm_prefix = optional_line(
             draft.ncm_prefix.as_deref(),
             MAX_NCM_PREFIX_DIGITS,
             DomainError::InvalidFiscalField("ncm_prefix"),
@@ -252,11 +252,7 @@ impl OperationNature {
         {
             return Err(DomainError::InvalidFiscalField("code"));
         }
-        let name = required_text(
-            &draft.name,
-            MAX_NATURE_NAME_CHARS,
-            DomainError::InvalidFiscalField("name"),
-        )?;
+        let name = required_line(&draft.name, MAX_NATURE_NAME_CHARS, "name")?;
         let blank = |raw: &Option<String>| raw.as_deref().is_none_or(|raw| raw.trim().is_empty());
         let (cfop_in_state, cfop_interstate, rules) = match draft.kind {
             NatureKind::Product => (
@@ -382,11 +378,7 @@ pub struct FiscalSettings {
 
 impl FiscalSettings {
     pub fn new(company_id: CompanyId, draft: FiscalSettingsDraft) -> Result<Self, DomainError> {
-        let legal_name = required_text(
-            &draft.legal_name,
-            MAX_LEGAL_NAME_CHARS,
-            DomainError::InvalidFiscalField("legal_name"),
-        )?;
+        let legal_name = required_line(&draft.legal_name, MAX_LEGAL_NAME_CHARS, "legal_name")?;
         let cnpj = match Document::parse(&draft.cnpj)? {
             Document::Cnpj(cnpj) => cnpj,
             Document::Cpf(_) => return Err(DomainError::InvalidFiscalField("cnpj")),
@@ -417,7 +409,7 @@ impl FiscalSettings {
             legal_name,
             cnpj,
             state_registration: state_registration_of(draft.state_registration.as_deref())?,
-            municipal_registration: optional_text(
+            municipal_registration: optional_line(
                 draft.municipal_registration.as_deref(),
                 MAX_MUNICIPAL_REGISTRATION_CHARS,
                 DomainError::InvalidFiscalField("municipal_registration"),
@@ -495,6 +487,16 @@ impl FiscalSettings {
             .collect::<Vec<_>>()
             .join("\n")
     }
+}
+
+/// A name on one line: the audit trail writes the natures one per row, and the database refuses control characters.
+fn required_line(raw: &str, max: usize, field: &'static str) -> Result<String, DomainError> {
+    let error = DomainError::InvalidFiscalField(field);
+    let text = required_text(raw, max, error.clone())?;
+    if text.chars().any(char::is_control) {
+        return Err(error);
+    }
+    Ok(text)
 }
 
 fn all_digits(text: &str) -> bool {
@@ -732,6 +734,22 @@ mod tests {
         assert_eq!(
             settings(|d| d.certificate_valid_until = Some("2027-02-30".into())).unwrap_err(),
             DomainError::InvalidDate("certificate_valid_until")
+        );
+    }
+
+    #[test]
+    fn names_are_one_line() {
+        assert_eq!(
+            field(settings(|d| d.legal_name = "Verde\nLtda".into()).unwrap_err()),
+            "legal_name"
+        );
+        assert_eq!(
+            field(settings(|d| d.natures[0].name = "Venda\tbalcão".into()).unwrap_err()),
+            "name"
+        );
+        assert_eq!(
+            field(settings(|d| d.municipal_registration = Some("12\n34".into())).unwrap_err()),
+            "municipal_registration"
         );
     }
 
