@@ -8,8 +8,9 @@ pub enum Role {
     Financial,
     Sales,
     Stock,
-    /// The company's external accountant: reads everything; period locks and exports come with
-    /// Phase 6 ([ADR 0013]).
+    /// The company's external accountant: reads everything but who belongs to the company, writes none
+    /// of the business data, and is the one role besides the owner and admins that closes a month
+    /// ([ADR 0067]).
     Accountant,
     Viewer,
 }
@@ -28,6 +29,9 @@ pub enum Area {
     Sales,
     /// Purchase orders and their receipts, stock and its movements, counts and reports ([ADR 0052]).
     Purchases,
+    /// Closing a month and getting the books out: the period lock, the exports and the schedule of the
+    /// monthly package ([ADR 0067]). Everyone who reaches the company reads it; the accountant writes it.
+    Accounting,
     /// Who is a member of the company, and their invitations.
     Members,
 }
@@ -68,15 +72,15 @@ impl Role {
 
     /// How far this role reaches into an area, `None` for not at all. The table of [ADR 0026]:
     ///
-    /// | role       | parties | products | finance | sales | purchases | members |
-    /// |------------|---------|----------|---------|-------|-----------|---------|
-    /// | owner      | write   | write    | write   | write | write     | write   |
-    /// | admin      | write   | write    | write   | write | write     | write   |
-    /// | financial  | write   | read     | write   | read  | read      | -       |
-    /// | sales      | write   | read     | read    | write | read      | -       |
-    /// | stock      | read    | write    | read    | read  | write     | -       |
-    /// | accountant | read    | read     | read    | read  | read      | -       |
-    /// | viewer     | read    | read     | read    | read  | read      | -       |
+    /// | role       | parties | products | finance | sales | purchases | accounting | members |
+    /// |------------|---------|----------|---------|-------|-----------|------------|---------|
+    /// | owner      | write   | write    | write   | write | write     | write      | write   |
+    /// | admin      | write   | write    | write   | write | write     | write      | write   |
+    /// | financial  | write   | read     | write   | read  | read      | read       | -       |
+    /// | sales      | write   | read     | read    | write | read      | read       | -       |
+    /// | stock      | read    | write    | read    | read  | write     | read       | -       |
+    /// | accountant | read    | read     | read    | read  | read      | write      | -       |
+    /// | viewer     | read    | read     | read    | read  | read      | read       | -       |
     pub fn access_to(self, area: Area) -> Option<Access> {
         use Access::{Read, Write};
         match (self, area) {
@@ -85,6 +89,7 @@ impl Role {
             (Self::Financial, Area::Parties | Area::Finance) => Some(Write),
             (Self::Sales, Area::Parties | Area::Sales) => Some(Write),
             (Self::Stock, Area::Products | Area::Purchases) => Some(Write),
+            (Self::Accountant, Area::Accounting) => Some(Write),
             _ => Some(Read),
         }
     }
@@ -96,12 +101,13 @@ impl Role {
 }
 
 impl Area {
-    pub const ALL: [Area; 6] = [
+    pub const ALL: [Area; 7] = [
         Self::Parties,
         Self::Products,
         Self::Finance,
         Self::Sales,
         Self::Purchases,
+        Self::Accounting,
         Self::Members,
     ];
 
@@ -112,6 +118,7 @@ impl Area {
             Self::Finance => "finance",
             Self::Sales => "sales",
             Self::Purchases => "purchases",
+            Self::Accounting => "accounting",
             Self::Members => "members",
         }
     }
@@ -156,86 +163,18 @@ mod tests {
     /// to this test, and so to a decision that [ADR 0026] makes.
     #[test]
     fn the_table_of_permissions() {
-        use Access::{Read, Write};
-        // parties, products, finance, sales, members
+        const W: Option<Access> = Some(Access::Write);
+        const R: Option<Access> = Some(Access::Read);
+        const N: Option<Access> = None;
+        // parties, products, finance, sales, purchases, accounting, members
         let expected = [
-            (
-                Role::Owner,
-                [
-                    Some(Write),
-                    Some(Write),
-                    Some(Write),
-                    Some(Write),
-                    Some(Write),
-                    Some(Write),
-                ],
-            ),
-            (
-                Role::Admin,
-                [
-                    Some(Write),
-                    Some(Write),
-                    Some(Write),
-                    Some(Write),
-                    Some(Write),
-                    Some(Write),
-                ],
-            ),
-            (
-                Role::Financial,
-                [
-                    Some(Write),
-                    Some(Read),
-                    Some(Write),
-                    Some(Read),
-                    Some(Read),
-                    None,
-                ],
-            ),
-            (
-                Role::Sales,
-                [
-                    Some(Write),
-                    Some(Read),
-                    Some(Read),
-                    Some(Write),
-                    Some(Read),
-                    None,
-                ],
-            ),
-            (
-                Role::Stock,
-                [
-                    Some(Read),
-                    Some(Write),
-                    Some(Read),
-                    Some(Read),
-                    Some(Write),
-                    None,
-                ],
-            ),
-            (
-                Role::Accountant,
-                [
-                    Some(Read),
-                    Some(Read),
-                    Some(Read),
-                    Some(Read),
-                    Some(Read),
-                    None,
-                ],
-            ),
-            (
-                Role::Viewer,
-                [
-                    Some(Read),
-                    Some(Read),
-                    Some(Read),
-                    Some(Read),
-                    Some(Read),
-                    None,
-                ],
-            ),
+            (Role::Owner, [W, W, W, W, W, W, W]),
+            (Role::Admin, [W, W, W, W, W, W, W]),
+            (Role::Financial, [W, R, W, R, R, R, N]),
+            (Role::Sales, [W, R, R, W, R, R, N]),
+            (Role::Stock, [R, W, R, R, W, R, N]),
+            (Role::Accountant, [R, R, R, R, R, W, N]),
+            (Role::Viewer, [R, R, R, R, R, R, N]),
         ];
         for (role, levels) in expected {
             let found = Area::ALL.map(|area| role.access_to(area));
@@ -255,5 +194,14 @@ mod tests {
         assert!(!Role::Sales.can(Area::Purchases, Access::Write));
         assert!(!Role::Viewer.can(Area::Members, Access::Read));
         assert!(!Role::Accountant.can(Area::Members, Access::Write));
+    }
+
+    #[test]
+    fn the_accountant_writes_nothing_but_the_accounting_area() {
+        for area in Area::ALL {
+            let writes = Role::Accountant.can(area, Access::Write);
+            assert_eq!(writes, area == Area::Accounting, "{area:?}");
+        }
+        assert!(!Role::Financial.can(Area::Accounting, Access::Write));
     }
 }

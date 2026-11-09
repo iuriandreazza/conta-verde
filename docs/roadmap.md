@@ -122,7 +122,7 @@ the schedule; which date locks each record; the DRE's sign and lines; the packag
 links to a login-gated page). One slice per pull request, in this order:
 
 - [x] Plan ([ADR 0067](adr/0067-accountant-and-reporting-plan.md))
-- [ ] Accountant role: read access to every company that invites them, no write
+- [x] Accountant role: read access to every company that invites them, no write ([ADR 0067](adr/0067-accountant-and-reporting-plan.md)) — the `accountant` role reads every area but members and writes only the new `accounting` area (the lock, the exports, the schedule), the one table of route segments is `SEGMENT_AREAS`, and a test walks every route of the router with the accountant and the viewer
 - [ ] Period lock: entries before the lock date cannot change without reopening
 - [ ] DRE (managerial income statement) by month and cost center ([ADR 0012](adr/0012-managerial-accounting-model.md))
 - [ ] Exports: entries and settlements (CSV/XLSX), fiscal XMLs and PDFs by period ([ADR 0013](adr/0013-accountant-access-and-exports.md))

@@ -9,7 +9,7 @@ export interface User {
 export type Role = "owner" | "admin" | "financial" | "sales" | "stock" | "accountant" | "viewer";
 
 /** A part of the product a permission is about (ADR 0026). */
-export type Area = "parties" | "products" | "finance" | "sales" | "purchases" | "members";
+export type Area = "parties" | "products" | "finance" | "sales" | "purchases" | "accounting" | "members";
 
 export interface Company {
   id: string;

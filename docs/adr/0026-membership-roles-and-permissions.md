@@ -92,6 +92,10 @@ Why these, since the choice is a product one and easy to change (it is one funct
 - One role per member per company; a person who is the accountant of two companies has two
   memberships.
 
+## Phase 6
+
+The `accounting` area was added with the accountant's work ([ADR 0067](0067-accountant-and-reporting-plan.md)): the table above gains a column where the accountant, owner and admin write and everyone else reads, and the rest of the table is as written here.
+
 ## Revisit when
 
 A real company needs a profile this table cannot say (the same person selling and reading finance
