@@ -134,6 +134,8 @@ pub enum ApplicationError {
     TooManyAttachments,
     /// A cash flow was asked for a span that is not one or is too long to cut.
     InvalidSpan(&'static str),
+    /// A package for the accountant would be bigger than one request holds; narrow the span ([ADR 0071]).
+    ExportTooLarge(&'static str),
     /// No statement line with this id in the company (another company's looks the same).
     StatementLineNotFound,
     /// Another statement line is already matched to the settlement or the transfer.
@@ -431,6 +433,9 @@ impl fmt::Display for ApplicationError {
             ),
             Self::TooManyImportRows => f.write_str("the file has more lines than one import takes"),
             Self::InvalidSpan(reason) => write!(f, "invalid span: {reason}"),
+            Self::ExportTooLarge(what) => {
+                write!(f, "too much for one export ({what}): choose a shorter period")
+            }
             Self::SettlementExceedsBalance => {
                 f.write_str("this settles more of the installment than is left of it")
             }

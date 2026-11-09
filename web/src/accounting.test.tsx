@@ -1,4 +1,4 @@
-import { fireEvent, screen } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, vi } from "vitest";
 import type { HistoryEntry, PeriodLock, Profile } from "./api";
@@ -53,8 +53,9 @@ it("offers the month after the closed one, so closing the next month is one clic
 
   expect(await screen.findByText("Período fechado até 29/02/2020.")).toBeInTheDocument();
   expect(putsOf(fetchMock)).toEqual([{ locked_through: "2020-02-29" }]);
-  // The offer moves on with the lock.
+  // The offer moves on with the lock, and so does the month the files are for.
   expect(screen.getByLabelText("Fechar até o fim de")).toHaveValue("2020-03");
+  expect(screen.getByLabelText("Mês")).toHaveValue("2020-02");
 });
 
 it("closes through the last day of the month that is chosen", async () => {
@@ -126,6 +127,102 @@ it("lets a reader see the lock and offers no way to change it", async () => {
   expect(await screen.findByText("31/10/2026")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Fechar período" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Reabrir período" })).not.toBeInTheDocument();
+});
+
+describe("the accountant's files", () => {
+  let saved: { name: string; text: string }[] = [];
+
+  beforeEach(() => {
+    saved = [];
+    vi.stubGlobal("URL", {
+      createObjectURL: (blob: Blob) => {
+        void blob.text().then((text) => (saved[saved.length - 1].text = text));
+        saved.push({ name: "", text: "" });
+        return "blob:x";
+      },
+      revokeObjectURL: () => undefined,
+    });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      saved[saved.length - 1].name = this.download;
+    });
+  });
+
+  /** The API of the lock, and a file answer for each export. */
+  function serveFiles(answer: (url: string) => { status: number; text?: string; body?: unknown }) {
+    return mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (url.includes("/accounting/exports/")) return answer(url);
+      if (url.endsWith("/accounting/period-lock/history")) return { status: 200, body: trail };
+      if (url.endsWith("/accounting/period-lock") && init?.method !== "PUT") return { status: 200, body: closedThroughOctober };
+      return { status: 404, body: { error: "not found" } };
+    });
+  }
+
+  it("asks for the month that was closed last and saves what the server makes", async () => {
+    const fetchMock = serveFiles(() => ({ status: 200, text: "entry_id;kind\r\n" }));
+    renderAt("/companies/c1/accounting");
+    await screen.findByText("31/10/2026");
+
+    expect(screen.getByLabelText("Mês")).toHaveValue("2026-10");
+    await userEvent.click(screen.getByRole("button", { name: "Lançamentos" }));
+
+    await waitFor(() => expect(saved[0]?.text).toBe("entry_id;kind\r\n"));
+    expect(saved[0].name).toBe("entries-2026-10-01-a-2026-10-31.csv");
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toContain(
+      "/api/companies/c1/accounting/exports/entries?from=2026-10-01&to=2026-10-31&format=csv",
+    );
+  });
+
+  it("asks for the spreadsheet and the whole package of another month", async () => {
+    const fetchMock = serveFiles(() => ({ status: 200, text: "x" }));
+    renderAt("/companies/c1/accounting");
+    await screen.findByText("31/10/2026");
+
+    fireEvent.change(screen.getByLabelText("Mês"), { target: { value: "2026-02" } });
+    await userEvent.selectOptions(screen.getByLabelText("Formato"), "xlsx");
+    await userEvent.click(screen.getByRole("button", { name: "Pacote completo (.zip)" }));
+
+    await waitFor(() => expect(saved[0]?.name).toBe("package-2026-02-01-a-2026-02-28.zip"));
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toContain(
+      "/api/companies/c1/accounting/exports/package?from=2026-02-01&to=2026-02-28&format=xlsx",
+    );
+  });
+
+  it("tells a refusal in the server's words and saves nothing", async () => {
+    serveFiles(() => ({
+      status: 422,
+      body: { error: "too much for one export (more than 50,000 settlements): choose a shorter period" },
+    }));
+    renderAt("/companies/c1/accounting");
+    await screen.findByText("31/10/2026");
+
+    await userEvent.click(screen.getByRole("button", { name: "Baixas" }));
+
+    expect(await screen.findByText(/too much for one export/)).toBeInTheDocument();
+    expect(saved).toEqual([]);
+    // The button is free again.
+    expect(screen.getByRole("button", { name: "Baixas" })).toBeEnabled();
+  });
+
+  it("says plainly what the package does not hold, and lets a reader download too", async () => {
+    const reader: Profile = {
+      ...profile,
+      companies: [{ id: "c1", name: "Padaria", role: "viewer", permissions: { ...OWNER_PERMISSIONS, accounting: "read" } }],
+    };
+    mockApi((url, init) => {
+      if (url === "/api/auth/me") return { status: 200, body: reader };
+      if (url.includes("/accounting/exports/")) return { status: 200, text: "x" };
+      if (url.endsWith("/history")) return { status: 200, body: trail };
+      if (init?.method === "PUT") return { status: 403, body: { error: "forbidden" } };
+      return { status: 200, body: closedThroughOctober };
+    });
+    renderAt("/companies/c1/accounting");
+    await screen.findByText("31/10/2026");
+
+    expect(screen.getByText(/não guarda o XML das notas de compra/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Transferências" }));
+    await waitFor(() => expect(saved[0]?.name).toBe("transfers-2026-10-01-a-2026-10-31.csv"));
+  });
 });
 
 it("is a link on the menu", async () => {

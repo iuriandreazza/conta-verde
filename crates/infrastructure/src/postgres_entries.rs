@@ -371,6 +371,48 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
         row.as_ref().map(settlement_from_row).transpose()
     }
 
+    async fn find_many(
+        &self,
+        company_id: CompanyId,
+        ids: &[EntryId],
+    ) -> Result<Vec<FinancialEntry>, RepositoryError> {
+        let ids: Vec<Uuid> = ids.iter().map(|id| id.as_uuid()).collect();
+        let mut tx = snapshot(&self.pool).await?;
+        let rows = sqlx::query(&format!(
+            "{SELECT_ENTRIES} WHERE company_id = $1 AND id = ANY($2) ORDER BY competence_date, id"
+        ))
+        .bind(company_id.as_uuid())
+        .bind(&ids)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(storage_error)?;
+        let entries = with_installments(&mut tx, company_id, rows).await?;
+        tx.commit().await.map_err(storage_error)?;
+        Ok(entries)
+    }
+
+    async fn settlements_between(
+        &self,
+        company_id: CompanyId,
+        since: CalendarDate,
+        until: CalendarDate,
+        limit: usize,
+    ) -> Result<Vec<Settlement>, RepositoryError> {
+        let rows = sqlx::query(&format!(
+            "{SELECT_SETTLEMENTS} WHERE company_id = $1 AND NOT reversed \
+             AND settled_on >= CAST($2 AS DATE) AND settled_on <= CAST($3 AS DATE) \
+             ORDER BY settled_on, id LIMIT $4"
+        ))
+        .bind(company_id.as_uuid())
+        .bind(since.to_string())
+        .bind(until.to_string())
+        .bind(i64::try_from(limit).unwrap_or(i64::MAX))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        rows.iter().map(settlement_from_row).collect()
+    }
+
     async fn settlements_of(
         &self,
         company_id: CompanyId,
@@ -846,6 +888,13 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
         if let Some(voided) = query.voided() {
             sql.push(" AND voided = ").push_bind(voided);
         }
+        if let Some((from, until)) = query.competence_span() {
+            sql.push(" AND competence_date >= CAST(")
+                .push_bind(from.to_string())
+                .push(" AS DATE) AND competence_date <= CAST(")
+                .push_bind(until.to_string())
+                .push(" AS DATE)");
+        }
         if let Some(text) = query.search() {
             // `strpos` instead of `LIKE` so that `%` and `_` in the text mean themselves.
             sql.push(" AND strpos(lower(description), lower(")
@@ -1300,6 +1349,47 @@ mod tests {
             &dre,
             &entries,
             &categories,
+            company,
+            other_company,
+            &seed,
+            &other_seed,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn exports_the_books_of_a_span() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let other_company = contract::create_company(&pool).await;
+        let (seed, other_seed) = (seed(&pool, company).await, seed(&pool, other_company).await);
+        let entries = FinancialEntryService::new(
+            PostgresFinancialEntryRepository::new(pool.clone()),
+            references(&pool),
+        );
+        let store = PostgresFinancialEntryRepository::new(pool.clone());
+        contract::exports_the_books_of_a_span(
+            &entries,
+            &store,
+            company,
+            other_company,
+            &seed,
+            &other_seed,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn names_everything_for_the_export() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let other_company = contract::create_company(&pool).await;
+        let (seed, other_seed) = (seed(&pool, company).await, seed(&pool, other_company).await);
+        contract::names_everything_for_the_export(
+            &references(&pool),
+            &PostgresCategoryRepository::new(pool.clone()),
             company,
             other_company,
             &seed,

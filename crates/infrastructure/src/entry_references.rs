@@ -1,9 +1,11 @@
 use std::collections::HashMap;
+use std::future::Future;
 
 use conta_verde_application::{
     BankAccountQuery, BankAccountRepository, CategoryRepository, CostCenterQuery,
-    CostCenterRepository, EntryLookups, EntryReferences, ImportNames, NameCursor, PartyQuery,
-    PartyRepository, PaymentMethodRepository, PeriodLockRepository, RepositoryError,
+    CostCenterRepository, EntryLookups, EntryReferences, ExportLookups, ExportNames, ImportNames,
+    NameCursor, PartyQuery, PartyRepository, PaymentMethodQuery, PaymentMethodRepository,
+    PeriodLockRepository, RepositoryError,
 };
 use conta_verde_domain::{
     BankAccountId, CalendarDate, CategoryId, CompanyId, CostCenterId, DreGroup, PartyId,
@@ -117,6 +119,149 @@ where
             .find(company_id, id)
             .await?
             .is_some_and(|method| method.is_active()))
+    }
+}
+
+/// Every row of a register listed by name, a page at a time: the inactive ones too.
+async fn every_row<T, F, Fut>(
+    fetch: F,
+    cursor_of: impl Fn(&T) -> NameCursor,
+) -> Result<Vec<T>, RepositoryError>
+where
+    F: Fn(Option<NameCursor>) -> Fut,
+    Fut: Future<Output = Result<Vec<T>, RepositoryError>>,
+{
+    let mut rows = Vec::new();
+    let mut after = None;
+    loop {
+        let page = fetch(after.take()).await?;
+        let full = page.len() == PAGE;
+        after = page.last().map(&cursor_of);
+        rows.extend(page);
+        if !full {
+            return Ok(rows);
+        }
+    }
+}
+
+impl<C, K, P, B, M, L> ExportLookups for RegisterReferences<C, K, P, B, M, L>
+where
+    C: CategoryRepository,
+    K: CostCenterRepository,
+    P: PartyRepository,
+    B: BankAccountRepository,
+    M: PaymentMethodRepository,
+    L: Send + Sync,
+{
+    async fn export_names(
+        &self,
+        company_id: CompanyId,
+        parties: &[PartyId],
+    ) -> Result<ExportNames, RepositoryError> {
+        let mut names = ExportNames::default();
+
+        // Every category, inactive ones too: an entry of last year may still point at one. The whole path is
+        // named, so `Despesas > Pessoal > Salários` and `Custos > Pessoal > Salários` are not the same text.
+        let categories = self.categories.list_by_company(company_id, None).await?;
+        let by_id: HashMap<CategoryId, &conta_verde_domain::Category> = categories
+            .iter()
+            .map(|category| (category.id(), category))
+            .collect();
+        for category in &categories {
+            let mut path = vec![category.name()];
+            let mut parent = category.parent_id();
+            // The tree is at most five deep; the bound only keeps a cycle, which cannot be stored, from looping.
+            while let Some(above) = parent
+                .and_then(|id| by_id.get(&id))
+                .filter(|_| path.len() < 16)
+            {
+                path.push(above.name());
+                parent = above.parent_id();
+            }
+            path.reverse();
+            names.categories.insert(category.id(), path.join(" > "));
+        }
+
+        let cost_centers = every_row(
+            |after| async move {
+                self.cost_centers
+                    .list_by_company(
+                        company_id,
+                        &CostCenterQuery::default(),
+                        after.as_ref(),
+                        PAGE,
+                    )
+                    .await
+            },
+            |row| NameCursor {
+                name: row.name().to_owned(),
+                id: row.id().as_uuid(),
+            },
+        )
+        .await?;
+        names.cost_centers = cost_centers
+            .iter()
+            .map(|row| (row.id(), row.name().to_owned()))
+            .collect();
+
+        let accounts = every_row(
+            |after| async move {
+                self.bank_accounts
+                    .list_by_company(
+                        company_id,
+                        &BankAccountQuery::default(),
+                        after.as_ref(),
+                        PAGE,
+                    )
+                    .await
+            },
+            |row| NameCursor {
+                name: row.name().to_owned(),
+                id: row.id().as_uuid(),
+            },
+        )
+        .await?;
+        names.bank_accounts = accounts
+            .iter()
+            .map(|row| (row.id(), row.name().to_owned()))
+            .collect();
+
+        let methods = every_row(
+            |after| async move {
+                self.payment_methods
+                    .list_by_company(
+                        company_id,
+                        &PaymentMethodQuery::default(),
+                        after.as_ref(),
+                        PAGE,
+                    )
+                    .await
+            },
+            |row| NameCursor {
+                name: row.name().to_owned(),
+                id: row.id().as_uuid(),
+            },
+        )
+        .await?;
+        names.payment_methods = methods
+            .iter()
+            .map(|row| (row.id(), row.name().to_owned()))
+            .collect();
+
+        for id in parties {
+            if let Some(party) = self.parties.find(company_id, *id).await? {
+                names.parties.insert(
+                    *id,
+                    (
+                        party.name().to_owned(),
+                        party
+                            .document()
+                            .map(|document| document.as_str().to_owned()),
+                    ),
+                );
+            }
+        }
+        Ok(names)
     }
 }
 

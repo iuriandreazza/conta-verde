@@ -19,6 +19,8 @@ mod dunning;
 mod entries;
 mod entries_import;
 mod error;
+mod export_files;
+mod exports;
 mod history;
 mod inventory_counts;
 mod json;
@@ -51,14 +53,14 @@ use std::sync::Arc;
 use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
 use conta_verde_application::{
-    AttachmentRepository, AttachmentService, AuthService, BalanceService, BankAccountRepository,
-    BankAccountService, BlobStore, CategoryRepository, CategoryService, ChargeRepository,
-    ChargeService, CnpjRegistry, CommissionRuleRepository, CommissionService, ContractRepository,
-    ContractService, CostCenterRepository, CostCenterService, DocumentMailRepository,
-    DocumentMailService, DocumentReferences, DreService, EmailSender, EntryLookups,
-    EntryReferences, FinancialEntryRepository, FinancialEntryService, IdentityRepository,
-    InventoryCountRepository, InventoryCountService, InvitationRepository, MemberService,
-    OpeningRepository, PartyRepository, PartyService, PaymentMethodRepository,
+    AccountingExportService, AttachmentRepository, AttachmentService, AuthService, BalanceService,
+    BankAccountRepository, BankAccountService, BlobStore, CategoryRepository, CategoryService,
+    ChargeRepository, ChargeService, CnpjRegistry, CommissionRuleRepository, CommissionService,
+    ContractRepository, ContractService, CostCenterRepository, CostCenterService,
+    DocumentMailRepository, DocumentMailService, DocumentReferences, DreService, EmailSender,
+    EntryLookups, EntryReferences, ExportLookups, FinancialEntryRepository, FinancialEntryService,
+    IdentityRepository, InventoryCountRepository, InventoryCountService, InvitationRepository,
+    MemberService, OpeningRepository, PartyRepository, PartyService, PaymentMethodRepository,
     PaymentMethodService, PaymentProvider, PaymentTermRepository, PaymentTermService,
     PostalCodeDirectory, PostalCodeService, PriceListRepository, PriceListService,
     ProductRepository, ProductService, PurchaseOrderRepository, PurchaseService, QuoteRepository,
@@ -97,7 +99,7 @@ pub trait Ports: 'static {
     type PaymentTerms: PaymentTermRepository + 'static;
     type PriceLists: PriceListRepository + 'static;
     type Entries: FinancialEntryRepository + 'static;
-    type EntryReferences: EntryReferences + EntryLookups + 'static;
+    type EntryReferences: EntryReferences + EntryLookups + ExportLookups + 'static;
     type PeriodLocks: PeriodLockRepository + 'static;
     type Attachments: AttachmentRepository + 'static;
     type Blobs: BlobStore + 'static;
@@ -182,6 +184,15 @@ type BalancesOf<X> = BalanceService<
     <X as Ports>::Transfers,
     <X as Ports>::Openings,
     <X as Ports>::PeriodLocks,
+>;
+
+/// The accountant's exports over the adapters of `X`.
+type ExportsOf<X> = AccountingExportService<
+    <X as Ports>::Entries,
+    <X as Ports>::Transfers,
+    <X as Ports>::Attachments,
+    <X as Ports>::Blobs,
+    <X as Ports>::EntryReferences,
 >;
 
 /// The inventory counts use case over the adapters of `X`.
@@ -271,6 +282,7 @@ pub struct Services<X: Ports> {
         ReconciliationService<X::Statements, X::Entries, X::Transfers, X::EntryReferences>,
     pub balances: BalancesOf<X>,
     pub period_locks: PeriodLockService<X::PeriodLocks>,
+    pub exports: ExportsOf<X>,
     pub postal_codes: PostalCodeService<X::PostalCodes>,
     pub members: MemberService<X::Invitations, X::Identity, X::Emails, X::Secrets>,
     pub documents: DocumentsOf<X>,
@@ -308,6 +320,7 @@ pub(crate) struct AppState<X: Ports> {
         ReconciliationService<X::Statements, X::Entries, X::Transfers, X::EntryReferences>,
     balances: BalancesOf<X>,
     period_locks: PeriodLockService<X::PeriodLocks>,
+    exports: ExportsOf<X>,
     postal_codes: PostalCodeService<X::PostalCodes>,
     members: MemberService<X::Invitations, X::Identity, X::Emails, X::Secrets>,
     documents: DocumentsOf<X>,
@@ -349,6 +362,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         reconciliation: services.reconciliation,
         balances: services.balances,
         period_locks: services.period_locks,
+        exports: services.exports,
         postal_codes: services.postal_codes,
         members: services.members,
         documents: services.documents,
@@ -608,6 +622,22 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         .route(
             "/companies/{company_id}/accounting/period-lock/history",
             get(accounting::period_lock_history::<X>),
+        )
+        .route(
+            "/companies/{company_id}/accounting/exports/entries",
+            get(exports::entries_file::<X>),
+        )
+        .route(
+            "/companies/{company_id}/accounting/exports/settlements",
+            get(exports::settlements_file::<X>),
+        )
+        .route(
+            "/companies/{company_id}/accounting/exports/transfers",
+            get(exports::transfers_file::<X>),
+        )
+        .route(
+            "/companies/{company_id}/accounting/exports/package",
+            get(exports::package_file::<X>),
         )
         .route(
             "/companies/{company_id}/dre",
@@ -1187,6 +1217,25 @@ mod tests {
             InMemoryAttachmentRepository::default(),
             InMemoryBlobStore::default(),
             InMemoryFinancialEntryRepository::default(),
+        )
+    }
+
+    type TestExports = ExportsOf<MemoryPorts>;
+
+    /// Exports over stores that the app's own services do not share: for the tests that never export.
+    fn standalone_exports() -> TestExports {
+        AccountingExportService::new(
+            InMemoryFinancialEntryRepository::default(),
+            InMemoryTransferRepository::default(),
+            InMemoryAttachmentRepository::default(),
+            InMemoryBlobStore::default(),
+            references_over(
+                &InMemoryCategoryRepository::default(),
+                &InMemoryCostCenterRepository::default(),
+                &InMemoryPartyRepository::default(),
+                &InMemoryBankAccountRepository::default(),
+                &InMemoryPaymentMethodRepository::default(),
+            ),
         )
     }
 
@@ -1798,6 +1847,7 @@ mod tests {
                 reconciliation: standalone_reconciliation(),
                 balances: standalone_balances(),
                 period_locks: PeriodLockService::new(locks()),
+                exports: standalone_exports(),
                 dre: DreService::new(
                     InMemoryFinancialEntryRepository::default(),
                     InMemoryCategoryRepository::default(),
@@ -2458,6 +2508,7 @@ mod tests {
                 reconciliation: standalone_reconciliation(),
                 balances: standalone_balances(),
                 period_locks: PeriodLockService::new(locks()),
+                exports: standalone_exports(),
                 dre: DreService::new(
                     InMemoryFinancialEntryRepository::default(),
                     InMemoryCategoryRepository::default(),
@@ -4679,6 +4730,7 @@ mod tests {
                 reconciliation: standalone_reconciliation(),
                 balances: standalone_balances(),
                 period_locks: PeriodLockService::new(locks()),
+                exports: standalone_exports(),
                 dre: DreService::new(
                     InMemoryFinancialEntryRepository::default(),
                     InMemoryCategoryRepository::default(),
@@ -6199,6 +6251,8 @@ mod tests {
         let sale_store = InMemorySaleRepository::default();
         let ledger = InMemoryStockMovementRepository::default();
         let stock_settings = InMemoryStockSettingsRepository::default();
+        let attachment_store = InMemoryAttachmentRepository::default();
+        let blob_store = InMemoryBlobStore::default();
         let sales = || {
             sales_over(
                 sale_store.clone(),
@@ -6234,8 +6288,8 @@ mod tests {
                     &payment_methods,
                 ),
                 attachments: AttachmentService::new(
-                    InMemoryAttachmentRepository::default(),
-                    InMemoryBlobStore::default(),
+                    attachment_store.clone(),
+                    blob_store.clone(),
                     entry_store.clone(),
                 ),
                 charges: ChargeService::new(
@@ -6330,11 +6384,24 @@ mod tests {
                 balances: BalanceService::new(
                     bank_accounts.clone(),
                     entry_store.clone(),
-                    transfer_store,
+                    transfer_store.clone(),
                     InMemoryOpeningRepository::default(),
                 )
                 .with_period_lock(locks()),
                 period_locks: PeriodLockService::new(locks()),
+                exports: AccountingExportService::new(
+                    entry_store.clone(),
+                    transfer_store.clone(),
+                    attachment_store.clone(),
+                    blob_store.clone(),
+                    references_over(
+                        &categories,
+                        &cost_centers,
+                        &parties,
+                        &bank_accounts,
+                        &payment_methods,
+                    ),
+                ),
                 dre: DreService::new(entry_store.clone(), categories.clone()),
                 postal_codes: PostalCodeService::new(known_postal_codes()),
                 members: standalone_members(),
@@ -6408,6 +6475,324 @@ mod tests {
                 .map(|(due, amount)| json!({ "due_date": due, "amount": amount }))
                 .collect::<Vec<_>>(),
         })
+    }
+
+    #[tokio::test]
+    async fn the_accountant_downloads_the_books_of_a_month_exactly() {
+        use conta_verde_domain::Role;
+
+        let (app, identities) = entry_app_with_identities();
+        let (owner, company_id) = sign_up(&app, "dona@example.com").await;
+        let accountant = member_with_role(&app, &identities, company_id, Role::Accountant).await;
+        let viewer = member_with_role(&app, &identities, company_id, Role::Viewer).await;
+        let (stranger, other_company) = sign_up(&app, "outra@example.com").await;
+        let targets = entry_targets(&app, &owner, company_id).await;
+        let others = entry_targets(&app, &stranger, other_company).await;
+        let account = registered_account(&app, &owner, company_id, "Caixa").await;
+        let other_account = registered_account(&app, &owner, company_id, "Banco").await;
+
+        let enter = |who: &str,
+                     with: &EntryTargets,
+                     company: Uuid,
+                     what: &str,
+                     kind: &str,
+                     category: &str,
+                     competence: &str,
+                     parts: &[(&str, &str)]| {
+            let mut body = entry_body(with, what, parts);
+            body["kind"] = json!(kind);
+            body["category_id"] = json!(category);
+            body["competence_date"] = json!(competence);
+            let (app, who) = (app.clone(), who.to_owned());
+            async move {
+                let reply = post_to(&app, &entries_uri(company), &who, body).await;
+                assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.body);
+                reply.body["id"].as_str().unwrap().to_owned()
+            }
+        };
+        // October: a sale in two installments, with a description a spreadsheet would run, and a rent.
+        let sale = enter(
+            &owner,
+            &targets,
+            company_id,
+            "Venda; \"da casa\"",
+            "receivable",
+            &targets.category,
+            "2026-10-05",
+            &[("2026-10-20", "600"), ("2026-11-20", "400")],
+        )
+        .await;
+        let rent = enter(
+            &owner,
+            &targets,
+            company_id,
+            "=Aluguel",
+            "payable",
+            &targets.other_category,
+            "2026-10-31",
+            &[("2026-10-31", "200.5")],
+        )
+        .await;
+        // Outside the span, and another company's: none of them is in the files.
+        let september = enter(
+            &owner,
+            &targets,
+            company_id,
+            "Setembro",
+            "receivable",
+            &targets.category,
+            "2026-09-30",
+            &[("2026-10-10", "10")],
+        )
+        .await;
+        enter(
+            &owner,
+            &targets,
+            company_id,
+            "Novembro",
+            "receivable",
+            &targets.category,
+            "2026-11-01",
+            &[("2026-11-30", "70")],
+        )
+        .await;
+        enter(
+            &stranger,
+            &others,
+            other_company,
+            "Alheio",
+            "receivable",
+            &others.category,
+            "2026-10-05",
+            &[("2026-10-10", "77")],
+        )
+        .await;
+
+        let settle = |entry: &str,
+                      installment: u32,
+                      on: &str,
+                      applied: &str,
+                      interest: Option<&str>| {
+            let mut body = json!({ "installment": installment, "settled_on": on, "applied": applied, "bank_account_id": account });
+            if let Some(interest) = interest {
+                body["interest"] = json!(interest);
+            }
+            let uri = format!("{}/{entry}/settlements", entries_uri(company_id));
+            let (app, owner) = (app.clone(), owner.clone());
+            async move {
+                let reply = post_to(&app, &uri, &owner, body).await;
+                assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.body);
+                reply.body["id"].as_str().unwrap().to_owned()
+            }
+        };
+        let paid_sale = settle(&sale, 1, "2026-10-20", "600", Some("5")).await;
+        let paid_rent = settle(&rent, 1, "2026-10-31", "200.5", None).await;
+        let undone = settle(&sale, 2, "2026-10-25", "100", None).await;
+        settle(&sale, 2, "2026-11-03", "300", None).await;
+        let reversed = send(
+            &app,
+            json_request(
+                "DELETE",
+                &format!("{}/{sale}/settlements/{undone}", entries_uri(company_id)),
+                Some(&owner),
+                Value::Null,
+            ),
+        )
+        .await;
+        assert_eq!(reversed.status, StatusCode::NO_CONTENT, "{}", reversed.body);
+
+        let transfer = |on: &str, amount: &str| {
+            let (app, owner) = (app.clone(), owner.clone());
+            let body = json!({ "from_account_id": account, "to_account_id": other_account, "amount": amount, "occurred_on": on });
+            let uri = transfers_uri(company_id);
+            async move {
+                let reply = post_to(&app, &uri, &owner, body).await;
+                assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.body);
+                reply.body["id"].as_str().unwrap().to_owned()
+            }
+        };
+        let moved = transfer("2026-10-10", "30.25").await;
+        let undone_transfer = transfer("2026-10-12", "99").await;
+        transfer("2026-11-02", "5").await;
+        let gone = send(
+            &app,
+            json_request(
+                "DELETE",
+                &format!("{}/{undone_transfer}", transfers_uri(company_id)),
+                Some(&owner),
+                Value::Null,
+            ),
+        )
+        .await;
+        assert_eq!(gone.status, StatusCode::NO_CONTENT, "{}", gone.body);
+
+        // A file attached to the sale is in the package; one on the September entry is not.
+        let attach = |entry: &str, name: &str, bytes: &[u8]| {
+            let uri = format!("{}?name={name}", attachments_uri(company_id, entry));
+            let (app, owner, bytes) = (app.clone(), owner.clone(), bytes.to_vec());
+            async move {
+                let reply = send(
+                    &app,
+                    file_request("POST", &uri, Some(&owner), "application/pdf", bytes),
+                )
+                .await;
+                assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.body);
+                reply.body["id"].as_str().unwrap().to_owned()
+            }
+        };
+        let note = attach(&sale, "Nota%20%C3%A7.pdf", b"%PDF-1.4 nota").await;
+        let lease = attach(&rent, "Contrato%3A%20aluguel.pdf", b"%PDF-1.4 contrato").await;
+        attach(&september, "Antigo.pdf", b"%PDF-1.4 velho").await;
+
+        let span = "from=2026-10-01&to=2026-10-31";
+        let base = format!("/companies/{company_id}/accounting/exports");
+        let get = |file: &str, query: &str, cookie: &str| {
+            let request = get_request(&format!("{base}/{file}?{query}"), Some(cookie));
+            let app = app.clone();
+            async move { raw(&app, request).await }
+        };
+
+        // The entries: one row per installment, by competence date, in the exact layout of ADR 0071.
+        let (status, headers, bytes) = get("entries", span, &accountant).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers[header::CONTENT_TYPE], "text/csv; charset=utf-8");
+        assert_eq!(
+            headers[header::CONTENT_DISPOSITION],
+            "attachment; filename=\"entries-2026-10-01-a-2026-10-31.csv\""
+        );
+        assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+        assert_eq!(headers[header::CACHE_CONTROL], "private, no-store");
+        let entries_csv = format!(
+            "\u{feff}entry_id;kind;description;party;party_document;category;cost_center;competence_date;installment;installments;due_date;amount\r\n\
+             {sale};receivable;\"Venda; \"\"da casa\"\"\";Padaria Central;11222333000181;Vendas;Matriz;2026-10-05;1;2;2026-10-20;600\r\n\
+             {sale};receivable;\"Venda; \"\"da casa\"\"\";Padaria Central;11222333000181;Vendas;Matriz;2026-10-05;2;2;2026-11-20;400\r\n\
+             {rent};payable;'=Aluguel;Padaria Central;11222333000181;Despesas;Matriz;2026-10-31;1;1;2026-10-31;200.5\r\n"
+        );
+        assert_eq!(String::from_utf8(bytes).unwrap(), entries_csv);
+
+        // The settlements: by the day settled, what was reversed out, the cash worked out.
+        let (status, _, bytes) = get("settlements", span, &accountant).await;
+        assert_eq!(status, StatusCode::OK);
+        let settlements_csv = format!(
+            "\u{feff}settlement_id;entry_id;kind;description;party;category;cost_center;installment;settled_on;bank_account;payment_method;applied;interest;fine;discount;cash\r\n\
+             {paid_sale};{sale};receivable;\"Venda; \"\"da casa\"\"\";Padaria Central;Vendas;Matriz;1;2026-10-20;Caixa;;600;5;0;0;605\r\n\
+             {paid_rent};{rent};payable;'=Aluguel;Padaria Central;Despesas;Matriz;1;2026-10-31;Caixa;;200.5;0;0;0;200.5\r\n"
+        );
+        assert_eq!(String::from_utf8(bytes).unwrap(), settlements_csv);
+
+        // The transfers: the one in the span, not the reversed one.
+        let (status, _, bytes) = get("transfers", span, &accountant).await;
+        assert_eq!(status, StatusCode::OK);
+        let transfers_csv = format!(
+            "\u{feff}transfer_id;occurred_on;from_account;to_account;amount;note\r\n\
+             {moved};2026-10-10;Caixa;Banco;30.25;\r\n"
+        );
+        assert_eq!(String::from_utf8(bytes).unwrap(), transfers_csv);
+
+        // The package: the same three files, the list of what is attached and the file itself, and nothing else.
+        let (status, headers, bytes) = get("package", span, &accountant).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers[header::CONTENT_TYPE], "application/zip");
+        assert_eq!(
+            headers[header::CONTENT_DISPOSITION],
+            "attachment; filename=\"package-2026-10-01-a-2026-10-31.zip\""
+        );
+        // In the order of the entries file (the sale, then the rent), whatever the order of their ids; a name that
+        // Windows cannot unpack is made one it can.
+        let note_path = format!("attachments/{sale}/{note}-Nota ç.pdf");
+        let lease_path = format!("attachments/{rent}/{lease}-Contrato_ aluguel.pdf");
+        let attachments_csv = format!(
+            "\u{feff}attachment_id;entry_id;file_name;content_type;size;path\r\n\
+             {note};{sale};Nota ç.pdf;application/pdf;13;{note_path}\r\n\
+             {lease};{rent};Contrato: aluguel.pdf;application/pdf;17;{lease_path}\r\n"
+        );
+        let files = crate::export_files::tests::unzip(&bytes);
+        assert_eq!(
+            files,
+            vec![
+                ("entries.csv".to_owned(), entries_csv.clone().into_bytes()),
+                ("settlements.csv".to_owned(), settlements_csv.into_bytes()),
+                ("transfers.csv".to_owned(), transfers_csv.into_bytes()),
+                ("attachments.csv".to_owned(), attachments_csv.into_bytes()),
+                (note_path, b"%PDF-1.4 nota".to_vec()),
+                (lease_path, b"%PDF-1.4 contrato".to_vec()),
+            ]
+        );
+
+        // The package as spreadsheets: the same files by name, the list of attachments still a CSV.
+        let (status, _, bytes) = get("package", &format!("{span}&format=xlsx"), &accountant).await;
+        assert_eq!(status, StatusCode::OK);
+        let names: Vec<String> = crate::export_files::tests::unzip(&bytes)
+            .into_iter()
+            .map(|(name, _)| name)
+            .take(4)
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "entries.xlsx",
+                "settlements.xlsx",
+                "transfers.xlsx",
+                "attachments.csv"
+            ]
+        );
+
+        // The same entries as a spreadsheet: a zip of its five parts, the amounts as numbers.
+        let (status, headers, bytes) =
+            get("entries", &format!("{span}&format=xlsx"), &accountant).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            headers[header::CONTENT_TYPE],
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        );
+        assert_eq!(
+            headers[header::CONTENT_DISPOSITION],
+            "attachment; filename=\"entries-2026-10-01-a-2026-10-31.xlsx\""
+        );
+        let sheet = crate::export_files::tests::unzip(&bytes);
+        let sheet = String::from_utf8(sheet.last().unwrap().1.clone()).unwrap();
+        assert!(sheet.contains("Venda; &quot;da casa&quot;"), "{sheet}");
+        assert!(sheet.contains("<c r=\"L4\"><v>200.5</v></c>"), "{sheet}");
+
+        // Nothing of the outside or of another company's is in any of it.
+        let everything = String::from_utf8_lossy(&bytes).to_string() + &entries_csv;
+        for absent in ["Setembro", "Novembro", "Alheio", "Antigo"] {
+            assert!(!everything.contains(absent), "{absent}");
+        }
+
+        // A reader of the area can download; one outside the company cannot see it; a bad request is told why.
+        assert_eq!(get("entries", span, &viewer).await.0, StatusCode::OK);
+        assert_eq!(get("package", span, &viewer).await.0, StatusCode::OK);
+        assert_eq!(
+            get("entries", span, &stranger).await.0,
+            StatusCode::NOT_FOUND
+        );
+        let unknown = [
+            (
+                "entries",
+                "from=2026-10-01&to=2026-10-31&format=pdf".to_owned(),
+            ),
+            ("entries", "from=2026-10-01".to_owned()),
+            ("entries", "from=october&to=2026-10-31".to_owned()),
+            ("settlements", "from=2026-10-31&to=2026-10-01".to_owned()),
+            ("transfers", "from=2025-01-01&to=2026-12-31".to_owned()),
+            ("package", "from=2025-01-01&to=2026-12-31".to_owned()),
+        ];
+        for (file, query) in unknown {
+            let (status, _, body) = get(file, &query, &accountant).await;
+            assert_eq!(
+                status,
+                StatusCode::BAD_REQUEST,
+                "{file} {query}: {}",
+                String::from_utf8_lossy(&body)
+            );
+        }
+        assert_eq!(
+            send(&app, get_request(&format!("{base}/entries?{span}"), None))
+                .await
+                .status,
+            StatusCode::UNAUTHORIZED
+        );
     }
 
     #[tokio::test]

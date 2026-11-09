@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { lastDayOfMonth, monthLabel, suggestedMonthToClose } from "./closing";
+import { lastDayOfMonth, monthLabel, monthToExport, suggestedMonthToClose } from "./closing";
 
 describe("the month to close next", () => {
   it("is the month after the one closed through, once that month is over", () => {
@@ -16,6 +16,18 @@ describe("the month to close next", () => {
   it("suggests nothing while the month after the lock is still running or in the future", () => {
     expect(suggestedMonthToClose("2026-10-31", "2026-11-09")).toBeUndefined();
     expect(suggestedMonthToClose("2026-12-31", "2026-11-09")).toBeUndefined();
+  });
+});
+
+describe("the month to download", () => {
+  it("is the month closed last, whatever today is", () => {
+    expect(monthToExport("2026-10-31", "2026-11-09")).toBe("2026-10");
+    expect(monthToExport("2026-03-31", "2027-02-03")).toBe("2026-03");
+  });
+
+  it("is the last month that is over when nothing is closed", () => {
+    expect(monthToExport(null, "2026-11-09")).toBe("2026-10");
+    expect(monthToExport(null, "2027-01-02")).toBe("2026-12");
   });
 });
 

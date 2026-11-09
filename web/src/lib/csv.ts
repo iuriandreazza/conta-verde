@@ -16,11 +16,15 @@ export function toCsv(header: string[], rows: string[][]): string {
 }
 
 /** Hands the browser a file to save, as the person would from a link. */
-export function downloadCsv(filename: string, text: string): void {
-  const url = URL.createObjectURL(new Blob([text], { type: "text/csv;charset=utf-8" }));
+export function saveFile(filename: string, blob: Blob): void {
+  const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
   link.download = filename;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+export function downloadCsv(filename: string, text: string): void {
+  saveFile(filename, new Blob([text], { type: "text/csv;charset=utf-8" }));
 }

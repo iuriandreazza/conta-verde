@@ -142,6 +142,24 @@ impl AttachmentRepository for PostgresAttachmentRepository {
         .map_err(storage_error)?;
         rows.iter().map(attachment_from_row).collect()
     }
+
+    async fn list_by_entries(
+        &self,
+        company_id: CompanyId,
+        entry_ids: &[EntryId],
+    ) -> Result<Vec<Attachment>, RepositoryError> {
+        let ids: Vec<uuid::Uuid> = entry_ids.iter().map(|id| id.as_uuid()).collect();
+        let rows = sqlx::query(&format!(
+            "{SELECT_ATTACHMENTS} WHERE company_id = $1 AND entry_id = ANY($2) AND NOT removed \
+             ORDER BY entry_id, seq"
+        ))
+        .bind(company_id.as_uuid())
+        .bind(&ids)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        rows.iter().map(attachment_from_row).collect()
+    }
 }
 
 #[cfg(test)]

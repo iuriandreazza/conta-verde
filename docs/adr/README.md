@@ -86,6 +86,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0068](0068-email-layout.md) | One layout for every e-mail | accepted | — |
 | [0069](0069-period-lock.md) | Period lock | accepted | 6 |
 | [0070](0070-income-statement.md) | The managerial income statement (DRE) | accepted | 6 |
+| [0071](0071-accountant-exports.md) | Exports for the accountant | accepted | 6 |
 
 ## Template
 

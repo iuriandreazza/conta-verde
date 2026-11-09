@@ -36,9 +36,31 @@ pub struct DayMovement {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TransferQuery {
     account: Option<BankAccountId>,
+    occurred_between: Option<(CalendarDate, CalendarDate)>,
+    unreversed: bool,
 }
 
 impl TransferQuery {
+    /// Only the transfers that occurred from `from` through `until`, both included ([ADR 0071]).
+    pub fn occurring_between(mut self, from: CalendarDate, until: CalendarDate) -> Self {
+        self.occurred_between = Some((from, until));
+        self
+    }
+
+    /// Leaves out the transfers that were reversed.
+    pub fn unreversed(mut self) -> Self {
+        self.unreversed = true;
+        self
+    }
+
+    pub fn span(&self) -> Option<(CalendarDate, CalendarDate)> {
+        self.occurred_between
+    }
+
+    pub fn only_unreversed(&self) -> bool {
+        self.unreversed
+    }
+
     pub fn with_account(mut self, account: BankAccountId) -> Self {
         self.account = Some(account);
         self
@@ -52,6 +74,10 @@ impl TransferQuery {
     pub fn matches(&self, transfer: &Transfer) -> bool {
         self.account
             .is_none_or(|account| transfer.from() == account || transfer.to() == account)
+            && self
+                .occurred_between
+                .is_none_or(|(from, until)| (from..=until).contains(&transfer.occurred_on()))
+            && !(self.unreversed && transfer.is_reversed())
     }
 }
 

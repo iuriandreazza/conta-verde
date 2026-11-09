@@ -186,6 +186,45 @@ impl FinancialEntryRepository for InMemoryFinancialEntryRepository {
             .cloned())
     }
 
+    async fn find_many(
+        &self,
+        company_id: CompanyId,
+        ids: &[EntryId],
+    ) -> Result<Vec<FinancialEntry>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        let mut found: Vec<FinancialEntry> = state
+            .entries
+            .iter()
+            .filter(|stored| stored.company_id() == company_id && ids.contains(&stored.id()))
+            .cloned()
+            .collect();
+        found.sort_by_key(|entry| (entry.competence_date(), entry.id().as_uuid()));
+        Ok(found)
+    }
+
+    async fn settlements_between(
+        &self,
+        company_id: CompanyId,
+        since: CalendarDate,
+        until: CalendarDate,
+        limit: usize,
+    ) -> Result<Vec<Settlement>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        let mut found: Vec<Settlement> = state
+            .settlements
+            .iter()
+            .filter(|stored| {
+                stored.company_id() == company_id
+                    && !stored.is_reversed()
+                    && (since..=until).contains(&stored.settled_on())
+            })
+            .cloned()
+            .collect();
+        found.sort_by_key(|stored| (stored.settled_on(), stored.id().as_uuid()));
+        found.truncate(limit);
+        Ok(found)
+    }
+
     async fn settlements_of(
         &self,
         company_id: CompanyId,
@@ -840,6 +879,235 @@ pub(crate) mod tests {
             &other_seed,
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn exports_the_books_of_a_span() {
+        let registers = Registers::new();
+        let (company, other_company) = (CompanyId::generate(), CompanyId::generate());
+        let (seed, other_seed) = (
+            registers.seed(company).await,
+            registers.seed(other_company).await,
+        );
+        let store = InMemoryFinancialEntryRepository::default();
+        let entries = FinancialEntryService::new(store.clone(), registers.references());
+        contract::exports_the_books_of_a_span(
+            &entries,
+            &store,
+            company,
+            other_company,
+            &seed,
+            &other_seed,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn names_everything_for_the_export() {
+        let registers = Registers::new();
+        let (company, other_company) = (CompanyId::generate(), CompanyId::generate());
+        let (seed, other_seed) = (
+            registers.seed(company).await,
+            registers.seed(other_company).await,
+        );
+        contract::names_everything_for_the_export(
+            &registers.references(),
+            &registers.categories,
+            company,
+            other_company,
+            &seed,
+            &other_seed,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn an_export_past_a_limit_is_refused_and_never_cut() {
+        use conta_verde_application::{
+            AccountingExportService, ApplicationError, AttachmentService, ExportLimits,
+        };
+        use conta_verde_domain::{CalendarDate, SettlementDraft};
+
+        use crate::{InMemoryAttachmentRepository, InMemoryBlobStore, InMemoryTransferRepository};
+
+        let registers = Registers::new();
+        let store = InMemoryFinancialEntryRepository::default();
+        let entries = FinancialEntryService::new(store.clone(), registers.references());
+        let attachments = InMemoryAttachmentRepository::default();
+        let blobs = InMemoryBlobStore::default();
+        let attach = AttachmentService::new(attachments.clone(), blobs.clone(), store.clone());
+        let service = AccountingExportService::new(
+            store.clone(),
+            InMemoryTransferRepository::default(),
+            attachments,
+            blobs,
+            registers.references(),
+        )
+        .with_limits(ExportLimits {
+            rows: 3,
+            attached_files: 1,
+            attached_bytes: 20,
+        });
+        let ana = contract::actor();
+        let day = |text: &str| CalendarDate::parse(text).unwrap();
+        let (from, to) = (day("2026-10-01"), day("2026-10-31"));
+        let too_large = |what: &'static str| ApplicationError::ExportTooLarge(what);
+
+        // Three installments are what a file takes; a fourth is refused, not cut off.
+        let company = CompanyId::generate();
+        let seed = registers.seed(company).await;
+        let register = |parts: &[(&str, &str)]| {
+            entries.register(
+                company,
+                &ana,
+                contract::entry_draft(&seed, "Lançamento", "2026-10-10", parts),
+            )
+        };
+        let three = register(&[
+            ("2026-10-20", "1"),
+            ("2026-10-21", "1"),
+            ("2026-10-22", "1"),
+        ])
+        .await
+        .unwrap();
+        assert_eq!(
+            service
+                .entries_table(company, from, to)
+                .await
+                .unwrap()
+                .rows
+                .len(),
+            3
+        );
+        let one = register(&[("2026-10-23", "1")]).await.unwrap();
+        for result in [
+            service.entries_table(company, from, to).await.err(),
+            service.package(company, from, to).await.err(),
+        ] {
+            assert_eq!(result, Some(too_large("more than 50,000 installments")));
+        }
+
+        // The same for settlements: three are exported, a fourth is not.
+        let settle = |entry: &conta_verde_domain::FinancialEntry, installment: u16| {
+            entries.settle(
+                company,
+                &ana,
+                entry.id(),
+                SettlementDraft {
+                    installment,
+                    settled_on: "2026-10-25".into(),
+                    applied: "1".into(),
+                    interest: None,
+                    fine: None,
+                    discount: None,
+                    bank_account_id: seed.bank_account,
+                    payment_method_id: None,
+                },
+            )
+        };
+        for installment in 1..=3 {
+            settle(&three, installment).await.unwrap();
+        }
+        assert_eq!(
+            service
+                .settlements_table(company, from, to)
+                .await
+                .unwrap()
+                .rows
+                .len(),
+            3
+        );
+        settle(&one, 1).await.unwrap();
+        assert_eq!(
+            service
+                .settlements_table(company, from, to)
+                .await
+                .unwrap_err(),
+            too_large("more than 50,000 settlements")
+        );
+
+        // Attached files: one is the limit, and 20 bytes; the records say so before any file is read.
+        let attached_to = |other: CompanyId| {
+            let (registers, entries, ana) = (&registers, &entries, &ana);
+            async move {
+                let seed = registers.seed(other).await;
+                let entry = entries
+                    .register(
+                        other,
+                        ana,
+                        contract::entry_draft(
+                            &seed,
+                            "Com anexos",
+                            "2026-10-10",
+                            &[("2026-10-20", "1")],
+                        ),
+                    )
+                    .await
+                    .unwrap();
+                (entry, ana.clone())
+            }
+        };
+        let (entry, who) = attached_to(CompanyId::generate()).await;
+        let two_files = entry.company_id();
+        for name in ["a.pdf", "b.pdf"] {
+            attach
+                .attach(
+                    two_files,
+                    &who,
+                    entry.id(),
+                    name,
+                    "application/pdf",
+                    b"%PDF",
+                )
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            service.package(two_files, from, to).await.unwrap_err(),
+            too_large("more than 500 attached files")
+        );
+        let (entry, who) = attached_to(CompanyId::generate()).await;
+        let heavy = entry.company_id();
+        attach
+            .attach(
+                heavy,
+                &who,
+                entry.id(),
+                "c.pdf",
+                "application/pdf",
+                &[b'x'; 25],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            service.package(heavy, from, to).await.unwrap_err(),
+            too_large("more than 200 MiB of attached files")
+        );
+        let (entry, who) = attached_to(CompanyId::generate()).await;
+        let fits = entry.company_id();
+        attach
+            .attach(
+                fits,
+                &who,
+                entry.id(),
+                "d.pdf",
+                "application/pdf",
+                b"%PDF-1.4",
+            )
+            .await
+            .unwrap();
+        let package = service.package(fits, from, to).await.unwrap();
+        assert_eq!(package.files.len(), 1);
+        assert_eq!(package.files[0].bytes, b"%PDF-1.4");
+
+        // A span of more than 366 days is a bad request, however little is in it.
+        assert_eq!(
+            service
+                .entries_table(company, day("2026-01-01"), day("2027-01-02"))
+                .await
+                .unwrap_err(),
+            ApplicationError::InvalidSpan("at most 366 days")
+        );
     }
 
     #[tokio::test]

@@ -13,6 +13,9 @@ const MONTHS = [
   "dezembro",
 ];
 
+/** What a month input holds; a browser without a month picker leaves whatever was typed. */
+export const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
+
 /** The last day of a month written `YYYY-MM`, which is what the period lock closes through (ADR 0069). */
 export function lastDayOfMonth(month: string): string {
   const [year, number] = month.split("-").map(Number);
@@ -37,6 +40,14 @@ export function suggestedMonthToClose(lockedThrough: string | null, today: strin
   const next = lockedThrough === null ? addMonths(current, -1) : addMonths(lockedThrough.slice(0, 7), 1);
   // `YYYY-MM` strings compare as the months do.
   return next < current ? next : undefined;
+}
+
+/**
+ * The month an accountant most likely downloads, as `YYYY-MM`: the one closed last, or the last one that is over when
+ * nothing is closed. `today` is where the person is: the server reads no clock.
+ */
+export function monthToExport(lockedThrough: string | null, today: string): string {
+  return lockedThrough === null ? addMonths(today.slice(0, 7), -1) : lockedThrough.slice(0, 7);
 }
 
 /** `2026-10-31` as `outubro de 2026`. */

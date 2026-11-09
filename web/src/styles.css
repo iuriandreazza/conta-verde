@@ -2208,6 +2208,14 @@ input[type="file"]:disabled::file-selector-button {
   font-variant-numeric: tabular-nums;
 }
 
+/* A row of actions that belong together, wrapping on a narrow screen. */
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  margin-top: 1rem;
+}
+
 .lock-actions {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
