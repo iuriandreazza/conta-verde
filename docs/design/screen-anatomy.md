@@ -24,9 +24,11 @@ This is the spec the new pages (Phase 3 on) are built to, and the one the existi
 | Company | Named in the top bar, with a link to change it when there is more than one; at the head of the drawer on a phone |
 | Mobile | The menu becomes a drawer opened from the top bar, in two screens: the areas, then the pages of the one chosen, with a way back and a close button. The content starts under the bar, never under a block of navigation |
 
-Group contents today: **Financeiro**: Lançamentos, Fluxo de caixa, Transferências, Conciliação, Recorrências.
-**Cadastros**: Clientes e fornecedores, Produtos e serviços, Categorias, Centros de custo, Contas bancárias,
-Formas de pagamento, Prazos de pagamento. **Suprimentos**: Compras, Estoque, Inventários, Relatórios de estoque. **Relatórios**: Relatórios. **Configurações**: Membros.
+Contents today: **Financeiro**: Contas a receber, Contas a pagar, Lançamentos, Fluxo de caixa, Transferências, Conciliação,
+Recorrências, Cobrança, Inadimplência, and its registers (Categorias, Centros de custo, Contas bancárias, Formas de
+pagamento, Prazos de pagamento). **Comercial**: Orçamentos, Vendas, Contratos, Comissões, Tabelas de preço.
+**Suprimentos**: Compras, Estoque, Inventários, Relatórios de estoque. **Cadastros**: Clientes e fornecedores, Produtos e
+serviços. **Configurações**: Membros.
 
 ## 2. A list page
 
