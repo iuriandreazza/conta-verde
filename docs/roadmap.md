@@ -116,6 +116,12 @@ the average cost (`a_purchase_xml_creates_payables_and_stock_and_a_sale_takes_it
 
 ## Phase 6 — Accountant and reporting (v0.7)
 
+Planned in [ADR 0067](adr/0067-accountant-and-reporting-plan.md), which also accepts [ADR 0013](adr/0013-accountant-access-and-exports.md)
+and settles what the phase changes underneath (an `accounting` area where the accountant writes only the lock, the exports and
+the schedule; which date locks each record; the DRE's sign and lines; the package's contents and limits; a monthly e-mail that
+links to a login-gated page). One slice per pull request, in this order:
+
+- [x] Plan ([ADR 0067](adr/0067-accountant-and-reporting-plan.md))
 - [ ] Accountant role: read access to every company that invites them, no write
 - [ ] Period lock: entries before the lock date cannot change without reopening
 - [ ] DRE (managerial income statement) by month and cost center ([ADR 0012](adr/0012-managerial-accounting-model.md))

@@ -28,7 +28,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0010](0010-payment-providers.md) | Payment providers behind ports | accepted | 4 |
 | [0011](0011-bank-data-ingestion.md) | Bank data: OFX first, aggregator later | accepted | 2, 8 |
 | [0012](0012-managerial-accounting-model.md) | Managerial chart of accounts, not a general ledger | accepted | 1, 2, 6 |
-| [0013](0013-accountant-access-and-exports.md) | Accountant access and exports | proposed | 6 |
+| [0013](0013-accountant-access-and-exports.md) | Accountant access and exports | accepted | 6 |
 | [0014](0014-notifications.md) | Notifications behind ports | accepted | 4 |
 | [0015](0015-public-api-and-webhooks.md) | Public API and webhooks | proposed | 8 |
 | [0016](0016-ui-motion-and-icons.md) | Motion for animation, vendored Lucide Animated icons | accepted | 1 |
@@ -82,6 +82,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0064](0064-entry-import-from-a-file.md) | Entry import from a file | accepted | — |
 | [0065](0065-document-mail-limits-and-log.md) | A limit and a log for documents sent by e-mail | accepted | — |
 | [0066](0066-recovering-an-unconfirmed-address.md) | Recovering an address held by an account nobody confirmed | accepted | — |
+| [0067](0067-accountant-and-reporting-plan.md) | Accountant and reporting: plan, shared rules and what it changes underneath | accepted | 6 |
 
 ## Template
 
