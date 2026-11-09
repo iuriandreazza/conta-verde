@@ -2620,3 +2620,21 @@ input[type="file"]:disabled::file-selector-button {
     width: auto;
   }
 }
+
+/* The income statement: a subtotal is a line worked out from the ones above it; what is below the line is not in the
+   result, so it is set apart and quieter. */
+tr.subtotal th,
+tr.subtotal td {
+  background: var(--green-soft);
+  border-top: 1px solid var(--line-strong);
+}
+
+tr.below-the-line th,
+tr.below-the-line td {
+  color: var(--muted);
+}
+
+tr.subtotal + tr.below-the-line th,
+tr.subtotal + tr.below-the-line td {
+  border-top: 1px dashed var(--line-strong);
+}

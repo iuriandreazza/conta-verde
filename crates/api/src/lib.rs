@@ -14,6 +14,7 @@ mod csv_import;
 mod cursor;
 mod delinquency;
 mod documents;
+mod dre;
 mod dunning;
 mod entries;
 mod entries_import;
@@ -54,16 +55,17 @@ use conta_verde_application::{
     BankAccountService, BlobStore, CategoryRepository, CategoryService, ChargeRepository,
     ChargeService, CnpjRegistry, CommissionRuleRepository, CommissionService, ContractRepository,
     ContractService, CostCenterRepository, CostCenterService, DocumentMailRepository,
-    DocumentMailService, DocumentReferences, EmailSender, EntryLookups, EntryReferences,
-    FinancialEntryRepository, FinancialEntryService, IdentityRepository, InventoryCountRepository,
-    InventoryCountService, InvitationRepository, MemberService, OpeningRepository, PartyRepository,
-    PartyService, PaymentMethodRepository, PaymentMethodService, PaymentProvider,
-    PaymentTermRepository, PaymentTermService, PostalCodeDirectory, PostalCodeService,
-    PriceListRepository, PriceListService, ProductRepository, ProductService,
-    PurchaseOrderRepository, PurchaseService, QuoteRepository, QuoteService, ReconciliationService,
-    RecurrenceRepository, RecurrenceService, SaleRepository, SaleService, SalesReportService,
-    SecretService, StatementLineRepository, StockMovementRepository, StockService,
-    StockSettingsRepository, TransferRepository, TransferService,
+    DocumentMailService, DocumentReferences, DreService, EmailSender, EntryLookups,
+    EntryReferences, FinancialEntryRepository, FinancialEntryService, IdentityRepository,
+    InventoryCountRepository, InventoryCountService, InvitationRepository, MemberService,
+    OpeningRepository, PartyRepository, PartyService, PaymentMethodRepository,
+    PaymentMethodService, PaymentProvider, PaymentTermRepository, PaymentTermService,
+    PostalCodeDirectory, PostalCodeService, PriceListRepository, PriceListService,
+    ProductRepository, ProductService, PurchaseOrderRepository, PurchaseService, QuoteRepository,
+    QuoteService, ReconciliationService, RecurrenceRepository, RecurrenceService, SaleRepository,
+    SaleService, SalesReportService, SecretService, StatementLineRepository,
+    StockMovementRepository, StockService, StockSettingsRepository, TransferRepository,
+    TransferService,
 };
 use conta_verde_application::{
     CollectionService, CollectionSettingsRepository, DunningPlanRepository, DunningService,
@@ -249,6 +251,7 @@ pub struct Services<X: Ports> {
     pub price_lists: PriceListsOf<X>,
     pub sales_reports: SalesReportsOf<X>,
     pub entries: FinancialEntryService<X::Entries, X::EntryReferences>,
+    pub dre: DreService<X::Entries, X::Categories>,
     pub attachments: AttachmentService<X::Attachments, X::Blobs, X::Entries>,
     pub charges: ChargesOf<X>,
     pub webhooks: WebhooksOf<X>,
@@ -285,6 +288,7 @@ pub(crate) struct AppState<X: Ports> {
     price_lists: PriceListsOf<X>,
     sales_reports: SalesReportsOf<X>,
     entries: FinancialEntryService<X::Entries, X::EntryReferences>,
+    dre: DreService<X::Entries, X::Categories>,
     attachments: AttachmentService<X::Attachments, X::Blobs, X::Entries>,
     charges: ChargesOf<X>,
     webhooks: WebhooksOf<X>,
@@ -326,6 +330,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         price_lists: services.price_lists,
         sales_reports: services.sales_reports,
         entries: services.entries,
+        dre: services.dre,
         attachments: services.attachments,
         charges: services.charges,
         webhooks: services.webhooks,
@@ -603,6 +608,10 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         .route(
             "/companies/{company_id}/accounting/period-lock/history",
             get(accounting::period_lock_history::<X>),
+        )
+        .route(
+            "/companies/{company_id}/dre",
+            get(dre::income_statement::<X>),
         )
         .route(
             "/companies/{company_id}/delinquency",
@@ -1789,6 +1798,10 @@ mod tests {
                 reconciliation: standalone_reconciliation(),
                 balances: standalone_balances(),
                 period_locks: PeriodLockService::new(locks()),
+                dre: DreService::new(
+                    InMemoryFinancialEntryRepository::default(),
+                    InMemoryCategoryRepository::default(),
+                ),
                 postal_codes: PostalCodeService::new(postal_codes),
                 members,
                 documents: standalone_documents(),
@@ -2445,6 +2458,10 @@ mod tests {
                 reconciliation: standalone_reconciliation(),
                 balances: standalone_balances(),
                 period_locks: PeriodLockService::new(locks()),
+                dre: DreService::new(
+                    InMemoryFinancialEntryRepository::default(),
+                    InMemoryCategoryRepository::default(),
+                ),
                 postal_codes: PostalCodeService::new(None),
                 members: standalone_members(),
                 documents: standalone_documents(),
@@ -4662,6 +4679,10 @@ mod tests {
                 reconciliation: standalone_reconciliation(),
                 balances: standalone_balances(),
                 period_locks: PeriodLockService::new(locks()),
+                dre: DreService::new(
+                    InMemoryFinancialEntryRepository::default(),
+                    InMemoryCategoryRepository::default(),
+                ),
                 postal_codes: PostalCodeService::new(None),
                 members: standalone_members(),
                 documents: standalone_documents(),
@@ -6314,6 +6335,7 @@ mod tests {
                 )
                 .with_period_lock(locks()),
                 period_locks: PeriodLockService::new(locks()),
+                dre: DreService::new(entry_store.clone(), categories.clone()),
                 postal_codes: PostalCodeService::new(known_postal_codes()),
                 members: standalone_members(),
                 documents: DocumentMailService::new(
@@ -6386,6 +6408,132 @@ mod tests {
                 .map(|(due, amount)| json!({ "due_date": due, "amount": amount }))
                 .collect::<Vec<_>>(),
         })
+    }
+
+    #[tokio::test]
+    async fn the_income_statement_adds_the_entries_up_by_month_and_cost_center() {
+        let app = entry_app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let targets = entry_targets(&app, &cookie, company_id).await;
+        let enter = |kind: &str,
+                     category: &str,
+                     competence: &str,
+                     cost_center: Option<&str>,
+                     amount: &str| {
+            let mut body = entry_body(&targets, "Lançamento", &[("2027-03-10", amount)]);
+            body["kind"] = json!(kind);
+            body["category_id"] = json!(category);
+            body["competence_date"] = json!(competence);
+            body["cost_center_id"] = json!(cost_center);
+            body
+        };
+        for body in [
+            enter(
+                "receivable",
+                &targets.category,
+                "2026-10-05",
+                Some(&targets.cost_center),
+                "100",
+            ),
+            enter("receivable", &targets.category, "2026-10-20", None, "50.5"),
+            enter(
+                "payable",
+                &targets.other_category,
+                "2026-11-03",
+                Some(&targets.cost_center),
+                "40",
+            ),
+        ] {
+            let made = post_to(&app, &entries_uri(company_id), &cookie, body).await;
+            assert_eq!(made.status, StatusCode::CREATED, "{}", made.body);
+        }
+        let uri = |query: &str| format!("/companies/{company_id}/dre?{query}");
+
+        let by_month = send(
+            &app,
+            get_request(&uri("from=2026-10-01&to=2026-11-30"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(by_month.status, StatusCode::OK, "{}", by_month.body);
+        assert_eq!(by_month.body["by"], "month");
+        let columns = by_month.body["columns"].as_array().unwrap();
+        assert_eq!(
+            columns
+                .iter()
+                .map(|column| column["key"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["2026-10", "2026-11"]
+        );
+        assert_eq!(columns[0]["lines"]["gross_revenue"], "150.5");
+        assert_eq!(columns[0]["lines"]["net_result"], "150.5");
+        assert_eq!(columns[1]["lines"]["operating_expenses"], "-40");
+        assert_eq!(columns[1]["lines"]["net_result"], "-40");
+        assert_eq!(by_month.body["total"]["gross_profit"], "150.5");
+        assert_eq!(by_month.body["total"]["operating_result"], "110.5");
+        assert_eq!(by_month.body["total"]["net_result"], "110.5");
+
+        let by_center = send(
+            &app,
+            get_request(
+                &uri("from=2026-10-01&to=2026-11-30&by=cost_center"),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        let columns = by_center.body["columns"].as_array().unwrap();
+        assert_eq!(columns[0]["key"], targets.cost_center);
+        assert_eq!(columns[0]["lines"]["net_result"], "60");
+        assert_eq!(columns[1]["key"], Value::Null);
+        assert_eq!(columns[1]["lines"]["net_result"], "50.5");
+
+        let without = send(
+            &app,
+            get_request(
+                &uri("from=2026-10-01&to=2026-11-30&cost_center=none"),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(without.body["total"]["net_result"], "50.5");
+        let only = send(
+            &app,
+            get_request(
+                &uri(&format!(
+                    "from=2026-10-01&to=2026-11-30&cost_center={}",
+                    targets.cost_center
+                )),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        assert_eq!(only.body["total"]["net_result"], "60");
+
+        for (query, status) in [
+            ("to=2026-11-30", StatusCode::BAD_REQUEST),
+            (
+                "from=2026-10-01&to=2026-11-30&by=year",
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                "from=2026-10-01&to=2026-11-30&cost_center=matriz",
+                StatusCode::BAD_REQUEST,
+            ),
+            ("from=2026-12-01&to=2026-11-30", StatusCode::BAD_REQUEST),
+            ("from=2024-01-01&to=2026-11-30", StatusCode::BAD_REQUEST),
+        ] {
+            let reply = send(&app, get_request(&uri(query), Some(&cookie))).await;
+            assert_eq!(reply.status, status, "{query}: {}", reply.body);
+            assert!(reply.body["error"].is_string(), "{query}");
+        }
+        assert_eq!(
+            send(
+                &app,
+                get_request(&uri("from=2026-10-01&to=2026-10-31"), None)
+            )
+            .await
+            .status,
+            StatusCode::UNAUTHORIZED
+        );
     }
 
     #[tokio::test]

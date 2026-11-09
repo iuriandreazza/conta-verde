@@ -12,6 +12,7 @@ import { BarChart } from "../components/charts/BarChart";
 import { ChartCard } from "../components/charts/ChartCard";
 import { Legend, type LegendItem } from "../components/charts/Legend";
 import { StatTile } from "../components/charts/StatTile";
+import { DreView } from "../components/DreView";
 import { Notice } from "../components/Notice";
 import { PeriodFilter } from "../components/PeriodFilter";
 import { PageHeader } from "../components/PageHeader";
@@ -44,7 +45,7 @@ const negative = (amount: string) => (amount.startsWith("-") ? "num negative" : 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one instance.
 export function ReportsPage() {
   const { companyId = "" } = useParams();
-  const [view, setView] = useState<"entries" | "overdue" | "sales">("entries");
+  const [view, setView] = useState<"entries" | "overdue" | "sales" | "dre">("entries");
   const [names, setNames] = useState<Map<string, string>>(new Map());
   const [namesError, setNamesError] = useState<string | null>(null);
 
@@ -72,7 +73,7 @@ export function ReportsPage() {
     <>
       <PageHeader
         title="Relatórios"
-        description="Para onde vai o dinheiro, o que está vencido e o que foi vendido, por cliente, produto e vendedor."
+        description="Para onde vai o dinheiro, o que está vencido, o que foi vendido e o resultado do período (DRE)."
       />
       <div className="segmented" role="group" aria-label="Relatório">
         <button type="button" aria-pressed={view === "entries"} onClick={() => setView("entries")}>
@@ -84,14 +85,19 @@ export function ReportsPage() {
         <button type="button" aria-pressed={view === "sales"} onClick={() => setView("sales")}>
           Vendas
         </button>
+        <button type="button" aria-pressed={view === "dre"} onClick={() => setView("dre")}>
+          DRE
+        </button>
       </div>
       <Notice message={namesError} />
       {view === "entries" ? (
         <EntriesReportView companyId={companyId} names={names} />
       ) : view === "overdue" ? (
         <OverdueView companyId={companyId} names={names} />
-      ) : (
+      ) : view === "sales" ? (
         <SalesReportView companyId={companyId} names={names} />
+      ) : (
+        <DreView companyId={companyId} />
       )}
     </>
   );

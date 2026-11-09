@@ -66,6 +66,18 @@ pub struct ReportRow {
     pub entries: u64,
 }
 
+/// What the entries whose competence date falls in a calendar month added up to for one category and cost center,
+/// by their total ([ADR 0070]): the rows the income statement is made of. `cost_center_id` is `None` for entries that
+/// have none; `month` is the month's first day.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompetenceTotal {
+    pub month: CalendarDate,
+    pub category_id: CategoryId,
+    pub cost_center_id: Option<CostCenterId>,
+    pub receivable: Decimal,
+    pub payable: Decimal,
+}
+
 /// An installment that fell due and still has something left.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OverdueItem {
@@ -292,6 +304,16 @@ pub trait FinancialEntryRepository: Send + Sync {
         since: CalendarDate,
         until: CalendarDate,
     ) -> impl Future<Output = Result<Vec<ReportRow>, RepositoryError>> + Send;
+
+    /// The entries that are not cancelled with a competence date from `since` through `until`, by their total,
+    /// added up by month, category and cost center: one row per combination that has any, by month, then category,
+    /// then cost center with the entries that have none first ([ADR 0070]).
+    fn competence_totals(
+        &self,
+        company_id: CompanyId,
+        since: CalendarDate,
+        until: CalendarDate,
+    ) -> impl Future<Output = Result<Vec<CompetenceTotal>, RepositoryError>> + Send;
 
     /// The installments due **before** `before` that still have something left, of entries of `kind` when
     /// given, oldest due day first (then entry id, then number), at most `limit`, and the totals of all.

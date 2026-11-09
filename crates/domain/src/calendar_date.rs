@@ -162,6 +162,11 @@ impl CalendarDate {
         })
     }
 
+    /// The first day of this date's month.
+    pub fn first_of_month(&self) -> Self {
+        Self { day: 1, ..*self }
+    }
+
     /// The last day of this date's month.
     pub fn last_of_month(&self) -> Self {
         Self {

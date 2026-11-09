@@ -3,7 +3,7 @@ use std::time::Duration;
 use conta_verde_api::{ApiConfig, Ports, Services, router};
 use conta_verde_application::{
     AttachmentService, AuthService, BalanceService, BankAccountService, CategoryService,
-    CommissionService, ContractService, CostCenterService, DocumentMailService,
+    CommissionService, ContractService, CostCenterService, DocumentMailService, DreService,
     FinancialEntryService, InventoryCountService, JobRunner, MemberService, PartyService,
     PaymentMethodService, PaymentTermService, PeriodLockService, PostalCodeService,
     PriceListService, ProductService, PurchaseService, QuoteService, ReconciliationService,
@@ -145,6 +145,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let entries = FinancialEntryService::new(
         PostgresFinancialEntryRepository::new(pool.clone()),
         references(),
+    );
+    let dre = DreService::new(
+        PostgresFinancialEntryRepository::new(pool.clone()),
+        PostgresCategoryRepository::new(pool.clone()),
     );
     let attachments = AttachmentService::new(
         PostgresAttachmentRepository::new(pool.clone()),
@@ -359,6 +363,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 price_lists,
                 sales_reports,
                 entries,
+                dre,
                 attachments,
                 charges,
                 webhooks,

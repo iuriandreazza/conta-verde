@@ -15916,3 +15916,297 @@ pub async fn a_closed_month_refuses_stock_and_documents<P, E, F, R, T, S, Q, M, 
         .await
         .unwrap();
 }
+
+/// The managerial income statement ([ADR 0012], [ADR 0070]): by competence date, each entry by its total in the month of
+/// its date, a receivable positive and a payable negative in the group of its category, cancelled entries and what is
+/// outside the span left out, the subtotals worked out from the groups, one column per month (an empty month is a column
+/// of zeros) or per cost center (the entries that have none last), narrowed to one cost center or to none, a span of at
+/// most 24 months, and nothing of another company's.
+#[allow(clippy::too_many_lines)]
+pub async fn reports_the_income_statement<E, C, F, R>(
+    dre: &conta_verde_application::DreService<E, C>,
+    entries: &FinancialEntryService<R, F>,
+    categories: &C,
+    company: CompanyId,
+    other_company: CompanyId,
+    seed: &EntrySeed,
+    other_seed: &EntrySeed,
+) where
+    E: FinancialEntryRepository,
+    C: CategoryRepository,
+    F: EntryReferences,
+    R: FinancialEntryRepository,
+{
+    use conta_verde_application::{CostCenterFilter, DreBy};
+    use conta_verde_domain::{DreColumnKey, DreLines};
+
+    let day = |text: &str| CalendarDate::parse(text).unwrap();
+    let money = |text: &str| text.parse::<Decimal>().unwrap();
+    let group_category = |name: &str, group: DreGroup| {
+        let category = Category::new_root(
+            CategoryId::generate(),
+            company,
+            name,
+            group,
+            CashFlowGroup::Operating,
+        )
+        .unwrap();
+        async move {
+            save_category(categories, &category).await;
+            category.id()
+        }
+    };
+    let deductions = group_category("Impostos sobre vendas", DreGroup::Deductions).await;
+    let costs = group_category("Custo das mercadorias", DreGroup::Costs).await;
+    let expenses = group_category("Aluguel", DreGroup::OperatingExpenses).await;
+    let financial = group_category("Juros", DreGroup::FinancialResult).await;
+    let investments = group_category("Máquinas", DreGroup::Investments).await;
+    let loans = group_category("Empréstimos", DreGroup::OutsideResult).await;
+
+    let enter = |company: CompanyId,
+                 kind: EntryKind,
+                 category: CategoryId,
+                 competence: &str,
+                 cost_center: Option<CostCenterId>,
+                 parts: &[&str]| {
+        let parts: Vec<(&str, &str)> = parts.iter().map(|amount| ("2027-03-10", *amount)).collect();
+        let draft = FinancialEntryDraft {
+            kind,
+            category_id: category,
+            cost_center_id: cost_center,
+            ..entry_draft(seed, "Lançamento", competence, &parts)
+        };
+        async move { entries.register(company, &actor(), draft).await.unwrap() }
+    };
+    use EntryKind::{Payable, Receivable};
+    let matriz = Some(seed.cost_center);
+    // October: 1000 (two installments, counted by their total) and 500 of revenue, a refund of 30 booked as a payable
+    // in a revenue category, 100 of deductions, 300 of costs, and 999 of costs that is cancelled.
+    enter(
+        company,
+        Receivable,
+        seed.category,
+        "2026-10-05",
+        matriz,
+        &["600", "400"],
+    )
+    .await;
+    enter(
+        company,
+        Receivable,
+        seed.category,
+        "2026-10-20",
+        None,
+        &["500"],
+    )
+    .await;
+    enter(company, Payable, seed.category, "2026-10-25", None, &["30"]).await;
+    enter(company, Payable, deductions, "2026-10-10", matriz, &["100"]).await;
+    enter(company, Payable, costs, "2026-10-15", None, &["300"]).await;
+    let cancelled = enter(company, Payable, costs, "2026-10-12", None, &["999"]).await;
+    entries
+        .void(company, &actor(), cancelled.id())
+        .await
+        .unwrap();
+    // November: expenses, financial, an investment and a loan (the last two are below the line).
+    enter(company, Payable, expenses, "2026-11-02", matriz, &["200"]).await;
+    enter(company, Payable, financial, "2026-11-30", None, &["20.50"]).await;
+    enter(
+        company,
+        Payable,
+        investments,
+        "2026-11-10",
+        matriz,
+        &["400"],
+    )
+    .await;
+    enter(company, Receivable, loans, "2026-11-11", None, &["5000"]).await;
+    // Outside the span asked below, and another company's.
+    enter(
+        company,
+        Receivable,
+        seed.category,
+        "2026-09-30",
+        None,
+        &["50"],
+    )
+    .await;
+    enter(
+        other_company,
+        Receivable,
+        other_seed.category,
+        "2026-10-05",
+        None,
+        &["77"],
+    )
+    .await;
+
+    let statement = |from: &str, to: &str, by: DreBy, filter: CostCenterFilter| {
+        let (from, to) = (day(from), day(to));
+        async move { dre.statement(company, from, to, by, filter).await }
+    };
+    let lines = |values: [&str; 7]| DreLines {
+        gross_revenue: money(values[0]),
+        deductions: money(values[1]),
+        costs: money(values[2]),
+        operating_expenses: money(values[3]),
+        financial_result: money(values[4]),
+        investments: money(values[5]),
+        outside_result: money(values[6]),
+    };
+
+    // By month, over three months, the last of them without entries.
+    let by_month = statement(
+        "2026-10-01",
+        "2026-12-31",
+        DreBy::Month,
+        CostCenterFilter::All,
+    )
+    .await
+    .unwrap();
+    let keys: Vec<DreColumnKey> = by_month.columns.iter().map(|column| column.key).collect();
+    assert_eq!(
+        keys,
+        [
+            DreColumnKey::Month(day("2026-10-01")),
+            DreColumnKey::Month(day("2026-11-01")),
+            DreColumnKey::Month(day("2026-12-01")),
+        ]
+    );
+    assert_eq!(
+        by_month.columns[0].lines,
+        lines(["1470", "-100", "-300", "0", "0", "0", "0"])
+    );
+    assert_eq!(
+        by_month.columns[1].lines,
+        lines(["0", "0", "0", "-200", "-20.5", "-400", "5000"])
+    );
+    assert_eq!(by_month.columns[2].lines, DreLines::default());
+    assert_eq!(
+        by_month.total,
+        lines(["1470", "-100", "-300", "-200", "-20.5", "-400", "5000"])
+    );
+    // The subtotals follow: October's result is 1470 - 100 - 300; below the line is not in November's.
+    assert_eq!(by_month.columns[0].lines.net_result(), money("1070"));
+    assert_eq!(by_month.columns[1].lines.net_result(), money("-220.5"));
+    assert_eq!(by_month.total.net_revenue(), money("1370"));
+    assert_eq!(by_month.total.net_result(), money("849.5"));
+
+    // By cost center: the one that was chosen, then the entries that have none.
+    let by_center = statement(
+        "2026-10-01",
+        "2026-12-31",
+        DreBy::CostCenter,
+        CostCenterFilter::All,
+    )
+    .await
+    .unwrap();
+    let keys: Vec<DreColumnKey> = by_center.columns.iter().map(|column| column.key).collect();
+    assert_eq!(
+        keys,
+        [
+            DreColumnKey::CostCenter(Some(seed.cost_center)),
+            DreColumnKey::CostCenter(None)
+        ]
+    );
+    assert_eq!(
+        by_center.columns[0].lines,
+        lines(["1000", "-100", "0", "-200", "0", "-400", "0"])
+    );
+    assert_eq!(
+        by_center.columns[1].lines,
+        lines(["470", "0", "-300", "0", "-20.5", "0", "5000"])
+    );
+    assert_eq!(by_center.total, by_month.total);
+
+    // Narrowed to one cost center, or to the entries that have none, by month.
+    let only = statement(
+        "2026-10-01",
+        "2026-11-30",
+        DreBy::Month,
+        CostCenterFilter::Only(seed.cost_center),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        only.columns[0].lines,
+        lines(["1000", "-100", "0", "0", "0", "0", "0"])
+    );
+    assert_eq!(
+        only.columns[1].lines,
+        lines(["0", "0", "0", "-200", "0", "-400", "0"])
+    );
+    let without = statement(
+        "2026-10-01",
+        "2026-11-30",
+        DreBy::Month,
+        CostCenterFilter::Without,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        without.columns[0].lines,
+        lines(["470", "0", "-300", "0", "0", "0", "0"])
+    );
+    assert_eq!(
+        only.total.gross_revenue + without.total.gross_revenue,
+        money("1470")
+    );
+
+    // The span is by days: a month is partly counted, and the day before the span is not.
+    let partial = statement(
+        "2026-10-06",
+        "2026-10-31",
+        DreBy::Month,
+        CostCenterFilter::All,
+    )
+    .await
+    .unwrap();
+    assert_eq!(partial.columns.len(), 1);
+    assert_eq!(partial.total.gross_revenue, money("470"));
+
+    // Another company has its own books.
+    let theirs = dre
+        .statement(
+            other_company,
+            day("2026-10-01"),
+            day("2026-10-31"),
+            DreBy::Month,
+            CostCenterFilter::All,
+        )
+        .await
+        .unwrap();
+    assert_eq!(theirs.total, lines(["77", "0", "0", "0", "0", "0", "0"]));
+
+    // At most 24 months, and a span that is one.
+    assert_eq!(
+        statement(
+            "2026-12-01",
+            "2026-10-01",
+            DreBy::Month,
+            CostCenterFilter::All
+        )
+        .await
+        .unwrap_err(),
+        ApplicationError::InvalidSpan("from must not be after to")
+    );
+    statement(
+        "2025-01-01",
+        "2026-12-31",
+        DreBy::Month,
+        CostCenterFilter::All,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        statement(
+            "2025-01-01",
+            "2027-01-01",
+            DreBy::Month,
+            CostCenterFilter::All
+        )
+        .await
+        .unwrap_err(),
+        ApplicationError::InvalidSpan(_)
+    ));
+}

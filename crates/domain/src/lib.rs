@@ -16,6 +16,7 @@ mod delinquency;
 mod document;
 mod document_check;
 mod document_mail;
+mod dre;
 mod dunning;
 mod email;
 mod error;
@@ -87,6 +88,7 @@ pub use delinquency::{BUCKET_STARTS, DelinquencyReport, DelinquentCustomer, Late
 pub use document::{Cnpj, Document};
 pub use document_check::DocumentCheck;
 pub use document_mail::{COOLDOWN_MILLIS, DAILY_CAP, DAY_MILLIS, DocumentMail, DocumentMailKind};
+pub use dre::{DreColumn, DreColumnKey, DreLines};
 pub use dunning::{
     DunningChannel, DunningPlan, DunningRule, MAX_DAYS_AFTER, MAX_DAYS_BEFORE, MAX_DUNNING_RULES,
 };

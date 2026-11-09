@@ -466,6 +466,37 @@ export interface SalesReport {
   rows: SalesReportRow[];
 }
 
+/** What each group of the managerial income statement added up to, and the subtotals the server worked out (ADR 0070). */
+export interface DreLines {
+  gross_revenue: string;
+  deductions: string;
+  costs: string;
+  operating_expenses: string;
+  financial_result: string;
+  investments: string;
+  outside_result: string;
+  net_revenue: string;
+  gross_profit: string;
+  operating_result: string;
+  net_result: string;
+}
+
+export type DreBy = "month" | "cost_center";
+
+export interface DreColumn {
+  /** `YYYY-MM` for a month; a cost center's id, or null for the entries that have none. */
+  key: string | null;
+  lines: DreLines;
+}
+
+export interface Dre {
+  from: string;
+  to: string;
+  by: DreBy;
+  columns: DreColumn[];
+  total: DreLines;
+}
+
 /** A payment of an installment, in part or in full (ADR 0030). */
 export interface Settlement {
   id: string;
@@ -2275,6 +2306,12 @@ export const api = {
     }),
   salesReport: (companyId: string, by: SalesGroup, from: string, to: string) =>
     request<SalesReport>(`/companies/${companyId}/sales-reports?${new URLSearchParams({ by, from, to })}`),
+  /** `costCenter` is an id, `none` for the entries that have none, or empty for all. */
+  incomeStatement: (companyId: string, from: string, to: string, by: DreBy, costCenter: string) => {
+    const params = new URLSearchParams({ from, to, by });
+    if (costCenter) params.set("cost_center", costCenter);
+    return request<Dre>(`/companies/${companyId}/dre?${params}`);
+  },
   entriesReport: (companyId: string, filters: EntriesReportFilters) =>
     request<EntriesReport>(`/companies/${companyId}/reports/entries?${new URLSearchParams({ ...filters })}`),
   /** `on` is today where the person is: the server does not know their zone. */

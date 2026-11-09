@@ -42,6 +42,7 @@ pub(crate) const SEGMENT_AREAS: &[(&str, Area)] = &[
     ("reports", Area::Finance),
     ("collection", Area::Finance),
     ("delinquency", Area::Finance),
+    ("dre", Area::Finance),
     ("quotes", Area::Sales),
     ("sales", Area::Sales),
     ("contracts", Area::Sales),
@@ -159,6 +160,7 @@ mod tests {
             "reports",
             "collection",
             "delinquency",
+            "dre",
         ] {
             assert_eq!(
                 area_of(&format!("/companies/{{company_id}}/{finance}")),
