@@ -594,6 +594,15 @@ export interface PeriodLock {
   locked_through: string | null;
 }
 
+/** When the accountants are told the previous month's package is ready (ADR 0072). */
+export interface PackageSchedule {
+  enabled: boolean;
+  /** The day of the month, 1 to 28, from which it is announced. */
+  day: number;
+  /** How many members it would reach: the ones whose role is accountant. With none, nothing is sent. */
+  accountants: number;
+}
+
 /** Where the money of a paid charge lands, and what the provider's fee is entered under (ADR 0046). */
 export interface CollectionSettings {
   bank_account_id: string | null;
@@ -1957,6 +1966,13 @@ export const api = {
   removeAttachment: (companyId: string, entryId: string, attachmentId: string) =>
     request<void>(`/companies/${companyId}/entries/${entryId}/attachments/${attachmentId}`, {
       method: "DELETE",
+    }),
+  getPackageSchedule: (companyId: string) =>
+    request<PackageSchedule>(`/companies/${companyId}/accounting/package-schedule`),
+  replacePackageSchedule: (companyId: string, input: { enabled: boolean; day: number }) =>
+    request<PackageSchedule>(`/companies/${companyId}/accounting/package-schedule`, {
+      method: "PUT",
+      body: JSON.stringify(input),
     }),
   /** The accountant's files (ADR 0071): `from` and `to` are days, both included. */
   exportFile: (companyId: string, file: ExportFile, from: string, to: string, format: ExportFormat) =>

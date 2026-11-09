@@ -5,9 +5,10 @@ use conta_verde_application::{
     AccountingExportService, AttachmentService, AuthService, BalanceService, BankAccountService,
     CategoryService, CommissionService, ContractService, CostCenterService, DocumentMailService,
     DreService, FinancialEntryService, InventoryCountService, JobRunner, MemberService,
-    PartyService, PaymentMethodService, PaymentTermService, PeriodLockService, PostalCodeService,
-    PriceListService, ProductService, PurchaseService, QuoteService, ReconciliationService,
-    RecurrenceService, SaleService, SalesReportService, StockService, TransferService,
+    PackageScheduleService, PartyService, PaymentMethodService, PaymentTermService,
+    PeriodLockService, PostalCodeService, PriceListService, ProductService, PurchaseService,
+    QuoteService, ReconciliationService, RecurrenceService, SaleService, SalesReportService,
+    StockService, TransferService,
 };
 use conta_verde_application::{
     BrandedEmailSender, ChargeService, CollectionService, DunningService, EmailError, EmailMessage,
@@ -21,11 +22,11 @@ use conta_verde_infrastructure::{
     PostgresCategoryRepository, PostgresCommissionRuleRepository, PostgresContractRepository,
     PostgresCostCenterRepository, PostgresDocumentMailRepository, PostgresFinancialEntryRepository,
     PostgresIdentityRepository, PostgresInventoryCountRepository, PostgresInvitationRepository,
-    PostgresJobQueue, PostgresOpeningRepository, PostgresPartyRepository,
-    PostgresPaymentMethodRepository, PostgresPaymentTermRepository, PostgresPeriodLockRepository,
-    PostgresPriceListRepository, PostgresProductRepository, PostgresPurchaseOrderRepository,
-    PostgresQuoteRepository, PostgresRecurrenceRepository, PostgresSaleRepository,
-    PostgresStatementLineRepository, PostgresStockMovementRepository,
+    PostgresJobQueue, PostgresOpeningRepository, PostgresPackageScheduleRepository,
+    PostgresPartyRepository, PostgresPaymentMethodRepository, PostgresPaymentTermRepository,
+    PostgresPeriodLockRepository, PostgresPriceListRepository, PostgresProductRepository,
+    PostgresPurchaseOrderRepository, PostgresQuoteRepository, PostgresRecurrenceRepository,
+    PostgresSaleRepository, PostgresStatementLineRepository, PostgresStockMovementRepository,
     PostgresStockSettingsRepository, PostgresTransferRepository, RegisterDocumentReferences,
     RegisterReferences, SmtpEmailSender, connect_and_migrate,
 };
@@ -65,6 +66,7 @@ impl Ports for PostgresPorts {
         PostgresPeriodLockRepository,
     >;
     type PeriodLocks = PostgresPeriodLockRepository;
+    type PackageSchedules = PostgresPackageScheduleRepository;
     type Attachments = PostgresAttachmentRepository;
     type Blobs = LocalBlobStore;
     type Charges = PostgresChargeRepository;
@@ -259,6 +261,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
     let dunning = dunning_service()?;
     tokio::spawn(send_reminders(dunning_service()?));
+    let package_schedules = || {
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(PackageScheduleService::new(
+            PostgresPackageScheduleRepository::new(pool.clone()),
+            PostgresIdentityRepository::new(pool.clone()),
+            queued_emails(PostgresJobQueue::new(pool.clone()))?,
+            &public_url,
+        ))
+    };
+    let packages = package_schedules()?;
+    tokio::spawn(announce_monthly_packages(package_schedules()?));
     let price_lists = PriceListService::new(
         PostgresPriceListRepository::new(pool.clone()),
         RegisterDocumentReferences::new(
@@ -390,6 +402,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 balances,
                 period_locks,
                 exports,
+                packages,
                 postal_codes,
                 members,
                 documents,
@@ -435,6 +448,38 @@ where
             }
             Ok(_) => {}
             Err(error) => tracing::error!(%error, "sending reminders failed"),
+        }
+    }
+}
+
+/// Every hour, announces the previous month's package to the accountants of the companies whose schedule has come due
+/// ([ADR 0072]): the e-mail goes through the queue, and each month is claimed in the store first, so a pass that overlaps
+/// another, or a restart, announces nothing twice.
+async fn announce_monthly_packages<R, I, M>(service: PackageScheduleService<R, I, M>)
+where
+    R: conta_verde_application::PackageScheduleRepository,
+    I: conta_verde_application::IdentityRepository,
+    M: EmailSender,
+{
+    let mut tick = tokio::time::interval(JOB_INTERVAL);
+    loop {
+        tick.tick().await;
+        match service
+            .send_due(
+                conta_verde_api::customer_today(),
+                conta_verde_api::now_millis(),
+            )
+            .await
+        {
+            Ok(report) if report.sent > 0 || report.failed > 0 => {
+                tracing::info!(
+                    sent = report.sent,
+                    failed = report.failed,
+                    "monthly packages announced"
+                );
+            }
+            Ok(_) => {}
+            Err(error) => tracing::error!(%error, "announcing the monthly packages failed"),
         }
     }
 }

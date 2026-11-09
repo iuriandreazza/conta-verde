@@ -3,7 +3,9 @@
 
 An owner sets a company up, invites an accountant, and the accountant, from their own login, closes a month and
 downloads everything: a locked month refuses changes, the accountant cannot write the books, and the files hold the
-month's entries, settlements, transfers and attachments exactly.
+month's entries, settlements, transfers and attachments exactly. The accountant also turns on the monthly notice
+(ADR 0072); the pass that sends it runs when the API starts and every hour, so start the API again and look at the
+mailbox (Mailpit) to see it.
 
     docker compose up -d db
     export $(cat .env.example | xargs) CNPJ_LOOKUP=off BIND_ADDR=127.0.0.1:3100
@@ -138,6 +140,14 @@ def main():
     mine = next(c for c in accountant.json("GET", "/auth/me")["companies"] if c["id"] == company)
     check(mine["role"] == "accountant" and mine["permissions"].get("accounting") == "write", "the accountant writes only accounting")
     check(mine["permissions"].get("finance") == "read", "and reads the finance area")
+
+    print("The accountant schedules the monthly notice")
+    schedule = f"{base}/accounting/package-schedule"
+    check(accountant.json("GET", schedule) == {"enabled": False, "day": 5, "accountants": 1}, "it is off, and would reach the one accountant")
+    chosen = accountant.json("PUT", schedule, {"enabled": True, "day": 1})
+    check(chosen == {"enabled": True, "day": 1, "accountants": 1}, "the accountant turns it on from the 1st")
+    status, _, _ = accountant.call("PUT", schedule, {"enabled": True, "day": 29})
+    check(status == 422, "a day that not every month has is refused")
 
     print("The accountant reads the books but cannot change them")
     status, _, _ = accountant.call("POST", f"{base}/entries", entry("Não pode", "receivable", revenue, "2026-12-01", [("2026-12-10", "1")]))

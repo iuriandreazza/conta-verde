@@ -60,14 +60,14 @@ use conta_verde_application::{
     DocumentMailRepository, DocumentMailService, DocumentReferences, DreService, EmailSender,
     EntryLookups, EntryReferences, ExportLookups, FinancialEntryRepository, FinancialEntryService,
     IdentityRepository, InventoryCountRepository, InventoryCountService, InvitationRepository,
-    MemberService, OpeningRepository, PartyRepository, PartyService, PaymentMethodRepository,
-    PaymentMethodService, PaymentProvider, PaymentTermRepository, PaymentTermService,
-    PostalCodeDirectory, PostalCodeService, PriceListRepository, PriceListService,
-    ProductRepository, ProductService, PurchaseOrderRepository, PurchaseService, QuoteRepository,
-    QuoteService, ReconciliationService, RecurrenceRepository, RecurrenceService, SaleRepository,
-    SaleService, SalesReportService, SecretService, StatementLineRepository,
-    StockMovementRepository, StockService, StockSettingsRepository, TransferRepository,
-    TransferService,
+    MemberService, OpeningRepository, PackageScheduleRepository, PackageScheduleService,
+    PartyRepository, PartyService, PaymentMethodRepository, PaymentMethodService, PaymentProvider,
+    PaymentTermRepository, PaymentTermService, PostalCodeDirectory, PostalCodeService,
+    PriceListRepository, PriceListService, ProductRepository, ProductService,
+    PurchaseOrderRepository, PurchaseService, QuoteRepository, QuoteService, ReconciliationService,
+    RecurrenceRepository, RecurrenceService, SaleRepository, SaleService, SalesReportService,
+    SecretService, StatementLineRepository, StockMovementRepository, StockService,
+    StockSettingsRepository, TransferRepository, TransferService,
 };
 use conta_verde_application::{
     CollectionService, CollectionSettingsRepository, DunningPlanRepository, DunningService,
@@ -84,7 +84,7 @@ pub struct ApiConfig {
 
 /// The adapters the use cases run on, named once so that a handler has one type parameter however
 /// many registers there are. Generic rather than `dyn`, like the use cases themselves.
-pub use clock::{customer_today, today};
+pub use clock::{customer_today, now_millis, today};
 
 pub trait Ports: 'static {
     type Parties: PartyRepository + 'static;
@@ -101,6 +101,7 @@ pub trait Ports: 'static {
     type Entries: FinancialEntryRepository + 'static;
     type EntryReferences: EntryReferences + EntryLookups + ExportLookups + 'static;
     type PeriodLocks: PeriodLockRepository + 'static;
+    type PackageSchedules: PackageScheduleRepository + 'static;
     type Attachments: AttachmentRepository + 'static;
     type Blobs: BlobStore + 'static;
     type Charges: ChargeRepository + 'static;
@@ -184,6 +185,13 @@ type BalancesOf<X> = BalanceService<
     <X as Ports>::Transfers,
     <X as Ports>::Openings,
     <X as Ports>::PeriodLocks,
+>;
+
+/// The schedule of the monthly package over the adapters of `X`.
+type PackagesOf<X> = PackageScheduleService<
+    <X as Ports>::PackageSchedules,
+    <X as Ports>::Identity,
+    <X as Ports>::Emails,
 >;
 
 /// The accountant's exports over the adapters of `X`.
@@ -283,6 +291,7 @@ pub struct Services<X: Ports> {
     pub balances: BalancesOf<X>,
     pub period_locks: PeriodLockService<X::PeriodLocks>,
     pub exports: ExportsOf<X>,
+    pub packages: PackagesOf<X>,
     pub postal_codes: PostalCodeService<X::PostalCodes>,
     pub members: MemberService<X::Invitations, X::Identity, X::Emails, X::Secrets>,
     pub documents: DocumentsOf<X>,
@@ -321,6 +330,7 @@ pub(crate) struct AppState<X: Ports> {
     balances: BalancesOf<X>,
     period_locks: PeriodLockService<X::PeriodLocks>,
     exports: ExportsOf<X>,
+    packages: PackagesOf<X>,
     postal_codes: PostalCodeService<X::PostalCodes>,
     members: MemberService<X::Invitations, X::Identity, X::Emails, X::Secrets>,
     documents: DocumentsOf<X>,
@@ -363,6 +373,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         balances: services.balances,
         period_locks: services.period_locks,
         exports: services.exports,
+        packages: services.packages,
         postal_codes: services.postal_codes,
         members: services.members,
         documents: services.documents,
@@ -622,6 +633,14 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         .route(
             "/companies/{company_id}/accounting/period-lock/history",
             get(accounting::period_lock_history::<X>),
+        )
+        .route(
+            "/companies/{company_id}/accounting/package-schedule",
+            get(accounting::get_package_schedule::<X>).put(accounting::put_package_schedule::<X>),
+        )
+        .route(
+            "/companies/{company_id}/accounting/package-schedule/history",
+            get(accounting::package_schedule_history::<X>),
         )
         .route(
             "/companies/{company_id}/accounting/exports/entries",
@@ -978,14 +997,15 @@ mod tests {
         InMemoryDocumentMailRepository, InMemoryDunningPlanRepository, InMemoryEmailSender,
         InMemoryFinancialEntryRepository, InMemoryIdentityRepository,
         InMemoryInventoryCountRepository, InMemoryInvitationRepository, InMemoryMessageSender,
-        InMemoryNotificationRepository, InMemoryOpeningRepository, InMemoryPartyRepository,
-        InMemoryPaymentEventRepository, InMemoryPaymentLinkRepository,
-        InMemoryPaymentMethodRepository, InMemoryPaymentTermRepository,
-        InMemoryPeriodLockRepository, InMemoryPostalCodeDirectory, InMemoryPriceListRepository,
-        InMemoryProductRepository, InMemoryPurchaseOrderRepository, InMemoryQuoteRepository,
-        InMemoryRecurrenceRepository, InMemorySaleRepository, InMemoryStatementLineRepository,
-        InMemoryStockMovementRepository, InMemoryStockSettingsRepository,
-        InMemoryTransferRepository, RegisterDocumentReferences, RegisterReferences,
+        InMemoryNotificationRepository, InMemoryOpeningRepository,
+        InMemoryPackageScheduleRepository, InMemoryPartyRepository, InMemoryPaymentEventRepository,
+        InMemoryPaymentLinkRepository, InMemoryPaymentMethodRepository,
+        InMemoryPaymentTermRepository, InMemoryPeriodLockRepository, InMemoryPostalCodeDirectory,
+        InMemoryPriceListRepository, InMemoryProductRepository, InMemoryPurchaseOrderRepository,
+        InMemoryQuoteRepository, InMemoryRecurrenceRepository, InMemorySaleRepository,
+        InMemoryStatementLineRepository, InMemoryStockMovementRepository,
+        InMemoryStockSettingsRepository, InMemoryTransferRepository, RegisterDocumentReferences,
+        RegisterReferences,
     };
     use http_body_util::BodyExt;
     use serde_json::{Value, json};
@@ -1053,6 +1073,7 @@ mod tests {
         type Entries = InMemoryFinancialEntryRepository;
         type EntryReferences = TestReferences;
         type PeriodLocks = InMemoryPeriodLockRepository;
+        type PackageSchedules = InMemoryPackageScheduleRepository;
         type Attachments = InMemoryAttachmentRepository;
         type Blobs = InMemoryBlobStore;
         type Charges = InMemoryChargeRepository;
@@ -1100,6 +1121,7 @@ mod tests {
         type Entries = InMemoryFinancialEntryRepository;
         type EntryReferences = TestReferences;
         type PeriodLocks = InMemoryPeriodLockRepository;
+        type PackageSchedules = InMemoryPackageScheduleRepository;
         type Attachments = InMemoryAttachmentRepository;
         type Blobs = InMemoryBlobStore;
         type Charges = InMemoryChargeRepository;
@@ -1236,6 +1258,16 @@ mod tests {
                 &InMemoryBankAccountRepository::default(),
                 &InMemoryPaymentMethodRepository::default(),
             ),
+        )
+    }
+
+    /// The schedule over stores that the app's own services do not share: for the tests that never use it.
+    fn standalone_packages() -> PackagesOf<MemoryPorts> {
+        PackageScheduleService::new(
+            InMemoryPackageScheduleRepository::default(),
+            InMemoryIdentityRepository::default(),
+            InMemoryEmailSender::default(),
+            "http://localhost:5173",
         )
     }
 
@@ -1848,6 +1880,7 @@ mod tests {
                 balances: standalone_balances(),
                 period_locks: PeriodLockService::new(locks()),
                 exports: standalone_exports(),
+                packages: standalone_packages(),
                 dre: DreService::new(
                     InMemoryFinancialEntryRepository::default(),
                     InMemoryCategoryRepository::default(),
@@ -2509,6 +2542,7 @@ mod tests {
                 balances: standalone_balances(),
                 period_locks: PeriodLockService::new(locks()),
                 exports: standalone_exports(),
+                packages: standalone_packages(),
                 dre: DreService::new(
                     InMemoryFinancialEntryRepository::default(),
                     InMemoryCategoryRepository::default(),
@@ -4731,6 +4765,7 @@ mod tests {
                 balances: standalone_balances(),
                 period_locks: PeriodLockService::new(locks()),
                 exports: standalone_exports(),
+                packages: standalone_packages(),
                 dre: DreService::new(
                     InMemoryFinancialEntryRepository::default(),
                     InMemoryCategoryRepository::default(),
@@ -6389,6 +6424,12 @@ mod tests {
                 )
                 .with_period_lock(locks()),
                 period_locks: PeriodLockService::new(locks()),
+                packages: PackageScheduleService::new(
+                    InMemoryPackageScheduleRepository::default(),
+                    identities.clone(),
+                    mailbox.clone(),
+                    "http://localhost:5173",
+                ),
                 exports: AccountingExportService::new(
                     entry_store.clone(),
                     transfer_store.clone(),
@@ -6791,6 +6832,114 @@ mod tests {
             send(&app, get_request(&format!("{base}/entries?{span}"), None))
                 .await
                 .status,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn the_accountant_chooses_when_the_package_is_announced() {
+        use conta_verde_domain::Role;
+
+        let (app, identities) = entry_app_with_identities();
+        let (owner, company_id) = sign_up(&app, "dona@example.com").await;
+        let accountant = member_with_role(&app, &identities, company_id, Role::Accountant).await;
+        let viewer = member_with_role(&app, &identities, company_id, Role::Viewer).await;
+        let (stranger, _) = sign_up(&app, "outra@example.com").await;
+        let uri = format!("/companies/{company_id}/accounting/package-schedule");
+
+        // Off on the 5th until chosen, and it says whom it would reach: the one accountant, not the viewer.
+        let read = send(&app, get_request(&uri, Some(&viewer))).await;
+        assert_eq!(read.status, StatusCode::OK, "{}", read.body);
+        assert_eq!(
+            read.body,
+            json!({ "enabled": false, "day": 5, "accountants": 1 })
+        );
+
+        // A reader cannot choose; the accountant can, and so can the owner.
+        let denied = send(
+            &app,
+            json_request(
+                "PUT",
+                &uri,
+                Some(&viewer),
+                json!({ "enabled": true, "day": 10 }),
+            ),
+        )
+        .await;
+        assert_eq!(denied.status, StatusCode::FORBIDDEN);
+        let chosen = send(
+            &app,
+            json_request(
+                "PUT",
+                &uri,
+                Some(&accountant),
+                json!({ "enabled": true, "day": 10 }),
+            ),
+        )
+        .await;
+        assert_eq!(chosen.status, StatusCode::OK, "{}", chosen.body);
+        assert_eq!(
+            chosen.body,
+            json!({ "enabled": true, "day": 10, "accountants": 1 })
+        );
+        let owner_choice = send(
+            &app,
+            json_request(
+                "PUT",
+                &uri,
+                Some(&owner),
+                json!({ "enabled": true, "day": 12 }),
+            ),
+        )
+        .await;
+        assert_eq!(owner_choice.status, StatusCode::OK);
+        assert_eq!(
+            send(&app, get_request(&uri, Some(&viewer))).await.body["day"],
+            12
+        );
+
+        // A day every month has, and both fields said every time.
+        for body in [
+            json!({ "enabled": true, "day": 0 }),
+            json!({ "enabled": true, "day": 29 }),
+            json!({ "enabled": true }),
+            json!({ "day": 10 }),
+            json!({ "enabled": true, "day": 10, "to": "x@example.com" }),
+        ] {
+            let refused = send(
+                &app,
+                json_request("PUT", &uri, Some(&accountant), body.clone()),
+            )
+            .await;
+            assert_eq!(
+                refused.status,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "{body}: {}",
+                refused.body
+            );
+        }
+        assert_eq!(
+            send(&app, get_request(&uri, Some(&viewer))).await.body["day"],
+            12,
+            "what was refused changed nothing"
+        );
+
+        // Who chose what is in the trail, and nobody outside the company sees any of it.
+        let history = send(&app, get_request(&format!("{uri}/history"), Some(&viewer))).await;
+        assert_eq!(history.status, StatusCode::OK);
+        assert_eq!(
+            history.body.as_array().unwrap().len(),
+            2,
+            "two choices, none of the refused ones"
+        );
+        assert_eq!(history.body[0]["action"], "created");
+        assert_eq!(history.body[1]["changes"][0]["field"], "day");
+        assert_eq!(
+            send(&app, get_request(&uri, Some(&stranger))).await.status,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            send(&app, get_request(&uri, None)).await.status,
             StatusCode::UNAUTHORIZED
         );
     }

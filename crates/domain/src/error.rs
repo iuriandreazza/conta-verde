@@ -43,6 +43,8 @@ pub enum DomainError {
     InvalidDate(&'static str),
     InvalidPeriodLock,
     InvalidReopenReason,
+    /// The day of the month the monthly package goes out on is from 1 to 28.
+    InvalidPackageDay,
     InvalidInstallmentAmount,
     InstallmentDatesDecrease,
     NoEntryInstallments,
@@ -211,6 +213,9 @@ impl fmt::Display for DomainError {
             Self::InvalidPeriodLock => f.write_str(
                 "a period is closed through the last day of a month, written YYYY-MM-DD",
             ),
+            Self::InvalidPackageDay => {
+                f.write_str("the package goes out on a day of the month from 1 to 28")
+            }
             Self::InvalidReopenReason => f.write_str(
                 "reopening a period needs a reason of 1 to 200 characters, on one line",
             ),

@@ -5,6 +5,7 @@ import { AccountantDownloads } from "../components/AccountantDownloads";
 import { Button } from "../components/Button";
 import { CheckIcon } from "../components/icons/check";
 import { Notice } from "../components/Notice";
+import { PackageScheduleCard } from "../components/PackageScheduleCard";
 import { PageHeader } from "../components/PageHeader";
 import { PeriodLockHistory } from "../components/PeriodLockHistory";
 import { Spinner } from "../components/Spinner";
@@ -180,6 +181,7 @@ export function AccountingPage() {
               </div>
             )}
             <AccountantDownloads key={through ?? "open"} companyId={companyId} lockedThrough={through} />
+            <PackageScheduleCard companyId={companyId} />
             <section className="card">
               <h2>Histórico</h2>
               <PeriodLockHistory key={trail} companyId={companyId} />

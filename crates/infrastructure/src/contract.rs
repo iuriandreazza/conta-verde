@@ -16521,3 +16521,372 @@ pub async fn names_everything_for_the_export<L, C>(
     assert!(theirs.categories.contains_key(&other_seed.category));
     assert!(!theirs.categories.contains_key(&seed.category));
 }
+
+/// A company's schedule of the monthly package ([ADR 0072]): none until chosen, replaced as a whole with its audit
+/// entry, the same choice again writing nothing; which companies are due on a day of the month; a month claimed by one
+/// caller and given back; and nothing of another company's.
+pub async fn stores_the_package_schedule<R: conta_verde_application::PackageScheduleRepository>(
+    store: &R,
+    company: CompanyId,
+    other_company: CompanyId,
+) {
+    use conta_verde_domain::{
+        PackageSchedule, package_schedule_changes, package_schedule_creation_changes,
+    };
+
+    let audit_entry = |schedule: &PackageSchedule, who: &Actor, action, changes| AuditEntry {
+        company_id: schedule.company_id(),
+        actor: who.clone(),
+        entity: AuditEntity::PackageSchedule,
+        entity_id: schedule.company_id().as_uuid(),
+        action,
+        changes,
+    };
+
+    let ana = actor();
+    let day = |text: &str| CalendarDate::parse(text).unwrap();
+    assert_eq!(store.find(company).await.unwrap(), None);
+
+    let first = PackageSchedule::new(company, true, 10).unwrap();
+    store
+        .save(
+            &first,
+            &audit_entry(
+                &first,
+                &ana,
+                AuditAction::Created,
+                package_schedule_creation_changes(&first),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(store.find(company).await.unwrap(), Some(first));
+    assert_eq!(store.find(other_company).await.unwrap(), None);
+
+    // Replaced as a whole, and the trail says what changed.
+    let second = PackageSchedule::new(company, true, 12).unwrap();
+    store
+        .save(
+            &second,
+            &audit_entry(
+                &second,
+                &ana,
+                AuditAction::Updated,
+                package_schedule_changes(&first, &second),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(store.find(company).await.unwrap(), Some(second));
+    let trail = store.history(company).await.unwrap();
+    assert_eq!(trail.len(), 2);
+    assert_eq!(trail[1].entry.action, AuditAction::Updated);
+    assert_eq!(
+        trail[1]
+            .entry
+            .changes
+            .iter()
+            .map(|c| (c.field.as_str(), c.to.as_deref()))
+            .collect::<Vec<_>>(),
+        [("day", Some("12"))]
+    );
+    assert!(store.history(other_company).await.unwrap().is_empty());
+
+    // An entry that describes another schedule is refused outright, and leaves nothing.
+    let stranger = PackageSchedule::new(other_company, true, 3).unwrap();
+    assert!(
+        store
+            .save(
+                &stranger,
+                &audit_entry(
+                    &second,
+                    &ana,
+                    AuditAction::Created,
+                    package_schedule_creation_changes(&second),
+                ),
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(store.find(other_company).await.unwrap(), None);
+
+    // Due on a day of the month: on, and the day has come. Another company's schedule is another's.
+    let due = |of: u8| {
+        let store = &store;
+        async move { store.due(of).await.unwrap() }
+    };
+    assert!(!due(11).await.contains(&company));
+    assert!(due(12).await.contains(&company));
+    assert!(due(28).await.contains(&company));
+    let off = PackageSchedule::new(company, false, 12).unwrap();
+    store
+        .save(
+            &off,
+            &audit_entry(
+                &off,
+                &ana,
+                AuditAction::Updated,
+                package_schedule_changes(&second, &off),
+            ),
+        )
+        .await
+        .unwrap();
+    assert!(!due(28).await.contains(&company), "off is never due");
+
+    // A month goes to the first that claims it; each month and each company is its own; giving it back lets it go on.
+    let (october, november) = (day("2026-10-01"), day("2026-11-01"));
+    assert!(store.claim(company, october, 1).await.unwrap());
+    assert!(!store.claim(company, october, 2).await.unwrap());
+    assert!(store.claim(company, november, 3).await.unwrap());
+    assert!(store.claim(other_company, october, 4).await.unwrap());
+    store.release(company, october).await.unwrap();
+    assert!(store.claim(company, october, 5).await.unwrap());
+    store.release(company, day("2030-01-01")).await.unwrap();
+}
+
+/// The announcement of the monthly package ([ADR 0072]): it goes to the members whose role is accountant and to no one
+/// else, for the previous month, once the day has come, once per month however often the pass runs, and carries only a
+/// link. Asserted on the messages to its own addresses, as the pass reaches every company of a shared database.
+pub async fn announces_the_monthly_package<R, I>(
+    service: &conta_verde_application::PackageScheduleService<R, I, InMemoryEmailSender>,
+    identities: &I,
+    mailbox: &InMemoryEmailSender,
+) where
+    R: conta_verde_application::PackageScheduleRepository,
+    I: IdentityRepository,
+{
+    let ana = actor();
+    let day = |text: &str| CalendarDate::parse(text).unwrap();
+    let unique = Uuid::new_v4();
+    let owner = Account::new(
+        UserId::generate(),
+        CompanyId::generate(),
+        AccountDraft {
+            user_name: "Dona".into(),
+            email: format!("dona-{unique}@example.com"),
+            company_name: "Padaria Exemplo".into(),
+        },
+    )
+    .unwrap();
+    identities
+        .register_account(&NewAccount {
+            account: owner.clone(),
+            password_hash: "not a real hash".into(),
+        })
+        .await
+        .unwrap();
+    let company = owner.company.id();
+    let join = |name: &str, role: Role| {
+        let email = format!("{name}-{unique}@example.com");
+        let name = name.to_owned();
+        async move {
+            let user = User::new(UserId::generate(), &name, &email).unwrap();
+            identities
+                .register_user(&NewUser {
+                    user: user.clone(),
+                    password_hash: "not a real hash".into(),
+                })
+                .await
+                .unwrap();
+            identities
+                .add_membership(user.id(), company, role)
+                .await
+                .unwrap();
+            email
+        }
+    };
+    let contadora = join("contadora", Role::Accountant).await;
+    let contador = join("contador", Role::Accountant).await;
+    let leitora = join("leitora", Role::Viewer).await;
+    let addresses = [
+        contadora.clone(),
+        contador.clone(),
+        leitora.clone(),
+        owner.user.email().as_str().to_owned(),
+    ];
+    let received = || -> Vec<EmailMessage> {
+        mailbox
+            .sent()
+            .into_iter()
+            .filter(|message| addresses.contains(&message.to.as_str().to_owned()))
+            .collect()
+    };
+
+    // Off until chosen, and the company counts its accountants.
+    let schedule = service.get(company).await.unwrap();
+    assert!(!schedule.is_enabled() && schedule.day() == 5);
+    assert_eq!(service.accountants(company).await.unwrap(), 2);
+    service.send_due(day("2026-11-20"), 1).await.unwrap();
+    assert!(
+        received().is_empty(),
+        "nothing is sent for a schedule that is off"
+    );
+
+    // A choice is audited; the same choice again writes nothing; a day that is not 1 to 28 is refused.
+    service.replace(company, &ana, true, 10).await.unwrap();
+    service.replace(company, &ana, true, 10).await.unwrap();
+    assert_eq!(service.history(company).await.unwrap().len(), 1);
+    for bad in [0, 29] {
+        assert_eq!(
+            service.replace(company, &ana, true, bad).await.unwrap_err(),
+            ApplicationError::Domain(DomainError::InvalidPackageDay)
+        );
+    }
+    assert_eq!(service.history(company).await.unwrap().len(), 1);
+    service.replace(company, &ana, true, 12).await.unwrap();
+    assert_eq!(service.history(company).await.unwrap().len(), 2);
+
+    // Before its day nothing goes; on it, the previous month goes to the accountants and to no one else.
+    service.send_due(day("2026-11-11"), 2).await.unwrap();
+    assert!(received().is_empty());
+    service.send_due(day("2026-11-12"), 3).await.unwrap();
+    let sent = received();
+    let mut to: Vec<&str> = sent.iter().map(|message| message.to.as_str()).collect();
+    to.sort_unstable();
+    let mut expected = vec![contadora.as_str(), contador.as_str()];
+    expected.sort_unstable();
+    assert_eq!(to, expected);
+    let link = format!("/companies/{}/accounting?month=2026-10", company.as_uuid());
+    for message in &sent {
+        assert!(
+            message.subject.contains("outubro de 2026"),
+            "{}",
+            message.subject
+        );
+        assert!(message.subject.contains("Padaria Exemplo"));
+        assert!(message.body.contains(&link), "{}", message.body);
+        // It says the package is ready and carries no figure and no file.
+        assert!(
+            message
+                .body
+                .contains("não traz dados da empresa nem arquivos")
+        );
+    }
+
+    // Once per month, however often the pass runs, for the rest of the month too.
+    service.send_due(day("2026-11-12"), 4).await.unwrap();
+    service.send_due(day("2026-11-30"), 5).await.unwrap();
+    assert_eq!(received().len(), 2);
+
+    // The next month goes again, for November; switched off, nothing goes.
+    service.send_due(day("2026-12-12"), 6).await.unwrap();
+    assert_eq!(received().len(), 4);
+    assert!(received()[2].subject.contains("novembro de 2026"));
+    service.replace(company, &ana, false, 12).await.unwrap();
+    service.send_due(day("2027-01-20"), 7).await.unwrap();
+    assert_eq!(received().len(), 4);
+
+    // A company with no accountant sends nothing and claims nothing: one invited later in the month still gets it.
+    let lonely = Account::new(
+        UserId::generate(),
+        CompanyId::generate(),
+        AccountDraft {
+            user_name: "Sozinha".into(),
+            email: format!("sozinha-{unique}@example.com"),
+            company_name: "Oficina".into(),
+        },
+    )
+    .unwrap();
+    identities
+        .register_account(&NewAccount {
+            account: lonely.clone(),
+            password_hash: "not a real hash".into(),
+        })
+        .await
+        .unwrap();
+    let lonely_company = lonely.company.id();
+    service
+        .replace(lonely_company, &ana, true, 1)
+        .await
+        .unwrap();
+    service.send_due(day("2027-02-10"), 8).await.unwrap();
+    assert!(mailbox.sent().iter().all(|m| m.to != *lonely.user.email()));
+    assert_eq!(service.accountants(lonely_company).await.unwrap(), 0);
+    let late = User::new(
+        UserId::generate(),
+        "tardia",
+        &format!("tardia-{unique}@example.com"),
+    )
+    .unwrap();
+    identities
+        .register_user(&NewUser {
+            user: late.clone(),
+            password_hash: "x".into(),
+        })
+        .await
+        .unwrap();
+    identities
+        .add_membership(late.id(), lonely_company, Role::Accountant)
+        .await
+        .unwrap();
+    service.send_due(day("2027-02-15"), 9).await.unwrap();
+    assert_eq!(
+        mailbox
+            .sent()
+            .iter()
+            .filter(|m| m.to == *late.email())
+            .count(),
+        1
+    );
+}
+
+/// A pass that could queue nothing gives the month back, so the next pass tries it again ([ADR 0072]).
+pub async fn gives_the_month_back_when_nothing_could_be_queued<R, I>(
+    broken: &conta_verde_application::PackageScheduleService<R, I, InMemoryEmailSender>,
+    store: &R,
+    identities: &I,
+) where
+    R: conta_verde_application::PackageScheduleRepository,
+    I: IdentityRepository,
+{
+    let ana = actor();
+    let unique = Uuid::new_v4();
+    let owner = Account::new(
+        UserId::generate(),
+        CompanyId::generate(),
+        AccountDraft {
+            user_name: "Dona".into(),
+            email: format!("dona-{unique}@example.com"),
+            company_name: "Padaria".into(),
+        },
+    )
+    .unwrap();
+    identities
+        .register_account(&NewAccount {
+            account: owner.clone(),
+            password_hash: "x".into(),
+        })
+        .await
+        .unwrap();
+    let company = owner.company.id();
+    let accountant = User::new(
+        UserId::generate(),
+        "contadora",
+        &format!("contadora-{unique}@example.com"),
+    )
+    .unwrap();
+    identities
+        .register_user(&NewUser {
+            user: accountant.clone(),
+            password_hash: "x".into(),
+        })
+        .await
+        .unwrap();
+    identities
+        .add_membership(accountant.id(), company, Role::Accountant)
+        .await
+        .unwrap();
+    broken.replace(company, &ana, true, 1).await.unwrap();
+
+    // A month no other test announces: the pass reaches every company of a shared database, so a test that ran at the
+    // same moment with a working mailbox would claim this company's month first.
+    let report = broken
+        .send_due(CalendarDate::parse("2031-06-10").unwrap(), 1)
+        .await
+        .unwrap();
+    assert!(report.failed >= 1);
+    // Nothing went out, so May is not claimed: it can be claimed now, once.
+    let may = CalendarDate::parse("2031-05-01").unwrap();
+    assert!(store.claim(company, may, 2).await.unwrap());
+    assert!(!store.claim(company, may, 3).await.unwrap());
+}

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { api, errorMessage, type ExportFile, type ExportFormat } from "../api";
 import { saveFile } from "../lib/csv";
 import { MONTH, lastDayOfMonth, monthToExport } from "../lib/closing";
@@ -18,7 +19,10 @@ const FILES: { file: ExportFile; label: string }[] = [
  * transfers, or all of them with the attached files in one zip. It says what the package does not hold.
  */
 export function AccountantDownloads({ companyId, lockedThrough }: { companyId: string; lockedThrough: string | null }) {
-  const [month, setMonth] = useState(() => monthToExport(lockedThrough, todayIso()));
+  // The e-mail that says a package is ready links here with the month in the address (ADR 0072).
+  const [params] = useSearchParams();
+  const linked = params.get("month") ?? "";
+  const [month, setMonth] = useState(() => (MONTH.test(linked) ? linked : monthToExport(lockedThrough, todayIso())));
   const [format, setFormat] = useState<ExportFormat>("csv");
   const [pending, setPending] = useState<ExportFile | null>(null);
   const [error, setError] = useState<string | null>(null);
