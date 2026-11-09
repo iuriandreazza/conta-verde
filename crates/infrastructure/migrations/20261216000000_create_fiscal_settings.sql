@@ -78,9 +78,11 @@ CREATE TABLE fiscal_natures (
         char_length(name) BETWEEN 1 AND 60 AND name !~ '^\s|\s$' AND name !~ '[[:cntrl:]]'
     ),
     CONSTRAINT fiscal_natures_kind_valid CHECK (kind IN ('product', 'service')),
-    -- Goods carry the CFOP for inside the state (5xxx) and for another (6xxx); a service carries none.
+    -- Goods carry the CFOP for inside the state (5xxx) and for another (6xxx); a service carries none. `IS NOT NULL` is
+    -- explicit because a regex test of NULL is NULL, and a CHECK passes on NULL.
     CONSTRAINT fiscal_natures_cfop_follows_kind CHECK (
-        (kind = 'product' AND cfop_in_state ~ '^5[0-9]{3}$' AND cfop_interstate ~ '^6[0-9]{3}$')
+        (kind = 'product' AND cfop_in_state IS NOT NULL AND cfop_in_state ~ '^5[0-9]{3}$'
+            AND cfop_interstate IS NOT NULL AND cfop_interstate ~ '^6[0-9]{3}$')
         OR (kind = 'service' AND cfop_in_state IS NULL AND cfop_interstate IS NULL)
     )
 );

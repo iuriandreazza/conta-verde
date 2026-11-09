@@ -360,6 +360,10 @@ mod tests {
             "fiscal_natures_cfop_follows_kind",
         );
         refused(
+            run(nature("product", "NULL", "NULL", "sale")).await,
+            "fiscal_natures_cfop_follows_kind",
+        );
+        refused(
             run(nature("service", "'5102'", "NULL", "service")).await,
             "fiscal_natures_cfop_follows_kind",
         );

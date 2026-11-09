@@ -327,3 +327,37 @@ it("shows the trail of changes", async () => {
   const change = (await screen.findByText("Regime tributário:")).closest("li")!;
   expect(change).toHaveTextContent("Regime tributário: Simples Nacional");
 });
+
+it("writes the natures out in the history so a changed rate or CFOP shows", async () => {
+  mockApi((url) => {
+    if (url === "/api/auth/me") return { status: 200, body: profile };
+    if (url.endsWith("/history")) {
+      return {
+        status: 200,
+        body: [
+          {
+            at: Date.UTC(2026, 10, 2, 15, 0),
+            actor: { kind: "user", id: "u1", name: "Ana" },
+            action: "updated",
+            changes: [
+              {
+                field: "natures",
+                from: "sale|Venda|product|5102|6102|true|simples_nacional::102:07:07:::",
+                to: "sale|Venda|product|5102|6102|true|lucro_presumido:19:00:01:01:18:0.65:3",
+              },
+            ],
+          },
+        ],
+      };
+    }
+    return { status: 200, body: stored };
+  });
+  renderAt("/companies/c1/fiscal/settings");
+
+  expect(
+    await screen.findByText(/Venda \(sale\), CFOP 5102\/6102, ativa \[Simples Nacional: ICMS 102, PIS 07, COFINS 07\]/),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByText(/Lucro Presumido NCM 19\*: ICMS 00 a 18%, PIS 01 a 0.65%, COFINS 01 a 3%/),
+  ).toBeInTheDocument();
+});

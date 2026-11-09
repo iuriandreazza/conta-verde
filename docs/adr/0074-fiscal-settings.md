@@ -63,7 +63,7 @@ each unique within the company, the name ignoring case), a **kind**, an `active`
 - A **service** nature has **no CFOP and no rules**: the tax of a service is municipal and is decided with the NFS-e
   (slice 5, which adds its fields to this record in its own ADR).
 - A **tax rule** is for one **regime** and, optionally, an **NCM prefix** (2 to 8 digits: the products whose NCM begins with it;
-  no prefix is the nature's general rule; at most one rule per regime and prefix). It holds the **ICMS code** (a CSOSN of three
+  no prefix is the nature's general rule; at most one rule per regime and prefix; when a document is made, the rule for an item is the one of the company's regime whose prefix is the **longest** the item's NCM begins with, else the general one). It holds the **ICMS code** (a CSOSN of three
   digits for the Simples Nacional, a CST of two for Lucro Presumido), the **PIS** and **COFINS** CSTs (two digits) and, all
   optional, the three **rates** (0 to 100 with at most two decimals, held as exact decimals, never floats). Rules for both
   regimes may exist side by side, so changing the company's regime changes which ones apply and deletes none.
