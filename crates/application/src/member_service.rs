@@ -4,7 +4,7 @@ use conta_verde_domain::{
     Actor, CompanyId, Email, Invitation, InvitationId, Role, User, UserId, validate_password,
 };
 
-use crate::text::one_line;
+use crate::text::{in_days, one_line};
 use crate::{
     ApplicationError, AuthError, EmailContent, EmailSender, IdentityRepository,
     InvitationRepository, InvitationState, Member, NewInvitation, NewUser, RepositoryError,
@@ -199,8 +199,8 @@ where
                 format!("{}/confirm-email/{token}", self.public_url),
             )
             .note(format!(
-                "O link vale por {} dias. Se você não criou uma conta no conta-verde, ignore este e-mail.",
-                CONFIRMATION_LIFETIME.as_secs() / 86_400
+                "O link vale por {}. Se você não criou uma conta no conta-verde, ignore este e-mail.",
+                in_days(CONFIRMATION_LIFETIME)
             ));
             self.notify(
                 user.email().clone(),
@@ -376,8 +376,8 @@ where
         .paragraph("Para aceitar, entre com este endereço de e-mail e abra o convite.")
         .button("Aceitar convite", link.clone())
         .note(format!(
-            "O convite vale por {} dias.",
-            self.invitation_lifetime.as_secs() / 86_400
+            "O convite vale por {}.",
+            in_days(self.invitation_lifetime)
         ));
         let emailed = self
             .emails

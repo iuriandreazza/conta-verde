@@ -154,6 +154,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         );
         "http://localhost:5173".to_owned()
     });
+    refuse_a_link_without_a_scheme("PUBLIC_URL", &public_url)?;
     let payment_provider = payment_provider_from_env(&public_url)?;
     let charges = ChargeService::new(
         PostgresChargeRepository::new(pool.clone()),
@@ -705,11 +706,31 @@ fn queued_emails(
     Box<dyn std::error::Error + Send + Sync>,
 > {
     let source_url = std::env::var("SOURCE_URL")
-        .unwrap_or_else(|_| "https://github.com/iuriandreazza/conta-verde".to_owned());
+        .ok()
+        .filter(|url| !url.is_empty())
+        .unwrap_or_else(|| "https://github.com/iuriandreazza/conta-verde".to_owned());
+    // Without a scheme the footer would lose the link AGPL section 13 asks for, so it is refused here.
+    refuse_a_link_without_a_scheme("SOURCE_URL", &source_url)?;
     Ok(BrandedEmailSender::new(
         QueuedEmailSender::new(queue, email_sender_from_env()?.is_enabled()),
         source_url,
     ))
+}
+
+/// A link in an e-mail must be a web address: the layout draws no button or link for anything else.
+fn refuse_a_link_without_a_scheme(
+    name: &str,
+    url: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let scheme = url.split_once("://").map(|(scheme, _)| scheme);
+    match scheme {
+        Some(scheme)
+            if scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https") =>
+        {
+            Ok(())
+        }
+        _ => Err(format!("{name} must start with http:// or https:// (it is {url:?})").into()),
+    }
 }
 
 /// The worker of ADR 0059: every few seconds, does the jobs that are due. Safe to run in several instances, since a

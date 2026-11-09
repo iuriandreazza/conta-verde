@@ -267,7 +267,8 @@ fn items_html(items: &Items) -> String {
 
 /// An address a link may point at: only http and https, never `javascript:` or the like.
 fn web_address(url: &str) -> Option<&str> {
-    (url.starts_with("https://") || url.starts_with("http://")).then_some(url)
+    let scheme = url.split_once("://")?.0;
+    (scheme.eq_ignore_ascii_case("https") || scheme.eq_ignore_ascii_case("http")).then_some(url)
 }
 
 fn escape(text: &str) -> String {
@@ -334,6 +335,14 @@ mod tests {
         assert!(html.contains("Se o botão não funcionar"));
         assert!(html.contains("href=\"https://example.org/source\""));
         assert!(html.contains("GNU AGPL v3"));
+    }
+
+    #[test]
+    fn the_scheme_of_a_web_address_may_be_in_capitals() {
+        let html = EmailContent::new("x", "y")
+            .button("Abrir", "HTTPS://app.example/x")
+            .to_html("HTTP://example.org");
+        assert!(html.contains("HTTPS://app.example/x") && html.contains("Código-fonte"));
     }
 
     #[test]

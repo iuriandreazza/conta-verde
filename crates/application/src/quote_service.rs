@@ -5,6 +5,7 @@ use conta_verde_domain::{
 
 use crate::audit::audit_entry;
 use crate::list_query::{clamp_limit, split_page};
+use crate::text::br_date;
 use crate::{
     ApplicationError, DocumentReferences, EmailContent, EmailSender, LinkChange, NumberCursor,
     QuoteQuery, QuoteRepository, RepositoryError, SecretService,
@@ -154,15 +155,7 @@ where
         ))
         .details(vec![
             ("Orçamento".to_owned(), format!("nº {}", after.number())),
-            (
-                "Válido até".to_owned(),
-                format!(
-                    "{:02}/{:02}/{}",
-                    valid_until.day(),
-                    valid_until.month(),
-                    valid_until.year()
-                ),
-            ),
+            ("Válido até".to_owned(), br_date(valid_until)),
         ])
         .button("Ver orçamento", link.clone());
         let emailed = self

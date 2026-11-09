@@ -5,6 +5,7 @@ use conta_verde_domain::{
 };
 
 use crate::audit::audit_entry;
+use crate::text::br_date;
 use crate::{
     ApplicationError, Claim, DunningPlanRepository, EmailContent, EmailSender,
     FinancialEntryRepository, IdentityRepository, InstallmentLinks, MessageSender,
@@ -365,7 +366,7 @@ impl ReminderText<'_> {
         ))
         .details(vec![
             ("Valor".to_owned(), brl(self.owed)),
-            ("Vencimento".to_owned(), brazilian_date(self.due)),
+            ("Vencimento".to_owned(), br_date(self.due)),
         ]);
         if let Some(link) = self.link {
             content = content.button("Pagar agora", link);
@@ -382,7 +383,7 @@ impl ReminderText<'_> {
             one_line(self.description),
             self.when(),
             brl(self.owed),
-            brazilian_date(self.due),
+            br_date(self.due),
         );
         if let Some(link) = self.link {
             text.push_str(&format!(" Pague em {link}"));
@@ -394,10 +395,6 @@ impl ReminderText<'_> {
 /// A name or description as one line, so it cannot break the message it is put in.
 fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-fn brazilian_date(day: CalendarDate) -> String {
-    format!("{:02}/{:02}/{}", day.day(), day.month(), day.year())
 }
 
 /// `R$ 1.234,56`.
@@ -427,10 +424,6 @@ mod tests {
         assert_eq!(
             brl(Decimal::from_str("1000000").unwrap()),
             "R$ 1.000.000,00"
-        );
-        assert_eq!(
-            brazilian_date(CalendarDate::parse("2026-12-09").unwrap()),
-            "09/12/2026"
         );
     }
 

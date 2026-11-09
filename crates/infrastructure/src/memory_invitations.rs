@@ -282,7 +282,7 @@ mod tests {
         let ana = auth
             .register(
                 AccountDraft {
-                    user_name: "Ana\r\nBcc: x@example.com".into(),
+                    user_name: "Ana\r\nBcc: x@example.com <img src=x onerror=alert(1)>".into(),
                     email: "ana@example.com".into(),
                     company_name: "Padaria\nSubject: oops".into(),
                 },
@@ -292,10 +292,14 @@ mod tests {
             .unwrap()
             .profile;
         let emails = InMemoryEmailSender::default();
+        // With the layout, as in production: the HTML is the part where a name could do harm.
         let service = MemberService::new(
             InMemoryInvitationRepository::new(identities.clone()),
             identities,
-            emails.clone(),
+            conta_verde_application::BrandedEmailSender::new(
+                emails.clone(),
+                "https://example.org/source".into(),
+            ),
             secrets(),
             Duration::from_secs(86_400),
             "https://erp.example",
@@ -320,8 +324,14 @@ mod tests {
             message.subject
         );
         // The names were one line each: neither part of the message has a line that starts with the injected header.
-        let html = message.html.as_deref().unwrap_or_default();
+        let html = message.html.as_deref().expect("the layout was drawn");
         assert!(!message.body.contains('\r') && !html.contains('\r'));
+        // What a person typed is text in the HTML, never markup.
+        assert!(!html.contains("<img"), "{html}");
+        assert!(
+            html.contains("&lt;img src=x onerror=alert(1)&gt;"),
+            "{html}"
+        );
         for line in message.body.lines() {
             assert!(
                 !line.starts_with("Bcc:") && !line.starts_with("Subject:"),

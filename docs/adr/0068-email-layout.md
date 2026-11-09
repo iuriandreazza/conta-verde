@@ -47,6 +47,11 @@ Option 3.
 - The text part is no longer worded exactly as before (each block is a paragraph or `Label: value`), so tests assert
   that the facts are there, not the shape.
 
+- **Deploying**: a worker of the previous version gives up (`Unrunnable`) on a job with four arguments and the message is
+  lost. Run the migration and replace the workers together, and on a rollback let the queue drain first.
+- `PUBLIC_URL` and `SOURCE_URL` must start with `http://` or `https://`, or the server does not start: the HTML draws no
+  button or link for another address.
+
 ## Revisit when
 
 A client needs a dark theme, a logo image, or the company's own name and colors in the header.

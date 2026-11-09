@@ -1,11 +1,11 @@
 use conta_verde_domain::{
-    Actor, COOLDOWN_MILLIS, CalendarDate, CompanyId, DAILY_CAP, DAY_MILLIS, Decimal, DocumentMail,
+    Actor, COOLDOWN_MILLIS, CompanyId, DAILY_CAP, DAY_MILLIS, Decimal, DocumentMail,
     DocumentMailId, DocumentMailKind, Email, EntryId, EntryKind, Party, PartyId, PurchaseOrderId,
     PurchaseStatus, SettlementId,
 };
 use uuid::Uuid;
 
-use crate::text::one_line;
+use crate::text::{br_date, one_line};
 use crate::{
     ApplicationError, DocumentMailRepository, EmailContent, EmailSender, FinancialEntryRepository,
     ItemRow, Items, PartyRepository, PurchaseOrderRepository, Reservation,
@@ -354,10 +354,6 @@ fn money(value: Decimal) -> String {
     format!("{sign}{grouped},{cents}")
 }
 
-fn br_date(day: CalendarDate) -> String {
-    format!("{:02}/{:02}/{}", day.day(), day.month(), day.year())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -372,9 +368,5 @@ mod tests {
         assert_eq!(money(Decimal::new(-100000, 2)), "-1.000,00");
         assert_eq!(quantity(Decimal::new(1500, 3)), "1,5");
         assert_eq!(quantity(Decimal::from(20)), "20");
-        assert_eq!(
-            br_date(CalendarDate::parse("2026-11-06").unwrap()),
-            "06/11/2026"
-        );
     }
 }
