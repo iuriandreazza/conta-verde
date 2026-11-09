@@ -128,8 +128,27 @@ links to a login-gated page). One slice per pull request, in this order:
 - [x] Exports: entries and settlements (CSV/XLSX) and the files attached to entries by period; **fiscal XMLs wait for Phase 7**, the product keeps none ([ADR 0013](adr/0013-accountant-access-and-exports.md), [ADR 0071](adr/0071-accountant-exports.md)) — `GET /accounting/exports/{entries,settlements,transfers,package}` for a span of at most 366 days, as CSV or XLSX written by hand, with the layout of every file fixed in the ADR; the package is a zip with the three files and the files attached to the entries (the product keeps no NF-e XML and issues no fiscal document, and says so); an `accounting` read, with limits that answer `422` instead of cutting a file; a downloads card on the Contador page
 - [x] Report scheduling by e-mail (monthly package to the accountant) ([ADR 0072](adr/0072-monthly-package-notice.md)) — a per-company switch and a day of the month (1 to 28); an hourly pass announces the previous month to every member with the accountant role, through the queue, once per company and month (a row claimed by one statement, given back when nothing could be queued); the e-mail carries only a link to the Contador page, which asks for a login, never the files or a link that works without one
 
+- [x] Screens and checks that came with the slices: the Contador page leads with what is closed (a badge and the day in large type), closes and reopens in two cards, offers the month after the lock, has the downloads and the notice cards; the DRE table keeps the names of its lines in view while it scrolls and explains itself behind an (i); `scripts/e2e-accountant.py` runs the exit criterion against a running API (an owner invites an accountant, who closes a month from their own login, is refused writes and downloads files checked against the books, and turns the notice on)
+
+Not in Phase 6, on purpose: a statutory statement, SPED files, any accounting vendor's own layout (the files have one fixed layout, in [ADR 0071](adr/0071-accountant-exports.md)), and fiscal XMLs of our own (the product keeps no NF-e XML and issues no fiscal document until Phase 7, [ADR 0006](adr/0006-fiscal-last.md)).
+
+Left open from this phase, each written in the ADR that made the choice:
+
+- **The lock is checked before the write, not inside its transaction** ([ADR 0069](adr/0069-period-lock.md)): a write that races a closing can pass. The fix is to move the check into the adapters' transactions; do it if the race ever matters.
+- **A package is built in memory** ([ADR 0071](adr/0071-accountant-exports.md)): up to 200 MiB per request with no cap on packages built at once, so a deployment that fears many readers asking for the biggest span at the same time limits them in front of the API. Streaming the zip to the response is the way out.
+- **Names in the export are read one party at a time**: a month with many thousands of parties is slow; a batch read is the next step. An attached file whose bytes are gone makes the package answer `500` with the attachment named in the log.
+- **The monthly notice is at most once per company and month** ([ADR 0072](adr/0072-monthly-package-notice.md)): a crash between the claim and the last message leaves some accountants not told, the catch-up window ends with the month, and a notice for day D goes out at about 21:00 Brazil time on D. It is sent whether or not the month was closed. An accountant cannot opt out of one company's notice without leaving it, and the schedule's trail (`GET .../package-schedule/history`) has no page yet.
+- **Not covered by a test**: some messages of a notice queued and others not (the claim must stay), and a member removed or changed between two passes (the members are read live, so it holds).
+
 Exit criteria: an accountant closes a month from their own login and downloads everything
-they need for their accounting software.
+they need for their accounting software. Both hold: through the API an accountant is invited, closes October, is refused every
+write outside `accounting` (`an_accountant_closes_a_month_and_the_books_of_it_refuse_changes`, with the sweep of every route
+of the router), the closed month refuses changes on both adapters (`a_closed_month_refuses_what_the_books_hold`), and the
+files hold the month's entries, settlements and transfers exactly, byte for byte, with the attached files
+(`the_accountant_downloads_the_books_of_a_month_exactly`; on both adapters `exports_the_books_of_a_span` and
+`names_everything_for_the_export`). The same flow ran against the real API and Postgres (`scripts/e2e-accountant.py`), the
+zip and the spreadsheet were opened with `unzip`, Python's `zipfile` and `openpyxl`, the notice reached a mailbox once however
+often the API restarted, and the pages were used in a browser.
 
 ## Phase 7 — Fiscal (v0.8)
 
