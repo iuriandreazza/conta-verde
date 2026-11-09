@@ -105,6 +105,7 @@ describe("App", () => {
     renderAt("/");
 
     expect(await screen.findByRole("heading", { name: "Painel" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Cadastros" }));
     await userEvent.click(screen.getByRole("link", { name: "Clientes e fornecedores" }));
     expect(await screen.findByRole("heading", { name: "Clientes e fornecedores" })).toBeInTheDocument();
     expect(await screen.findByText("Carla")).toBeInTheDocument();
@@ -354,7 +355,7 @@ describe("App", () => {
     expect(await screen.findByRole("heading", { name: "Escolha uma empresa" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("link", { name: "Mercearia" }));
     expect(await screen.findByRole("heading", { name: "Painel" })).toBeInTheDocument();
-    expect(screen.getByText("Mercearia")).toBeInTheDocument();
+    expect(screen.getAllByText("Mercearia").length).toBeGreaterThan(0);
   });
 
   it("returns to sign-in when the session is lost after the page loaded", async () => {
@@ -1035,7 +1036,8 @@ describe("cost centers", () => {
       return page(store);
     });
     renderAt("/companies/c1/parties");
-    await userEvent.click(await screen.findByRole("link", { name: "Centros de custo" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Financeiro" }));
+    await userEvent.click(screen.getByRole("link", { name: "Centros de custo" }));
     expect(await screen.findByText("Loja Centro")).toBeInTheDocument();
 
     await userEvent.click(await screen.findByRole("button", { name: "Novo centro de custo" }));
@@ -2607,7 +2609,7 @@ describe("members and invitations", () => {
       });
       renderAt("/register?next=%2Finvitations%2Fabc123");
 
-      expect(await screen.findByText("Mercearia")).toBeInTheDocument();
+      expect((await screen.findAllByText("Mercearia")).length).toBeGreaterThan(0);
       expect(screen.queryByLabelText("Nome da empresa")).not.toBeInTheDocument();
       expect(screen.getByLabelText("E-mail")).toHaveValue("bia@example.com");
       expect(screen.getByLabelText("E-mail")).toHaveAttribute("readonly");
@@ -2717,7 +2719,7 @@ describe("members and invitations", () => {
       await userEvent.click(await screen.findByRole("button", { name: "Aceitar convite" }));
 
       expect(await screen.findByRole("heading", { name: "Painel" })).toBeInTheDocument();
-      expect(screen.getByText("Mercearia")).toBeInTheDocument();
+      expect(screen.getAllByText("Mercearia").length).toBeGreaterThan(0);
       const posts = fetchMock.mock.calls.filter(([, init]) => init?.method === "POST");
       expect(String(posts[0][0])).toBe("/api/invitations/abc123/accept");
     });

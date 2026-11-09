@@ -9,6 +9,7 @@ import { CompanyNav } from "./CompanyNav";
 import { Footer } from "./Footer";
 import { ChevronLeftIcon } from "./icons/chevron-left";
 import { ChevronRightIcon } from "./icons/chevron-right";
+import { XIcon } from "./icons/x";
 import { Logo } from "./Logo";
 
 const COLLAPSED_KEY = "conta-verde.sidebar-collapsed";
@@ -27,7 +28,7 @@ export function Layout() {
   const [signOutFailed, setSignOutFailed] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
-  // On a wide screen the menu can shrink to a rail of icons; the phone's drawer ignores it.
+  // On a wide screen the panel beside the rail can be put away; the phone's drawer ignores it.
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const location = useLocation();
   const mainRef = useRef<HTMLElement>(null);
@@ -35,11 +36,14 @@ export function Layout() {
   useEffect(() => setNavOpen(false), [location.pathname, location.search]);
   // The drawer takes the focus when it opens, and gives it back to its button when it closes.
   useEffect(() => {
-    if (navOpen) document.querySelector<HTMLElement>("#app-sidebar .side-nav a")?.focus();
+    if (!navOpen) return;
+    const shell = document.querySelector<HTMLElement>("#app-sidebar .nav-shell");
+    // The first thing of the screen the drawer opens on: the way back when it shows an area, else the first area.
+    const first = shell?.dataset.level === "items" ? ".panel-back" : ".rail a, .rail button";
+    shell?.querySelector<HTMLElement>(first)?.focus();
   }, [navOpen]);
 
-  function toggleCollapsed() {
-    const next = !collapsed;
+  function changeCollapsed(next: boolean) {
     setCollapsed(next);
     try {
       window.localStorage.setItem(COLLAPSED_KEY, String(next));
@@ -151,23 +155,15 @@ export function Layout() {
         <a href="#main" className="skip-link" onClick={skipToContent}>
           Ir para o conteúdo
         </a>
+        {companyId && (
+          <button type="button" className="sidebar-close" aria-label="Fechar o menu" onClick={closeNav}>
+            <XIcon size={22} aria-hidden />
+          </button>
+        )}
         <div className="sidebar-head">
           <Link to="/" className="brand" aria-label="conta-verde, início">
             <Logo size={30} />
           </Link>
-          {companyId && (
-            <button
-              type="button"
-              className="sidebar-toggle"
-              aria-expanded={!collapsed}
-              aria-controls="company-nav"
-              aria-label={collapsed ? "Expandir o menu" : "Recolher o menu"}
-              title={collapsed ? "Expandir o menu" : "Recolher o menu"}
-              onClick={toggleCollapsed}
-            >
-              {collapsed ? <ChevronRightIcon size={18} aria-hidden /> : <ChevronLeftIcon size={18} aria-hidden />}
-            </button>
-          )}
         </div>
         {company && (
           <div className="company-switch">
@@ -177,7 +173,24 @@ export function Layout() {
           </div>
         )}
         {companyId && (
-          <CompanyNav companyId={companyId} collapsed={collapsed} canSeeMembers={company?.permissions.members !== undefined} />
+          <CompanyNav
+            companyId={companyId}
+            collapsed={collapsed}
+            onExpand={() => changeCollapsed(false)}
+            canSeeMembers={company?.permissions.members !== undefined}
+          />
+        )}
+        {companyId && (
+          <button
+            type="button"
+            className="sidebar-toggle"
+            aria-expanded={!collapsed}
+            aria-label={collapsed ? "Expandir o menu" : "Recolher o menu"}
+            title={collapsed ? "Expandir o menu" : "Recolher o menu"}
+            onClick={() => changeCollapsed(!collapsed)}
+          >
+            {collapsed ? <ChevronRightIcon size={18} aria-hidden /> : <ChevronLeftIcon size={18} aria-hidden />}
+          </button>
         )}
       </aside>
       <div className="app-main">
@@ -185,6 +198,8 @@ export function Layout() {
           userName={userName}
           permissions={company?.permissions}
           companyId={companyId}
+          companyName={company?.name}
+          canSwitchCompany={companies.length > 1}
           signingOut={signingOut}
           signOutFailed={signOutFailed}
           navOpen={navOpen}
@@ -195,7 +210,7 @@ export function Layout() {
         {page}
         <Footer />
       </div>
-      {navOpen && <button type="button" className="drawer-scrim" aria-label="Fechar o menu" onClick={closeNav} />}
+      {navOpen && <button type="button" className="drawer-scrim" aria-hidden tabIndex={-1} onClick={closeNav} />}
     </div>
     </CreationProvider>
   );

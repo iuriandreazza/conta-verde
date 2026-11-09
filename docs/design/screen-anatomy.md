@@ -20,9 +20,9 @@ This is the spec the new pages (Phase 3 on) are built to, and the one the existi
 | Part | Rule |
 |------|------|
 | Top bar | Always visible. Left: logo and the **title of the page**. Right: a global **"Novo registro" menu** (new entry, new sale, new party…, only what the role may write), search when it exists, the user menu (company switch, sign out) |
-| Sidebar | Groups, never a flat list: **Início**, **Financeiro**, **Comercial** (Orçamentos, Vendas), **Cadastros**, **Relatórios**, **Configurações**. A group opens in place and the group of the current page stays open; the current link is marked. A control collapses the whole sidebar to icons |
-| Company | Named in the sidebar header, and in the user menu when there is more than one |
-| Mobile | The sidebar becomes a drawer opened from the top bar: the content starts under the bar, never under a block of navigation |
+| Menu | Two levels. A **rail** of areas (Painel, Comercial, Suprimentos, Financeiro, Cadastros, Relatórios, Configurações): an area with pages is a button that opens a **panel** beside the rail, the one with nothing under it (Painel, Relatórios) is a link. The panel holds the area's pages, the current one marked, and a fold for its registers (Financeiro has "Cadastros financeiros"). A control under the rail puts the panel away: an area then lists its pages in a flyout, and choosing one brings the panel back |
+| Company | Named in the top bar, with a link to change it when there is more than one; at the head of the drawer on a phone |
+| Mobile | The menu becomes a drawer opened from the top bar, in two screens: the areas, then the pages of the one chosen, with a way back and a close button. The content starts under the bar, never under a block of navigation |
 
 Group contents today: **Financeiro**: Lançamentos, Fluxo de caixa, Transferências, Conciliação, Recorrências.
 **Cadastros**: Clientes e fornecedores, Produtos e serviços, Categorias, Centros de custo, Contas bancárias,
