@@ -105,6 +105,28 @@ impl AttachmentRepository for InMemoryAttachmentRepository {
             .cloned()
             .collect())
     }
+
+    async fn list_by_entries(
+        &self,
+        company_id: CompanyId,
+        entry_ids: &[EntryId],
+    ) -> Result<Vec<Attachment>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        let mut found: Vec<(usize, Attachment)> = state
+            .attachments
+            .iter()
+            .enumerate()
+            .filter(|(_, stored)| {
+                stored.company_id() == company_id
+                    && entry_ids.contains(&stored.entry_id())
+                    && !stored.is_removed()
+            })
+            .map(|(attached, stored)| (attached, stored.clone()))
+            .collect();
+        // The order they were attached is the order they were stored in.
+        found.sort_by_key(|(attached, stored)| (stored.entry_id().as_uuid(), *attached));
+        Ok(found.into_iter().map(|(_, stored)| stored).collect())
+    }
 }
 
 /// Keeps the bytes of attachments in process memory, for tests and for running the API without a disk.

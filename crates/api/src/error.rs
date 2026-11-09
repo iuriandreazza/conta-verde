@@ -185,7 +185,9 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
         ApplicationError::AlreadyMatched | ApplicationError::LineChanged => {
             (StatusCode::CONFLICT, error.to_string())
         }
-        ApplicationError::MatchDoesNotFit | ApplicationError::TooManyImportRows => {
+        ApplicationError::MatchDoesNotFit
+        | ApplicationError::TooManyImportRows
+        | ApplicationError::ExportTooLarge(_) => {
             (StatusCode::UNPROCESSABLE_ENTITY, error.to_string())
         }
         ApplicationError::InvalidSpan(_) => (StatusCode::BAD_REQUEST, error.to_string()),

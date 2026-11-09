@@ -1,3 +1,4 @@
+mod accounting_export_service;
 mod attachment_repository;
 mod attachment_service;
 mod audit;
@@ -83,6 +84,10 @@ mod text;
 mod transfer_repository;
 mod transfer_service;
 
+pub use accounting_export_service::{
+    AccountingExportService, ExportCell, ExportFile, ExportLookups, ExportNames, ExportPackage,
+    ExportTable, MAX_ATTACHED_BYTES, MAX_ATTACHED_FILES, MAX_ROWS,
+};
 pub use attachment_repository::AttachmentRepository;
 pub use attachment_service::{AttachedFile, AttachmentService};
 pub use audit::ensure_audit_describes;

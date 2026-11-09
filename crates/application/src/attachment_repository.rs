@@ -46,4 +46,12 @@ pub trait AttachmentRepository: Send + Sync {
         company_id: CompanyId,
         entry_id: EntryId,
     ) -> impl Future<Output = Result<Vec<Attachment>, RepositoryError>> + Send;
+
+    /// The attachments, not removed, of these entries of the company, by entry id and then in the order they were
+    /// attached; nothing of another company's ([ADR 0071]).
+    fn list_by_entries(
+        &self,
+        company_id: CompanyId,
+        entry_ids: &[EntryId],
+    ) -> impl Future<Output = Result<Vec<Attachment>, RepositoryError>> + Send;
 }

@@ -6120,6 +6120,39 @@ pub async fn moves_money_between_accounts<T, F>(
             .is_empty()
     );
 
+    // A span of days, both ends included, and without what was reversed (the accountant's export, ADR 0071).
+    let december = |from: &str, to: &str| {
+        TransferQuery::default()
+            .occurring_between(
+                CalendarDate::parse(from).unwrap(),
+                CalendarDate::parse(to).unwrap(),
+            )
+            .unreversed()
+    };
+    let ids_of = |transfers: Vec<Transfer>| transfers.iter().map(Transfer::id).collect::<Vec<_>>();
+    assert_eq!(
+        ids_of(listed_transfers(service, company, &december("2026-12-10", "2026-12-12")).await),
+        vec![second.id(), first.id()],
+        "both ends of the span are in"
+    );
+    assert_eq!(
+        ids_of(listed_transfers(service, company, &december("2026-12-11", "2026-12-12")).await),
+        vec![second.id()]
+    );
+    assert_eq!(
+        ids_of(listed_transfers(service, company, &december("2026-12-01", "2026-12-09")).await),
+        Vec::new()
+    );
+    assert!(
+        listed_transfers(
+            service,
+            other_company,
+            &december("2026-12-01", "2026-12-31")
+        )
+        .await
+        .is_empty()
+    );
+
     // Paging: one at a time, newest first, then from the cursor of the last one.
     let page = service
         .list(company, &everything, None, Some(1))
@@ -6228,6 +6261,11 @@ pub async fn moves_money_between_accounts<T, F>(
     );
     assert_eq!(store.history(company, first.id()).await.unwrap().len(), 2);
     assert_eq!(store.history(company, second.id()).await.unwrap().len(), 1);
+    // The export leaves out what was reversed, and still lists it when `unreversed` is not asked.
+    assert_eq!(
+        ids_of(listed_transfers(service, company, &december("2026-12-10", "2026-12-12")).await),
+        vec![second.id()]
+    );
 }
 
 fn balance_of(balances: &Balances, account: BankAccountId) -> &AccountBalance {
@@ -8616,6 +8654,28 @@ pub async fn attaches_files<R, B, E, F>(
     assert_eq!(
         service.list(company, entry.id()).await.unwrap(),
         vec![receipt.clone()]
+    );
+    // Many entries at once (the accountant's package, ADR 0071): the ones not removed, none of another company's.
+    assert_eq!(
+        store
+            .list_by_entries(company, &[other_entry.id(), entry.id()])
+            .await
+            .unwrap(),
+        vec![receipt.clone()]
+    );
+    assert!(
+        store
+            .list_by_entries(other_company, &[entry.id()])
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        store
+            .list_by_entries(company, &[])
+            .await
+            .unwrap()
+            .is_empty()
     );
     assert_eq!(blobs.get(company, invoice.id()).await.unwrap(), None);
     assert_eq!(
@@ -16209,4 +16269,188 @@ pub async fn reports_the_income_statement<E, C, F, R>(
         .unwrap_err(),
         ApplicationError::InvalidSpan(_)
     ));
+}
+
+/// What the accountant's export reads from the entries' port ([ADR 0071]): the entries of a span of competence dates
+/// (both ends in, the cancelled and the other company's out), many entries by id, and the settlements settled in a
+/// span of days (not the reversed ones, oldest first, cut at a limit, nothing of another company's).
+#[allow(clippy::too_many_lines)]
+pub async fn exports_the_books_of_a_span<R, F>(
+    entries: &FinancialEntryService<R, F>,
+    store: &R,
+    company: CompanyId,
+    other_company: CompanyId,
+    seed: &EntrySeed,
+    other_seed: &EntrySeed,
+) where
+    R: FinancialEntryRepository,
+    F: EntryReferences,
+{
+    use conta_verde_application::{EntrySort, FinancialEntryQuery};
+
+    let ana = actor();
+    let day = |text: &str| CalendarDate::parse(text).unwrap();
+    let register = |who: CompanyId, with: &EntrySeed, competence: &str, parts: &[(&str, &str)]| {
+        entries.register(
+            who,
+            &ana,
+            entry_draft(with, "Lançamento", competence, parts),
+        )
+    };
+    let before = register(company, seed, "2026-09-30", &[("2026-10-10", "10")])
+        .await
+        .unwrap();
+    let first_day = register(
+        company,
+        seed,
+        "2026-10-01",
+        &[("2026-10-10", "600"), ("2026-11-10", "400")],
+    )
+    .await
+    .unwrap();
+    let last_day = register(company, seed, "2026-10-31", &[("2026-11-30", "50")])
+        .await
+        .unwrap();
+    let after = register(company, seed, "2026-11-01", &[("2026-11-30", "70")])
+        .await
+        .unwrap();
+    let cancelled = register(company, seed, "2026-10-15", &[("2026-10-20", "999")])
+        .await
+        .unwrap();
+    entries.void(company, &ana, cancelled.id()).await.unwrap();
+    let theirs = register(
+        other_company,
+        other_seed,
+        "2026-10-05",
+        &[("2026-10-10", "77")],
+    )
+    .await
+    .unwrap();
+
+    // The entries of a span of competence dates, both ends in, oldest first, without the cancelled.
+    let october = FinancialEntryQuery::default()
+        .with_voided(false)
+        .competing_between(day("2026-10-01"), day("2026-10-31"))
+        .sorted(EntrySort::CompetenceAsc);
+    let ids = |found: Vec<FinancialEntry>| found.iter().map(FinancialEntry::id).collect::<Vec<_>>();
+    assert_eq!(
+        ids(store
+            .list_by_company(company, &october, None, 100)
+            .await
+            .unwrap()),
+        vec![first_day.id(), last_day.id()]
+    );
+    // A page ends where the cursor says: the second page resumes after the first row.
+    let page = store
+        .list_by_company(company, &october, None, 1)
+        .await
+        .unwrap();
+    let cursor = conta_verde_application::DateCursor::from(&page[0]);
+    assert_eq!(
+        ids(store
+            .list_by_company(company, &october, Some(&cursor), 1)
+            .await
+            .unwrap()),
+        vec![last_day.id()]
+    );
+    assert!(
+        store
+            .list_by_company(other_company, &october, None, 100)
+            .await
+            .unwrap()
+            .iter()
+            .all(|entry| entry.id() == theirs.id())
+    );
+
+    // Many entries by id, with their installments, by competence date; another company's id is not found.
+    let found = store
+        .find_many(
+            company,
+            &[
+                last_day.id(),
+                theirs.id(),
+                first_day.id(),
+                EntryId::generate(),
+            ],
+        )
+        .await
+        .unwrap();
+    assert_eq!(ids(found.clone()), vec![first_day.id(), last_day.id()]);
+    assert_eq!(found[0].installments().len(), 2);
+    assert!(store.find_many(company, &[]).await.unwrap().is_empty());
+
+    // Settlements by the day they were settled: both ends in, the reversed out, oldest first, cut at a limit.
+    let settle = |entry: &FinancialEntry, number: u16, applied: &str, on: &str| {
+        let draft = SettlementDraft {
+            settled_on: on.into(),
+            ..settlement_draft(seed, number, applied)
+        };
+        entries.settle(company, &ana, entry.id(), draft)
+    };
+    let on_the_first = settle(&first_day, 1, "600", "2026-10-01").await.unwrap();
+    let on_the_last = settle(&last_day, 1, "50", "2026-10-31").await.unwrap();
+    let in_november = settle(&first_day, 2, "400", "2026-11-03").await.unwrap();
+    let undone = settle(&before, 1, "10", "2026-10-15").await.unwrap();
+    entries
+        .reverse(company, &ana, before.id(), undone.id())
+        .await
+        .unwrap();
+    let theirs_settled = entries
+        .settle(
+            other_company,
+            &ana,
+            theirs.id(),
+            SettlementDraft {
+                settled_on: "2026-10-12".into(),
+                ..settlement_draft(other_seed, 1, "77")
+            },
+        )
+        .await
+        .unwrap();
+    let settled = |found: Vec<Settlement>| found.iter().map(Settlement::id).collect::<Vec<_>>();
+    assert_eq!(
+        settled(
+            store
+                .settlements_between(company, day("2026-10-01"), day("2026-10-31"), 100)
+                .await
+                .unwrap()
+        ),
+        vec![on_the_first.id(), on_the_last.id()]
+    );
+    assert_eq!(
+        settled(
+            store
+                .settlements_between(company, day("2026-10-01"), day("2026-11-30"), 100)
+                .await
+                .unwrap()
+        ),
+        vec![on_the_first.id(), on_the_last.id(), in_november.id()]
+    );
+    assert_eq!(
+        settled(
+            store
+                .settlements_between(company, day("2026-10-01"), day("2026-11-30"), 2)
+                .await
+                .unwrap()
+        ),
+        vec![on_the_first.id(), on_the_last.id()],
+        "cut at the limit, the oldest kept"
+    );
+    assert_eq!(
+        settled(
+            store
+                .settlements_between(other_company, day("2026-10-01"), day("2026-10-31"), 100)
+                .await
+                .unwrap()
+        ),
+        vec![theirs_settled.id()]
+    );
+    assert!(
+        store
+            .settlements_between(company, day("2026-12-01"), day("2026-12-31"), 100)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let _ = after;
 }

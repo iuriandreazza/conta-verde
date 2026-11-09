@@ -39,6 +39,14 @@ export function suggestedMonthToClose(lockedThrough: string | null, today: strin
   return next < current ? next : undefined;
 }
 
+/**
+ * The month an accountant most likely downloads, as `YYYY-MM`: the one closed last, or the last one that is over when
+ * nothing is closed. `today` is where the person is: the server reads no clock.
+ */
+export function monthToExport(lockedThrough: string | null, today: string): string {
+  return lockedThrough === null ? addMonths(today.slice(0, 7), -1) : lockedThrough.slice(0, 7);
+}
+
 /** `2026-10-31` as `outubro de 2026`. */
 export function monthLabel(day: string): string {
   const [year, month] = day.split("-").map(Number);

@@ -186,6 +186,45 @@ impl FinancialEntryRepository for InMemoryFinancialEntryRepository {
             .cloned())
     }
 
+    async fn find_many(
+        &self,
+        company_id: CompanyId,
+        ids: &[EntryId],
+    ) -> Result<Vec<FinancialEntry>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        let mut found: Vec<FinancialEntry> = state
+            .entries
+            .iter()
+            .filter(|stored| stored.company_id() == company_id && ids.contains(&stored.id()))
+            .cloned()
+            .collect();
+        found.sort_by_key(|entry| (entry.competence_date(), entry.id().as_uuid()));
+        Ok(found)
+    }
+
+    async fn settlements_between(
+        &self,
+        company_id: CompanyId,
+        since: CalendarDate,
+        until: CalendarDate,
+        limit: usize,
+    ) -> Result<Vec<Settlement>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        let mut found: Vec<Settlement> = state
+            .settlements
+            .iter()
+            .filter(|stored| {
+                stored.company_id() == company_id
+                    && !stored.is_reversed()
+                    && (since..=until).contains(&stored.settled_on())
+            })
+            .cloned()
+            .collect();
+        found.sort_by_key(|stored| (stored.settled_on(), stored.id().as_uuid()));
+        found.truncate(limit);
+        Ok(found)
+    }
+
     async fn settlements_of(
         &self,
         company_id: CompanyId,
@@ -834,6 +873,27 @@ pub(crate) mod tests {
             &dre,
             &entries,
             &registers.categories,
+            company,
+            other_company,
+            &seed,
+            &other_seed,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn exports_the_books_of_a_span() {
+        let registers = Registers::new();
+        let (company, other_company) = (CompanyId::generate(), CompanyId::generate());
+        let (seed, other_seed) = (
+            registers.seed(company).await,
+            registers.seed(other_company).await,
+        );
+        let store = InMemoryFinancialEntryRepository::default();
+        let entries = FinancialEntryService::new(store.clone(), registers.references());
+        contract::exports_the_books_of_a_span(
+            &entries,
+            &store,
             company,
             other_company,
             &seed,

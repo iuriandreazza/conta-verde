@@ -119,10 +119,23 @@ pub struct FinancialEntryQuery {
     kind: Option<EntryKind>,
     category: Option<CategoryId>,
     voided: Option<bool>,
+    competence_from: Option<CalendarDate>,
+    competence_until: Option<CalendarDate>,
     sort: EntrySort,
 }
 
 impl FinancialEntryQuery {
+    /// Only the entries whose competence date is from `from` through `until`, both included ([ADR 0071]).
+    pub fn competing_between(mut self, from: CalendarDate, until: CalendarDate) -> Self {
+        self.competence_from = Some(from);
+        self.competence_until = Some(until);
+        self
+    }
+
+    pub fn competence_span(&self) -> Option<(CalendarDate, CalendarDate)> {
+        self.competence_from.zip(self.competence_until)
+    }
+
     /// Matches the description anywhere in it, ignoring case. Blank text means no search.
     pub fn searching(mut self, text: &str) -> Self {
         self.search = clean_search(text);
@@ -177,6 +190,9 @@ impl FinancialEntryQuery {
                 .category
                 .is_none_or(|category| entry.category_id() == category)
             && self.voided.is_none_or(|voided| entry.is_voided() == voided)
+            && self
+                .competence_span()
+                .is_none_or(|(from, until)| (from..=until).contains(&entry.competence_date()))
             && self.search().is_none_or(|text| {
                 entry
                     .description()
@@ -233,6 +249,24 @@ pub trait FinancialEntryRepository: Send + Sync {
         reversed: &Settlement,
         audit: &AuditEntry,
     ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
+
+    /// The entries of the company with these ids, installments included, by competence date and then id; an id the
+    /// company does not have is not in the answer ([ADR 0071]).
+    fn find_many(
+        &self,
+        company_id: CompanyId,
+        ids: &[EntryId],
+    ) -> impl Future<Output = Result<Vec<FinancialEntry>, RepositoryError>> + Send;
+
+    /// The settlements that are not reversed, settled from `since` through `until`, by day settled and then id, at
+    /// most `limit` ([ADR 0071]). An entry with such a settlement is never cancelled, so none is asked.
+    fn settlements_between(
+        &self,
+        company_id: CompanyId,
+        since: CalendarDate,
+        until: CalendarDate,
+        limit: usize,
+    ) -> impl Future<Output = Result<Vec<Settlement>, RepositoryError>> + Send;
 
     /// The settlement, reversed or not, only if it belongs to the company's entry.
     fn settlement(

@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useParams } from "react-router-dom";
 import { api, errorMessage, type PeriodLock } from "../api";
+import { AccountantDownloads } from "../components/AccountantDownloads";
 import { Button } from "../components/Button";
 import { CheckIcon } from "../components/icons/check";
 import { Notice } from "../components/Notice";
@@ -181,6 +182,7 @@ export function AccountingPage() {
                 )}
               </div>
             )}
+            <AccountantDownloads companyId={companyId} lockedThrough={through} />
             <section className="card">
               <h2>Histórico</h2>
               <PeriodLockHistory key={trail} companyId={companyId} />

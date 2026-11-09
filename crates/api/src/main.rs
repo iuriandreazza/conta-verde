@@ -2,10 +2,10 @@ use std::time::Duration;
 
 use conta_verde_api::{ApiConfig, Ports, Services, router};
 use conta_verde_application::{
-    AttachmentService, AuthService, BalanceService, BankAccountService, CategoryService,
-    CommissionService, ContractService, CostCenterService, DocumentMailService, DreService,
-    FinancialEntryService, InventoryCountService, JobRunner, MemberService, PartyService,
-    PaymentMethodService, PaymentTermService, PeriodLockService, PostalCodeService,
+    AccountingExportService, AttachmentService, AuthService, BalanceService, BankAccountService,
+    CategoryService, CommissionService, ContractService, CostCenterService, DocumentMailService,
+    DreService, FinancialEntryService, InventoryCountService, JobRunner, MemberService,
+    PartyService, PaymentMethodService, PaymentTermService, PeriodLockService, PostalCodeService,
     PriceListService, ProductService, PurchaseService, QuoteService, ReconciliationService,
     RecurrenceService, SaleService, SalesReportService, StockService, TransferService,
 };
@@ -154,6 +154,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         PostgresAttachmentRepository::new(pool.clone()),
         LocalBlobStore::new(attachments_dir_from_env()),
         PostgresFinancialEntryRepository::new(pool.clone()),
+    );
+    let exports = AccountingExportService::new(
+        PostgresFinancialEntryRepository::new(pool.clone()),
+        PostgresTransferRepository::new(pool.clone()),
+        PostgresAttachmentRepository::new(pool.clone()),
+        LocalBlobStore::new(attachments_dir_from_env()),
+        references(),
     );
     // Links in e-mails (an invitation, a quote, a payment) lead to the web app, which is where the person
     // answers.
@@ -382,6 +389,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 reconciliation,
                 balances,
                 period_locks,
+                exports,
                 postal_codes,
                 members,
                 documents,

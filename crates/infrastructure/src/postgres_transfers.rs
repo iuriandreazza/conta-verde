@@ -130,6 +130,16 @@ impl TransferRepository for PostgresTransferRepository {
                 .push_bind(account.as_uuid())
                 .push(")");
         }
+        if let Some((from, until)) = query.span() {
+            sql.push(" AND occurred_on >= CAST(")
+                .push_bind(from.to_string())
+                .push(" AS DATE) AND occurred_on <= CAST(")
+                .push_bind(until.to_string())
+                .push(" AS DATE)");
+        }
+        if query.only_unreversed() {
+            sql.push(" AND NOT reversed");
+        }
         if let Some(cursor) = after {
             sql.push(" AND (occurred_on, id) < (CAST(")
                 .push_bind(cursor.date.to_string())
