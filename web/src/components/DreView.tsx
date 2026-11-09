@@ -144,6 +144,12 @@ export function DreView({ companyId }: { companyId: string }) {
               <Spinner size={16} /> Atualizando…
             </p>
           )}
+          {columns.length === 0 ? (
+            <div className="card empty">
+              <p role="status">Nenhum lançamento com competência nesse período.</p>
+            </div>
+          ) : (
+            <>
           <ChartCard
             title="Receita líquida e custos e despesas"
             description="O resultado financeiro e o que fica abaixo da linha estão na tabela."
@@ -201,6 +207,8 @@ export function DreView({ companyId }: { companyId: string }) {
               substitui a demonstração contábil. Investimentos e empréstimos ficam abaixo da linha, fora do resultado.
             </p>
           </section>
+            </>
+          )}
         </>
       )}
     </>

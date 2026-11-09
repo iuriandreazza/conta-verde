@@ -159,6 +159,18 @@ describe("the income statement", () => {
     expect(urls).toContain("/api/companies/c1/dre?from=2026-11-01&to=2026-11-30&by=month&cost_center=none");
   });
 
+  it("says when no entry falls in the period instead of drawing an empty statement", async () => {
+    mockApi(
+      answer((url) =>
+        url.includes("/dre?") ? { status: 200, body: { ...byMonth, by: "cost_center", columns: [], total: lines({}) } } : undefined,
+      ),
+    );
+    await open();
+
+    expect(await screen.findByText("Nenhum lançamento com competência nesse período.")).toBeInTheDocument();
+    expect(screen.queryByRole("row", { name: /Receita bruta/ })).not.toBeInTheDocument();
+  });
+
   it("says what the server refuses and keeps the controls", async () => {
     mockApi(
       answer((url) =>
