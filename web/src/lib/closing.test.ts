@@ -1,5 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { lastDayOfMonth, monthLabel } from "./closing";
+import { lastDayOfMonth, monthLabel, suggestedMonthToClose } from "./closing";
+
+describe("the month to close next", () => {
+  it("is the month after the one closed through, once that month is over", () => {
+    expect(suggestedMonthToClose("2026-09-30", "2026-11-09")).toBe("2026-10");
+    // Across the turn of the year.
+    expect(suggestedMonthToClose("2026-12-31", "2027-02-03")).toBe("2027-01");
+  });
+
+  it("is the last month that is over when nothing is closed yet", () => {
+    expect(suggestedMonthToClose(null, "2026-11-09")).toBe("2026-10");
+    expect(suggestedMonthToClose(null, "2027-01-02")).toBe("2026-12");
+  });
+
+  it("suggests nothing while the month after the lock is still running or in the future", () => {
+    expect(suggestedMonthToClose("2026-10-31", "2026-11-09")).toBeUndefined();
+    expect(suggestedMonthToClose("2026-12-31", "2026-11-09")).toBeUndefined();
+  });
+});
 
 describe("closing a month", () => {
   it("finds the last day of any month, leap years included", () => {
