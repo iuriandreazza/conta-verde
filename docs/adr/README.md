@@ -88,6 +88,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0070](0070-income-statement.md) | The managerial income statement (DRE) | accepted | 6 |
 | [0071](0071-accountant-exports.md) | Exports for the accountant | accepted | 6 |
 | [0072](0072-monthly-package-notice.md) | The monthly package notice, by e-mail to the accountants | accepted | 6 |
+| [0073](0073-fiscal-module-plan.md) | The fiscal module: plan, shared rules and what it changes underneath | accepted | 7 |
 
 ## Template
 
