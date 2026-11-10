@@ -112,12 +112,11 @@ fiscal settings. A storage failure is a `5xx`, so the gateway retries instead of
   a cancellation or correction waiting as a `sent` event, and a document the authority never answers (the person's refresh settles it).
 - **A knock polls its own company** (`poll_company`, `pending(Some(company), ..)`): it no longer makes the server ask the gateways of
   the others. The queued events are left to the minute pass, which covers every company.
+- **The pass over every company is fair**: it reads ten times its size and gives each company a turn in turn (oldest of each first), so a company whose gateway cannot answer cannot take every place of the minute pass.
 - **`refresh` reads again** when another writer moved the document between its read and its write (up to three times).
 
 ### What this does not solve (known limits)
 
-- **The minute pass is global and oldest first.** A company whose gateway cannot be resolved keeps its waiting documents at the front of
-  the 50 the pass takes, which can starve the others. It wants a fair order (for instance by the last time a document was asked about).
 - **Error precedence.** Fiscal settings are read before the gateway is resolved, so a company with none gets "set the fiscal settings"
   even on a server with no gateway, where it used to get `Disabled` first.
 - A client is built on every resolve and the row is read and opened every time: cheap at this volume, not measured.
