@@ -2,7 +2,7 @@ use uuid::Uuid;
 
 use crate::line::lines_text;
 use crate::{
-    AccountOpening, ApiKey, ApiKeyId, Attachment, BankAccount, Category, Charge,
+    AccountOpening, ApiKey, ApiKeyId, Attachment, BankAccount, BankConnection, Category, Charge,
     CollectionSettings, CommissionRule, CompanyId, Contract, CostCenter, DocumentCheck,
     DunningPlan, FinancialEntry, FiscalDocument, FiscalEvent, FiscalEventSubject, FiscalSettings,
     GatewaySettings, InventoryCount, LineMatch, PackageSchedule, Party, PaymentMethod, PaymentTerm,
@@ -62,6 +62,7 @@ impl Actor {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuditEntity {
     ApiKey,
+    BankConnection,
     WebhookSubscription,
     Party,
     Product,
@@ -113,6 +114,7 @@ impl AuditEntity {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::ApiKey => "api_key",
+            Self::BankConnection => "bank_connection",
             Self::WebhookSubscription => "webhook_subscription",
             Self::Party => "party",
             Self::Product => "product",
@@ -696,6 +698,20 @@ impl Audited for ApiKey {
 impl Audited for WebhookSubscription {
     fn audit_entity(&self) -> AuditEntity {
         AuditEntity::WebhookSubscription
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.id().as_uuid()
+    }
+}
+
+impl Audited for BankConnection {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::BankConnection
     }
 
     fn audit_company(&self) -> CompanyId {
@@ -1912,6 +1928,35 @@ pub fn webhook_secret_change() -> FieldChange {
         from: Some("set".to_owned()),
         to: Some("changed".to_owned()),
     }
+}
+
+/// What the trail says of a connection: where it comes from and where it stands. When it last pulled and why a pull failed are
+/// bookkeeping and are not in it.
+fn bank_connection_fields(connection: &BankConnection) -> Fields {
+    vec![
+        ("provider", Some(connection.provider().to_owned())),
+        (
+            "bank_account_id",
+            Some(connection.bank_account_id().as_uuid().to_string()),
+        ),
+        ("item_id", Some(connection.item_id().to_owned())),
+        ("account_id", Some(connection.account_id().to_owned())),
+        ("status", Some(connection.status().as_str().to_owned())),
+    ]
+}
+
+pub fn bank_connection_creation_changes(connection: &BankConnection) -> Vec<FieldChange> {
+    creation_from(bank_connection_fields(connection))
+}
+
+pub fn bank_connection_changes(
+    before: &BankConnection,
+    after: &BankConnection,
+) -> Vec<FieldChange> {
+    changes_between(
+        bank_connection_fields(before),
+        bank_connection_fields(after),
+    )
 }
 
 fn cost_center_fields(cost_center: &CostCenter) -> Fields {

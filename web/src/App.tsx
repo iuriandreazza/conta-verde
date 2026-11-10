@@ -12,6 +12,7 @@ import { CategoriesPage } from "./pages/CategoriesPage";
 import { CompaniesPage } from "./pages/CompaniesPage";
 import { AccountingPage } from "./pages/AccountingPage";
 import { ApiKeysPage } from "./pages/ApiKeysPage";
+import { BankConnectionsPage } from "./pages/BankConnectionsPage";
 import { WebhooksPage } from "./pages/WebhooksPage";
 import { GatewaySettingsPage } from "./pages/GatewaySettingsPage";
 import { PosPage } from "./pages/PosPage";
@@ -82,6 +83,7 @@ export function App() {
           <Route path="/companies/:companyId/delinquency" element={<DelinquencyPage />} />
           <Route path="/companies/:companyId/reports" element={<ReportsPage />} />
           <Route path="/companies/:companyId/reconciliation" element={<ReconciliationPage />} />
+          <Route path="/companies/:companyId/bank-connections" element={<BankConnectionsPage />} />
           <Route path="/companies/:companyId/recurrences" element={<RecurrencesPage />} />
           <Route path="/companies/:companyId/cash-flow" element={<CashFlowPage />} />
           <Route path="/companies/:companyId/transfers" element={<TransfersPage />} />

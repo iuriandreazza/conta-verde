@@ -6,6 +6,9 @@ pub enum DomainError {
     /// A scope of an API key that is not `area:read` or `area:write` of an area a key may have.
     InvalidApiScope,
     NoApiScopes,
+    /// A bank connection whose provider or aggregator id is not usable; names which.
+    InvalidBankConnection(&'static str),
+    TooManyBankConnections,
     /// A webhook address that is not `https` with a public host.
     InvalidWebhookUrl,
     InvalidWebhookEvent,
@@ -194,6 +197,11 @@ impl fmt::Display for DomainError {
                 "events are sale.created, sale.completed, sale.cancelled, charge.paid and stock.below_minimum",
             ),
             Self::TooManyWebhookSubscriptions => f.write_str("a company has at most 20 subscriptions"),
+            Self::InvalidBankConnection(what) => write!(
+                f,
+                "the {what} of a bank connection is 1 to 100 printable characters with no spaces (the provider is lower case letters)"
+            ),
+            Self::TooManyBankConnections => f.write_str("a company has at most 50 bank connections"),
             Self::NoApiScopes => f.write_str("a key needs at least one scope"),
             Self::InvalidApiKeyGrace => {
                 f.write_str("the old key may live on for 0 to 168 hours after a rotation")

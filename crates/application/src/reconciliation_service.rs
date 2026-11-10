@@ -81,6 +81,18 @@ where
         }
     }
 
+    /// Whether the account is an active one of the company, which is what lines may be stored in.
+    pub async fn account_is_usable(
+        &self,
+        company_id: CompanyId,
+        account: BankAccountId,
+    ) -> Result<bool, ApplicationError> {
+        Ok(self
+            .references
+            .bank_account_is_usable(company_id, account)
+            .await?)
+    }
+
     /// Stores the lines of a statement in an active account of the company, or with `dry_run` only
     /// says what would happen. Every line is checked before any is written: if one is refused, nothing
     /// is. A line the account already has (the same day, amount, description and reference, in the same

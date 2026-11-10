@@ -7,6 +7,9 @@ mod audit;
 mod auth_service;
 mod bank_account_repository;
 mod bank_account_service;
+mod bank_aggregator;
+mod bank_connection_repository;
+mod bank_sync_service;
 mod blob_store;
 mod cash_flow;
 mod category_repository;
@@ -114,6 +117,11 @@ pub use audit::ensure_audit_describes;
 pub use auth_service::{AuthService, Member, Profile, SignedIn};
 pub use bank_account_repository::{BankAccountQuery, BankAccountRepository};
 pub use bank_account_service::{BankAccountPage, BankAccountService};
+pub use bank_aggregator::{
+    AggregatedAccount, AggregatedTransaction, AggregatorError, BankAggregator, ItemState,
+};
+pub use bank_connection_repository::BankConnectionRepository;
+pub use bank_sync_service::{BankSyncService, StatementSink, SyncReport};
 pub use blob_store::BlobStore;
 pub use cash_flow::{CashFlow, CashFlowPeriod, CashFlowQuery, Granularity, PastDue};
 pub use category_repository::{CategoryRepository, MAX_CATEGORIES};
@@ -216,7 +224,8 @@ pub use purchase_service::{PurchaseOrderPage, PurchaseService, ReceiptRecord};
 pub use quote_repository::{LinkChange, NumberCursor, NumberSort, QuoteQuery, QuoteRepository};
 pub use quote_service::{QuotePage, QuoteService, SentQuote};
 pub use reconciliation_service::{
-    EntryFromLine, ReconciliationService, SUGGESTION_WINDOW_DAYS, StatementLinePage, Suggestion,
+    EntryFromLine, MAX_STATEMENT_LINES, ReconciliationService, SUGGESTION_WINDOW_DAYS,
+    StatementLinePage, Suggestion,
 };
 pub use recurrence_repository::{RecurrenceQuery, RecurrenceRepository};
 pub use recurrence_service::{

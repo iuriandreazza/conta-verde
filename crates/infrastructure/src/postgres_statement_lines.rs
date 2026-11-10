@@ -479,4 +479,56 @@ mod tests {
             .is_ok()
         );
     }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn syncs_bank_connections() {
+        use conta_verde_application::BankSyncService;
+
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let other_company = contract::create_company(&pool).await;
+        let seed = seed_for(&pool, company).await;
+        let reconciliation = || {
+            ReconciliationService::new(
+                PostgresStatementLineRepository::new(pool.clone()),
+                FinancialEntryService::new(
+                    PostgresFinancialEntryRepository::new(pool.clone()),
+                    references(&pool),
+                ),
+                TransferService::new(
+                    PostgresTransferRepository::new(pool.clone()),
+                    references(&pool),
+                ),
+                references(&pool),
+            )
+        };
+        let aggregator =
+            crate::FakeBankAggregator::default().with_account("item-1", "acc-1", "Conta");
+        let sync = BankSyncService::new(
+            crate::PostgresBankConnectionRepository::new(pool.clone()),
+            aggregator.clone(),
+            reconciliation(),
+            crate::PostgresJobQueue::new(pool.clone()),
+        );
+        crate::contract_integrations::syncs_bank_connections(
+            &sync,
+            &aggregator,
+            &reconciliation(),
+            company,
+            other_company,
+            seed.bank_account,
+            seed.other_bank_account,
+        )
+        .await;
+
+        let third = contract::create_company(&pool).await;
+        let third_seed = seed_for(&pool, third).await;
+        crate::contract_integrations::an_ended_connection_stays_ended(
+            &crate::PostgresBankConnectionRepository::new(pool.clone()),
+            third,
+            third_seed.bank_account,
+        )
+        .await;
+    }
 }

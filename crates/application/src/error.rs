@@ -18,6 +18,8 @@ pub enum RepositoryError {
     DuplicateTransferCategory,
     /// The company already has an account with this bank, branch and number.
     DuplicateBankAccount,
+    /// The bank account already has a connection that is not disconnected ([ADR 0089]).
+    DuplicateBankConnection,
     /// An update matched no row.
     NotFound,
     /// A settlement would settle more of an installment than is left of it.
@@ -241,6 +243,12 @@ pub enum ApplicationError {
     CostCenterNotFound,
     /// No API key with this id in the company (another company's looks the same).
     ApiKeyNotFound,
+    /// No bank connection with this id in the company (another company's looks the same).
+    BankConnectionNotFound,
+    /// The installation has no bank aggregator configured.
+    AggregatorOff,
+    /// The aggregator did not answer or refused; the reason is in the log, never what it said.
+    AggregatorUnavailable,
     /// No webhook subscription with this id in the company (another company's looks the same).
     WebhookNotFound,
     WebhookDeliveryNotFound,
@@ -331,6 +339,9 @@ impl fmt::Display for RepositoryError {
             Self::DuplicateInvitation => {
                 f.write_str("this e-mail address already has an open invitation to the company")
             }
+            Self::DuplicateBankConnection => {
+                f.write_str("that bank account already has a connection: disconnect it first")
+            }
             Self::DuplicateBankAccount => {
                 f.write_str("a bank account with this bank, branch and number already exists")
             }
@@ -410,6 +421,11 @@ impl fmt::Display for ApplicationError {
             Self::ProductNotFound => f.write_str("product not found"),
             Self::CostCenterNotFound => f.write_str("cost center not found"),
             Self::ApiKeyNotFound => f.write_str("API key not found"),
+            Self::BankConnectionNotFound => f.write_str("bank connection not found"),
+            Self::AggregatorOff => f.write_str(
+                "no bank aggregator is configured on the server (BANK_AGGREGATOR): import an OFX statement instead",
+            ),
+            Self::AggregatorUnavailable => f.write_str("the bank aggregator did not answer: try again in a few minutes"),
             Self::WebhookNotFound => f.write_str("webhook subscription not found"),
             Self::WebhookDeliveryNotFound => f.write_str("webhook delivery not found"),
             Self::WebhooksOff => f.write_str(
