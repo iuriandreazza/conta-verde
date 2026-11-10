@@ -2,7 +2,8 @@ use std::time::Duration;
 
 use conta_verde_application::{
     AcceptedEvent, AuthorizedDocument, AuthorizedNfse, Destination, DocumentOutcome, EventOutcome,
-    EventQuery, FiscalGateway, GatewayError, NfeRequest, NfseRequest, Refusal, Submission,
+    EventQuery, FiscalGateway, GatewayError, NfceRequest, NfeRequest, NfseRequest, Refusal,
+    Submission,
 };
 use conta_verde_domain::{
     AccessKey, Amount, Decimal, FiscalEnvironment, FiscalSettings, IssTaxation, TaxRegime,
@@ -184,15 +185,16 @@ impl FocusNfeGateway {
         base: &str,
         token: &str,
         answer: &Answer,
+        printed: bool,
     ) -> Result<DocumentOutcome, GatewayError> {
         let body = &answer.body;
         match body["status"].as_str() {
             Some("processando_autorizacao") => Ok(DocumentOutcome::Processing),
             Some("autorizado") => Ok(DocumentOutcome::Authorized(
-                self.authorized(base, token, body).await?,
+                self.authorized(base, token, body, printed).await?,
             )),
             Some("cancelado") => {
-                let document = self.authorized(base, token, body).await?;
+                let document = self.authorized(base, token, body, printed).await?;
                 let path = text(body, "caminho_xml_cancelamento").ok_or_else(|| {
                     GatewayError::Unavailable("a cancelled document has no cancellation XML".into())
                 })?;
@@ -215,11 +217,14 @@ impl FocusNfeGateway {
         }
     }
 
+    /// `printed` is whether the printed form is kept: the DANFE of an NF-e is a PDF, the DANFCe of an NFC-e is a page the
+    /// gateway serves as HTML, which is not kept ([ADR 0082]).
     async fn authorized(
         &self,
         base: &str,
         token: &str,
         body: &Value,
+        printed: bool,
     ) -> Result<AuthorizedDocument, GatewayError> {
         let missing = |field: &str| GatewayError::Unavailable(format!("the answer has no {field}"));
         let key = text(body, "chave_nfe").ok_or_else(|| missing("chave_nfe"))?;
@@ -241,7 +246,7 @@ impl FocusNfeGateway {
         }
         let xml_path = text(body, "caminho_xml_nota_fiscal")
             .ok_or_else(|| missing("caminho_xml_nota_fiscal"))?;
-        let pdf = match text(body, "caminho_danfe") {
+        let pdf = match text(body, "caminho_danfe").filter(|_| printed) {
             Some(path) => Some(self.download(base, token, &path).await?),
             None => None,
         };
@@ -299,6 +304,41 @@ impl FocusNfeGateway {
             xml: downloaded.next().flatten(),
             pdf: downloaded.next().flatten(),
         }))
+    }
+
+    async fn submit_consumer(
+        &self,
+        request: &NfceRequest,
+    ) -> Result<DocumentOutcome, GatewayError> {
+        let (base, token) = self.target(&request.issuer)?;
+        if request.issuer.regime() != TaxRegime::SimplesNacional {
+            return Err(GatewayError::Unsupported(
+                "an NFC-e for Lucro Presumido, which needs the tax calculation",
+            ));
+        }
+        let reference = path_reference(&request.reference)?;
+        let answer = self
+            .call(
+                Method::POST,
+                &format!("{base}/v2/nfce?ref={reference}"),
+                token,
+                Some(nfce_body(request)?),
+            )
+            .await?;
+        match answer.status {
+            StatusCode::ACCEPTED => Ok(DocumentOutcome::Processing),
+            // The NFC-e is answered at once: the invoice is authorized or refused in the same call.
+            status if status.is_success() => self.outcome_of(&base, token, &answer, false).await,
+            StatusCode::UNPROCESSABLE_ENTITY
+                if matches!(
+                    answer.body["codigo"].as_str(),
+                    Some("already_processed" | "pending_operation")
+                ) =>
+            {
+                self.query_nfce(&request.issuer, reference).await
+            }
+            _ => failure(&answer).map(DocumentOutcome::Rejected),
+        }
     }
 
     /// What an answer about an NFS-e means, with its files fetched when it is authorized or cancelled.
@@ -430,7 +470,7 @@ impl FocusNfeGateway {
             .await?;
         match answer.status {
             StatusCode::ACCEPTED => Ok(DocumentOutcome::Processing),
-            status if status.is_success() => self.outcome_of(&base, token, &answer).await,
+            status if status.is_success() => self.outcome_of(&base, token, &answer, true).await,
             // The reference is already known to the gateway: what it says is the state of that document.
             StatusCode::UNPROCESSABLE_ENTITY
                 if matches!(
@@ -633,6 +673,93 @@ fn nfse_body(request: &NfseRequest) -> Result<String, GatewayError> {
     Ok(numbers.render(&Value::Object(body)))
 }
 
+/// The body of an NFC-e for the gateway, in the fields its documentation lists: the issuer, the moment, the presence, no
+/// freight (9), inside the state (1), the nature, the consumer when named, the items and what was paid. **No change is
+/// sent**: the documentation does not say how it is declared. Anything the documentation does not list is not invented.
+fn nfce_body(request: &NfceRequest) -> Result<String, GatewayError> {
+    let issuer = &request.issuer;
+    let issued_at =
+        fiscal_timestamp(request.issued_at_unix, issuer.address().state()).ok_or_else(|| {
+            GatewayError::Unavailable("the moment of issue is out of range".to_owned())
+        })?;
+    let numbers = Numbers::new();
+    let money = |amount: &Amount| numbers.of(amount);
+    let mut body = Map::new();
+    let mut put = |key: &str, value: Value| {
+        body.insert(key.to_owned(), value);
+    };
+    put("cnpj_emitente", json!(issuer.cnpj()));
+    put("data_emissao", json!(issued_at));
+    put("presenca_comprador", json!(request.presence.code()));
+    put("modalidade_frete", json!(9));
+    put("local_destino", json!(1));
+    put("natureza_operacao", json!(request.nature));
+    if let Some(consumer) = &request.consumer {
+        let key = if consumer.document.len() == 14 {
+            "cnpj_destinatario"
+        } else {
+            "cpf_destinatario"
+        };
+        put(key, json!(consumer.document));
+        if let Some(name) = &consumer.name {
+            put("nome_destinatario", json!(name));
+        }
+    }
+    put("valor_produtos", money(&request.total_products));
+    put("valor_desconto", money(&request.total_discount));
+    put("valor_total", money(&request.total));
+    put(
+        "formas_pagamento",
+        Value::Array(
+            request
+                .payments
+                .iter()
+                .map(|(form, amount)| {
+                    json!({ "forma_pagamento": form.code(), "valor_pagamento": money(amount) })
+                })
+                .collect(),
+        ),
+    );
+    put(
+        "items",
+        Value::Array(
+            request
+                .items
+                .iter()
+                .map(|item| nfe_item(&numbers, item))
+                .collect(),
+        ),
+    );
+    Ok(numbers.render(&Value::Object(body)))
+}
+
+/// One item of an NF-e or an NFC-e in the gateway's fields.
+fn nfe_item(numbers: &Numbers, item: &conta_verde_application::NfeItem) -> Value {
+    let money = |amount: &Amount| numbers.of(amount);
+    let mut line = json!({
+        "numero_item": item.number,
+        "codigo_produto": item.code,
+        "descricao": item.description,
+        "cfop": item.cfop,
+        "codigo_ncm": item.ncm,
+        "unidade_comercial": item.unit,
+        "quantidade_comercial": numbers.of(item.quantity),
+        "valor_unitario_comercial": numbers.of(item.unit_price),
+        "unidade_tributavel": item.unit,
+        "quantidade_tributavel": numbers.of(item.quantity),
+        "valor_unitario_tributavel": numbers.of(item.unit_price),
+        "valor_bruto": money(&item.gross),
+        "icms_origem": item.origin,
+        "icms_situacao_tributaria": item.icms_code,
+        "pis_situacao_tributaria": item.pis_code,
+        "cofins_situacao_tributaria": item.cofins_code,
+    });
+    if item.discount.as_decimal() > Decimal::ZERO {
+        line["valor_desconto"] = money(&item.discount);
+    }
+    line
+}
+
 /// The body of an NF-e for the gateway, in the fields its documentation gives for a sale, with every amount as the
 /// exact decimal it is.
 fn nfe_body(request: &NfeRequest) -> Result<String, GatewayError> {
@@ -738,30 +865,7 @@ fn nfe_body(request: &NfeRequest) -> Result<String, GatewayError> {
             request
                 .items
                 .iter()
-                .map(|item| {
-                    let mut line = json!({
-                        "numero_item": item.number,
-                        "codigo_produto": item.code,
-                        "descricao": item.description,
-                        "cfop": item.cfop,
-                        "codigo_ncm": item.ncm,
-                        "unidade_comercial": item.unit,
-                        "quantidade_comercial": numbers.of(item.quantity),
-                        "valor_unitario_comercial": numbers.of(item.unit_price),
-                        "unidade_tributavel": item.unit,
-                        "quantidade_tributavel": numbers.of(item.quantity),
-                        "valor_unitario_tributavel": numbers.of(item.unit_price),
-                        "valor_bruto": money(&item.gross),
-                        "icms_origem": item.origin,
-                        "icms_situacao_tributaria": item.icms_code,
-                        "pis_situacao_tributaria": item.pis_code,
-                        "cofins_situacao_tributaria": item.cofins_code,
-                    });
-                    if item.discount.as_decimal() > Decimal::ZERO {
-                        line["valor_desconto"] = money(&item.discount);
-                    }
-                    line
-                })
+                .map(|item| nfe_item(&numbers, item))
                 .collect(),
         ),
     );
@@ -835,7 +939,7 @@ impl FiscalGateway for FocusNfeGateway {
             .await?;
         match answer.status {
             StatusCode::NOT_FOUND => Ok(DocumentOutcome::Unknown),
-            status if status.is_success() => self.outcome_of(&base, token, &answer).await,
+            status if status.is_success() => self.outcome_of(&base, token, &answer, true).await,
             // A question the gateway would not answer says nothing about the document: it is not a refusal of it.
             status => Err(GatewayError::Unavailable(format!("{status}"))),
         }
@@ -937,6 +1041,63 @@ impl FiscalGateway for FocusNfeGateway {
             &answer,
             "autorizado",
             &["caminho_xml"],
+            refusal_of,
+        )
+        .await
+    }
+
+    fn issues_nfce(&self) -> bool {
+        true
+    }
+
+    async fn submit_nfce(&self, request: &NfceRequest) -> Result<Submission, GatewayError> {
+        self.submit_consumer(request).await.map(Submission::of)
+    }
+
+    async fn query_nfce(
+        &self,
+        issuer: &FiscalSettings,
+        reference: &str,
+    ) -> Result<DocumentOutcome, GatewayError> {
+        let (base, token) = self.target(issuer)?;
+        let reference = path_reference(reference)?;
+        let answer = self
+            .call(
+                Method::GET,
+                &format!("{base}/v2/nfce/{reference}"),
+                token,
+                None,
+            )
+            .await?;
+        match answer.status {
+            StatusCode::NOT_FOUND => Ok(DocumentOutcome::Unknown),
+            status if status.is_success() => self.outcome_of(&base, token, &answer, false).await,
+            status => Err(GatewayError::Unavailable(format!("{status}"))),
+        }
+    }
+
+    async fn cancel_nfce(
+        &self,
+        issuer: &FiscalSettings,
+        reference: &str,
+        reason: &str,
+    ) -> Result<EventOutcome, GatewayError> {
+        let (base, token) = self.target(issuer)?;
+        let reference = path_reference(reference)?;
+        let answer = self
+            .call(
+                Method::DELETE,
+                &format!("{base}/v2/nfce/{reference}"),
+                token,
+                Some(json!({ "justificativa": reason }).to_string()),
+            )
+            .await?;
+        self.event_of(
+            &base,
+            token,
+            &answer,
+            "cancelado",
+            &["caminho_xml_cancelamento"],
             refusal_of,
         )
         .await
@@ -1091,6 +1252,8 @@ mod tests {
         unknown_status: bool,
         server_error: bool,
         nfse: HashMap<String, Stored>,
+        nfce: HashMap<String, Stored>,
+        nfce_bodies: Vec<String>,
         /// The DPS (series, number) each issuer used, and under which reference.
         dps_used: HashMap<(String, u64, u64), String>,
         nfse_bodies: Vec<String>,
@@ -1361,6 +1524,109 @@ mod tests {
                                 StatusCode::BAD_REQUEST,
                                 json!({"codigo": "requisicao_invalida", "mensagem": "A nota não está autorizada"}),
                             ),
+                        }
+                    },
+                ),
+            )
+            .route(
+                "/v2/nfce",
+                post(
+                    |State(fake): State<Shared>,
+                     headers: HeaderMap,
+                     Query(query): Query<HashMap<String, String>>,
+                     body: String| async move {
+                        if !authorized(&headers, HOMOLOGATION_TOKEN) {
+                            return json_reply(StatusCode::UNAUTHORIZED, json!({"codigo": "nao_autorizado"}));
+                        }
+                        let mut fake = fake.lock().unwrap();
+                        let Some(reference) = query.get("ref").cloned() else {
+                            return json_reply(
+                                StatusCode::BAD_REQUEST,
+                                json!({"codigo": "requisicao_invalida", "mensagem": "ref"}),
+                            );
+                        };
+                        fake.nfce_bodies.push(body.clone());
+                        let sent: Value = serde_json::from_str(&body).unwrap();
+                        if fake.nfce.contains_key(&reference) {
+                            return json_reply(
+                                StatusCode::UNPROCESSABLE_ENTITY,
+                                json!({"codigo": "already_processed", "mensagem": "already"}),
+                            );
+                        }
+                        let cnpj = sent["cnpj_emitente"].as_str().unwrap().to_owned();
+                        let number = fake.nfce.len() as u32 + 1;
+                        let key = AccessKey::from_parts(
+                            state_code("SP").unwrap(),
+                            CalendarDate::parse("2026-11-09").unwrap(),
+                            &cnpj,
+                            65,
+                            1,
+                            number,
+                            1,
+                            20_000_000 + number,
+                        )
+                        .unwrap()
+                        .as_str()
+                        .to_owned();
+                        let stored = Stored {
+                            stage: "autorizado",
+                            asked: 0,
+                            number,
+                            key,
+                            corrections: 0,
+                        };
+                        // Answered at once, as the documentation says: the invoice is authorized in the same call.
+                        let mut answer = files(&stored.key, stored.number);
+                        answer["status"] = json!("autorizado");
+                        answer["caminho_danfe"] = json!(format!("/arquivos/{}-danfce.html", stored.key));
+                        fake.nfce.insert(reference, stored);
+                        json_reply(StatusCode::CREATED, answer)
+                    },
+                ),
+            )
+            .route(
+                "/v2/nfce/{reference}",
+                get(|State(fake): State<Shared>, headers: HeaderMap, Path(reference): Path<String>| async move {
+                    if !authorized(&headers, HOMOLOGATION_TOKEN) {
+                        return json_reply(StatusCode::UNAUTHORIZED, json!({}));
+                    }
+                    let fake = fake.lock().unwrap();
+                    let Some(stored) = fake.nfce.get(&reference) else {
+                        return json_reply(StatusCode::NOT_FOUND, json!({"codigo": "nao_encontrado"}));
+                    };
+                    json_reply(StatusCode::OK, answer_of(stored))
+                })
+                .delete(
+                    |State(fake): State<Shared>,
+                     headers: HeaderMap,
+                     Path(reference): Path<String>,
+                     body: String| async move {
+                        if !authorized(&headers, HOMOLOGATION_TOKEN) {
+                            return json_reply(StatusCode::UNAUTHORIZED, json!({}));
+                        }
+                        let sent: Value = serde_json::from_str(&body).unwrap();
+                        let reason = sent["justificativa"].as_str().unwrap_or("");
+                        if !(15..=255).contains(&reason.chars().count()) {
+                            return json_reply(
+                                StatusCode::BAD_REQUEST,
+                                json!({"codigo": "requisicao_invalida", "mensagem": "justificativa"}),
+                            );
+                        }
+                        let mut fake = fake.lock().unwrap();
+                        match fake.nfce.get_mut(&reference) {
+                            Some(stored) if stored.stage == "autorizado" => {
+                                stored.stage = "cancelado";
+                                json_reply(
+                                    StatusCode::OK,
+                                    json!({"status": "cancelado",
+                                           "caminho_xml_cancelamento": format!("/arquivos/{}-cancel.xml", stored.key)}),
+                                )
+                            }
+                            Some(_) => json_reply(
+                                StatusCode::UNPROCESSABLE_ENTITY,
+                                json!({"codigo": "nfe_nao_autorizada", "mensagem": "A nota não está autorizada"}),
+                            ),
+                            None => json_reply(StatusCode::NOT_FOUND, json!({"codigo": "nao_encontrado"})),
                         }
                     },
                 ),
@@ -1784,6 +2050,41 @@ mod tests {
     /// homologation**). CI runs the ignored tests without them and this one does nothing. It issues one NF-e from a
     /// sale of goods and asks for it, which settles what this adapter's documentation reading left open: the fields,
     /// contingency, and where the files are. Fill in the issuer's data of that company before running.
+    #[tokio::test]
+    async fn an_nfce_is_answered_at_once_and_its_printed_page_is_not_kept() {
+        let fake = Shared::default();
+        let addr = serve(fake.clone()).await;
+        let issuer = contract::fiscal_issuer(CNPJ, FiscalEnvironment::Homologation);
+        let gateway = gateway(addr, Some(HOMOLOGATION_TOKEN), None);
+        contract::a_gateway_authorizes_and_cancels_an_nfce(&gateway, &issuer).await;
+        let sent: Value = serde_json::from_str(&fake.lock().unwrap().nfce_bodies[0]).unwrap();
+        assert_eq!(sent["cnpj_emitente"], CNPJ);
+        assert_eq!(sent["presenca_comprador"], 1);
+        assert_eq!(sent["modalidade_frete"], 9);
+        assert_eq!(sent["local_destino"], 1);
+        assert_eq!(sent["cpf_destinatario"], "52998224725");
+        assert_eq!(sent["formas_pagamento"][0]["forma_pagamento"], "01");
+        assert_eq!(sent["items"][0]["codigo_ncm"], "49111090");
+        // The DANFCe is an HTML page of the gateway's: it is not kept as a PDF.
+        let reference = "printed-page".to_owned();
+        let DocumentOutcome::Authorized(document) = gateway
+            .submit_nfce(&contract::nfce_request(&issuer, &reference))
+            .await
+            .unwrap()
+            .outcome
+        else {
+            panic!("authorized was expected");
+        };
+        assert_eq!(document.pdf, None);
+        // Without a named consumer the body has none of the consumer's fields.
+        let mut anonymous = contract::nfce_request(&issuer, "anonymous");
+        anonymous.consumer = None;
+        gateway.submit_nfce(&anonymous).await.unwrap();
+        let last: Value =
+            serde_json::from_str(fake.lock().unwrap().nfce_bodies.last().unwrap()).unwrap();
+        assert!(last.get("cpf_destinatario").is_none() && last.get("nome_destinatario").is_none());
+    }
+
     #[tokio::test]
     async fn an_nfse_is_authorized_and_cancelled_through_the_stand_in() {
         let fake = Shared::default();

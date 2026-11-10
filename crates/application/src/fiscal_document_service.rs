@@ -17,8 +17,9 @@ use crate::{
     ApplicationError, AuthorizedDocument, AuthorizedNfse, BlobStore, BuyerPresence, Destination,
     DocumentOutcome, EntryReferences, EventOutcome, EventQuery, FiscalDocumentCursor,
     FiscalDocumentQuery, FiscalDocumentRepository, FiscalGateway, FiscalSettingsRepository,
-    GatewayError, NfeItem, NfeRecipient, NfeRequest, NfseRecipient, NfseRequest, PartyRepository,
-    PaymentForm, ProductRepository, RepositoryError, SaleRepository, SpecialTaxRegime,
+    GatewayError, NfceConsumer, NfceRequest, NfeItem, NfeRecipient, NfeRequest, NfseRecipient,
+    NfseRequest, PartyRepository, PaymentForm, ProductRepository, RepositoryError, SaleRepository,
+    SpecialTaxRegime,
 };
 
 const MIN_REASON_CHARS: usize = 15;
@@ -28,6 +29,8 @@ const MAX_CANCEL_REASON_CHARS: usize = 255;
 const UNKNOWN_GRACE_SECONDS: i64 = 10 * 60;
 /// How many times a DPS number that another writer took first is asked for again.
 const MAX_DPS_ATTEMPTS: u32 = 5;
+/// What a document names as its recipient when the consumer of an NFC-e is not identified.
+const ANONYMOUS_CONSUMER: &str = "Consumidor não identificado";
 /// What the national layout takes for the description of the services.
 const MAX_SERVICE_DESCRIPTION_CHARS: usize = 1000;
 
@@ -73,6 +76,22 @@ pub struct IssueNfse {
     /// The IBGE code of the municipality where the service was rendered: seven digits.
     pub service_city_code: String,
     pub special_regime: SpecialTaxRegime,
+}
+
+/// What the person chooses to issue an NFC-e from a completed sale at the counter ([ADR 0082]): **every field is a fiscal
+/// fact the product does not know**, so none has a default. What is paid is declared per form and adds up to the total
+/// (no change is given).
+#[derive(Debug, Clone)]
+pub struct IssueNfce {
+    pub sale_id: SaleId,
+    pub nature_code: String,
+    /// The origin of the goods, 0 to 8, one for the whole document.
+    pub origin: u8,
+    pub presence: BuyerPresence,
+    /// Whether the consumer is named on the invoice (the sale's customer, with their CPF or CNPJ). It is optional on the
+    /// NFC-e, and a customer without a document cannot be named.
+    pub identify_consumer: bool,
+    pub payments: Vec<(PaymentForm, Amount)>,
 }
 
 /// What a gateway hands over once it authorizes a document: the files to keep and the record of what the authority gave.
@@ -473,6 +492,105 @@ where
         }
     }
 
+    /// Issues an NFC-e from a completed sale at the counter, or finishes the one the sale already has ([ADR 0082]): the
+    /// NF-e's flow, for the products of the sale, always inside the issuer's state. The gateway answers at once, so a
+    /// healthy issue comes back authorized.
+    pub async fn issue_nfce(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        request: IssueNfce,
+        now_unix: i64,
+    ) -> Result<FiscalDocument, ApplicationError> {
+        let settings = self.ready_settings(company_id).await?;
+        self.ensure_issues_nfce()?;
+        let sale = self.completed_sale(company_id, request.sale_id).await?;
+        let origin = FiscalOrigin::Sale(sale.id());
+        let live = self
+            .documents
+            .find_live(company_id, origin, FiscalDocumentKind::Nfce)
+            .await?;
+        if let Some(live) = live
+            .as_ref()
+            .filter(|live| live.status() != FiscalDocumentStatus::Draft)
+        {
+            return self
+                .refresh_or_return(company_id, live.clone(), now_unix)
+                .await;
+        }
+        let issued_on = issue_day(&settings, now_unix)?;
+        ensure_certificate(&settings, issued_on)?;
+        self.references.ensure_open(company_id, issued_on).await?;
+        let id = live
+            .as_ref()
+            .map_or_else(FiscalDocumentId::generate, FiscalDocument::id);
+        let (draft, nfce) = self
+            .build_nfce(
+                company_id, actor, &settings, &sale, &request, issued_on, now_unix, id,
+            )
+            .await?;
+        match self
+            .persist_draft(
+                company_id,
+                actor,
+                live,
+                id,
+                FiscalDocumentKind::Nfce,
+                draft,
+                now_unix,
+            )
+            .await?
+        {
+            Persisted::Fresh(document) => self.send_nfce(company_id, actor, document, &nfce).await,
+            Persisted::Existing(document) => Ok(document),
+        }
+    }
+
+    /// Sends a rejected NFC-e again under the same id, built again from the sale as it is now.
+    pub async fn resend_nfce(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        id: FiscalDocumentId,
+        request: IssueNfce,
+        now_unix: i64,
+    ) -> Result<FiscalDocument, ApplicationError> {
+        let stored = self
+            .rejected_of(company_id, id, FiscalDocumentKind::Nfce, request.sale_id)
+            .await?;
+        let settings = self.ready_settings(company_id).await?;
+        self.ensure_issues_nfce()?;
+        let issued_on = issue_day(&settings, now_unix)?;
+        ensure_certificate(&settings, issued_on)?;
+        self.references.ensure_open(company_id, issued_on).await?;
+        let sale = self.completed_sale(company_id, request.sale_id).await?;
+        let (draft, nfce) = self
+            .build_nfce(
+                company_id, actor, &settings, &sale, &request, issued_on, now_unix, id,
+            )
+            .await?;
+        let rebuilt = stored.rebuilt_with(draft)?;
+        let audit = audit_entry(
+            &rebuilt,
+            actor,
+            AuditAction::Updated,
+            fiscal_document_changes(&stored, &rebuilt),
+        );
+        self.documents
+            .replace(&rebuilt, FiscalDocumentStatus::Rejected, &audit)
+            .await?;
+        self.send_nfce(company_id, actor, rebuilt, &nfce).await
+    }
+
+    /// A gateway that does not issue NFC-e is refused before anything is written.
+    fn ensure_issues_nfce(&self) -> Result<(), ApplicationError> {
+        if self.gateway.issues_nfce() {
+            Ok(())
+        } else {
+            Err(GatewayError::Unsupported("an NFC-e through this gateway: use another one").into())
+        }
+    }
+
     /// A gateway that does not issue NFS-e is refused before a DPS number is taken or a document is written.
     fn ensure_issues_nfse(&self) -> Result<(), ApplicationError> {
         if self.gateway.issues_nfse() {
@@ -640,6 +758,14 @@ where
                 self.apply(company_id, &actor, document, outcome, unknown_is_final)
                     .await
             }
+            FiscalDocumentKind::Nfce => {
+                let outcome = self
+                    .gateway
+                    .query_nfce(&settings, &reference(&document))
+                    .await?;
+                self.apply(company_id, &actor, document, outcome, unknown_is_final)
+                    .await
+            }
             FiscalDocumentKind::Nfse => {
                 let outcome = self
                     .gateway
@@ -691,6 +817,17 @@ where
                         .await;
                 }
             }
+            FiscalDocumentKind::Nfce => {
+                let state = self
+                    .gateway
+                    .query_nfce(&settings, &reference(&document))
+                    .await?;
+                if let DocumentOutcome::Cancelled { .. } = state {
+                    return self
+                        .follow_cancellation(company_id, actor, document, state)
+                        .await;
+                }
+            }
             FiscalDocumentKind::Nfse => {
                 let state = self
                     .gateway
@@ -723,6 +860,11 @@ where
             FiscalDocumentKind::Nfe => {
                 self.gateway
                     .cancel_nfe(&settings, &reference(&document), reason)
+                    .await
+            }
+            FiscalDocumentKind::Nfce => {
+                self.gateway
+                    .cancel_nfce(&settings, &reference(&document), reason)
                     .await
             }
             FiscalDocumentKind::Nfse => {
@@ -768,7 +910,7 @@ where
         }
         if document.kind() != FiscalDocumentKind::Nfe {
             return Err(ApplicationError::FiscalRule(
-                "the national NFS-e has no correction letter: cancel it and issue it again"
+                "an NFC-e and the national NFS-e take no correction letter: cancel it and issue it again"
                     .to_owned(),
             ));
         }
@@ -1359,6 +1501,41 @@ where
         }
     }
 
+    /// The same as [`send`](Self::send) for an NFC-e.
+    async fn send_nfce(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        document: FiscalDocument,
+        nfce: &NfceRequest,
+    ) -> Result<FiscalDocument, ApplicationError> {
+        let processing = self
+            .move_to(actor, document, |document| document.submitted())
+            .await?;
+        match self.gateway.submit_nfce(nfce).await {
+            Ok(submission) => {
+                let processing = match submission.reference {
+                    Some(name) => {
+                        self.move_to(actor, processing, |document| document.referenced(&name))
+                            .await?
+                    }
+                    None => processing,
+                };
+                self.apply(company_id, actor, processing, submission.outcome, true)
+                    .await
+            }
+            Err(GatewayError::Unavailable(detail)) => {
+                tracing::warn!(%detail, "the fiscal gateway did not answer a submission");
+                Ok(processing)
+            }
+            Err(error) => {
+                let refusal = FiscalRefusal::new("gateway", &error.to_string());
+                self.move_to(actor, processing, |document| document.rejected(refusal))
+                    .await
+            }
+        }
+    }
+
     /// The same as [`send`](Self::send) for an NFS-e.
     async fn send_nfse(
         &self,
@@ -1644,6 +1821,147 @@ where
             now_unix,
         );
         Ok((draft, nfe))
+    }
+
+    /// What the document and the gateway's request are made of for an NFC-e: the sale's **product** lines, taxed as the
+    /// nature says for a sale inside the state, and what is paid, which must add up to the total ([ADR 0082]).
+    #[allow(clippy::too_many_arguments)]
+    async fn build_nfce(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        settings: &FiscalSettings,
+        sale: &Sale,
+        request: &IssueNfce,
+        issued_on: CalendarDate,
+        now_unix: i64,
+        id: FiscalDocumentId,
+    ) -> Result<(FiscalDocumentDraft, NfceRequest), ApplicationError> {
+        let rule = |text: &str| ApplicationError::FiscalRule(text.to_owned());
+        if settings.regime() != TaxRegime::SimplesNacional {
+            return Err(rule(
+                "only the Simples Nacional regime can issue for now: the tax calculation of the other regimes is not built",
+            ));
+        }
+        if request.origin > 8 {
+            return Err(rule("the origin of the goods is a number from 0 to 8"));
+        }
+        let nature = settings
+            .natures()
+            .iter()
+            .find(|nature| nature.code() == request.nature_code.trim().to_ascii_lowercase())
+            .filter(|nature| nature.is_active() && nature.kind() == NatureKind::Product)
+            .ok_or_else(|| rule("choose an active operation nature for products"))?;
+        let mut items = Vec::new();
+        let mut total_products = conta_verde_domain::Decimal::ZERO;
+        let mut total_discount = conta_verde_domain::Decimal::ZERO;
+        let mut total = conta_verde_domain::Decimal::ZERO;
+        for line in sale.lines() {
+            let product = self
+                .products
+                .find(company_id, line.product_id())
+                .await?
+                .ok_or_else(|| rule("a product of the sale does not exist"))?;
+            if product.kind() != ProductKind::Product {
+                continue;
+            }
+            let number =
+                u16::try_from(items.len() + 1).map_err(|_| rule("the sale has too many lines"))?;
+            // At the counter and inside the state: the CFOP is the nature's for the issuer's state.
+            items.push(item_of(
+                number,
+                line,
+                &product,
+                nature,
+                settings,
+                true,
+                request.origin,
+            )?);
+            total_products += line.gross();
+            total_discount += line.discount().as_decimal();
+            total += line.total();
+        }
+        if items.is_empty() {
+            return Err(rule(
+                "the sale has no product line: an NFC-e is the document of products",
+            ));
+        }
+        let total = amount(total)?;
+        // An NFC-e is made at the counter: the buyer is there (1), at a delivery (4), outside the establishment (5) or other (9)
+        // (unverified against the authority's rule: ADR 0082).
+        if !matches!(
+            request.presence,
+            BuyerPresence::InPerson
+                | BuyerPresence::HomeDelivery
+                | BuyerPresence::OutsideTheEstablishment
+                | BuyerPresence::Other
+        ) {
+            return Err(rule(
+                "an NFC-e is for a buyer who is present, at a delivery, outside the establishment or other: choose one of those",
+            ));
+        }
+        if request
+            .payments
+            .iter()
+            .any(|(_, paid)| paid.as_decimal().is_zero())
+        {
+            return Err(rule("every payment of an NFC-e is above 0"));
+        }
+        if request.payments.is_empty()
+            || request
+                .payments
+                .iter()
+                .map(|(_, paid)| paid.as_decimal())
+                .sum::<conta_verde_domain::Decimal>()
+                != total.as_decimal()
+        {
+            return Err(rule(
+                "what is paid must add up to the total of the invoice: no change is given",
+            ));
+        }
+        let customer = self.parties.find(company_id, sale.customer_id()).await?;
+        let consumer = if request.identify_consumer {
+            let customer =
+                customer.ok_or_else(|| rule("the customer of the sale does not exist"))?;
+            let document = customer.document().ok_or_else(|| {
+                rule("the customer has no CPF or CNPJ to be named on the invoice")
+            })?;
+            Some(NfceConsumer {
+                name: Some(customer.name().to_owned()),
+                document: document.as_str().to_owned(),
+            })
+        } else {
+            None
+        };
+        let nfce = NfceRequest {
+            reference: id.as_uuid().to_string(),
+            issuer: settings.clone(),
+            nature: nature.name().to_owned(),
+            issued_at_unix: now_unix,
+            presence: request.presence,
+            consumer: consumer.clone(),
+            items,
+            payments: request.payments.clone(),
+            total_products: amount(total_products)?,
+            total_discount: amount(total_discount)?,
+            total,
+        };
+        let name = consumer
+            .as_ref()
+            .and_then(|consumer| consumer.name.clone())
+            .unwrap_or_else(|| ANONYMOUS_CONSUMER.to_owned());
+        let draft = document_draft(
+            settings,
+            actor,
+            sale.id(),
+            nature.code(),
+            &name,
+            consumer.map(|consumer| consumer.document),
+            total,
+            issued_on,
+            now_unix,
+        );
+        Ok((draft, nfce))
     }
 
     /// What the document and the gateway's request are made of for an NFS-e: the sale's **service** lines under a service

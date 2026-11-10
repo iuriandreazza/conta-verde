@@ -775,7 +775,7 @@ impl FiscalDocumentRepository for PostgresFiscalDocumentRepository {
     ) -> Result<bool, RepositoryError> {
         sqlx::query_scalar(
             "SELECT EXISTS (SELECT 1 FROM fiscal_documents WHERE company_id = $1 AND environment = $2 \
-             AND series = $3 AND number BETWEEN $4 AND $5)",
+             AND kind = 'nfe' AND series = $3 AND number BETWEEN $4 AND $5)",
         )
         .bind(company_id.as_uuid())
         .bind(environment.key())
@@ -1292,7 +1292,7 @@ mod tests {
         // The kind is one of the two: a third fails both checks, and the database names the first by name.
         refused(
             update(
-                "UPDATE fiscal_documents SET kind = 'nfce' WHERE id = $1",
+                "UPDATE fiscal_documents SET kind = 'other' WHERE id = $1",
                 nfse.id(),
             )
             .await,
@@ -1338,6 +1338,58 @@ mod tests {
             ),
         );
         contract::issues_an_nfse_from_a_sale(
+            &service,
+            &gateway,
+            &settings,
+            &sales,
+            company,
+            other_company,
+            &entry_seed,
+            &seed,
+            &fiscal,
+        )
+        .await;
+        std::fs::remove_dir_all(root).expect("the test's own directory is removed");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn issues_an_nfce_from_a_sale() {
+        use crate::{
+            FakeFiscalGateway, LocalBlobStore, PostgresFiscalSettingsRepository,
+            PostgresPeriodLockRepository, RegisterReferences,
+        };
+        use conta_verde_application::FiscalDocumentService;
+
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let other_company = contract::create_company(&pool).await;
+        let (entry_seed, seed) = seeds(&pool, company).await;
+        let parties = PostgresPartyRepository::new(pool.clone());
+        let fiscal = contract::seed_fiscal_customer(&parties, company).await;
+        let gateway = FakeFiscalGateway::authorizing_after(1);
+        let settings = PostgresFiscalSettingsRepository::new(pool.clone());
+        let sales = PostgresSaleRepository::new(pool.clone());
+        let root =
+            std::env::temp_dir().join(format!("conta-verde-fiscal-{}", uuid::Uuid::new_v4()));
+        let service = FiscalDocumentService::new(
+            PostgresFiscalDocumentRepository::new(pool.clone()),
+            sales.clone(),
+            parties,
+            PostgresProductRepository::new(pool.clone()),
+            settings.clone(),
+            gateway.clone(),
+            LocalBlobStore::new(&root),
+            RegisterReferences::new(
+                PostgresCategoryRepository::new(pool.clone()),
+                PostgresCostCenterRepository::new(pool.clone()),
+                PostgresPartyRepository::new(pool.clone()),
+                PostgresBankAccountRepository::new(pool.clone()),
+                PostgresPaymentMethodRepository::new(pool.clone()),
+                PostgresPeriodLockRepository::new(pool.clone()),
+            ),
+        );
+        contract::issues_an_nfce_from_a_sale(
             &service,
             &gateway,
             &settings,

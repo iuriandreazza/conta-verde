@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use conta_verde_application::{
     AcceptedEvent, AuthorizedDocument, AuthorizedNfse, Destination, DocumentOutcome, EventOutcome,
-    EventQuery, FiscalGateway, GatewayError, NfeRequest, NfseRequest, PaymentForm, Refusal,
-    Submission,
+    EventQuery, FiscalGateway, GatewayError, NfceRequest, NfeRequest, NfseRequest, PaymentForm,
+    Refusal, Submission,
 };
 use conta_verde_domain::{AccessKey, Decimal, FiscalEnvironment, FiscalSettings, TaxRegime};
 use reqwest::{Method, StatusCode};
@@ -24,6 +24,8 @@ const NAMED: &str = "nfeio:";
 /// The text our reference is written into on the document (its complementary information), so that a document the
 /// gateway made for it can be found again without knowing the gateway's own id.
 const MARKER: &str = "cv-";
+/// What the person reads when an NFC-e is asked of this gateway.
+const NFCE_NOT_BUILT: &str = "an NFC-e through NFE.io: its consumer invoices API is not written in this adapter yet (use another gateway)";
 /// What the person reads when an NFS-e is asked of this gateway.
 const NFSE_NOT_BUILT: &str = "an NFS-e through NFE.io: its published reference does not say how to find a service invoice by our reference, so none is submitted (use another gateway)";
 
@@ -1008,6 +1010,34 @@ impl FiscalGateway for NfeIoGateway {
         false
     }
 
+    fn issues_nfce(&self) -> bool {
+        false
+    }
+
+    // NFE.io has an API for consumer invoices (`consumerinvoices`, another OpenAPI file) with the same listing by `q` and the same
+    // queued cancellation as its product invoices, but **this adapter was not written for it**: the schema of its request was not
+    // read in this slice, and an NFC-e is not sent on a guess ([ADR 0082]). Refused with that reason, nothing is sent.
+    async fn submit_nfce(&self, _request: &NfceRequest) -> Result<Submission, GatewayError> {
+        Err(GatewayError::Unsupported(NFCE_NOT_BUILT))
+    }
+
+    async fn query_nfce(
+        &self,
+        _issuer: &conta_verde_domain::FiscalSettings,
+        _reference: &str,
+    ) -> Result<DocumentOutcome, GatewayError> {
+        Err(GatewayError::Unsupported(NFCE_NOT_BUILT))
+    }
+
+    async fn cancel_nfce(
+        &self,
+        _issuer: &conta_verde_domain::FiscalSettings,
+        _reference: &str,
+        _reason: &str,
+    ) -> Result<EventOutcome, GatewayError> {
+        Err(GatewayError::Unsupported(NFCE_NOT_BUILT))
+    }
+
     // NFE.io's service invoices (NFS-e) are **not built**, and not because the gateway lacks them: its published
     // reference does not give what an adapter needs to promise that a service invoice is never issued twice ([ADR 0078],
     // [ADR 0081]). The listing takes a period, a page and no filter by our reference or `externalId` that the reference
@@ -1322,6 +1352,32 @@ mod tests {
             .unwrap(),
         );
         request
+    }
+
+    #[tokio::test]
+    async fn an_nfce_is_refused_with_the_reason_and_nothing_is_sent() {
+        let stand = Shared::default();
+        let addr = serve(stand.clone()).await;
+        let gateway = gateway(addr, true);
+        let issuer = fiscal_issuer(CNPJ, FiscalEnvironment::Homologation);
+        assert!(!gateway.issues_nfce());
+        assert!(matches!(
+            gateway
+                .submit_nfce(&crate::contract::nfce_request(&issuer, "ref-nfce"))
+                .await,
+            Err(GatewayError::Unsupported(reason)) if reason.contains("another gateway")
+        ));
+        assert!(matches!(
+            gateway.query_nfce(&issuer, "ref-nfce").await,
+            Err(GatewayError::Unsupported(_))
+        ));
+        assert!(matches!(
+            gateway
+                .cancel_nfce(&issuer, "ref-nfce", "Venda desfeita a pedido")
+                .await,
+            Err(GatewayError::Unsupported(_))
+        ));
+        assert_eq!(stand.lock().unwrap().posts, 0);
     }
 
     #[tokio::test]

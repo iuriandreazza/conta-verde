@@ -7,7 +7,7 @@ import type {
   SpecialTaxRegime,
 } from "../api";
 
-export const KIND_LABELS: Record<FiscalDocument["kind"], string> = { nfe: "NF-e", nfse: "NFS-e" };
+export const KIND_LABELS: Record<FiscalDocument["kind"], string> = { nfe: "NF-e", nfce: "NFC-e", nfse: "NFS-e" };
 
 export const SPECIAL_REGIME_LABELS: Record<SpecialTaxRegime, string> = {
   none: "Nenhum",
@@ -75,7 +75,7 @@ export function numberLabel(series: number | null, number: number | null): strin
  * (the number the company gave) while it waits.
  */
 export function documentLabel(document: FiscalDocument): string {
-  if (document.kind === "nfe") return numberLabel(document.series, document.number);
+  if (document.kind !== "nfse") return numberLabel(document.series, document.number);
   if (document.nfse) return String(document.nfse.number);
   return document.dps ? `DPS ${document.dps.series}/${document.dps.number}` : "—";
 }

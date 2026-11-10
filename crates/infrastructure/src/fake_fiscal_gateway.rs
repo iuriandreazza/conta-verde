@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use conta_verde_application::{
     AcceptedEvent, AuthorizedDocument, AuthorizedNfse, DocumentOutcome, EventOutcome, EventQuery,
-    FiscalGateway, GatewayError, NfeRequest, NfseRequest, Refusal, Submission,
+    FiscalGateway, GatewayError, NfceRequest, NfeRequest, NfseRequest, Refusal, Submission,
 };
 use conta_verde_domain::{
     AccessKey, CalendarDate, FiscalSettings, state_code, state_utc_offset_minutes,
@@ -78,6 +78,27 @@ impl FiscalGateway for NoFiscalGateway {
         Err(GatewayError::Disabled)
     }
 
+    async fn submit_nfce(&self, _request: &NfceRequest) -> Result<Submission, GatewayError> {
+        Err(GatewayError::Disabled)
+    }
+
+    async fn query_nfce(
+        &self,
+        _issuer: &FiscalSettings,
+        _reference: &str,
+    ) -> Result<DocumentOutcome, GatewayError> {
+        Err(GatewayError::Disabled)
+    }
+
+    async fn cancel_nfce(
+        &self,
+        _issuer: &FiscalSettings,
+        _reference: &str,
+        _reason: &str,
+    ) -> Result<EventOutcome, GatewayError> {
+        Err(GatewayError::Disabled)
+    }
+
     async fn submit_nfse(
         &self,
         _request: &NfseRequest,
@@ -145,8 +166,11 @@ struct FakeState {
     /// A gateway that does not issue NFS-e, like NFE.io for now.
     without_nfse: bool,
     /// The last number given, per issuer, environment and series: the gateway's own counter, like the real one's.
-    counters: HashMap<(String, &'static str, u16), u32>,
+    counters: HashMap<(String, &'static str, u16, u8), u32>,
     submitted: Vec<NfeRequest>,
+    submitted_nfce: Vec<NfceRequest>,
+    /// A gateway that does not issue NFC-e.
+    without_nfce: bool,
     invalidated: Vec<(u16, u32, u32)>,
     rejection: Option<Refusal>,
     denial: Option<Refusal>,
@@ -240,6 +264,16 @@ impl FakeFiscalGateway {
     /// From now on the gateway does not issue NFS-e: an issue is refused before a DPS number is taken.
     pub fn without_nfse(&self, without: bool) {
         self.lock().without_nfse = without;
+    }
+
+    /// From now on the gateway does not issue NFC-e.
+    pub fn without_nfce(&self, without: bool) {
+        self.lock().without_nfce = without;
+    }
+
+    /// The NFC-e submitted, in order, repeats included.
+    pub fn submitted_nfce(&self) -> Vec<NfceRequest> {
+        self.lock().submitted_nfce.clone()
     }
 
     /// The NFS-e submitted, in order, repeats included.
@@ -432,85 +466,53 @@ impl FiscalGateway for FakeFiscalGateway {
             return Err(GatewayError::Unavailable("the fake is switched off".into()));
         }
         state.submitted.push(request.clone());
-        // The same reference again is the same document, unless it was refused: then it is another try.
-        let known_as = resolve(&state, &request.reference);
-        if let Some(known) = state.documents.get(&known_as)
-            && !matches!(known.stage, Stage::Rejected(_))
-        {
-            let named = state.assigns_references.then(|| known_as.clone());
-            return Ok(Submission {
-                reference: named,
-                outcome: outcome(known),
-            });
-        }
-        let assigned = if state.assigns_references {
-            format!("gw-{}", state.documents.len() + 1)
-        } else {
-            request.reference.clone()
-        };
-        if state.assigns_references {
-            state
-                .by_request
-                .insert(request.reference.clone(), assigned.clone());
-        }
-        let named = state.assigns_references.then(|| assigned.clone());
-        if let Some(refusal) = state.rejection.clone() {
-            let document = refused_document(request, Stage::Rejected(refusal));
-            let answer = outcome(&document);
-            state.documents.insert(assigned, document);
-            return Ok(Submission {
-                reference: named,
-                outcome: answer,
-            });
-        }
-        let issuer = &request.issuer;
-        let series = issuer.nfe_series();
-        let counter = state
-            .counters
-            .entry((issuer.cnpj().to_owned(), issuer.environment().key(), series))
-            .or_insert(0);
-        *counter += 1;
-        let number = *counter;
-        // The key's month is the issuer's own day, like the document's.
-        let offset = i64::from(state_utc_offset_minutes(issuer.address().state()).unwrap_or(-180));
-        let day =
-            CalendarDate::from_unix_days((request.issued_at_unix + offset * 60).div_euclid(86_400))
-                .ok_or_else(|| GatewayError::Unavailable("the moment is out of range".into()))?;
-        let state_code = state_code(issuer.address().state())
-            .ok_or_else(|| GatewayError::Unavailable("the issuer's state is unknown".into()))?;
-        let access_key = AccessKey::from_parts(
-            state_code,
-            day,
-            issuer.cnpj(),
+        submit_keyed(
+            &mut state,
             55,
-            series,
-            number,
-            1,
-            10_000_000 + number,
+            request.issuer.nfe_series(),
+            &request.reference,
+            &request.issuer,
+            request.issued_at_unix,
+            request.total.to_string(),
         )
-        .map_err(|error| GatewayError::Unavailable(error.to_string()))?;
-        let stage = match state.denial.clone() {
-            Some(refusal) => Stage::Denied(refusal),
-            None if state.queries_before_authorized == 0 => Stage::Authorized,
-            None => Stage::Processing {
-                queries_left: state.queries_before_authorized,
-            },
-        };
-        let document = FakeDocument {
-            stage,
-            issuer_cnpj: issuer.cnpj().to_owned(),
-            series,
-            number,
-            access_key,
-            total: request.total.to_string(),
-            corrections: 0,
-        };
-        let answer = outcome(&document);
-        state.documents.insert(assigned, document);
-        Ok(Submission {
-            reference: named,
-            outcome: answer,
-        })
+    }
+
+    async fn submit_nfce(&self, request: &NfceRequest) -> Result<Submission, GatewayError> {
+        let mut state = self.lock();
+        if state.unavailable {
+            return Err(GatewayError::Unavailable("the fake is switched off".into()));
+        }
+        state.submitted_nfce.push(request.clone());
+        submit_keyed(
+            &mut state,
+            65,
+            request.issuer.nfce_series(),
+            &request.reference,
+            &request.issuer,
+            request.issued_at_unix,
+            request.total.to_string(),
+        )
+    }
+
+    fn issues_nfce(&self) -> bool {
+        !self.lock().without_nfce
+    }
+
+    async fn query_nfce(
+        &self,
+        issuer: &FiscalSettings,
+        reference: &str,
+    ) -> Result<DocumentOutcome, GatewayError> {
+        self.query_nfe(issuer, reference).await
+    }
+
+    async fn cancel_nfce(
+        &self,
+        issuer: &FiscalSettings,
+        reference: &str,
+        reason: &str,
+    ) -> Result<EventOutcome, GatewayError> {
+        self.cancel_nfe(issuer, reference, reason).await
     }
 
     async fn query_nfe(
@@ -779,18 +781,112 @@ impl FiscalGateway for FakeFiscalGateway {
     }
 }
 
+/// What a submission does at the fake, for the NF-e (model 55) or the NFC-e (65): the same reference is the same document,
+/// a refusal takes no number, and the numbers are the gateway's own per issuer, environment, series and model.
+fn submit_keyed(
+    state: &mut FakeState,
+    model: u8,
+    series: u16,
+    reference: &str,
+    issuer: &FiscalSettings,
+    issued_at_unix: i64,
+    total: String,
+) -> Result<Submission, GatewayError> {
+    // The same reference again is the same document, unless it was refused: then it is another try.
+    let known_as = resolve(state, reference);
+    if let Some(known) = state.documents.get(&known_as)
+        && !matches!(known.stage, Stage::Rejected(_))
+    {
+        let named = state.assigns_references.then(|| known_as.clone());
+        return Ok(Submission {
+            reference: named,
+            outcome: outcome(known),
+        });
+    }
+    let assigned = if state.assigns_references {
+        format!("gw-{}", state.documents.len() + 1)
+    } else {
+        reference.to_owned()
+    };
+    if state.assigns_references {
+        state
+            .by_request
+            .insert(reference.to_owned(), assigned.clone());
+    }
+    let named = state.assigns_references.then(|| assigned.clone());
+    if let Some(refusal) = state.rejection.clone() {
+        let document = refused_document(issuer, &total, Stage::Rejected(refusal));
+        let answer = outcome(&document);
+        state.documents.insert(assigned, document);
+        return Ok(Submission {
+            reference: named,
+            outcome: answer,
+        });
+    }
+    let counter = state
+        .counters
+        .entry((
+            issuer.cnpj().to_owned(),
+            issuer.environment().key(),
+            series,
+            model,
+        ))
+        .or_insert(0);
+    *counter += 1;
+    let number = *counter;
+    // The key's month is the issuer's own day, like the document's.
+    let offset = i64::from(state_utc_offset_minutes(issuer.address().state()).unwrap_or(-180));
+    let day = CalendarDate::from_unix_days((issued_at_unix + offset * 60).div_euclid(86_400))
+        .ok_or_else(|| GatewayError::Unavailable("the moment is out of range".into()))?;
+    let state_code = state_code(issuer.address().state())
+        .ok_or_else(|| GatewayError::Unavailable("the issuer's state is unknown".into()))?;
+    let access_key = AccessKey::from_parts(
+        state_code,
+        day,
+        issuer.cnpj(),
+        model,
+        series,
+        number,
+        1,
+        10_000_000 + number,
+    )
+    .map_err(|error| GatewayError::Unavailable(error.to_string()))?;
+    let stage = match state.denial.clone() {
+        Some(refusal) => Stage::Denied(refusal),
+        None if state.queries_before_authorized == 0 => Stage::Authorized,
+        None => Stage::Processing {
+            queries_left: state.queries_before_authorized,
+        },
+    };
+    let document = FakeDocument {
+        stage,
+        issuer_cnpj: issuer.cnpj().to_owned(),
+        series,
+        number,
+        access_key,
+        total,
+        corrections: 0,
+    };
+    let answer = outcome(&document);
+    state.documents.insert(assigned, document);
+    Ok(Submission {
+        reference: named,
+        outcome: answer,
+    })
+}
+
 /// A document the gateway refused: it keeps no number, since a refusal before authorization consumes none.
-fn refused_document(request: &NfeRequest, stage: Stage) -> FakeDocument {
+fn refused_document(issuer: &FiscalSettings, total: &str, stage: Stage) -> FakeDocument {
     FakeDocument {
         stage,
-        issuer_cnpj: request.issuer.cnpj().to_owned(),
-        series: request.issuer.nfe_series(),
+        issuer_cnpj: issuer.cnpj().to_owned(),
+        series: issuer.nfe_series(),
         number: 0,
         // Never read: a refused document has no files. Any right key will do.
         access_key: AccessKey::from_parts(
             35,
             CalendarDate::parse("2026-01-01").expect("a real day"),
-            request.issuer.cnpj(),
+            issuer.cnpj(),
             55,
             1,
             1,
@@ -798,7 +894,7 @@ fn refused_document(request: &NfeRequest, stage: Stage) -> FakeDocument {
             1,
         )
         .expect("a right key"),
-        total: request.total.to_string(),
+        total: total.to_owned(),
         corrections: 0,
     }
 }
@@ -822,6 +918,27 @@ mod tests {
             &issuer(),
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn authorizes_and_cancels_an_nfce_and_counts_its_numbers_apart_from_the_nfes() {
+        let gateway = FakeFiscalGateway::default();
+        contract::a_gateway_authorizes_and_cancels_an_nfce(&gateway, &issuer()).await;
+        contract::a_gateway_authorizes_and_cancels_an_nfce(
+            &FakeFiscalGateway::authorizing_after(2),
+            &issuer(),
+        )
+        .await;
+        // The same series number of an NF-e is not taken from the NFC-e's: the model is part of what is counted.
+        let sent = gateway
+            .submit_nfe(&nfe_request(&issuer(), &Uuid::new_v4().to_string()))
+            .await
+            .unwrap();
+        let DocumentOutcome::Authorized(nfe) = sent.outcome else {
+            panic!("authorized was expected");
+        };
+        assert_eq!(nfe.number, 1);
+        assert_eq!(nfe.access_key.model(), "55");
     }
 
     #[tokio::test]
@@ -1019,6 +1136,13 @@ mod tests {
         );
         assert_eq!(
             gateway.query_nfse(&service, "x").await,
+            Err(GatewayError::Disabled)
+        );
+        assert_eq!(
+            gateway
+                .submit_nfce(&contract::nfce_request(&service, "x"))
+                .await
+                .map(|submission| submission.outcome),
             Err(GatewayError::Disabled)
         );
         assert_eq!(

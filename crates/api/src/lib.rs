@@ -687,6 +687,10 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
             post(fiscal::issue_service_document::<X>),
         )
         .route(
+            "/companies/{company_id}/fiscal/consumer-documents",
+            post(fiscal::issue_consumer_document::<X>),
+        )
+        .route(
             "/companies/{company_id}/fiscal/documents/{id}",
             get(fiscal::get_document::<X>),
         )
@@ -705,6 +709,10 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         .route(
             "/companies/{company_id}/fiscal/documents/{id}/resend-service",
             post(fiscal::resend_service_document::<X>),
+        )
+        .route(
+            "/companies/{company_id}/fiscal/documents/{id}/resend-consumer",
+            post(fiscal::resend_consumer_document::<X>),
         )
         .route(
             "/companies/{company_id}/fiscal/documents/{id}/cancel",
@@ -10202,6 +10210,147 @@ mod tests {
             };
             assert_eq!(write.status, expected, "{role:?} writes");
         }
+    }
+
+    /// An NFC-e through the API ([ADR 0082]): the product lines of a completed sale at the counter, what is paid adding up to the
+    /// total, the consumer named only when the person says so, no correction letter, and each role keeping to its area.
+    #[tokio::test]
+    async fn an_nfce_is_issued_at_the_counter_from_the_product_lines_of_a_sale() {
+        use conta_verde_domain::Role;
+
+        let (app, identities) = entry_app_with_identities();
+        let (owner, company_id) = sign_up(&app, "dona@example.com").await;
+        let seller = member_with_role(&app, &identities, company_id, Role::Sales).await;
+        let targets = sales_targets(&app, &owner, company_id).await;
+        let category = revenue_category(&app, &owner, company_id).await;
+        let customer = send(
+            &app,
+            json_request(
+                "POST",
+                &parties_uri(company_id),
+                Some(&owner),
+                json!({ "name": "Maria Souza", "document": "529.982.247-25", "is_customer": true, "is_supplier": false }),
+            ),
+        )
+        .await;
+        let mut sale = sale_body(&targets, &category);
+        sale["customer_id"] = customer.body["id"].clone();
+        let created = send(
+            &app,
+            json_request("POST", &sales_uri(company_id), Some(&owner), sale),
+        )
+        .await;
+        let sale_id = created.body["id"].as_str().unwrap().to_owned();
+        assert_eq!(
+            send(
+                &app,
+                json_request(
+                    "POST",
+                    &format!("{}/{sale_id}/complete", sales_uri(company_id)),
+                    Some(&owner),
+                    Value::Null,
+                ),
+            )
+            .await
+            .status,
+            StatusCode::OK
+        );
+        assert_eq!(
+            send(
+                &app,
+                json_request(
+                    "PUT",
+                    &format!("/companies/{company_id}/fiscal/settings"),
+                    Some(&owner),
+                    fiscal_settings_body(),
+                ),
+            )
+            .await
+            .status,
+            StatusCode::OK
+        );
+
+        let consumers = format!("/companies/{company_id}/fiscal/consumer-documents");
+        let choices = json!({
+            "sale_id": sale_id, "nature_code": "sale", "origin": 0, "presence": "in_person",
+            "identify_consumer": true, "payments": [{ "form": "pix", "amount": "35" }]
+        });
+        assert_eq!(
+            send(
+                &app,
+                json_request("POST", &consumers, Some(&seller), choices.clone())
+            )
+            .await
+            .status,
+            StatusCode::FORBIDDEN
+        );
+        for (field, value) in [
+            ("presence", json!("somewhere")),
+            ("payments", json!([{ "form": "gold", "amount": "35" }])),
+            ("payments", json!([{ "form": "pix", "amount": "abc" }])),
+            ("extra", json!(1)),
+        ] {
+            let mut bad = choices.clone();
+            bad[field] = value;
+            assert_eq!(
+                send(&app, json_request("POST", &consumers, Some(&owner), bad))
+                    .await
+                    .status,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "{field}"
+            );
+        }
+        // What is paid must add up: no change is given.
+        let mut short = choices.clone();
+        short["payments"] = json!([{ "form": "cash", "amount": "20" }]);
+        let refused = send(&app, json_request("POST", &consumers, Some(&owner), short)).await;
+        assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(refused.body["error"].as_str().unwrap().contains("add up"));
+
+        let issued = send(
+            &app,
+            json_request("POST", &consumers, Some(&owner), choices.clone()),
+        )
+        .await;
+        assert_eq!(issued.status, StatusCode::OK, "{}", issued.body);
+        assert_eq!(issued.body["kind"], "nfce");
+        assert_eq!(issued.body["total"], "35");
+        assert_eq!(issued.body["recipient_document"], "52998224725");
+        let again = send(
+            &app,
+            json_request("POST", &consumers, Some(&owner), choices.clone()),
+        )
+        .await;
+        assert_eq!(again.body["id"], issued.body["id"]);
+        assert_eq!(again.body["status"], "authorized", "{}", again.body);
+        assert_eq!(again.body["access_key"].as_str().unwrap().len(), 44);
+        assert_eq!(&again.body["access_key"].as_str().unwrap()[20..22], "65");
+        let one = format!(
+            "/companies/{company_id}/fiscal/documents/{}",
+            issued.body["id"].as_str().unwrap()
+        );
+        let letter = send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{one}/corrections"),
+                Some(&owner),
+                json!({ "text": "Corrige o endereço do consumidor" }),
+            ),
+        )
+        .await;
+        assert_eq!(letter.status, StatusCode::UNPROCESSABLE_ENTITY);
+        let cancelled = send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{one}/cancel"),
+                Some(&owner),
+                json!({ "reason": "Venda desfeita a pedido do cliente" }),
+            ),
+        )
+        .await;
+        assert_eq!(cancelled.body["status"], "cancelled", "{}", cancelled.body);
     }
 
     /// An NFS-e through the API ([ADR 0081]): the service lines of a completed sale are invoiced once, under the nature's
