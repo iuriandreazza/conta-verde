@@ -72,7 +72,14 @@ function ConnectForm({ companyId, accounts, onConnected }: { companyId: string; 
         </label>
         <label>
           Código da conexão (Item ID)
-          <input value={itemId} onChange={(event) => setItemId(event.target.value)} autoComplete="off" required maxLength={200} />
+          <input
+            value={itemId}
+            onChange={(event) => {
+              // The accounts found belong to the id that was looked up.
+              setItemId(event.target.value);
+              setFound(null);
+              setAccountId("");
+            }} autoComplete="off" required maxLength={200} />
         </label>
         <div className="form-actions">
           <Button type="button" variant="ghost" className="btn-small" pending={looking} disabled={itemId.trim() === ""} onClick={() => void look()}>

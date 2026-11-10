@@ -534,7 +534,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         )
         .route(
             "/companies/{company_id}/bank-connections/accounts",
-            get(bank_connections::aggregator_accounts::<X>),
+            post(bank_connections::aggregator_accounts::<X>),
         )
         .route(
             "/companies/{company_id}/bank-connections/{connection_id}/sync",

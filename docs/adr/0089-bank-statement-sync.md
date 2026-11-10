@@ -32,8 +32,10 @@ what it does **not** know, because the adapter was written without an account at
   **Changed from ADR 0011**: the port is named `BankAggregator`, not `BankConnector` (the word now means the e-commerce packages of
   ADR 0086), and the consent flow is **not** embedded in the SPA (below).
 - A connection is `connected`, `needs_attention` (the bank asks something of the person: the login failed, a code is waited for) or
-  `disconnected` (ended: the bank account is free to be connected again). A partial unique index allows **one live connection per bank
-  account**; the bank account must be usable and the company's (a composite foreign key), the aggregator must hold the account in the
+  `disconnected` (ended: the bank account is free to be connected again). Partial unique indexes allow **one live connection per bank
+  account** and **one live connection per aggregator account in the whole installation** (a company that learns another's
+  account id cannot take its statement while it is connected, nor end its consent: the item is ended at the aggregator only when no
+  live connection of any company still uses it); the bank account must be usable and the company's (a composite foreign key), the aggregator must hold the account in the
   connection (asked at connecting) and a company has at most **50** connections. Audited (provider, bank account, ids and status; the
   day of the last pull and the reason are bookkeeping, as `generated_through` is for recurrences).
 
@@ -45,6 +47,8 @@ what it does **not** know, because the adapter was written without an account at
   the lines are reconciled by the same screens.
 - **The window**: the first pull reaches **90 days back**; later ones start **7 days before the last day reached**, so a movement the
   bank posted late is still found, and the fingerprint keeps the overlap from adding twice.
+- **A big pull is stored whole**: one import takes at most 5,000 rows, so a larger pull goes in parts, and the day reached is recorded
+  only after every part is stored (one that fails half way is made again from the same window, and nothing is stored twice).
 - **A movement that cannot be a line** (a zero amount, a description with nothing in it) is **counted as refused and never blocks the
   rest**: the import refuses a whole file for one bad row, so the sync validates each draft first (`StatementLine::new`). The answer of
   a pull says `created`, `skipped` (already known), `refused` and whether the bank `needs_attention`.
@@ -55,15 +59,16 @@ what it does **not** know, because the adapter was written without an account at
   (the day is `customer_today()` so tests move it) and a worker takes at most 10 jobs a minute. A pass may queue a connection again
   while an earlier job still waits; a pull is safe to repeat, so that costs a read and nothing else. A pull that fails is tried again
   as the queue says, records **why** on the connection in a few words (never what the aggregator answered), and a connection that
-  reports `needs_attention` stops being pulled until the person looks at it. **"Sincronizar" on the page pulls now** with the server's UTC
+  reports `needs_attention` stops being pulled by the hourly pass; **the way back is the person asking again with "Sincronizar"**: if the bank is ready the connection is `connected` again (audited) and pulls, if not it says so and writes nothing more. **"Sincronizar" on the page pulls now** with the server's UTC
   day (a read of the clock besides the job queue and the hourly passes, like the quote's expiry).
 - **Ending**: marks the connection ended and frees the bank account, then tells the aggregator (a failure there is logged and never keeps
-  the connection alive here; the consent is then ended at the provider by hand). Ending twice is the same answer.
+  the connection alive here; the consent is then ended at the provider by hand). Ending twice is the same answer. An ended connection **stays ended**: the adapters refuse a status written by a pull that was half
+  way when it was ended (`update_status` never moves a `disconnected` connection to another status).
 
 ### Routes and screens
 
 `/companies/{id}/bank-connections` (`finance` area: who reads finance lists, who writes it connects, pulls and ends): `GET` the list
-(with `available` and the provider, so the page can say there is none), `POST` to connect, `POST connect-token`, `GET accounts?item_id=`,
+(with `available` and the provider, so the page can say there is none), `POST` to connect, `POST connect-token`, `POST accounts` (a body `{item_id}`: it spends the installation's calls to the aggregator, so only who writes may),
 `POST {id}/sync`, `POST {id}/disconnect`, `GET {id}/history`. An aggregator that is off is `409`, one that is down `502` with a fixed
 text. The page **Conexões bancárias** (under Financeiro, next to Conciliação) lists the connections with state, last pull and why it
 stopped, and connects an account by the connection's id (**Buscar contas** asks the aggregator which accounts it holds).
@@ -79,6 +84,18 @@ stopped, and connects an account by the connection's id (**Buscar contas** asks 
 - **The consent widget is not embedded.** The page takes the connection's id (Item ID) that the person gets from the provider's
   widget or dashboard. `POST connect-token` exists and is tested so a later step can load the widget; this one does not load a
   third-party script into a page that holds the company's books without having been able to see it work.
+- The aggregator sends amounts as JSON numbers, read through `serde_json::Number` (the shortest decimal that round-trips, never a float
+  operation): exact for cents up to about 10^13, which is the reach of a bank account's movement.
+- **An aggregator that answers a connection with a refusal** (a `4xx`: the item was removed there, the consent revoked) is treated like a bank
+  that needs the person: `needs_attention` with a fixed reason, no retry; refused credentials and server errors are **not** that (they are
+  the operator's and are tried again).
+- **A movement the adapter cannot read** (an amount that is not a number, no description) is handed on and counted as refused by the sync;
+  one with no id or no date cannot be stored and is left out.
+- **Known limits**: the statement line's fingerprint holds the day, amount and description besides the aggregator's id, so a movement the
+  provider later changes (an enriched description, a corrected day) inside the 7-day window comes in as a second line, which the person
+  ignores; the hourly pass does not re-check connections waiting for the person (only "Sincronizar" does) and takes at most 200 due
+  connections per pass, oldest first; `last_error` of a failed pull can be overwritten by a pull that succeeded at the same moment; a
+  pull of an ended connection answers with a domain error that is not worded for it (the page hides the button).
 - **A movement whose id changes at the aggregator comes in again as a new line**; the old one stays and the person ignores it. Fixing
   it would mean guessing which two lines are one.
 - The aggregator's own consent lasts as long as the bank's (Open Finance consents expire): the pull then reports `needs_attention` and the

@@ -9,7 +9,8 @@ use crate::RepositoryError;
 /// Port to the bank connections of a company ([ADR 0089]). Writes of what the connection **is** (made, status) take the audit
 /// entry that describes them and store both atomically ([ADR 0008]); what a pull leaves (the day, a failure) is bookkeeping.
 pub trait BankConnectionRepository: Send + Sync {
-    /// Stores a new connection. `DuplicateBankConnection` when the bank account has one that is not disconnected.
+    /// Stores a new connection. `DuplicateBankConnection` when the bank account has one that is not disconnected, or when the
+    /// aggregator's account is held by one of any company.
     fn save(
         &self,
         connection: &BankConnection,
@@ -53,6 +54,13 @@ pub trait BankConnectionRepository: Send + Sync {
         day: CalendarDate,
         limit: usize,
     ) -> impl Future<Output = Result<Vec<BankConnection>, RepositoryError>> + Send;
+
+    /// Whether a connection of any company that is not disconnected still uses the aggregator's `item_id`.
+    fn item_is_live(
+        &self,
+        provider: &str,
+        item_id: &str,
+    ) -> impl Future<Output = Result<bool, RepositoryError>> + Send;
 
     fn history(
         &self,

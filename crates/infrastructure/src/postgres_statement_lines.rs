@@ -521,5 +521,14 @@ mod tests {
             seed.other_bank_account,
         )
         .await;
+
+        let third = contract::create_company(&pool).await;
+        let third_seed = seed_for(&pool, third).await;
+        crate::contract_integrations::an_ended_connection_stays_ended(
+            &crate::PostgresBankConnectionRepository::new(pool.clone()),
+            third,
+            third_seed.bank_account,
+        )
+        .await;
     }
 }

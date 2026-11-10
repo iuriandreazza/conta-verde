@@ -59,6 +59,8 @@ struct World {
     pulls: Vec<(String, CalendarDate, CalendarDate)>,
     disconnected: Vec<String>,
     down: bool,
+    /// The items it no longer accepts, as a real one does for a consent that was revoked.
+    refused: bool,
 }
 
 /// An aggregator for tests and for trying the product without an account: it knows the accounts and the movements it was told of,
@@ -71,6 +73,11 @@ pub struct FakeBankAggregator {
 
 impl FakeBankAggregator {
     pub fn with_account(self, item: &str, id: &str, name: &str) -> Self {
+        self.add_account(item, id, name);
+        self
+    }
+
+    pub fn add_account(&self, item: &str, id: &str, name: &str) {
         self.world
             .lock()
             .expect("fake aggregator lock poisoned")
@@ -83,7 +90,14 @@ impl FakeBankAggregator {
                 kind: "CHECKING_ACCOUNT".to_owned(),
                 number: Some("12345-6".to_owned()),
             });
-        self
+    }
+
+    /// Makes it refuse every connection, as a real one does when the consent was revoked there.
+    pub fn set_refused(&self, refused: bool) {
+        self.world
+            .lock()
+            .expect("fake aggregator lock poisoned")
+            .refused = refused;
     }
 
     /// A posted movement of an account.
@@ -191,6 +205,14 @@ impl BankAggregator for FakeBankAggregator {
 
     async fn item_state(&self, item: &str) -> Result<ItemState, AggregatorError> {
         self.check_up()?;
+        if self
+            .world
+            .lock()
+            .expect("fake aggregator lock poisoned")
+            .refused
+        {
+            return Err(AggregatorError::Refused("no longer accepted".to_owned()));
+        }
         Ok(self
             .world
             .lock()

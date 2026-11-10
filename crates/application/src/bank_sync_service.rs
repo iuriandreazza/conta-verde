@@ -23,6 +23,8 @@ const FIRST_PULL_DAYS: i64 = 90;
 const OVERLAP_DAYS: i64 = 7;
 const LEASE_SECONDS: i64 = 300;
 const DUE_PER_PASS: usize = 200;
+const REFUSED_REASON: &str =
+    "the provider no longer accepts this connection: connect it again there";
 
 /// What the sync stores statement lines through: the reconciliation use case, as a narrow trait so that the sync does not carry
 /// its four type parameters ([ADR 0034]).
@@ -211,7 +213,14 @@ where
             .update_status(&after, &audit)
             .await
             .map_err(missing)?;
-        if self.aggregator.is_enabled()
+        // The item is the person's whole consent with the bank, and other accounts of it may still feed a bank account: it is ended
+        // at the aggregator only when nothing else uses it.
+        let in_use = self
+            .connections
+            .item_is_live(before.provider(), before.item_id())
+            .await?;
+        if !in_use
+            && self.aggregator.is_enabled()
             && let Err(error) = self.aggregator.disconnect(before.item_id()).await
         {
             tracing::warn!(%error, "the aggregator was not told of a disconnected bank connection");
@@ -338,7 +347,7 @@ where
         connection: BankConnection,
         today: CalendarDate,
     ) -> Result<SyncReport, ApplicationError> {
-        if connection.status() != ConnectionStatus::Connected {
+        if connection.status() == ConnectionStatus::Disconnected {
             return Err(conta_verde_domain::DomainError::InvalidBankConnection("status").into());
         }
         let state = match self.aggregator.item_state(connection.item_id()).await {
@@ -346,17 +355,10 @@ where
             Err(error) => return self.failed(&connection, error).await,
         };
         if let crate::ItemState::NeedsAttention(reason) = state {
-            let after = connection.with_status(ConnectionStatus::NeedsAttention, Some(&reason));
-            let audit = audit_entry(
-                &after,
-                connection.connected_by(),
-                AuditAction::Updated,
-                bank_connection_changes(&connection, &after),
-            );
-            self.connections
-                .update_status(&after, &audit)
-                .await
-                .map_err(missing)?;
+            if connection.status() != ConnectionStatus::NeedsAttention {
+                self.move_to(&connection, ConnectionStatus::NeedsAttention, Some(&reason))
+                    .await?;
+            }
             return Ok(SyncReport {
                 created: 0,
                 skipped: 0,
@@ -364,6 +366,14 @@ where
                 needs_attention: true,
             });
         }
+        // The person did what the bank asked: only asking again can bring the connection back, since the hourly pass leaves the
+        // ones waiting for them alone.
+        let connection = if connection.status() == ConnectionStatus::NeedsAttention {
+            self.move_to(&connection, ConnectionStatus::Connected, None)
+                .await?
+        } else {
+            connection
+        };
         let from = window_start(&connection, today);
         let transactions = match self
             .aggregator
@@ -373,19 +383,26 @@ where
             Ok(transactions) => transactions,
             Err(error) => return self.failed(&connection, error).await,
         };
-        let (rows, refused) = self.lines_of(&connection, transactions);
-        let report = if rows.is_empty() {
-            ImportReport::default()
-        } else {
-            self.sink
+        let (mut pending, refused) = self.lines_of(&connection, transactions);
+        // One import takes a bounded number of rows; the day is recorded only after all of them are stored, so a pull that fails
+        // half way is made again whole.
+        let mut report = ImportReport::default();
+        while !pending.is_empty() {
+            let rest = pending.split_off(pending.len().min(MAX_STATEMENT_LINES));
+            let stored = self
+                .sink
                 .store(
                     connection.company_id(),
                     connection.connected_by(),
                     connection.bank_account_id(),
-                    rows,
+                    pending,
                 )
-                .await?
-        };
+                .await?;
+            report.valid += stored.valid;
+            report.created += stored.created;
+            report.skipped.extend(stored.skipped);
+            pending = rest;
+        }
         self.connections
             .record_sync(&connection.synced_through(today))
             .await?;
@@ -407,7 +424,7 @@ where
     ) -> (Vec<ImportRow<StatementLineDraft>>, usize) {
         let mut rows = Vec::new();
         let mut refused = 0;
-        for transaction in transactions.into_iter().take(MAX_STATEMENT_LINES) {
+        for transaction in transactions {
             let draft = StatementLineDraft {
                 posted_on: transaction.posted_on.to_string(),
                 amount: transaction.amount,
@@ -433,13 +450,31 @@ where
         (rows, refused)
     }
 
-    /// An aggregator that could not answer: the connection says why, and the pull fails so that it is tried again, unless the
-    /// aggregator refused it, which no retry changes.
+    /// An aggregator that could not answer: the connection says why, and the pull fails so that the queue tries it again.
     async fn failed(
         &self,
         connection: &BankConnection,
         error: AggregatorError,
     ) -> Result<SyncReport, ApplicationError> {
+        // The aggregator no longer accepts this connection (it was removed there, the consent was revoked): no retry changes
+        // that, so it waits for the person like a bank that asks for them, instead of being queued every hour for ever.
+        if let AggregatorError::Refused(_) = &error {
+            tracing::warn!(%error, "a bank aggregator refused a connection");
+            if connection.status() != ConnectionStatus::NeedsAttention {
+                self.move_to(
+                    connection,
+                    ConnectionStatus::NeedsAttention,
+                    Some(REFUSED_REASON),
+                )
+                .await?;
+            }
+            return Ok(SyncReport {
+                created: 0,
+                skipped: 0,
+                refused: 0,
+                needs_attention: true,
+            });
+        }
         let reason = sync_error(&error.to_string());
         let mut noted = connection.clone();
         noted = noted.with_status(noted.status(), Some(&reason));
@@ -447,6 +482,27 @@ where
             tracing::error!(error = %storage, "why a bank pull failed could not be written");
         }
         Err(failure(error))
+    }
+
+    /// Moves a connection to `status`, in the name of whoever connected it, and says why.
+    async fn move_to(
+        &self,
+        connection: &BankConnection,
+        status: ConnectionStatus,
+        reason: Option<&str>,
+    ) -> Result<BankConnection, ApplicationError> {
+        let after = connection.with_status(status, reason);
+        let audit = audit_entry(
+            &after,
+            connection.connected_by(),
+            AuditAction::Updated,
+            bank_connection_changes(connection, &after),
+        );
+        self.connections
+            .update_status(&after, &audit)
+            .await
+            .map_err(missing)?;
+        Ok(after)
     }
 
     async fn enqueue(

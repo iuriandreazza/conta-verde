@@ -37,9 +37,11 @@ impl BankConnectionRepository for InMemoryBankConnectionRepository {
         ensure_audit_describes(audit, connection)?;
         let mut state = self.state.lock().expect("repository lock poisoned");
         let taken = state.connections.iter().any(|stored| {
-            stored.company_id() == connection.company_id()
-                && stored.bank_account_id() == connection.bank_account_id()
-                && stored.status() != ConnectionStatus::Disconnected
+            stored.status() != ConnectionStatus::Disconnected
+                && ((stored.company_id() == connection.company_id()
+                    && stored.bank_account_id() == connection.bank_account_id())
+                    || (stored.provider() == connection.provider()
+                        && stored.account_id() == connection.account_id()))
         });
         if taken {
             return Err(RepositoryError::DuplicateBankConnection);
@@ -59,8 +61,14 @@ impl BankConnectionRepository for InMemoryBankConnectionRepository {
         let position = state
             .position(connection.company_id(), connection.id())
             .ok_or(RepositoryError::NotFound)?;
-        // Only the status and its reason move: what a pull wrote meanwhile (the day) stays.
+        // Only the status and its reason move: what a pull wrote meanwhile (the day) stays. An ended connection stays ended: a
+        // pull that was half way when it was ended must not bring it back.
         let stored = &state.connections[position];
+        if stored.status() == ConnectionStatus::Disconnected
+            && connection.status() != ConnectionStatus::Disconnected
+        {
+            return Err(RepositoryError::NotFound);
+        }
         let next = stored.with_status(connection.status(), connection.last_error());
         state.connections[position] = next;
         state.audit.record(audit);
@@ -140,6 +148,15 @@ impl BankConnectionRepository for InMemoryBankConnectionRepository {
         found.sort_by_key(|stored| (stored.last_synced_on(), stored.id().as_uuid()));
         found.truncate(limit);
         Ok(found)
+    }
+
+    async fn item_is_live(&self, provider: &str, item_id: &str) -> Result<bool, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        Ok(state.connections.iter().any(|stored| {
+            stored.provider() == provider
+                && stored.item_id() == item_id
+                && stored.status() != ConnectionStatus::Disconnected
+        }))
     }
 
     async fn history(

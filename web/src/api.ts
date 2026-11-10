@@ -2179,9 +2179,7 @@ export const api = {
   listBankConnections: (companyId: string) =>
     request<BankConnectionList>(`/companies/${companyId}/bank-connections`),
   aggregatedBankAccounts: (companyId: string, itemId: string) =>
-    request<{ items: AggregatedBankAccount[] }>(
-      `/companies/${companyId}/bank-connections/accounts?item_id=${encodeURIComponent(itemId)}`,
-    ),
+    post<{ items: AggregatedBankAccount[] }>(`/companies/${companyId}/bank-connections/accounts`, { item_id: itemId }),
   connectBankAccount: (companyId: string, input: BankConnectionInput) =>
     post<BankConnection>(`/companies/${companyId}/bank-connections`, input),
   syncBankConnection: (companyId: string, id: string) =>

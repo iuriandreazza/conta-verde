@@ -9,7 +9,10 @@ use sqlx::{PgPool, Row};
 use crate::postgres::storage_error;
 use crate::postgres_audit;
 
-const LIVE_UNIQUE_INDEX: &str = "bank_connections_one_live_key";
+const LIVE_UNIQUE_INDEXES: [&str; 2] = [
+    "bank_connections_one_live_key",
+    "bank_connections_one_live_account",
+];
 
 const SELECT_CONNECTIONS: &str = "SELECT id, company_id, bank_account_id, provider, item_id, account_id, status, \
      to_char(last_synced_on, 'YYYY-MM-DD') AS last_synced_on, last_error, created_by_id, created_by_name, created_at \
@@ -75,7 +78,11 @@ impl BankConnectionRepository for PostgresBankConnectionRepository {
         .execute(&mut *tx)
         .await
         .map_err(|error| match &error {
-            sqlx::Error::Database(db) if db.constraint() == Some(LIVE_UNIQUE_INDEX) => {
+            sqlx::Error::Database(db)
+                if db
+                    .constraint()
+                    .is_some_and(|name| LIVE_UNIQUE_INDEXES.contains(&name)) =>
+            {
                 RepositoryError::DuplicateBankConnection
             }
             _ => storage_error(error),
@@ -91,9 +98,11 @@ impl BankConnectionRepository for PostgresBankConnectionRepository {
     ) -> Result<(), RepositoryError> {
         ensure_audit_describes(audit, connection)?;
         let mut tx = self.pool.begin().await.map_err(storage_error)?;
-        // Only the status and its reason: the day a pull reached is not overwritten with an older copy.
+        // Only the status and its reason: the day a pull reached is not overwritten with an older copy. An ended connection stays
+        // ended: a pull that was half way when it was ended must not bring it back.
         let result = sqlx::query(
-            "UPDATE bank_connections SET status = $3, last_error = $4 WHERE id = $1 AND company_id = $2",
+            "UPDATE bank_connections SET status = $3, last_error = $4 \
+             WHERE id = $1 AND company_id = $2 AND (status <> 'disconnected' OR $3 = 'disconnected')",
         )
         .bind(connection.id().as_uuid())
         .bind(connection.company_id().as_uuid())
@@ -183,6 +192,18 @@ impl BankConnectionRepository for PostgresBankConnectionRepository {
         .await
         .map_err(storage_error)?;
         rows.iter().map(connection_from_row).collect()
+    }
+
+    async fn item_is_live(&self, provider: &str, item_id: &str) -> Result<bool, RepositoryError> {
+        sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM bank_connections \
+             WHERE provider = $1 AND item_id = $2 AND status <> 'disconnected')",
+        )
+        .bind(provider)
+        .bind(item_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(storage_error)
     }
 
     async fn history(

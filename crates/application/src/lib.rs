@@ -224,7 +224,8 @@ pub use purchase_service::{PurchaseOrderPage, PurchaseService, ReceiptRecord};
 pub use quote_repository::{LinkChange, NumberCursor, NumberSort, QuoteQuery, QuoteRepository};
 pub use quote_service::{QuotePage, QuoteService, SentQuote};
 pub use reconciliation_service::{
-    EntryFromLine, ReconciliationService, SUGGESTION_WINDOW_DAYS, StatementLinePage, Suggestion,
+    EntryFromLine, MAX_STATEMENT_LINES, ReconciliationService, SUGGESTION_WINDOW_DAYS,
+    StatementLinePage, Suggestion,
 };
 pub use recurrence_repository::{RecurrenceQuery, RecurrenceRepository};
 pub use recurrence_service::{

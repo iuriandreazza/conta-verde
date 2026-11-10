@@ -13,7 +13,7 @@ use crate::access::CompanyAccess;
 use crate::clock::{now_millis, today};
 use crate::error::ApiError;
 use crate::history::HistoryEntryResponse;
-use crate::json::{ApiJson, ApiQuery};
+use crate::json::ApiJson;
 use crate::{Ports, SharedState};
 
 #[derive(Deserialize)]
@@ -33,9 +33,10 @@ pub(crate) struct TokenRequest {
     item_id: Option<String>,
 }
 
+/// Asked with a `POST`, so that only who may write finance spends the installation's calls to the aggregator on an id of their choice.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct AccountsQuery {
+pub(crate) struct AccountsRequest {
     item_id: String,
 }
 
@@ -164,9 +165,9 @@ pub(crate) async fn connect_token<X: Ports>(
 pub(crate) async fn aggregator_accounts<X: Ports>(
     State(state): State<SharedState<X>>,
     CompanyAccess(_, _): CompanyAccess,
-    ApiQuery(query): ApiQuery<AccountsQuery>,
+    ApiJson(request): ApiJson<AccountsRequest>,
 ) -> Result<Json<AccountListResponse>, ApiError> {
-    let accounts = state.bank_sync.accounts_of(&query.item_id).await?;
+    let accounts = state.bank_sync.accounts_of(&request.item_id).await?;
     Ok(Json(AccountListResponse {
         items: accounts.into_iter().map(AccountResponse::from).collect(),
     }))

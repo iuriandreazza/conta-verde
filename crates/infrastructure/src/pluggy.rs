@@ -72,8 +72,9 @@ impl PluggyAggregator {
             .map_err(unreachable)?;
         let status = response.status();
         if !status.is_success() {
-            // The credentials are the operator's: a refusal is theirs to fix, and is said as such, without the answer.
-            return Err(AggregatorError::Refused(format!(
+            // The credentials are the operator's, for every company: a refusal is theirs to fix, so it is a failure to try again and
+            // never a verdict on one connection. Said without the answer.
+            return Err(AggregatorError::Unavailable(format!(
                 "Pluggy refused the credentials ({status})"
             )));
         }
@@ -125,7 +126,7 @@ impl PluggyAggregator {
                 status => AggregatorError::Refused(format!("Pluggy answered {status}")),
             });
         }
-        Err(AggregatorError::Refused(
+        Err(AggregatorError::Unavailable(
             "Pluggy refused the API key".to_owned(),
         ))
     }
@@ -320,24 +321,37 @@ fn transaction_of(raw: &Value) -> Option<AggregatedTransaction> {
     }
     let id = raw["id"].as_str()?.to_owned();
     let posted_on = CalendarDate::parse(raw["date"].as_str()?.get(..10)?)?;
-    let magnitude = Decimal::from_str(&raw["amount"].as_number()?.to_string())
-        .ok()?
-        .abs();
-    // A bank account's amount has no sign convention the documentation states: the direction is `type`.
-    let amount = match raw["type"].as_str() {
-        Some("CREDIT") => magnitude,
-        Some("DEBIT") => -magnitude,
-        _ => Decimal::from_str(&raw["amount"].as_number()?.to_string()).ok()?,
+    // What cannot be read as an amount or a description is handed on as it came (or empty): the sync refuses it, counts it and goes
+    // on, instead of the movement vanishing here without a trace.
+    let amount = match amount_of(raw) {
+        Some(amount) => amount.normalize().to_string(),
+        None => raw["amount"].to_string(),
     };
-    let description = raw["description"]
-        .as_str()
-        .or_else(|| raw["descriptionRaw"].as_str())?
+    let description = ["description", "descriptionRaw"]
+        .iter()
+        .filter_map(|field| raw[*field].as_str())
+        .find(|text| !text.trim().is_empty())
+        .unwrap_or_default()
         .to_owned();
     Some(AggregatedTransaction {
         id,
         posted_on,
-        amount: amount.normalize().to_string(),
+        amount,
         description,
+    })
+}
+
+fn amount_of(raw: &Value) -> Option<Decimal> {
+    let text = raw["amount"].as_number()?.to_string();
+    // A very small or very large number is printed in scientific notation.
+    let value = Decimal::from_str(&text)
+        .or_else(|_| Decimal::from_scientific(&text))
+        .ok()?;
+    // A bank account's amount has no sign convention the documentation states: the direction is `type`.
+    Some(match raw["type"].as_str() {
+        Some("CREDIT") => value.abs(),
+        Some("DEBIT") => -value.abs(),
+        _ => value,
     })
 }
 
@@ -566,7 +580,7 @@ mod tests {
         world.lock().unwrap().credentials_ok = false;
         let aggregator = pluggy(&world).await;
         match aggregator.accounts("item-1").await.unwrap_err() {
-            AggregatorError::Refused(reason) => {
+            AggregatorError::Unavailable(reason) => {
                 assert!(reason.contains("credentials") && !reason.contains("secret reason"));
                 assert!(!reason.contains(GOOD_SECRET));
             }
@@ -600,8 +614,9 @@ mod tests {
             .unwrap();
         let by_id: HashMap<&str, &AggregatedTransaction> =
             found.iter().map(|t| (t.id.as_str(), t)).collect();
-        // The pending one and the one with no description are left out; the three pages' worth are all there.
-        assert_eq!(by_id.len(), 4, "{found:?}");
+        // The pending one is left out; the one with no description is handed on empty, for the sync to refuse and count.
+        assert_eq!(by_id.len(), 5, "{found:?}");
+        assert_eq!(by_id["t6"].description, "");
         assert_eq!(
             (by_id["t1"].amount.as_str(), by_id["t1"].posted_on),
             ("-212.45", day("2026-11-01"))

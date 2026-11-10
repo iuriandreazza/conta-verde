@@ -1153,6 +1153,68 @@ pub fn sales_tell_what_happens_to_them(events: &[conta_verde_application::Domain
     }));
 }
 
+/// A pull that was half way when its connection was ended writes its status late: the connection stays ended, and the bank account
+/// stays free for another one.
+pub async fn an_ended_connection_stays_ended<C: BankConnectionRepository>(
+    connections: &C,
+    company: CompanyId,
+    bank_account: BankAccountId,
+) {
+    let ana = actor();
+    let entry =
+        |connection: &conta_verde_domain::BankConnection, action| conta_verde_domain::AuditEntry {
+            company_id: company,
+            actor: ana.clone(),
+            entity: conta_verde_domain::AuditEntity::BankConnection,
+            entity_id: connection.id().as_uuid(),
+            action,
+            changes: Vec::new(),
+        };
+    let connection = conta_verde_domain::BankConnection::new(
+        conta_verde_domain::BankConnectionId::generate(),
+        company,
+        bank_account,
+        "fake",
+        "item-ended",
+        "acc-ended",
+        ana.clone(),
+        NOW,
+    )
+    .unwrap();
+    connections
+        .save(&connection, &entry(&connection, AuditAction::Created))
+        .await
+        .unwrap();
+    let ended = connection.with_status(ConnectionStatus::Disconnected, None);
+    connections
+        .update_status(&ended, &entry(&ended, AuditAction::Updated))
+        .await
+        .unwrap();
+    // The pull that read it while it was live finds the bank asking for the person, and writes that.
+    let late = connection.with_status(
+        ConnectionStatus::NeedsAttention,
+        Some("the bank login failed"),
+    );
+    assert_eq!(
+        connections
+            .update_status(&late, &entry(&late, AuditAction::Updated))
+            .await
+            .unwrap_err(),
+        RepositoryError::NotFound
+    );
+    let stored = connections
+        .find(company, connection.id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.status(), ConnectionStatus::Disconnected);
+    // Ending it again is the same, and the account takes another connection.
+    connections
+        .update_status(&ended, &entry(&ended, AuditAction::Updated))
+        .await
+        .unwrap();
+}
+
 /// A bank connection links a bank account of the company to an account at the aggregator and pulls its statement as statement
 /// lines, once however many times the same movement is pulled, in the name of whoever connected it; the bank needing the person
 /// stops the pull and says so; an aggregator that is down is tried again by the queue; and a connection that is ended is not pulled.
@@ -1330,7 +1392,26 @@ pub async fn syncs_bank_connections<C, S, E, T, F, Q>(
             .iter()
             .any(|change| change.field == "status")
     );
-    assert!(sync.sync(company, connection.id(), tomorrow).await.is_err());
+    // Asking while the bank still waits changes nothing and writes nothing more.
+    let still = sync.sync(company, connection.id(), tomorrow).await.unwrap();
+    assert!(still.needs_attention);
+    assert_eq!(
+        sync.history(company, connection.id()).await.unwrap().len(),
+        2
+    );
+    // Once the person has done what the bank asked, asking again brings the connection back and pulls.
+    aggregator.set_state("item-1", ItemState::Ready);
+    let back = sync.sync(company, connection.id(), tomorrow).await.unwrap();
+    assert!(!back.needs_attention);
+    let revived = sync.list(company).await.unwrap().remove(0);
+    assert_eq!(
+        (revived.status(), revived.last_error()),
+        (ConnectionStatus::Connected, None)
+    );
+    assert_eq!(
+        sync.history(company, connection.id()).await.unwrap().len(),
+        3
+    );
     assert_eq!(stored().await.len(), 4);
 
     // Ending it frees the bank account for another connection, tells the aggregator, and is the same however often it is asked.
@@ -1345,7 +1426,7 @@ pub async fn syncs_bank_connections<C, S, E, T, F, Q>(
         .unwrap();
     assert_eq!(
         sync.history(company, connection.id()).await.unwrap().len(),
-        3
+        4
     );
     assert_eq!(
         sync.disconnect(other_company, &ana, connection.id())
@@ -1362,8 +1443,16 @@ pub async fn syncs_bank_connections<C, S, E, T, F, Q>(
         .connect(company, &ana, main, "item-1", "acc-1", now)
         .await
         .unwrap();
+    // An account at the aggregator feeds one bank account: another bank account cannot take the same one while it is live.
+    assert_eq!(
+        sync.connect(company, &ana, reserve, "item-1", "acc-1", now)
+            .await
+            .unwrap_err(),
+        ApplicationError::Repository(RepositoryError::DuplicateBankConnection)
+    );
+    aggregator.add_account("item-1", "acc-2", "Poupanca");
     let other = sync
-        .connect(company, &ana, reserve, "item-1", "acc-1", now)
+        .connect(company, &ana, reserve, "item-1", "acc-2", now)
         .await
         .unwrap();
     // Both were queued when they were made; the pass that finds what is due queues what has not pulled through the day.
@@ -1399,8 +1488,32 @@ pub async fn syncs_bank_connections<C, S, E, T, F, Q>(
         );
     }
     assert_eq!(sync.enqueue_due(today, now / 1000).await.unwrap(), 0);
-    // A connection that was ended while its job waited pulls nothing.
+    // An aggregator that no longer accepts the connection waits for the person like a bank that asks for them (no retry changes
+    // it), and comes back when asked again once it accepts it.
+    aggregator.set_refused(true);
+    let refused = sync.sync(company, other.id(), today).await.unwrap();
+    assert!(refused.needs_attention);
+    let waiting = sync
+        .list(company)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|c| c.id() == other.id())
+        .unwrap();
+    assert_eq!(waiting.status(), ConnectionStatus::NeedsAttention);
+    assert!(waiting.last_error().is_some());
+    aggregator.set_refused(false);
+    assert!(
+        !sync
+            .sync(company, other.id(), today)
+            .await
+            .unwrap()
+            .needs_attention
+    );
+    // A connection that was ended while its job waited pulls nothing. The aggregator's item is ended only when no connection
+    // still uses it: another account of the same item is connected.
     sync.disconnect(company, &ana, other.id()).await.unwrap();
+    assert_eq!(aggregator.disconnected(), ["item-1"]);
     assert!(
         sync.enqueue_due(CalendarDate::parse("2026-11-12").unwrap(), now / 1000)
             .await
@@ -1422,4 +1535,6 @@ pub async fn syncs_bank_connections<C, S, E, T, F, Q>(
         .find(|c| c.id() == other.id())
         .unwrap();
     assert_eq!(ended_one.last_synced_on(), Some(today));
+    sync.disconnect(company, &ana, again.id()).await.unwrap();
+    assert_eq!(aggregator.disconnected(), ["item-1", "item-1"]);
 }

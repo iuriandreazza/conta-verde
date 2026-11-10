@@ -66,7 +66,7 @@ describe("the bank connections page", () => {
     mockApi((url, init) => {
       if (url === "/api/auth/me") return { status: 200, body: profile };
       if (url.includes("/bank-accounts")) return { status: 200, body: ACCOUNTS };
-      if (url.includes("/bank-connections/accounts?item_id=item-9")) {
+      if (url === "/api/companies/c1/bank-connections/accounts" && init?.method === "POST" && String(init.body).includes("item-9")) {
         return { status: 200, body: { items: [{ id: "acc-9", name: "Conta Corrente", kind: "BANK", number: "1234-5" }, { id: "acc-8", name: "Poupança", kind: "BANK", number: null }] } };
       }
       if (url === "/api/companies/c1/bank-connections" && init?.method === "POST") {

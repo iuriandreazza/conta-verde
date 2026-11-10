@@ -26,9 +26,9 @@ async fn a_bank_account_is_connected_and_its_statement_comes_in_once_as_lines_to
     let token = send(&app, json_request("POST", &format!("{uri}/connect-token"), Some(&cookie), json!({}))).await;
     assert_eq!(token.status, StatusCode::OK, "{}", token.body);
     assert!(token.body["access_token"].as_str().unwrap().starts_with("fake-token-"));
-    let accounts = send(&app, get_request(&format!("{uri}/accounts?item_id=item-1"), Some(&cookie))).await;
+    let accounts = send(&app, json_request("POST", &format!("{uri}/accounts"), Some(&cookie), json!({ "item_id": "item-1" }))).await;
     assert_eq!(accounts.body["items"][0]["id"], "acc-1");
-    let unknown = send(&app, get_request(&format!("{uri}/accounts?item_id=nope"), Some(&cookie))).await;
+    let unknown = send(&app, json_request("POST", &format!("{uri}/accounts"), Some(&cookie), json!({ "item_id": "nope" }))).await;
     assert_eq!(unknown.status, StatusCode::BAD_GATEWAY);
     assert!(!unknown.body.to_string().contains("no such item"));
 
@@ -92,6 +92,12 @@ async fn a_bank_account_is_connected_and_its_statement_comes_in_once_as_lines_to
         (waiting.body["items"][0]["status"].as_str(), waiting.body["items"][0]["last_error"].as_str()),
         (Some("needs_attention"), Some("the bank login failed"))
     );
+    // When the person has done what the bank asked, pulling again brings the connection back.
+    aggregator.set_state("item-1", conta_verde_application::ItemState::Ready);
+    let back = send(&app, json_request("POST", &format!("{uri}/{id}/sync"), Some(&cookie), json!({}))).await;
+    assert_eq!((back.status, back.body["needs_attention"].clone()), (StatusCode::OK, json!(false)));
+    let revived = send(&app, get_request(&uri, Some(&cookie))).await;
+    assert_eq!((revived.body["items"][0]["status"].as_str(), revived.body["items"][0]["last_error"].clone()), (Some("connected"), Value::Null));
     // The trail says who connected it and what changed, and no secret exists to say.
     let history = send(&app, get_request(&format!("{uri}/{id}/history"), Some(&cookie))).await;
     assert!(history.body.as_array().unwrap().len() >= 2);
@@ -137,10 +143,35 @@ async fn bank_connections_follow_the_finance_role() {
         assert_eq!(send(&app, get_request(&uri, Some(&member))).await.status, StatusCode::OK, "{role:?}");
         let attempt = send(&app, json_request("POST", &uri, Some(&member), body.clone())).await;
         assert_eq!(attempt.status != StatusCode::FORBIDDEN, writes, "{role:?} {}", attempt.body);
+        // Looking up what the aggregator holds spends the installation's calls: only who writes may.
+        let lookup = send(&app, json_request("POST", &format!("{uri}/accounts"), Some(&member), json!({ "item_id": "item-1" }))).await;
+        assert_eq!(lookup.status != StatusCode::FORBIDDEN, writes, "{role:?}");
         if writes {
             // Only the one connection can be made: the others were refused before they could be.
             assert_eq!(attempt.status, StatusCode::CREATED);
         }
     }
     assert_eq!(send(&app, get_request(&uri, None)).await.status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn a_pull_larger_than_one_import_is_stored_whole() {
+    let (app, _) = entry_app_with_identities();
+    let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+    let account = registered_account(&app, &cookie, company_id, "Caixa").await;
+    let uri = format!("/companies/{company_id}/bank-connections");
+    let aggregator = this_aggregator().with_account("item-big", "acc-big", "Conta");
+    let day = crate::clock::today().to_string();
+    // One more than an import takes: the extra one is a movement like any other and must not be dropped.
+    for number in 0..=conta_verde_application::MAX_STATEMENT_LINES {
+        aggregator.add_transaction("acc-big", &format!("tx-{number}"), &day, "10", &format!("MOV {number}"));
+    }
+    let made = send(
+        &app,
+        json_request("POST", &uri, Some(&cookie), json!({ "bank_account_id": account, "item_id": "item-big", "account_id": "acc-big" })),
+    )
+    .await;
+    let id = made.body["id"].as_str().unwrap().to_owned();
+    let synced = send(&app, json_request("POST", &format!("{uri}/{id}/sync"), Some(&cookie), json!({}))).await;
+    assert_eq!(synced.body["created"].as_u64(), Some(conta_verde_application::MAX_STATEMENT_LINES as u64 + 1), "{}", synced.body);
 }

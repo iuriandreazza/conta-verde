@@ -231,5 +231,14 @@ mod tests {
             seed.other_bank_account,
         )
         .await;
+
+        let third = CompanyId::generate();
+        let third_seed = registers.seed(third).await;
+        crate::contract_integrations::an_ended_connection_stays_ended(
+            &crate::InMemoryBankConnectionRepository::default(),
+            third,
+            third_seed.bank_account,
+        )
+        .await;
     }
 }

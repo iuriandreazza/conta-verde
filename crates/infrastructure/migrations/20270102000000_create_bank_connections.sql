@@ -40,5 +40,9 @@ CREATE TABLE bank_connections (
 -- A bank account is fed by one connection at a time: what makes connecting twice, or in two places, safe.
 CREATE UNIQUE INDEX bank_connections_one_live_key ON bank_connections (company_id, bank_account_id)
     WHERE status <> 'disconnected';
+-- An account at the aggregator feeds one bank account in the whole installation: another company that learns its id cannot take
+-- the statement of one that is connected.
+CREATE UNIQUE INDEX bank_connections_one_live_account ON bank_connections (provider, account_id)
+    WHERE status <> 'disconnected';
 CREATE INDEX bank_connections_company_idx ON bank_connections (company_id, created_at DESC, id DESC);
 CREATE INDEX bank_connections_due_idx ON bank_connections (last_synced_on NULLS FIRST) WHERE status = 'connected';
