@@ -97,7 +97,8 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0079](0079-nfeio-adapter.md) | The NFE.io adapter | accepted | 7 |
 | [0080](0080-nfse-plan-and-settings.md) | NFS-e: the plan and what the settings must say first | accepted | 7 |
 | [0081](0081-nfse-documents.md) | NFS-e documents, the DPS numbering and the port's NFS-e calls | accepted | 7 |
-| [0082](0082-cloud-erp-api-reader.md) | Reading a company's books from the cloud ERP's API | accepted | 7 |
+| [0082](0082-nfce-and-point-of-sale.md) | NFC-e at the counter and the minimal point of sale | accepted | 7 |
+| [0090](0090-cloud-erp-api-reader.md) | Reading a company's books from the cloud ERP's API | accepted | 7 |
 
 ## Template
 

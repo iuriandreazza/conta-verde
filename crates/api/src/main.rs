@@ -13,9 +13,10 @@ use conta_verde_application::{
 use conta_verde_application::{
     AuthorizedNfse, BrandedEmailSender, ChargeService, CollectionService, DocumentOutcome,
     DunningService, EmailError, EmailMessage, EmailSender, EventOutcome, EventQuery, FiscalGateway,
-    GatewayError, MessageError, MessageSender, NfeRequest, NfseRequest, PaymentPageService,
-    PaymentProvider, PaymentWebhookService, ProviderCharge, ProviderChargeRequest, ProviderError,
-    ProviderEvent, QueuedEmailSender, Submission, TextMessage, WebhookError, WebhookHeaders,
+    GatewayError, MessageError, MessageSender, NfceRequest, NfeRequest, NfseRequest,
+    PaymentPageService, PaymentProvider, PaymentWebhookService, ProviderCharge,
+    ProviderChargeRequest, ProviderError, ProviderEvent, QueuedEmailSender, Submission,
+    TextMessage, WebhookError, WebhookHeaders,
 };
 use conta_verde_domain::FiscalSettings;
 use conta_verde_infrastructure::{
@@ -697,6 +698,31 @@ impl FiscalGateway for ConfiguredFiscalGateway {
 
     fn issues_nfse(&self) -> bool {
         on_gateway!(self, gateway => gateway.issues_nfse())
+    }
+
+    fn issues_nfce(&self) -> bool {
+        on_gateway!(self, gateway => gateway.issues_nfce())
+    }
+
+    async fn submit_nfce(&self, request: &NfceRequest) -> Result<Submission, GatewayError> {
+        on_gateway!(self, gateway => gateway.submit_nfce(request).await)
+    }
+
+    async fn query_nfce(
+        &self,
+        issuer: &FiscalSettings,
+        reference: &str,
+    ) -> Result<DocumentOutcome, GatewayError> {
+        on_gateway!(self, gateway => gateway.query_nfce(issuer, reference).await)
+    }
+
+    async fn cancel_nfce(
+        &self,
+        issuer: &FiscalSettings,
+        reference: &str,
+        reason: &str,
+    ) -> Result<EventOutcome, GatewayError> {
+        on_gateway!(self, gateway => gateway.cancel_nfce(issuer, reference, reason).await)
     }
 
     async fn submit_nfse(

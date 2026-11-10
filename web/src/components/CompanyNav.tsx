@@ -58,6 +58,7 @@ const AREAS: NavArea[] = [
     items: [
       { path: "/quotes", label: "Orçamentos", icon: FileTextIcon },
       { path: "/sales", label: "Vendas", icon: HandCoinsIcon },
+      { path: "/pos", label: "Caixa", icon: HandCoinsIcon },
       { path: "/contracts", label: "Contratos", icon: RotateCCWIcon },
       { path: "/commissions", label: "Comissões", icon: CircleDollarSignIcon },
       { path: "/price-lists", label: "Tabelas de preço", icon: LayersIcon },

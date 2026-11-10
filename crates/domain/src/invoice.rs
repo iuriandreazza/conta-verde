@@ -89,6 +89,11 @@ impl AccessKey {
         &self.0[6..20]
     }
 
+    /// The model of the document, two digits: 55 for an NF-e, 65 for an NFC-e.
+    pub fn model(&self) -> &str {
+        &self.0[20..22]
+    }
+
     /// The series, three digits.
     pub fn series(&self) -> &str {
         &self.0[22..25]

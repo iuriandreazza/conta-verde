@@ -677,7 +677,7 @@ export interface Dps {
 /** An NF-e or an NFS-e on its way to, or past, the authority (ADR 0076, ADR 0081). */
 export interface FiscalDocument {
   id: string;
-  kind: "nfe" | "nfse";
+  kind: "nfe" | "nfce" | "nfse";
   status: FiscalDocumentStatus;
   /** The cancellation waiting for the authority's answer, or accepted (a gateway may answer it later, ADR 0078). */
   cancellation: FiscalEvent | null;
@@ -732,6 +732,44 @@ export type PaymentForm =
   | "transfer"
   | "no_payment"
   | "other";
+
+export type SpecialTaxRegime =
+  | "none"
+  | "cooperative_act"
+  | "estimate"
+  | "municipal_microenterprise"
+  | "notary_or_registrar"
+  | "autonomous_professional"
+  | "professionals_society"
+  | "other";
+
+/** What the person chooses to issue an NFS-e: nothing has a default (ADR 0081); the ISSQN terms are the nature's. */
+export interface IssueServiceChoices {
+  sale_id: string;
+  nature_code: string;
+  /** The competence day, `YYYY-MM-DD`. */
+  competence: string;
+  /** The IBGE code of the municipality where the service was rendered: seven digits. */
+  service_city_code: string;
+  special_regime: SpecialTaxRegime;
+}
+
+/** What is paid with one form, as a decimal string. */
+export interface ConsumerPayment {
+  form: PaymentForm;
+  amount: string;
+}
+
+/** What the person chooses to issue an NFC-e at the counter: nothing has a default and what is paid adds up to the total (ADR 0082). */
+export interface IssueConsumerChoices {
+  sale_id: string;
+  nature_code: string;
+  origin: number;
+  presence: BuyerPresence;
+  /** Whether the consumer is named on the invoice (the sale's customer, with their CPF or CNPJ). */
+  identify_consumer: boolean;
+  payments: ConsumerPayment[];
+}
 
 /** Every tax choice is the person's: nothing has a default (ADR 0076). */
 export interface IssueChoices {
@@ -2196,6 +2234,14 @@ export const api = {
     post<FiscalDocument>(`/companies/${companyId}/fiscal/documents`, choices),
   resendFiscalDocument: (companyId: string, id: string, choices: IssueChoices) =>
     post<FiscalDocument>(`/companies/${companyId}/fiscal/documents/${id}/resend`, choices),
+  issueConsumerDocument: (companyId: string, choices: IssueConsumerChoices) =>
+    post<FiscalDocument>(`/companies/${companyId}/fiscal/consumer-documents`, choices),
+  resendConsumerDocument: (companyId: string, id: string, choices: IssueConsumerChoices) =>
+    post<FiscalDocument>(`/companies/${companyId}/fiscal/documents/${id}/resend-consumer`, choices),
+  issueServiceDocument: (companyId: string, choices: IssueServiceChoices) =>
+    post<FiscalDocument>(`/companies/${companyId}/fiscal/service-documents`, choices),
+  resendServiceDocument: (companyId: string, id: string, choices: IssueServiceChoices) =>
+    post<FiscalDocument>(`/companies/${companyId}/fiscal/documents/${id}/resend-service`, choices),
   refreshFiscalDocument: (companyId: string, id: string) =>
     post<FiscalDocument>(`/companies/${companyId}/fiscal/documents/${id}/refresh`),
   cancelFiscalDocument: (companyId: string, id: string, reason: string) =>
