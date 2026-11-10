@@ -32,6 +32,7 @@ mod entry_import;
 mod entry_repository;
 mod error;
 mod financial_entry_service;
+mod fiscal_document_repository;
 mod fiscal_gateway;
 mod fiscal_settings_repository;
 mod fiscal_settings_service;
@@ -134,6 +135,7 @@ pub use entry_repository::{
 };
 pub use error::{ApplicationError, AuthError, RepositoryError};
 pub use financial_entry_service::{FinancialEntryPage, FinancialEntryService};
+pub use fiscal_document_repository::FiscalDocumentRepository;
 pub use fiscal_gateway::{
     AcceptedEvent, AuthorizedDocument, BuyerPresence, Destination, DocumentOutcome, EventOutcome,
     FiscalGateway, GatewayError, NfeItem, NfeRecipient, NfeRequest, PaymentForm, Refusal,

@@ -3,10 +3,10 @@ use uuid::Uuid;
 use crate::line::lines_text;
 use crate::{
     AccountOpening, Attachment, BankAccount, Category, Charge, CollectionSettings, CommissionRule,
-    CompanyId, Contract, CostCenter, DocumentCheck, DunningPlan, FinancialEntry, FiscalSettings,
-    InventoryCount, LineMatch, PackageSchedule, Party, PaymentMethod, PaymentTerm, PeriodLock,
-    PriceList, Product, PurchaseOrder, PurchaseReceipt, Quote, Recurrence, Sale, SaleReturn,
-    Settlement, StatementLine, StockMovement, StockSettings, Tag, Transfer, UserId,
+    CompanyId, Contract, CostCenter, DocumentCheck, DunningPlan, FinancialEntry, FiscalDocument,
+    FiscalSettings, InventoryCount, LineMatch, PackageSchedule, Party, PaymentMethod, PaymentTerm,
+    PeriodLock, PriceList, Product, PurchaseOrder, PurchaseReceipt, Quote, Recurrence, Sale,
+    SaleReturn, Settlement, StatementLine, StockMovement, StockSettings, Tag, Transfer, UserId,
 };
 
 /// Who made a change. The name is a snapshot: history must keep reading the same after the user is
@@ -57,6 +57,7 @@ pub enum AuditEntity {
     PackageSchedule,
     /// One per company: the audit id is the company's.
     FiscalSettings,
+    FiscalDocument,
 }
 
 impl AuditEntity {
@@ -90,6 +91,7 @@ impl AuditEntity {
             Self::PeriodLock => "period_lock",
             Self::PackageSchedule => "package_schedule",
             Self::FiscalSettings => "fiscal_settings",
+            Self::FiscalDocument => "fiscal_document",
             Self::Settlement => "settlement",
             Self::Transfer => "transfer",
             Self::AccountOpening => "account_opening",
@@ -494,6 +496,20 @@ impl Audited for FiscalSettings {
 
     fn audit_id(&self) -> Uuid {
         self.company_id().as_uuid()
+    }
+}
+
+impl Audited for FiscalDocument {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::FiscalDocument
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.id().as_uuid()
     }
 }
 
@@ -1380,6 +1396,59 @@ pub fn fiscal_settings_changes(
     changes_between(
         fiscal_settings_fields(before),
         fiscal_settings_fields(after),
+    )
+}
+
+fn fiscal_document_fields(document: &FiscalDocument) -> Fields {
+    let authorization = document.authorization();
+    vec![
+        ("kind", Some(document.kind().key().to_owned())),
+        ("status", Some(document.status().key().to_owned())),
+        ("issuer_cnpj", Some(document.issuer_cnpj().to_owned())),
+        ("environment", Some(document.environment().key().to_owned())),
+        ("recipient", Some(document.recipient_name().to_owned())),
+        ("nature", Some(document.nature_code().to_owned())),
+        ("total", Some(document.total().as_decimal().to_string())),
+        ("issued_on", Some(document.issued_on().to_string())),
+        (
+            "access_key",
+            authorization.map(|auth| auth.access_key().as_str().to_owned()),
+        ),
+        (
+            "number",
+            authorization.map(|auth| auth.number().to_string()),
+        ),
+        (
+            "series",
+            authorization.map(|auth| auth.series().to_string()),
+        ),
+        (
+            "protocol",
+            authorization.and_then(|auth| auth.protocol().map(str::to_owned)),
+        ),
+        (
+            "refusal",
+            document
+                .refusal()
+                .map(|refusal| format!("{}: {}", refusal.code(), refusal.message())),
+        ),
+        ("note", document.note().map(str::to_owned)),
+    ]
+}
+
+/// What writing a fiscal document for the first time records.
+pub fn fiscal_document_creation_changes(document: &FiscalDocument) -> Vec<FieldChange> {
+    creation_from(fiscal_document_fields(document))
+}
+
+/// What a move of a fiscal document records: the fields that changed.
+pub fn fiscal_document_changes(
+    before: &FiscalDocument,
+    after: &FiscalDocument,
+) -> Vec<FieldChange> {
+    changes_between(
+        fiscal_document_fields(before),
+        fiscal_document_fields(after),
     )
 }
 

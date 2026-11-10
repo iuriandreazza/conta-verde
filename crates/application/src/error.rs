@@ -64,6 +64,12 @@ pub enum RepositoryError {
     QuoteChanged,
     /// The installment already has an open charge.
     ChargeAlreadyOpen,
+    /// The sale already has a live fiscal document of this kind.
+    FiscalDocumentAlreadyLive,
+    /// The fiscal document is no longer in the status the write was made from.
+    FiscalDocumentChanged,
+    /// The fiscal document already has a file of this kind.
+    DuplicateFiscalFile,
     Storage(String),
 }
 
@@ -329,6 +335,13 @@ impl fmt::Display for RepositoryError {
             Self::SaleHasReturns => f.write_str("the sale has returns"),
             Self::QuoteChanged => f.write_str("the quote was changed meanwhile"),
             Self::ChargeAlreadyOpen => f.write_str("the installment already has an open charge"),
+            Self::FiscalDocumentAlreadyLive => {
+                f.write_str("the sale already has a fiscal document in progress or authorized")
+            }
+            Self::FiscalDocumentChanged => f.write_str("the fiscal document was changed meanwhile"),
+            Self::DuplicateFiscalFile => {
+                f.write_str("the fiscal document already has a file of this kind")
+            }
             Self::Storage(message) => write!(f, "storage failure: {message}"),
         }
     }
