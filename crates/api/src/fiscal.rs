@@ -3,7 +3,8 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderValue, header};
 use axum::response::{IntoResponse, Response};
 use conta_verde_application::{
-    ApplicationError, BuyerPresence, FiscalGateway, IssueNfe, PaymentForm,
+    ApplicationError, BuyerPresence, FiscalDocumentCursor, FiscalDocumentQuery, FiscalGateway,
+    IssueNfe, PaymentForm,
 };
 use conta_verde_domain::{
     AddressDraft, FiscalDocument, FiscalDocumentId, FiscalEnvironment, FiscalEvent, FiscalEventId,
@@ -16,7 +17,7 @@ use uuid::Uuid;
 use crate::access::CompanyAccess;
 use crate::error::ApiError;
 use crate::history::HistoryEntryResponse;
-use crate::json::ApiJson;
+use crate::json::{ApiJson, ApiQuery};
 use crate::parties::{AddressRequest, AddressResponse};
 use crate::{Ports, SharedState};
 
@@ -689,4 +690,68 @@ pub(crate) async fn abandon_event<X: Ports>(
         .abandon_event(company_id, &actor, id)
         .await?;
     Ok(Json(FiscalEventResponse::from(&event)))
+}
+
+#[derive(Serialize)]
+pub(crate) struct FiscalDocumentPageResponse {
+    items: Vec<FiscalDocumentResponse>,
+    next_cursor: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct DocumentListQuery {
+    limit: Option<usize>,
+    after: Option<String>,
+    /// `draft`, `processing`, `authorized`, `contingency`, `rejected`, `denied` or `cancelled`.
+    status: Option<String>,
+    /// The sale a document was made from.
+    sale: Option<Uuid>,
+}
+
+// Opaque to clients: the id first, because it has a fixed shape.
+fn encode_cursor(cursor: &FiscalDocumentCursor) -> String {
+    format!("{}|{}", cursor.id.as_uuid(), cursor.issued_at_unix)
+}
+
+fn decode_cursor(raw: &str) -> Result<FiscalDocumentCursor, ApiError> {
+    let (id, moment) = raw.split_once('|').ok_or(ApiError::InvalidCursor)?;
+    Ok(FiscalDocumentCursor {
+        id: FiscalDocumentId::from_uuid(Uuid::parse_str(id).map_err(|_| ApiError::InvalidCursor)?),
+        issued_at_unix: moment.parse().map_err(|_| ApiError::InvalidCursor)?,
+    })
+}
+
+/// The company's documents, newest first, a page at a time.
+pub(crate) async fn list_documents<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, _): CompanyAccess,
+    ApiQuery(query): ApiQuery<DocumentListQuery>,
+) -> Result<Json<FiscalDocumentPageResponse>, ApiError> {
+    let status = query
+        .status
+        .as_deref()
+        .map(|raw| {
+            conta_verde_domain::FiscalDocumentStatus::parse(raw).ok_or(ApiError::InvalidQuery(
+                "invalid status: expected draft, processing, authorized, contingency, rejected, denied or cancelled",
+            ))
+        })
+        .transpose()?;
+    let filter = FiscalDocumentQuery {
+        status,
+        sale: query.sale.map(SaleId::from_uuid),
+    };
+    let after = query.after.as_deref().map(decode_cursor).transpose()?;
+    let page = state
+        .fiscal_documents
+        .list(company_id, &filter, after.as_ref(), query.limit)
+        .await?;
+    Ok(Json(FiscalDocumentPageResponse {
+        // The files are not listed here: the detail has them.
+        items: page
+            .items
+            .iter()
+            .map(|document| document_response(document, &[]))
+            .collect(),
+        next_cursor: page.next.as_ref().map(encode_cursor),
+    }))
 }
