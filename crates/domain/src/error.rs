@@ -54,6 +54,8 @@ pub enum DomainError {
     InvalidFiscalDocument(&'static str),
     /// A value the tax calculation cannot work on: more than cents, or a discount above the value.
     InvalidTaxCalculation,
+    /// Names the field of the gateway settings that is not valid. The value is never in the message.
+    InvalidGatewaySettings(&'static str),
     /// Names the field of a received invoice that is not valid, or the rule of the recipient's manifestation it breaks.
     InvalidReceivedInvoice(&'static str),
     ServiceNatureHasNoCfop,
@@ -239,6 +241,7 @@ impl fmt::Display for DomainError {
                 f.write_str("the fiscal document cannot move from its status to that one")
             }
             Self::InvalidFiscalDocument(field) => write!(f, "{field} of the fiscal document is not valid"),
+            Self::InvalidGatewaySettings(field) => write!(f, "{field} of the gateway settings is not valid"),
             Self::InvalidTaxCalculation => f.write_str(
                 "a tax is worked out from amounts in cents and a discount not above the value",
             ),

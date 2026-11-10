@@ -4,10 +4,10 @@ use crate::line::lines_text;
 use crate::{
     AccountOpening, Attachment, BankAccount, Category, Charge, CollectionSettings, CommissionRule,
     CompanyId, Contract, CostCenter, DocumentCheck, DunningPlan, FinancialEntry, FiscalDocument,
-    FiscalEvent, FiscalEventSubject, FiscalSettings, InventoryCount, LineMatch, PackageSchedule,
-    Party, PaymentMethod, PaymentTerm, PeriodLock, PriceList, Product, PurchaseOrder,
-    PurchaseReceipt, Quote, ReceivedInvoice, Recurrence, Sale, SaleReturn, Settlement,
-    StatementLine, StockMovement, StockSettings, Tag, Transfer, UserId,
+    FiscalEvent, FiscalEventSubject, FiscalSettings, GatewaySettings, InventoryCount, LineMatch,
+    PackageSchedule, Party, PaymentMethod, PaymentTerm, PeriodLock, PriceList, Product,
+    PurchaseOrder, PurchaseReceipt, Quote, ReceivedInvoice, Recurrence, Sale, SaleReturn,
+    Settlement, StatementLine, StockMovement, StockSettings, Tag, Transfer, UserId,
 };
 
 /// Who made a change. The name is a snapshot: history must keep reading the same after the user is
@@ -62,6 +62,8 @@ pub enum AuditEntity {
     FiscalEvent,
     /// A received invoice: only what the recipient declares about it is audited ([ADR 0083]).
     ReceivedInvoice,
+    /// One per company: the audit id is the company's. Only that a secret was set, changed or cleared is recorded, never its value.
+    GatewaySettings,
 }
 
 impl AuditEntity {
@@ -98,6 +100,7 @@ impl AuditEntity {
             Self::FiscalDocument => "fiscal_document",
             Self::FiscalEvent => "fiscal_event",
             Self::ReceivedInvoice => "received_invoice",
+            Self::GatewaySettings => "gateway_settings",
             Self::Settlement => "settlement",
             Self::Transfer => "transfer",
             Self::AccountOpening => "account_opening",
@@ -516,6 +519,20 @@ impl Audited for FiscalDocument {
 
     fn audit_id(&self) -> Uuid {
         self.id().as_uuid()
+    }
+}
+
+impl Audited for GatewaySettings {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::GatewaySettings
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.company_id().as_uuid()
     }
 }
 

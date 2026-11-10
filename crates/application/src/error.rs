@@ -68,6 +68,8 @@ pub enum RepositoryError {
     FiscalDocumentAlreadyLive,
     /// The fiscal document is no longer in the status the write was made from.
     FiscalDocumentChanged,
+    /// The gateway settings were written by someone else since they were read.
+    GatewaySettingsChanged,
     /// The fiscal document already has a file of this kind.
     DuplicateFiscalFile,
     /// Another document of the issuer already holds this DPS series and number.
@@ -96,6 +98,8 @@ pub enum ApplicationError {
     Repository(RepositoryError),
     Auth(AuthError),
     Secret(SecretError),
+    /// A secret stored for a company cannot be opened: the server's key changed or was lost. It names the field, never the value.
+    SecretUnreadable(&'static str),
     /// No party with this id in the company (another company's party looks the same).
     PartyNotFound,
     /// No product or service with this id in the company (another company's looks the same).
@@ -353,6 +357,9 @@ impl fmt::Display for RepositoryError {
                 f.write_str("the sale already has a fiscal document in progress or authorized")
             }
             Self::FiscalDocumentChanged => f.write_str("the fiscal document was changed meanwhile"),
+            Self::GatewaySettingsChanged => f.write_str(
+                "the gateway settings were changed by someone else meanwhile: read them again",
+            ),
             Self::DuplicateFiscalFile => {
                 f.write_str("the fiscal document already has a file of this kind")
             }
@@ -386,6 +393,10 @@ impl fmt::Display for ApplicationError {
             Self::Repository(error) => error.fmt(f),
             Self::Auth(error) => error.fmt(f),
             Self::Secret(error) => error.fmt(f),
+            Self::SecretUnreadable(field) => write!(
+                f,
+                "the stored {field} cannot be read (the server's key changed or was lost): type it again"
+            ),
             Self::PartyNotFound => f.write_str("party not found"),
             Self::ProductNotFound => f.write_str("product not found"),
             Self::CostCenterNotFound => f.write_str("cost center not found"),

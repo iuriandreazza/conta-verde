@@ -25,6 +25,7 @@ mod fiscal_document;
 mod fiscal_event;
 mod fiscal_settings;
 mod fiscal_time;
+mod gateway_settings;
 mod ids;
 mod inventory_count;
 mod invitation;
@@ -125,6 +126,10 @@ pub use fiscal_settings::{
     TaxRuleDraft,
 };
 pub use fiscal_time::{fiscal_day, fiscal_timestamp, state_code, state_utc_offset_minutes};
+pub use gateway_settings::{
+    GatewayKind, GatewaySecret, GatewaySettings, GatewaySettingsDraft, MAX_SEALED_BYTES,
+    SealedSecret, SecretText,
+};
 pub use ids::{
     AttachmentId, BankAccountId, BlobId, CategoryId, ChargeId, CommissionRuleId, CompanyId,
     ContractId, CostCenterId, DocumentMailId, EntryId, FiscalDocumentId, FiscalEventId,

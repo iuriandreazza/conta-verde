@@ -11,6 +11,7 @@ import { CashFlowPage } from "./pages/CashFlowPage";
 import { CategoriesPage } from "./pages/CategoriesPage";
 import { CompaniesPage } from "./pages/CompaniesPage";
 import { AccountingPage } from "./pages/AccountingPage";
+import { GatewaySettingsPage } from "./pages/GatewaySettingsPage";
 import { PosPage } from "./pages/PosPage";
 import { ReceivedInvoicesPage } from "./pages/ReceivedInvoicesPage";
 import { FiscalDocumentsPage } from "./pages/FiscalDocumentsPage";
@@ -71,6 +72,7 @@ export function App() {
           <Route path="/companies/:companyId/entries" element={<EntriesPage />} />
           <Route path="/companies/:companyId/accounting" element={<AccountingPage />} />
           <Route path="/companies/:companyId/pos" element={<PosPage />} />
+          <Route path="/companies/:companyId/gateway" element={<GatewaySettingsPage />} />
           <Route path="/companies/:companyId/fiscal/received" element={<ReceivedInvoicesPage />} />
           <Route path="/companies/:companyId/fiscal/documents" element={<FiscalDocumentsPage />} />
           <Route path="/companies/:companyId/fiscal/settings" element={<FiscalSettingsPage />} />

@@ -19938,6 +19938,340 @@ pub async fn the_regular_regimes_issue_nothing_until_their_calculation_is_signed
     );
 }
 
+/// The key the gateway-settings tests seal with: 32 bytes written as hexadecimal.
+pub const SECRETS_KEY: &str = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+
+/// A company's gateway settings keep their secrets sealed and write-only: `Set` seals for that company and field, `Keep` rewrites
+/// nothing, `Clear` removes, a server without a key refuses a secret and still saves what is not one, no trail, `Debug` or value read
+/// back holds a secret, and another company sees nothing.
+pub async fn gateway_settings_are_sealed_audited_and_never_shown<R>(
+    service: &conta_verde_application::GatewaySettingsService<R, crate::RingSecretCipher>,
+    without_key: &conta_verde_application::GatewaySettingsService<R, crate::NoSecretCipher>,
+    company: CompanyId,
+    other_company: CompanyId,
+) where
+    R: conta_verde_application::GatewaySettingsRepository,
+{
+    use conta_verde_application::{ApplicationError, GatewaySettingsInput, SecretChange};
+    use conta_verde_domain::{GatewayKind, GatewaySecret, SecretText};
+
+    let secret = |text: &str| SecretChange::Set(SecretText::new(text).unwrap());
+    let input = |kind| GatewaySettingsInput {
+        kind,
+        focus_token_homologation: SecretChange::Keep,
+        focus_token_production: SecretChange::Keep,
+        nfeio_api_key: SecretChange::Keep,
+        webhook_secret: SecretChange::Keep,
+        nfeio_company_homologation: None,
+        nfeio_company_production: None,
+        nfeio_search_confirmed: false,
+    };
+    let user = actor();
+    // Whether a text holds any secret this test ever typed.
+    let leaks = |text: &str| {
+        [
+            "tok_homol_1234567890",
+            "tok_prod_1234567890",
+            "tok_prod_other_567890",
+            "hook_1234567890abc",
+        ]
+        .iter()
+        .any(|value| text.contains(value))
+    };
+    let secrets_in = |history: &[conta_verde_domain::AuditRecord]| -> String {
+        history
+            .iter()
+            .flat_map(|record| record.entry.changes.iter())
+            .flat_map(|change| [change.from.clone(), change.to.clone()])
+            .flatten()
+            .collect::<Vec<_>>()
+            .join("|")
+    };
+
+    assert!(service.get(company).await.unwrap().is_none());
+    assert!(service.encryption_available());
+    let first = service
+        .replace(
+            company,
+            &user,
+            GatewaySettingsInput {
+                focus_token_homologation: secret("tok_homol_1234567890"),
+                focus_token_production: secret("tok_prod_1234567890"),
+                webhook_secret: secret("hook_1234567890abc"),
+                ..input(GatewayKind::Focus)
+            },
+        )
+        .await
+        .unwrap();
+    for stored in [
+        GatewaySecret::FocusTokenHomologation,
+        GatewaySecret::FocusTokenProduction,
+        GatewaySecret::WebhookSecret,
+    ] {
+        assert!(first.secret(stored).is_some());
+    }
+    assert!(first.secret(GatewaySecret::NfeIoApiKey).is_none());
+    // Opened, it is what was typed; sealed, it is not, and nothing prints it.
+    assert_eq!(
+        service
+            .open(company, GatewaySecret::FocusTokenProduction)
+            .await
+            .unwrap()
+            .unwrap()
+            .expose(),
+        "tok_prod_1234567890"
+    );
+    assert!(
+        service
+            .open(company, GatewaySecret::NfeIoApiKey)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let sealed = first
+        .secret(GatewaySecret::FocusTokenProduction)
+        .unwrap()
+        .as_bytes();
+    assert!(!String::from_utf8_lossy(sealed).contains("tok_prod"));
+    let shown = format!("{first:?} {:?}", service.get(company).await.unwrap());
+    assert!(!leaks(&shown), "{shown}");
+
+    // The trail says a secret was set, never what it was.
+    let history = service.history(company).await.unwrap();
+    assert_eq!(history.len(), 1);
+    let said = secrets_in(&history);
+    assert!(said.contains("set") && said.contains("focus"));
+    assert!(!leaks(&said), "{said}");
+    assert!(
+        history[0]
+            .entry
+            .changes
+            .iter()
+            .any(|change| change.field == "webhook_secret" && change.to.as_deref() == Some("set"))
+    );
+
+    // Another company sees nothing of it, and a secret sealed for one does not open for the other.
+    assert!(service.get(other_company).await.unwrap().is_none());
+    assert!(
+        service
+            .open(other_company, GatewaySecret::FocusTokenProduction)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(service.history(other_company).await.unwrap().is_empty());
+
+    // The same settings again, every secret kept, write nothing: not a record in the trail, not a byte of what is stored.
+    let again = service
+        .replace(company, &user, input(GatewayKind::Focus))
+        .await
+        .unwrap();
+    assert_eq!(again, first);
+    assert_eq!(service.history(company).await.unwrap().len(), 1);
+    assert_eq!(service.get(company).await.unwrap().unwrap(), first);
+
+    // A secret replaced is told as changed, one cleared as gone, the others stay; what is not secret is told in the clear.
+    let changed = service
+        .replace(
+            company,
+            &user,
+            GatewaySettingsInput {
+                focus_token_production: secret("tok_prod_other_567890"),
+                webhook_secret: SecretChange::Clear,
+                nfeio_company_homologation: Some("company-123".into()),
+                ..input(GatewayKind::NfeIo)
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(changed.kind(), GatewayKind::NfeIo);
+    assert_eq!(changed.nfeio_company_homologation(), Some("company-123"));
+    assert!(changed.secret(GatewaySecret::WebhookSecret).is_none());
+    assert_eq!(
+        changed.secret(GatewaySecret::FocusTokenHomologation),
+        first.secret(GatewaySecret::FocusTokenHomologation)
+    );
+    assert_eq!(
+        service
+            .open(company, GatewaySecret::FocusTokenProduction)
+            .await
+            .unwrap()
+            .unwrap()
+            .expose(),
+        "tok_prod_other_567890"
+    );
+    let history = service.history(company).await.unwrap();
+    assert_eq!(history.len(), 2);
+    let latest = &history[1].entry.changes;
+    let field = |name: &str| latest.iter().find(|change| change.field == name).unwrap();
+    assert_eq!(
+        field("focus_token_production").to.as_deref(),
+        Some("changed")
+    );
+    assert_eq!(field("webhook_secret").from.as_deref(), Some("set"));
+    assert_eq!(field("webhook_secret").to, None);
+    assert_eq!(field("kind").to.as_deref(), Some("nfeio"));
+    assert!(
+        latest
+            .iter()
+            .all(|change| change.field != "focus_token_homologation"),
+        "kept is not a change"
+    );
+    assert!(!leaks(&secrets_in(&history)));
+
+    // What is not a token is refused, and a bad id at the gateway too: nothing is written.
+    assert!(matches!(
+        service
+            .replace(
+                company,
+                &user,
+                GatewaySettingsInput {
+                    nfeio_company_production: Some("has space".into()),
+                    ..input(GatewayKind::NfeIo)
+                }
+            )
+            .await,
+        Err(ApplicationError::Domain(_))
+    ));
+    assert_eq!(service.history(company).await.unwrap().len(), 2);
+    assert!(SecretText::new("short").is_err());
+
+    // A server without a key saves what is not a secret and refuses a secret, naming the key and never the value.
+    let created = without_key
+        .replace(other_company, &user, input(GatewayKind::Focus))
+        .await
+        .unwrap();
+    assert_eq!(created.kind(), GatewayKind::Focus);
+    assert!(!without_key.encryption_available());
+    let refused = without_key
+        .replace(
+            other_company,
+            &user,
+            GatewaySettingsInput {
+                focus_token_production: secret("tok_prod_1234567890"),
+                ..input(GatewayKind::Focus)
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&refused, ApplicationError::FiscalRule(text) if text.contains("FISCAL_SECRETS_KEY") && !leaks(text))
+    );
+    assert_eq!(without_key.history(other_company).await.unwrap().len(), 1);
+    // What was sealed cannot be opened without the key: the answer is a named error, not an empty value, and the secrets that cannot
+    // be read are told apart from the ones that can (the page says so instead of showing them as configured).
+    assert!(matches!(
+        without_key
+            .open(company, GatewaySecret::FocusTokenProduction)
+            .await,
+        Err(ApplicationError::SecretUnreadable("focus_token_production"))
+    ));
+    assert_eq!(
+        without_key.unreadable(company).await.unwrap(),
+        vec![
+            GatewaySecret::FocusTokenHomologation,
+            GatewaySecret::FocusTokenProduction
+        ]
+    );
+    assert!(service.unreadable(company).await.unwrap().is_empty());
+
+    // Reset removes the company's own settings (the server's come back), tells the trail what was cleared and never a value, and
+    // resetting again writes nothing. Setting it up again starts from the first version.
+    service.reset(company, &user).await.unwrap();
+    assert!(service.get(company).await.unwrap().is_none());
+    let history = service.history(company).await.unwrap();
+    assert_eq!(history.len(), 3);
+    let gone = &history[2].entry.changes;
+    assert!(gone.iter().any(|change| change.field == "kind"
+        && change.from.as_deref() == Some("nfeio")
+        && change.to.is_none()));
+    assert!(
+        gone.iter()
+            .any(|change| change.field == "focus_token_production"
+                && change.from.as_deref() == Some("set"))
+    );
+    assert!(!leaks(&secrets_in(&history)));
+    service.reset(company, &user).await.unwrap();
+    assert_eq!(service.history(company).await.unwrap().len(), 3);
+    let again = service
+        .replace(company, &user, input(GatewayKind::Focus))
+        .await
+        .unwrap();
+    assert_eq!(again.version(), 1);
+}
+
+/// A write is made from the version it read: one from an old read is refused and changes nothing, and so is a removal from an old
+/// read, so two people editing the settings never undo each other without knowing.
+pub async fn gateway_settings_refuse_a_write_from_an_old_read<R>(repository: &R, company: CompanyId)
+where
+    R: conta_verde_application::GatewaySettingsRepository,
+{
+    use conta_verde_domain::{GatewayKind, GatewaySettings, GatewaySettingsDraft, SealedSecret};
+
+    let draft = |kind, token: Option<u8>| GatewaySettingsDraft {
+        kind,
+        focus_token_homologation: token.map(|byte| SealedSecret::new(vec![byte; 40]).unwrap()),
+        focus_token_production: None,
+        nfeio_api_key: None,
+        webhook_secret: None,
+        nfeio_company_homologation: None,
+        nfeio_company_production: None,
+        nfeio_search_confirmed: false,
+    };
+    let write = || AuditEntry {
+        company_id: company,
+        actor: actor(),
+        entity: AuditEntity::GatewaySettings,
+        entity_id: company.as_uuid(),
+        action: AuditAction::Updated,
+        changes: Vec::new(),
+    };
+    let first = GatewaySettings::new(company, draft(GatewayKind::Focus, None), 1).unwrap();
+    repository.save(&first, &write()).await.unwrap();
+    // A first write again (someone else made it meanwhile) and one that skips a version are refused.
+    assert_eq!(
+        repository.save(&first, &write()).await,
+        Err(RepositoryError::GatewaySettingsChanged)
+    );
+    let skipped = GatewaySettings::new(company, draft(GatewayKind::Focus, None), 3).unwrap();
+    assert_eq!(
+        repository.save(&skipped, &write()).await,
+        Err(RepositoryError::GatewaySettingsChanged)
+    );
+
+    // Two people read version 1: B sets a token, A (from the same old read) changes the kind keeping what it read, which has no token.
+    let by_b = GatewaySettings::new(company, draft(GatewayKind::Focus, Some(7)), 2).unwrap();
+    repository.save(&by_b, &write()).await.unwrap();
+    let by_a = GatewaySettings::new(company, draft(GatewayKind::NfeIo, None), 2).unwrap();
+    assert_eq!(
+        repository.save(&by_a, &write()).await,
+        Err(RepositoryError::GatewaySettingsChanged)
+    );
+    let stored = repository.find(company).await.unwrap().unwrap();
+    assert_eq!(
+        stored, by_b,
+        "B's write stands: the refused one changed nothing"
+    );
+    assert_eq!(
+        repository.history(company).await.unwrap().len(),
+        2,
+        "and left no entry"
+    );
+
+    // A removal from an old read is refused too; from the version it has, it removes.
+    assert_eq!(
+        repository.remove(company, 1, &write()).await,
+        Err(RepositoryError::GatewaySettingsChanged)
+    );
+    assert!(repository.find(company).await.unwrap().is_some());
+    repository.remove(company, 2, &write()).await.unwrap();
+    assert!(repository.find(company).await.unwrap().is_none());
+    assert_eq!(
+        repository.remove(company, 2, &write()).await,
+        Err(RepositoryError::NotFound)
+    );
+}
+
 /// An NFS-e is issued from the **service lines** of a completed sale under a service nature that carries the company's
 /// ISSQN terms; the DPS is numbered once and never reused (not by a cancelled document, not by a resend, not after a
 /// gateway that was down); the NF-e of the same sale covers only the products; and nothing is sent until every choice is

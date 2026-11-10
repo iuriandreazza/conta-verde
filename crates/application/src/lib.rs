@@ -37,6 +37,8 @@ mod fiscal_document_service;
 mod fiscal_gateway;
 mod fiscal_settings_repository;
 mod fiscal_settings_service;
+mod gateway_settings_repository;
+mod gateway_settings_service;
 mod identity_repository;
 mod import;
 mod inventory_count_repository;
@@ -82,6 +84,7 @@ mod sale_reading;
 mod sale_repository;
 mod sale_service;
 mod sales_report_service;
+mod secret_cipher;
 mod secret_service;
 mod statement_line_repository;
 mod stock_repository;
@@ -153,6 +156,8 @@ pub use fiscal_gateway::{
 };
 pub use fiscal_settings_repository::FiscalSettingsRepository;
 pub use fiscal_settings_service::FiscalSettingsService;
+pub use gateway_settings_repository::GatewaySettingsRepository;
+pub use gateway_settings_service::{GatewaySettingsInput, GatewaySettingsService, SecretChange};
 pub use identity_repository::{
     CompanyMembership, IdentityRepository, NewAccount, NewUser, StoredCredentials,
 };
@@ -210,6 +215,7 @@ pub use recurrence_service::{
 pub use sale_repository::{SaleQuery, SaleRepository};
 pub use sale_service::{Conversion, Refund, ReturnRecord, SalePage, SaleService};
 pub use sales_report_service::{SalesReport, SalesReportService};
+pub use secret_cipher::SecretCipher;
 pub use secret_service::{SecretError, SecretService};
 pub use statement_line_repository::{MatchedTargets, StatementLineQuery, StatementLineRepository};
 pub use stock_repository::{
