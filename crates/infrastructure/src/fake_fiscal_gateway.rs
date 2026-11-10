@@ -144,6 +144,10 @@ impl FakeFiscalGateway {
         self.lock().refuse_events = Some(Refusal::new(code, message));
     }
 
+    pub fn accept_events_again(&self) {
+        self.lock().refuse_events = None;
+    }
+
     /// Whether every call fails as if the network were down.
     pub fn set_unavailable(&self, unavailable: bool) {
         self.lock().unavailable = unavailable;

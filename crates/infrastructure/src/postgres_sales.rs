@@ -22,6 +22,7 @@ const SELECT_SALES: &str = "SELECT id, company_id, number, customer_id, seller_i
      to_char(sold_on, 'YYYY-MM-DD') AS sold_on, payment_term_id, category_id, cost_center_id, \
      notes, status, quote_id, contract_id, to_char(cycle_on, 'YYYY-MM-DD') AS cycle_on FROM sales";
 
+#[derive(Clone)]
 pub struct PostgresSaleRepository {
     pool: PgPool,
 }

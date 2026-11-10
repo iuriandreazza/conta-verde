@@ -281,6 +281,23 @@ impl FiscalDocumentRepository for PostgresFiscalDocumentRepository {
         row.as_ref().map(document_from_row).transpose()
     }
 
+    async fn pending(
+        &self,
+        since_unix: i64,
+        limit: usize,
+    ) -> Result<Vec<FiscalDocument>, RepositoryError> {
+        let rows = sqlx::query(&format!(
+            "SELECT {COLUMNS} FROM fiscal_documents WHERE status IN ('processing', 'contingency') \
+             AND issued_at >= $1 ORDER BY issued_at, id LIMIT $2"
+        ))
+        .bind(since_unix)
+        .bind(i64::try_from(limit).unwrap_or(i64::MAX))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        rows.iter().map(document_from_row).collect()
+    }
+
     async fn history(
         &self,
         company_id: CompanyId,
@@ -512,6 +529,58 @@ mod tests {
                 .await,
             "kind_valid",
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn issues_an_nfe_from_a_sale() {
+        use crate::{
+            FakeFiscalGateway, LocalBlobStore, PostgresFiscalSettingsRepository,
+            PostgresPeriodLockRepository, RegisterReferences,
+        };
+        use conta_verde_application::FiscalDocumentService;
+
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let other_company = contract::create_company(&pool).await;
+        let (entry_seed, seed) = seeds(&pool, company).await;
+        let parties = PostgresPartyRepository::new(pool.clone());
+        let fiscal = contract::seed_fiscal_customer(&parties, company).await;
+        let gateway = FakeFiscalGateway::authorizing_after(1);
+        let settings = PostgresFiscalSettingsRepository::new(pool.clone());
+        let sales = PostgresSaleRepository::new(pool.clone());
+        let root =
+            std::env::temp_dir().join(format!("conta-verde-fiscal-{}", uuid::Uuid::new_v4()));
+        let service = FiscalDocumentService::new(
+            PostgresFiscalDocumentRepository::new(pool.clone()),
+            sales.clone(),
+            parties,
+            PostgresProductRepository::new(pool.clone()),
+            settings.clone(),
+            gateway.clone(),
+            LocalBlobStore::new(&root),
+            RegisterReferences::new(
+                PostgresCategoryRepository::new(pool.clone()),
+                PostgresCostCenterRepository::new(pool.clone()),
+                PostgresPartyRepository::new(pool.clone()),
+                PostgresBankAccountRepository::new(pool.clone()),
+                PostgresPaymentMethodRepository::new(pool.clone()),
+                PostgresPeriodLockRepository::new(pool.clone()),
+            ),
+        );
+        contract::issues_an_nfe_from_a_sale(
+            &service,
+            &gateway,
+            &settings,
+            &sales,
+            company,
+            other_company,
+            &entry_seed,
+            &seed,
+            &fiscal,
+        )
+        .await;
+        std::fs::remove_dir_all(root).expect("the test's own directory is removed");
     }
 
     /// An access key names one document of a company.
