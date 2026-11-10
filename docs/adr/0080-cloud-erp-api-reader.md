@@ -1,11 +1,11 @@
 ---
-title: "ADR 0077: Reading a company's books from the cloud ERP's API"
+title: "ADR 0080: Reading a company's books from the cloud ERP's API"
 status: accepted
 date: 2026-11-10
 tags: [adr, import, migration]
 ---
 
-# ADR 0077: Reading a company's books from the cloud ERP's API
+# ADR 0080: Reading a company's books from the cloud ERP's API
 
 ## Context
 

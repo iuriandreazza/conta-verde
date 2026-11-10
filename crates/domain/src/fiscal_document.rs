@@ -7,6 +7,7 @@ const MAX_TEXT_CHARS: usize = 150;
 const MAX_REFUSAL_CODE_CHARS: usize = 50;
 const MAX_REFUSAL_MESSAGE_CHARS: usize = 500;
 const MAX_NOTE_CHARS: usize = 500;
+const MAX_REFERENCE_CHARS: usize = 100;
 /// The number of a document has nine digits in its access key.
 const MAX_NUMBER: u32 = 999_999_999;
 
@@ -203,6 +204,8 @@ pub struct FiscalDocument {
     refusal: Option<FiscalRefusal>,
     authorization: Option<FiscalAuthorization>,
     note: Option<String>,
+    /// The gateway's own identifier of the document, when it assigns one: set once, never changed ([ADR 0078]).
+    gateway_reference: Option<String>,
 }
 
 impl FiscalDocument {
@@ -220,6 +223,7 @@ impl FiscalDocument {
             refusal: None,
             authorization: None,
             note: None,
+            gateway_reference: None,
         })
     }
 
@@ -236,6 +240,32 @@ impl FiscalDocument {
         self.authorization = authorization;
         self.note = note;
         self
+    }
+
+    /// The document with the gateway's identifier it was stored with.
+    pub fn with_gateway_reference(mut self, reference: Option<String>) -> Self {
+        self.gateway_reference = reference;
+        self
+    }
+
+    /// The gateway named the document: kept once, and the same name again changes nothing. Only a document that was sent
+    /// takes one, and a different name later is refused, because the gateway's calls are about that document.
+    pub fn referenced(&self, reference: &str) -> Result<Self, DomainError> {
+        let reference = reference.trim().to_owned();
+        let valid = !reference.is_empty()
+            && reference.chars().count() <= MAX_REFERENCE_CHARS
+            && !reference.chars().any(char::is_control);
+        if !valid || !self.status.is_pending() {
+            return Err(DomainError::InvalidFiscalDocument("gateway_reference"));
+        }
+        match &self.gateway_reference {
+            Some(known) if *known == reference => Ok(self.clone()),
+            Some(_) => Err(DomainError::InvalidFiscalDocument("gateway_reference")),
+            None => Ok(Self {
+                gateway_reference: Some(reference),
+                ..self.clone()
+            }),
+        }
     }
 
     /// The same document with the content of a new attempt: only a draft or a rejected one is built again, because
@@ -261,6 +291,8 @@ impl FiscalDocument {
         )
         .map(|document| Self {
             refusal: None,
+            // A new attempt: a gateway that names its documents may make a new one, so the old name is let go.
+            gateway_reference: None,
             ..document
         })
     }
@@ -418,12 +450,18 @@ impl FiscalDocument {
         self.note.as_deref()
     }
 
+    /// The identifier the gateway gave the document, if it gave one: otherwise the gateway knows it by our id.
+    pub fn gateway_reference(&self) -> Option<&str> {
+        self.gateway_reference.as_deref()
+    }
+
     /// Whether the content or what the authority gave differs from another's: what an adapter refuses to write once
     /// authorized.
     pub fn content_differs_from(&self, other: &Self) -> bool {
         self.content != other.content
             || self.kind != other.kind
             || self.authorization != other.authorization
+            || self.gateway_reference != other.gateway_reference
     }
 }
 
@@ -712,6 +750,60 @@ mod tests {
         assert_eq!(rebuilt.status(), FiscalDocumentStatus::Rejected);
         assert!(rebuilt.refusal().is_some());
         assert!(rebuilt.submitted().unwrap().refusal().is_none());
+    }
+
+    #[test]
+    fn the_gateway_names_a_document_once_and_only_after_it_was_sent() {
+        assert!(
+            document().referenced("nfeio-123").is_err(),
+            "a draft was not sent"
+        );
+        let sent = document().submitted().unwrap();
+        let named = sent.referenced(" nfeio-123 ").unwrap();
+        assert_eq!(named.gateway_reference(), Some("nfeio-123"));
+        assert_eq!(named.referenced("nfeio-123"), Ok(named.clone()));
+        assert!(named.referenced("another").is_err());
+        assert!(sent.referenced("  ").is_err());
+        // It survives the moves, and once authorized it is part of what never changes.
+        let authorized = named.authorized(authorization(), None).unwrap();
+        assert_eq!(authorized.gateway_reference(), Some("nfeio-123"));
+        assert!(
+            authorized.referenced("nfeio-123").is_err(),
+            "no longer pending"
+        );
+        let other = document()
+            .submitted()
+            .unwrap()
+            .referenced("different")
+            .unwrap()
+            .authorized(authorization(), None)
+            .unwrap();
+        assert!(authorized.content_differs_from(&other));
+    }
+
+    #[test]
+    fn sending_a_rejected_document_again_lets_go_of_the_gateways_old_name() {
+        let rejected = document()
+            .submitted()
+            .unwrap()
+            .referenced("gw-1")
+            .unwrap()
+            .rejected(FiscalRefusal::new("225", "Falha"))
+            .unwrap();
+        assert_eq!(rejected.gateway_reference(), Some("gw-1"));
+        let again = rejected.submitted().unwrap();
+        assert_eq!(again.gateway_reference(), None);
+        assert_eq!(
+            again.referenced("gw-2").unwrap().gateway_reference(),
+            Some("gw-2")
+        );
+        assert!(
+            document()
+                .submitted()
+                .unwrap()
+                .referenced(&"x".repeat(101))
+                .is_err()
+        );
     }
 
     #[test]

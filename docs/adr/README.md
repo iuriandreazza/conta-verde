@@ -92,7 +92,10 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0074](0074-fiscal-settings.md) | Fiscal settings per company | accepted | 7 |
 | [0075](0075-fiscal-gateway-port.md) | The fiscal gateway port, its fake and the Focus NFe adapter | accepted | 7 |
 | [0076](0076-nfe-documents.md) | NF-e documents: the store, issuing from a sale, events and the package | accepted | 7 |
-| [0077](0077-cloud-erp-api-reader.md) | Reading a company's books from the cloud ERP's API | accepted | 7 |
+| [0077](0077-choosing-a-fiscal-gateway.md) | Two fiscal gateways, chosen by each installation | accepted | 7 |
+| [0078](0078-gateway-reference-and-queued-events.md) | A reference the gateway assigns and events it answers later | accepted | 7 |
+| [0079](0079-nfeio-adapter.md) | The NFE.io adapter | accepted | 7 |
+| [0080](0080-cloud-erp-api-reader.md) | Reading a company's books from the cloud ERP's API | accepted | 7 |
 
 ## Template
 

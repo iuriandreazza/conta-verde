@@ -172,6 +172,22 @@ pub trait FiscalDocumentRepository: Send + Sync {
         id: FiscalDocumentId,
     ) -> impl Future<Output = Result<Vec<FiscalEvent>, RepositoryError>> + Send;
 
+    /// The cancellation of the document that is waiting or was accepted, if there is one: a refused one does not count
+    /// (the person may ask again).
+    fn open_cancellation(
+        &self,
+        company_id: CompanyId,
+        id: FiscalDocumentId,
+    ) -> impl Future<Output = Result<Option<FiscalEvent>, RepositoryError>> + Send;
+
+    /// The correction letters and cancellations of every company that were sent and not answered, oldest first, at most
+    /// `limit`: what the poll asks the gateway about when it answered "queued". Reaches every company: for the
+    /// background pass only.
+    fn pending_events(
+        &self,
+        limit: usize,
+    ) -> impl Future<Output = Result<Vec<FiscalEvent>, RepositoryError>> + Send;
+
     /// The invalidations of the company, newest first, at most `limit`.
     fn invalidations(
         &self,

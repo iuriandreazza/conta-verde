@@ -282,6 +282,9 @@ pub(crate) struct FiscalDocumentResponse {
     id: Uuid,
     kind: &'static str,
     status: &'static str,
+    /// The cancellation that was asked and is waiting for the authority's answer, or was accepted ([ADR 0078]): a gateway
+    /// that answers it later leaves the document authorized until then.
+    cancellation: Option<FiscalEventResponse>,
     sale_id: Uuid,
     issuer_cnpj: String,
     issuer_name: String,
@@ -305,6 +308,7 @@ pub(crate) struct FiscalDocumentResponse {
 fn document_response(
     document: &FiscalDocument,
     files: &[conta_verde_domain::FiscalFile],
+    cancellation: Option<&FiscalEvent>,
 ) -> FiscalDocumentResponse {
     let conta_verde_domain::FiscalOrigin::Sale(sale) = document.origin();
     let authorization = document.authorization();
@@ -312,6 +316,7 @@ fn document_response(
         id: document.id().as_uuid(),
         kind: document.kind().key(),
         status: document.status().key(),
+        cancellation: cancellation.map(FiscalEventResponse::from),
         sale_id: sale.as_uuid(),
         issuer_cnpj: document.issuer_cnpj().to_owned(),
         issuer_name: document.issuer_name().to_owned(),
@@ -343,7 +348,15 @@ async fn respond<X: Ports>(
         .fiscal_documents
         .files(document.company_id(), document.id())
         .await?;
-    Ok(Json(document_response(document, &files)))
+    let cancellation = state
+        .fiscal_documents
+        .open_cancellation(document.company_id(), document.id())
+        .await?;
+    Ok(Json(document_response(
+        document,
+        &files,
+        cancellation.as_ref(),
+    )))
 }
 
 fn parse_document(raw: &str) -> Result<FiscalDocumentId, ApiError> {
@@ -540,6 +553,7 @@ impl From<&FiscalEvent> for FiscalEventResponse {
     fn from(event: &FiscalEvent) -> Self {
         let (sequence, series, first, last) = match event.subject() {
             FiscalEventSubject::Correction { sequence, .. } => (Some(*sequence), None, None, None),
+            FiscalEventSubject::Cancellation { .. } => (None, None, None, None),
             FiscalEventSubject::Invalidation {
                 series,
                 first,
@@ -750,7 +764,7 @@ pub(crate) async fn list_documents<X: Ports>(
         items: page
             .items
             .iter()
-            .map(|document| document_response(document, &[]))
+            .map(|document| document_response(document, &[], None))
             .collect(),
         next_cursor: page.next.as_ref().map(encode_cursor),
     }))

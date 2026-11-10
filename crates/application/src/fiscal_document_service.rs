@@ -15,7 +15,7 @@ use crate::audit::audit_entry;
 use crate::list_query::{clamp_limit, split_page};
 use crate::{
     ApplicationError, AuthorizedDocument, BlobStore, BuyerPresence, Destination, DocumentOutcome,
-    EntryReferences, EventOutcome, FiscalDocumentCursor, FiscalDocumentQuery,
+    EntryReferences, EventOutcome, EventQuery, FiscalDocumentCursor, FiscalDocumentQuery,
     FiscalDocumentRepository, FiscalGateway, FiscalSettingsRepository, GatewayError, NfeItem,
     NfeRecipient, NfeRequest, PartyRepository, PaymentForm, ProductRepository, RepositoryError,
     SaleRepository,
@@ -136,6 +136,9 @@ where
                 }
             }
         }
+        let (asked, settled) = self.settle_queued_events(limit).await?;
+        report.asked += asked;
+        report.settled += settled;
         Ok(report)
     }
 
@@ -384,26 +387,33 @@ where
             .query_nfe(&settings, &reference(&document))
             .await?;
         if let DocumentOutcome::Cancelled { .. } = state {
-            return self.apply(company_id, actor, document, state, true).await;
+            let cancelled = self.apply(company_id, actor, document, state, true).await?;
+            self.accept_open_cancellation(company_id, id).await?;
+            return Ok(cancelled);
         }
-        match self
+        // One cancellation at a time: a refused one does not count, so the person may ask again.
+        if self
+            .documents
+            .open_cancellation(company_id, id)
+            .await?
+            .is_some()
+        {
+            return Err(ApplicationError::FiscalRule(
+                "a cancellation of this document is already waiting for an answer or was accepted"
+                    .to_owned(),
+            ));
+        }
+        // Recorded before the gateway is asked, like the other events: an answer that is lost, or that comes later, is
+        // found by the poll and the cancellation is never sent twice ([ADR 0078]).
+        let subject = FiscalEventSubject::cancellation(id, reason)?;
+        let event = self.record_event(company_id, actor, subject).await?;
+        let answer = self
             .gateway
             .cancel_nfe(&settings, &reference(&document), reason)
-            .await?
-        {
-            EventOutcome::Accepted(event) => {
-                if let Some(xml) = event.xml {
-                    self.store_file(company_id, id, FiscalFileKind::CancellationXml, &xml)
-                        .await?;
-                }
-                self.move_to(actor, document, |document| document.cancelled())
-                    .await
-            }
-            EventOutcome::Refused(refusal) => Err(ApplicationError::FiscalRule(format!(
-                "the authority refused the cancellation ({}): {}",
-                refusal.code, refusal.message
-            ))),
-        }
+            .await;
+        self.settle_event(company_id, actor, event, answer, "cancellation")
+            .await?;
+        self.get(company_id, id).await
     }
 
     /// Sends a correction letter (CC-e) for an authorized document. The letter is **recorded as sent before the gateway
@@ -629,6 +639,15 @@ where
         Ok(refused)
     }
 
+    /// The cancellation of the document that is waiting for the authority's answer or was accepted, if there is one.
+    pub async fn open_cancellation(
+        &self,
+        company_id: CompanyId,
+        id: FiscalDocumentId,
+    ) -> Result<Option<FiscalEvent>, ApplicationError> {
+        Ok(self.documents.open_cancellation(company_id, id).await?)
+    }
+
     /// The correction letters of a document.
     pub async fn corrections(
         &self,
@@ -696,9 +715,24 @@ where
         answer: Result<EventOutcome, GatewayError>,
         what: &str,
     ) -> Result<FiscalEvent, ApplicationError> {
-        let settled = match answer {
+        match answer {
             Ok(EventOutcome::Accepted(accepted)) => {
+                let is_cancellation =
+                    matches!(event.subject(), FiscalEventSubject::Cancellation { .. });
                 let xml = match accepted.xml {
+                    // A cancellation's XML belongs to the document, like its authorization's.
+                    Some(bytes) if !bytes.is_empty() && is_cancellation => {
+                        if let FiscalEventSubject::Cancellation { document, .. } = event.subject() {
+                            self.store_file(
+                                company_id,
+                                *document,
+                                FiscalFileKind::CancellationXml,
+                                &bytes,
+                            )
+                            .await?;
+                        }
+                        None
+                    }
                     Some(bytes) if !bytes.is_empty() => {
                         let blob = BlobId::generate();
                         self.blobs.put(company_id, blob, &bytes).await?;
@@ -706,26 +740,138 @@ where
                     }
                     _ => None,
                 };
-                event.accepted(accepted.protocol.as_deref(), xml)?
+                let settled = event.accepted(accepted.protocol.as_deref(), xml)?;
+                // The document first: if this fails the event is still `sent` and the poll finishes it; the other way
+                // round would leave an accepted cancellation over a document nothing would ever move.
+                if let FiscalEventSubject::Cancellation { document, .. } = event.subject() {
+                    self.finish_cancellation(company_id, actor, *document)
+                        .await?;
+                }
+                self.write_settlement(actor, &event, &settled).await?;
+                Ok(settled)
             }
             Ok(EventOutcome::Refused(refusal)) => {
                 let refused = event.refused(FiscalRefusal::new(&refusal.code, &refusal.message))?;
                 self.write_settlement(actor, &event, &refused).await?;
-                return Err(ApplicationError::FiscalRule(format!(
+                Err(ApplicationError::FiscalRule(format!(
                     "the authority refused the {what} ({}): {}",
                     refusal.code, refusal.message
-                )));
+                )))
             }
+            // The gateway took it and will do it later: the event stays `sent`, and the poll asks again.
+            Ok(EventOutcome::Queued) => Ok(event),
             // The call may have reached the authority: the event stays `sent` and is never sent again.
-            Err(error @ GatewayError::Unavailable(_)) => return Err(error.into()),
+            Err(error @ GatewayError::Unavailable(_)) => Err(error.into()),
             Err(error) => {
                 let refused = event.refused(FiscalRefusal::new("gateway", &error.to_string()))?;
                 self.write_settlement(actor, &event, &refused).await?;
-                return Err(error.into());
+                Err(error.into())
             }
-        };
-        self.write_settlement(actor, &event, &settled).await?;
-        Ok(settled)
+        }
+    }
+
+    /// The gateway says the document is cancelled: a cancellation of ours that was still waiting is the one that was done.
+    async fn accept_open_cancellation(
+        &self,
+        company_id: CompanyId,
+        id: FiscalDocumentId,
+    ) -> Result<(), ApplicationError> {
+        if let Some(open) = self.documents.open_cancellation(company_id, id).await?
+            && open.status() == FiscalEventStatus::Sent
+        {
+            let actor = Actor::User {
+                id: open.requested_by(),
+                name: open.requested_by_name().to_owned(),
+            };
+            let accepted = open.accepted(None, None)?;
+            self.write_settlement(&actor, &open, &accepted).await?;
+        }
+        Ok(())
+    }
+
+    /// The authority accepted the cancellation: the document is cancelled, in the name of whoever asked. A document that
+    /// is no longer authorized (the poll got there first) is left as it is.
+    async fn finish_cancellation(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        id: FiscalDocumentId,
+    ) -> Result<(), ApplicationError> {
+        let document = self.get(company_id, id).await?;
+        if document.status() == FiscalDocumentStatus::Authorized {
+            self.move_to(actor, document, |document| document.cancelled())
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Asks the gateway about the correction letters and cancellations it answered "queued" to and records what it says,
+    /// in the name of whoever asked. Returns how many were asked and how many are no longer waiting. A gateway that
+    /// never queues has none to ask about.
+    pub async fn settle_queued_events(
+        &self,
+        limit: usize,
+    ) -> Result<(usize, usize), ApplicationError> {
+        let mut asked = 0;
+        let mut settled = 0;
+        for event in self.documents.pending_events(limit).await? {
+            asked += 1;
+            let company_id = event.company_id();
+            let (document_id, query) = match event.subject() {
+                FiscalEventSubject::Correction { document, .. } => {
+                    let before = self
+                        .documents
+                        .corrections_of(company_id, *document)
+                        .await?
+                        .iter()
+                        .filter(|letter| letter.status() == FiscalEventStatus::Accepted)
+                        .count();
+                    (
+                        *document,
+                        EventQuery::Correction {
+                            accepted_before: u8::try_from(before).unwrap_or(u8::MAX),
+                        },
+                    )
+                }
+                FiscalEventSubject::Cancellation { document, .. } => {
+                    (*document, EventQuery::Cancellation)
+                }
+                FiscalEventSubject::Invalidation { .. } => continue,
+            };
+            let outcome = async {
+                let document = self.get(company_id, document_id).await?;
+                let settings = self.settings_of(company_id, &document).await?;
+                let actor = Actor::User {
+                    id: event.requested_by(),
+                    name: event.requested_by_name().to_owned(),
+                };
+                // Only an answer settles an event: a gateway that cannot be reached, or that does not answer events
+                // later (Focus NFe answers them at once), leaves it as it is, never refused for the lack of an answer.
+                let answer = match self
+                    .gateway
+                    .query_event(&settings, &reference(&document), query)
+                    .await
+                {
+                    Ok(answer @ (EventOutcome::Accepted(_) | EventOutcome::Refused(_))) => answer,
+                    Ok(EventOutcome::Queued) | Err(_) => return Ok(false),
+                };
+                match self
+                    .settle_event(company_id, &actor, event.clone(), Ok(answer), "event")
+                    .await
+                {
+                    // The authority's refusal is an answer: the event is settled.
+                    Ok(_) | Err(ApplicationError::FiscalRule(_)) => Ok(true),
+                    Err(error) => Err(error),
+                }
+            }
+            .await;
+            match outcome {
+                Ok(true) => settled += 1,
+                Ok(false) => {}
+                Err(error) => tracing::warn!(%error, "a fiscal event could not be settled"),
+            }
+        }
+        Ok((asked, settled))
     }
 
     async fn write_settlement(
@@ -821,8 +967,17 @@ where
             .move_to(actor, document, |document| document.submitted())
             .await?;
         match self.gateway.submit_nfe(nfe).await {
-            Ok(outcome) => {
-                self.apply(company_id, actor, processing, outcome, true)
+            Ok(submission) => {
+                // A gateway that names its documents says the name now: kept before anything else is recorded, because
+                // every later call is about the document by that name.
+                let processing = match submission.reference {
+                    Some(name) => {
+                        self.move_to(actor, processing, |document| document.referenced(&name))
+                            .await?
+                    }
+                    None => processing,
+                };
+                self.apply(company_id, actor, processing, submission.outcome, true)
                     .await
             }
             Err(GatewayError::Unavailable(detail)) => {
@@ -878,13 +1033,17 @@ where
                 } else {
                     document
                 };
-                self.store_file(
-                    company_id,
-                    document.id(),
-                    FiscalFileKind::CancellationXml,
-                    &cancellation_xml,
-                )
-                .await?;
+                // A gateway that cannot hand over the cancellation's XML says so with no bytes: the document is
+                // cancelled all the same, and there is no file to keep.
+                if !cancellation_xml.is_empty() {
+                    self.store_file(
+                        company_id,
+                        document.id(),
+                        FiscalFileKind::CancellationXml,
+                        &cancellation_xml,
+                    )
+                    .await?;
+                }
                 if document.status() == FiscalDocumentStatus::Authorized {
                     self.move_to(actor, document, |d| d.cancelled()).await
                 } else {
@@ -1088,8 +1247,11 @@ where
     }
 }
 
+/// The name the gateway knows the document by: the one it gave when it assigns its own, ours otherwise ([ADR 0078]).
 fn reference(document: &FiscalDocument) -> String {
-    document.id().as_uuid().to_string()
+    document
+        .gateway_reference()
+        .map_or_else(|| document.id().as_uuid().to_string(), str::to_owned)
 }
 
 /// The person who submitted the document: what happens later without a person is written in their name.

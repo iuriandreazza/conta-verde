@@ -261,20 +261,40 @@ impl FiscalDocumentRepository for InMemoryFiscalDocumentRepository {
                 "the fiscal event already exists".to_owned(),
             ));
         }
-        if let FiscalEventSubject::Correction {
-            document, sequence, ..
-        } = event.subject()
-        {
-            if !state
-                .documents
-                .iter()
-                .any(|stored| stored.company_id() == event.company_id() && stored.id() == *document)
-            {
+        let about = match event.subject() {
+            FiscalEventSubject::Correction { document, .. }
+            | FiscalEventSubject::Cancellation { document, .. } => Some(*document),
+            FiscalEventSubject::Invalidation { .. } => None,
+        };
+        if let Some(document) = about {
+            let Some(stored) = state.documents.iter().find(|stored| {
+                stored.company_id() == event.company_id() && stored.id() == document
+            }) else {
                 return Err(RepositoryError::NotFound);
+            };
+            // A letter or a cancellation is for an authorized document: one cancelled meanwhile takes none.
+            if stored.status() != FiscalDocumentStatus::Authorized {
+                return Err(RepositoryError::FiscalDocumentChanged);
             }
             let taken = state.events.iter().any(|stored| {
                 stored.company_id() == event.company_id()
-                    && matches!(stored.subject(), FiscalEventSubject::Correction { document: other, sequence: place, .. } if other == document && place == sequence)
+                    && match (stored.subject(), event.subject()) {
+                        (
+                            FiscalEventSubject::Correction {
+                                document: other,
+                                sequence: place,
+                                ..
+                            },
+                            FiscalEventSubject::Correction { sequence, .. },
+                        ) => *other == document && place == sequence,
+                        (
+                            FiscalEventSubject::Cancellation {
+                                document: other, ..
+                            },
+                            FiscalEventSubject::Cancellation { .. },
+                        ) => *other == document && stored.status() != FiscalEventStatus::Refused,
+                        _ => false,
+                    }
             });
             if taken {
                 return Err(RepositoryError::FiscalDocumentChanged);
@@ -352,9 +372,40 @@ impl FiscalDocumentRepository for InMemoryFiscalDocumentRepository {
             .collect();
         letters.sort_by_key(|letter| match letter.subject() {
             FiscalEventSubject::Correction { sequence, .. } => *sequence,
-            FiscalEventSubject::Invalidation { .. } => 0,
+            FiscalEventSubject::Cancellation { .. } | FiscalEventSubject::Invalidation { .. } => 0,
         });
         Ok(letters)
+    }
+
+    async fn open_cancellation(
+        &self,
+        company_id: CompanyId,
+        id: FiscalDocumentId,
+    ) -> Result<Option<FiscalEvent>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        Ok(state
+            .events
+            .iter()
+            .find(|stored| {
+                stored.company_id() == company_id
+                    && stored.status() != FiscalEventStatus::Refused
+                    && matches!(stored.subject(), FiscalEventSubject::Cancellation { document, .. } if *document == id)
+            })
+            .cloned())
+    }
+
+    async fn pending_events(&self, limit: usize) -> Result<Vec<FiscalEvent>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        Ok(state
+            .events
+            .iter()
+            .filter(|stored| {
+                stored.status() == FiscalEventStatus::Sent
+                    && !matches!(stored.subject(), FiscalEventSubject::Invalidation { .. })
+            })
+            .take(limit)
+            .cloned()
+            .collect())
     }
 
     async fn invalidations(
@@ -523,6 +574,53 @@ mod tests {
             CompanyId::generate(),
             CompanyId::generate(),
             SaleId::generate(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn follows_a_gateway_that_names_and_queues() {
+        use crate::memory_entries::tests::Registers;
+        use crate::{
+            FakeFiscalGateway, InMemoryBlobStore, InMemoryFiscalSettingsRepository,
+            InMemoryPaymentTermRepository, InMemoryProductRepository, InMemorySaleRepository,
+        };
+        use conta_verde_application::FiscalDocumentService;
+
+        let registers = Registers::new();
+        let company = CompanyId::generate();
+        let entry_seed = registers.seed(company).await;
+        let products = InMemoryProductRepository::default();
+        let seed = contract::seed_sales_records(
+            &registers.parties,
+            &products,
+            &InMemoryPaymentTermRepository::default(),
+            company,
+        )
+        .await;
+        let fiscal = contract::seed_fiscal_customer(&registers.parties, company).await;
+        let gateway = FakeFiscalGateway::default();
+        let settings = InMemoryFiscalSettingsRepository::default();
+        let sales = InMemorySaleRepository::default();
+        let service = FiscalDocumentService::new(
+            InMemoryFiscalDocumentRepository::default(),
+            sales.clone(),
+            registers.parties.clone(),
+            products,
+            settings.clone(),
+            gateway.clone(),
+            InMemoryBlobStore::default(),
+            registers.references(),
+        );
+        contract::follows_a_gateway_that_names_and_queues(
+            &service,
+            &gateway,
+            &settings,
+            &sales,
+            company,
+            &entry_seed,
+            &seed,
+            &fiscal,
         )
         .await;
     }

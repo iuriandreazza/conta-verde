@@ -12,18 +12,18 @@ use conta_verde_application::{
 };
 use conta_verde_application::{
     BrandedEmailSender, ChargeService, CollectionService, DocumentOutcome, DunningService,
-    EmailError, EmailMessage, EmailSender, EventOutcome, FiscalGateway, GatewayError, MessageError,
-    MessageSender, NfeRequest, PaymentPageService, PaymentProvider, PaymentWebhookService,
-    ProviderCharge, ProviderChargeRequest, ProviderError, ProviderEvent, QueuedEmailSender,
-    TextMessage, WebhookError, WebhookHeaders,
+    EmailError, EmailMessage, EmailSender, EventOutcome, EventQuery, FiscalGateway, GatewayError,
+    MessageError, MessageSender, NfeRequest, PaymentPageService, PaymentProvider,
+    PaymentWebhookService, ProviderCharge, ProviderChargeRequest, ProviderError, ProviderEvent,
+    QueuedEmailSender, Submission, TextMessage, WebhookError, WebhookHeaders,
 };
 use conta_verde_domain::FiscalSettings;
 use conta_verde_infrastructure::{
-    Argon2SecretService, BrasilApiCnpjRegistry, BrasilApiPostalCodeDirectory, CachedCnpjRegistry,
-    FakeFiscalGateway, FocusNfeGateway, LocalBlobStore, LogEmailSender, NoFiscalGateway,
-    PostgresAttachmentRepository, PostgresBankAccountRepository, PostgresCategoryRepository,
-    PostgresCommissionRuleRepository, PostgresContractRepository, PostgresCostCenterRepository,
-    PostgresDocumentMailRepository, PostgresFinancialEntryRepository,
+    Argon2SecretService, BrasilApiCityCodes, BrasilApiCnpjRegistry, BrasilApiPostalCodeDirectory,
+    CachedCnpjRegistry, FakeFiscalGateway, FocusNfeGateway, LocalBlobStore, LogEmailSender,
+    NfeIoGateway, NoFiscalGateway, PostgresAttachmentRepository, PostgresBankAccountRepository,
+    PostgresCategoryRepository, PostgresCommissionRuleRepository, PostgresContractRepository,
+    PostgresCostCenterRepository, PostgresDocumentMailRepository, PostgresFinancialEntryRepository,
     PostgresFiscalDocumentRepository, PostgresFiscalSettingsRepository, PostgresIdentityRepository,
     PostgresInventoryCountRepository, PostgresInvitationRepository, PostgresJobQueue,
     PostgresOpeningRepository, PostgresPackageScheduleRepository, PostgresPartyRepository,
@@ -619,6 +619,7 @@ enum ConfiguredFiscalGateway {
     Off(NoFiscalGateway),
     Fake(FakeFiscalGateway),
     Focus(Box<FocusNfeGateway>),
+    NfeIo(Box<NfeIoGateway>),
 }
 
 /// Calls the same method of whichever gateway is configured.
@@ -628,6 +629,7 @@ macro_rules! on_gateway {
             ConfiguredFiscalGateway::Off($gateway) => $call,
             ConfiguredFiscalGateway::Fake($gateway) => $call,
             ConfiguredFiscalGateway::Focus($gateway) => $call,
+            ConfiguredFiscalGateway::NfeIo($gateway) => $call,
         }
     };
 }
@@ -641,7 +643,7 @@ impl FiscalGateway for ConfiguredFiscalGateway {
         on_gateway!(self, gateway => gateway.is_enabled())
     }
 
-    async fn submit_nfe(&self, request: &NfeRequest) -> Result<DocumentOutcome, GatewayError> {
+    async fn submit_nfe(&self, request: &NfeRequest) -> Result<Submission, GatewayError> {
         on_gateway!(self, gateway => gateway.submit_nfe(request).await)
     }
 
@@ -671,6 +673,15 @@ impl FiscalGateway for ConfiguredFiscalGateway {
         on_gateway!(self, gateway => gateway.correct_nfe(issuer, reference, text).await)
     }
 
+    async fn query_event(
+        &self,
+        issuer: &FiscalSettings,
+        reference: &str,
+        event: EventQuery,
+    ) -> Result<EventOutcome, GatewayError> {
+        on_gateway!(self, gateway => gateway.query_event(issuer, reference, event).await)
+    }
+
     async fn invalidate_nfe_numbers(
         &self,
         issuer: &FiscalSettings,
@@ -683,6 +694,20 @@ impl FiscalGateway for ConfiguredFiscalGateway {
             .invalidate_nfe_numbers(issuer, series, first, last, reason)
             .await)
     }
+}
+
+/// An address the gateway's credentials may be sent to: over TLS, or on this machine (a stand-in). The host is compared
+/// whole, so `http://localhost.example.com` is not local.
+fn is_https_or_local(url: &str) -> bool {
+    if url.starts_with("https://") {
+        return true;
+    }
+    ["http://localhost", "http://127.0.0.1"]
+        .iter()
+        .any(|local| {
+            url.strip_prefix(local)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with([':', '/']))
+        })
 }
 
 fn fiscal_gateway_from_env()
@@ -711,9 +736,7 @@ fn fiscal_gateway_from_env()
             // The tokens go to this address in every call: it is the gateway's over TLS, or a stand-in on this machine.
             let api_url = setting("FOCUS_NFE_API_URL");
             if let Some(url) = &api_url
-                && !(url.starts_with("https://")
-                    || url.starts_with("http://localhost")
-                    || url.starts_with("http://127.0.0.1"))
+                && !is_https_or_local(url)
             {
                 return Err(
                     "FOCUS_NFE_API_URL must be an https:// address (or a local one)".into(),
@@ -742,6 +765,59 @@ fn fiscal_gateway_from_env()
                     production.as_deref(),
                     &cnpj,
                 )?,
+            )))
+        }
+        Some("nfeio") => {
+            // The key goes to this address in every call: it is the gateway's over TLS, or a stand-in on this machine.
+            let api_url = setting("NFEIO_API_URL");
+            if let Some(url) = &api_url
+                && !is_https_or_local(url)
+            {
+                return Err("NFEIO_API_URL must be an https:// address (or a local one)".into());
+            }
+            let Some(key) = setting("NFEIO_API_KEY") else {
+                return Err("FISCAL_GATEWAY=nfeio needs NFEIO_API_KEY".into());
+            };
+            let (homologation, production) = (
+                setting("NFEIO_COMPANY_ID_HOMOLOGATION"),
+                setting("NFEIO_COMPANY_ID_PRODUCTION"),
+            );
+            if homologation.is_none() && production.is_none() {
+                return Err(
+                    "FISCAL_GATEWAY=nfeio needs NFEIO_COMPANY_ID_HOMOLOGATION or NFEIO_COMPANY_ID_PRODUCTION"
+                        .into(),
+                );
+            }
+            // A company at the gateway has one CNPJ: this is what keeps another company of this installation from
+            // issuing under it.
+            let Some(cnpj) = setting("NFEIO_ISSUER_CNPJ") else {
+                return Err("FISCAL_GATEWAY=nfeio needs NFEIO_ISSUER_CNPJ".into());
+            };
+            let cnpj = match conta_verde_domain::Document::parse(&cnpj) {
+                Ok(conta_verde_domain::Document::Cnpj(cnpj)) => cnpj,
+                _ => return Err("NFEIO_ISSUER_CNPJ is not a valid CNPJ".into()),
+            };
+            let search_confirmed = setting("NFEIO_SEARCH_CONFIRMED").as_deref() == Some("true");
+            if !search_confirmed {
+                tracing::warn!(
+                    "NFEIO_SEARCH_CONFIRMED is not true: issuing in production is refused until the search for a document by our reference is confirmed in the sandbox (ADR 0079)"
+                );
+            }
+            let file_hosts: Vec<String> = setting("NFEIO_FILE_HOSTS")
+                .map(|hosts| hosts.split(',').map(str::to_owned).collect())
+                .unwrap_or_default();
+            tracing::info!("fiscal documents are issued through NFE.io");
+            Ok(ConfiguredFiscalGateway::NfeIo(Box::new(
+                NfeIoGateway::new(
+                    api_url.as_deref(),
+                    &key,
+                    homologation.as_deref(),
+                    production.as_deref(),
+                    &cnpj,
+                    std::sync::Arc::new(BrasilApiCityCodes::new(None)?),
+                )?
+                .with_file_hosts(&file_hosts)
+                .with_search_confirmed(search_confirmed),
             )))
         }
         Some(other) => Err(format!("FISCAL_GATEWAY={other} is not a known gateway").into()),
@@ -1149,6 +1225,27 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_gateway_address_is_https_or_exactly_this_machine() {
+        for yes in [
+            "https://api.nfse.io",
+            "http://localhost",
+            "http://localhost:3999",
+            "http://127.0.0.1:8080/x",
+        ] {
+            assert!(is_https_or_local(yes), "{yes}");
+        }
+        for no in [
+            "http://api.nfse.io",
+            "http://localhost.evil.com",
+            "http://localhostevil",
+            "http://127.0.0.1.evil.com",
+            "ftp://localhost",
+        ] {
+            assert!(!is_https_or_local(no), "{no}");
+        }
+    }
 
     #[test]
     fn the_lookup_is_on_by_default_and_off_only_when_asked() {

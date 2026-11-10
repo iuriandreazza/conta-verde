@@ -1450,6 +1450,10 @@ fn fiscal_document_fields(document: &FiscalDocument) -> Fields {
                 .map(|refusal| format!("{}: {}", refusal.code(), refusal.message())),
         ),
         ("note", document.note().map(str::to_owned)),
+        (
+            "gateway_reference",
+            document.gateway_reference().map(str::to_owned),
+        ),
     ]
 }
 
@@ -1481,6 +1485,9 @@ fn fiscal_event_fields(event: &FiscalEvent) -> Fields {
         } => {
             fields.push(("document", Some(document.as_uuid().to_string())));
             fields.push(("sequence", Some(sequence.to_string())));
+        }
+        FiscalEventSubject::Cancellation { document, .. } => {
+            fields.push(("document", Some(document.as_uuid().to_string())));
         }
         FiscalEventSubject::Invalidation {
             series,
