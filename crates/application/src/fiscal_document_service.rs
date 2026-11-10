@@ -369,6 +369,14 @@ where
         let origin = draft.origin;
         match live {
             Some(stored) => {
+                // Another writer may have moved it since it was read (numbered it, sent it): what is there now is the
+                // document to build on, and one past its draft is the answer.
+                let stored = self.get(company_id, stored.id()).await?;
+                if stored.status() != FiscalDocumentStatus::Draft {
+                    return Ok(Persisted::Existing(
+                        self.refresh_or_return(company_id, stored, now_unix).await?,
+                    ));
+                }
                 let rebuilt = stored.rebuilt_with(draft)?;
                 let audit = audit_entry(
                     &rebuilt,
@@ -419,6 +427,7 @@ where
         now_unix: i64,
     ) -> Result<FiscalDocument, ApplicationError> {
         let settings = self.ready_settings(company_id).await?;
+        self.ensure_issues_nfse()?;
         let sale = self.completed_sale(company_id, request.sale_id).await?;
         let origin = FiscalOrigin::Sale(sale.id());
         let live = self
@@ -461,6 +470,15 @@ where
                     .await
             }
             Persisted::Existing(document) => Ok(document),
+        }
+    }
+
+    /// A gateway that does not issue NFS-e is refused before a DPS number is taken or a document is written.
+    fn ensure_issues_nfse(&self) -> Result<(), ApplicationError> {
+        if self.gateway.issues_nfse() {
+            Ok(())
+        } else {
+            Err(GatewayError::Unsupported("an NFS-e through this gateway: use another one").into())
         }
     }
 
@@ -554,6 +572,7 @@ where
             .rejected_of(company_id, id, FiscalDocumentKind::Nfse, request.sale_id)
             .await?;
         let settings = self.ready_settings(company_id).await?;
+        self.ensure_issues_nfse()?;
         let issued_on = issue_day(&settings, now_unix)?;
         ensure_certificate(&settings, issued_on)?;
         self.references.ensure_open(company_id, issued_on).await?;

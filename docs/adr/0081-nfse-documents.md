@@ -98,6 +98,14 @@ a cancellation is answered at once. Until a file that settles those points is re
 and **send nothing** (tested: no call reaches the gateway). **An installation that issues NFS-e uses Focus NFe or the fake for now**; this
 is the one place where ADR 0077's "built for both" is not met, and it is stated rather than guessed.
 
+### A gateway that does not issue NFS-e is refused before a number is taken
+
+`FiscalGateway::issues_nfse` (true by default, false for NFE.io) is asked before the DPS is numbered, so an installation on a gateway that
+cannot issue NFS-e writes nothing and spends no number (a number taken and then refused would leave a gap with a rejected document behind).
+A refusal of a request that the gateway also holds a document for is told from a duplicate by asking, and a **rejected** document found
+that way is not the answer: the refusal of the request just made is. A file the gateway names is followed only on its own host (never
+`//host`), and an optional PDF that cannot be fetched is not kept rather than holding back an authorization; the XML is required.
+
 ### The accountant's package
 
 An NFS-e issued in production is in the package like an NF-e, **in the same fixed columns** (ADR 0076 does not change): the number, the

@@ -1004,6 +1004,10 @@ impl FiscalGateway for NfeIoGateway {
             ))),
         }
     }
+    fn issues_nfse(&self) -> bool {
+        false
+    }
+
     // NFE.io's service invoices (NFS-e) are **not built**, and not because the gateway lacks them: its published
     // reference does not give what an adapter needs to promise that a service invoice is never issued twice ([ADR 0078],
     // [ADR 0081]). The listing takes a period, a page and no filter by our reference or `externalId` that the reference

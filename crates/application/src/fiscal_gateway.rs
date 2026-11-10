@@ -512,6 +512,12 @@ pub trait FiscalGateway: Send + Sync {
         reason: &str,
     ) -> impl Future<Output = Result<EventOutcome, GatewayError>> + Send;
 
+    /// Whether the gateway issues NFS-e. One that does not is refused **before** a DPS number is taken, so a number is
+    /// never spent on a document that cannot be sent ([ADR 0081]).
+    fn issues_nfse(&self) -> bool {
+        true
+    }
+
     /// Asks the gateway to authorize an NFS-e of the national standard. Same rule as [`submit_nfe`](Self::submit_nfe): the
     /// reference is ours, and a gateway that cannot find what it made for it before submitting **never submits** when it
     /// cannot tell, because issuing twice is a fiscal fault. One that cannot promise that answers `Unsupported`.

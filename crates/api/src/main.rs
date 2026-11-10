@@ -695,6 +695,10 @@ impl FiscalGateway for ConfiguredFiscalGateway {
             .await)
     }
 
+    fn issues_nfse(&self) -> bool {
+        on_gateway!(self, gateway => gateway.issues_nfse())
+    }
+
     async fn submit_nfse(
         &self,
         request: &NfseRequest,

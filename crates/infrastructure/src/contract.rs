@@ -18960,6 +18960,34 @@ pub async fn issues_an_nfse_from_a_sale<D, S, P, Y, F, B, R>(
     numbers.sort_unstable();
     assert_eq!(numbers, vec![1, 2, 3, 4]);
 
+    // A gateway that does not issue NFS-e is refused before a number is taken: nothing is written and no number is spent.
+    let unissued_sale = save_a_mixed_sale(sales, company, entry_seed, seed, fiscal).await;
+    gateway.without_nfse(true);
+    assert!(matches!(
+        service
+            .issue_nfse(
+                company,
+                &user,
+                issue_nfse_request(unissued_sale),
+                FISCAL_NOW
+            )
+            .await,
+        Err(ApplicationError::FiscalGateway(
+            conta_verde_application::GatewayError::Unsupported(_)
+        ))
+    ));
+    gateway.without_nfse(false);
+    let after = service
+        .issue_nfse(
+            company,
+            &user,
+            issue_nfse_request(unissued_sale),
+            FISCAL_NOW,
+        )
+        .await
+        .unwrap();
+    assert_eq!(after.dps(), Some(Dps::new(1, 5).unwrap()), "no gap");
+
     // The accountant's package holds the NFS-e issued in production with its files, under its key (or its number when the
     // gateway gave none); the numbers of production are its own, from 1 again.
     let mut production = draft;

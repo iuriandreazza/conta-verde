@@ -357,8 +357,9 @@ impl FocusNfeGateway {
             .ok_or_else(|| missing("caminho_xml_nota_fiscal"))?;
         // The printed form may be somewhere the gateway does not host (a storage service): then it is not kept, and the
         // person has the XML and the authority's portal.
+        // An optional file never holds back an authorization the authority gave: when it cannot be had, it is not kept.
         let pdf = match text(body, "url_danfse").and_then(|url| own_path(base, &url)) {
-            Some(path) => Some(self.download(base, token, &path).await?),
+            Some(path) => self.download(base, token, &path).await.ok(),
             None => None,
         };
         Ok(AuthorizedNfse {
@@ -391,9 +392,20 @@ impl FocusNfeGateway {
             // A refusal of the request is told apart from "this reference is already known" by asking: the gateway's
             // own words for a duplicate are not documented, and a duplicate is the document it made, not a refusal.
             StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY => {
-                match self.query_nfse(&request.issuer, reference).await? {
-                    DocumentOutcome::Unknown => failure(&answer).map(DocumentOutcome::Rejected),
-                    known => Ok(known),
+                match self.query_nfse(&request.issuer, reference).await {
+                    // What the gateway holds is the answer unless it is a refusal: then the refusal of **this** request is
+                    // the news (a corrected document sent again must not be told its old reason), and a question that
+                    // cannot be answered does not hide why the request was refused.
+                    Ok(
+                        known @ (DocumentOutcome::Processing
+                        | DocumentOutcome::Authorized(_)
+                        | DocumentOutcome::Contingency
+                        | DocumentOutcome::Denied(_)
+                        | DocumentOutcome::Cancelled { .. }),
+                    ) => Ok(known),
+                    Ok(DocumentOutcome::Unknown | DocumentOutcome::Rejected(_)) | Err(_) => {
+                        failure(&answer).map(DocumentOutcome::Rejected)
+                    }
                 }
             }
             _ => failure(&answer).map(DocumentOutcome::Rejected),
@@ -507,6 +519,9 @@ fn refusal_of_nfse(body: &Value) -> Refusal {
 /// The path of a file the gateway says it holds, when it is on the gateway's own host: a path as it is, or a whole address
 /// that starts with the gateway's own. Anything else (another host) is not followed.
 fn own_path(base: &str, value: &str) -> Option<String> {
+    if value.starts_with("//") {
+        return None;
+    }
     if value.starts_with('/') {
         return Some(value.to_owned());
     }
@@ -973,6 +988,30 @@ impl FiscalGateway for FocusNfeGateway {
                 Some(json!({ "justificativa": reason }).to_string()),
             )
             .await?;
+        // A success that is neither the cancellation nor the documented business error is not an answer this adapter
+        // understands: the event stays as it is and is not recorded as refused while the authority may still do it.
+        if answer.status.is_success()
+            && !matches!(
+                answer.body["status"].as_str(),
+                Some("cancelado" | "erro_cancelamento")
+            )
+        {
+            return Err(GatewayError::Unavailable(
+                "a cancellation answer this adapter does not know".to_owned(),
+            ));
+        }
+        // The cancellation's file is followed only when it is on the gateway's own host; otherwise it is not kept.
+        let mut answer = answer;
+        let own =
+            text(&answer.body, "caminho_xml_cancelamento").and_then(|path| own_path(&base, &path));
+        match own {
+            Some(path) => answer.body["caminho_xml_cancelamento"] = json!(path),
+            None => {
+                if let Some(body) = answer.body.as_object_mut() {
+                    body.remove("caminho_xml_cancelamento");
+                }
+            }
+        }
         self.event_of(
             &base,
             token,
@@ -1824,6 +1863,44 @@ mod tests {
             refused.outcome,
             DocumentOutcome::Rejected(refusal) if refusal.code == "erro_validacao"
         ));
+    }
+
+    #[tokio::test]
+    async fn a_corrected_document_sent_again_is_judged_not_told_its_old_reason() {
+        let fake = Shared::default();
+        let addr = serve(fake.clone()).await;
+        let issuer = contract::fiscal_service_issuer(CNPJ, FiscalEnvironment::Homologation);
+        let gateway = gateway(addr, Some(HOMOLOGATION_TOKEN), None);
+        gateway
+            .submit_nfse(&contract::nfse_request(&issuer, "again", 1))
+            .await
+            .unwrap();
+        // The authority refused it at first; the gateway still holds that document under the reference.
+        fake.lock().unwrap().nfse.get_mut("again").unwrap().stage = "erro_autorizacao";
+        let sent = gateway
+            .submit_nfse(&contract::nfse_request(&issuer, "again", 1))
+            .await
+            .unwrap();
+        // The refusal of this request (the 422's own) is the news, not the stored one.
+        assert!(matches!(
+            sent.outcome,
+            DocumentOutcome::Rejected(refusal) if refusal.code == "erro_validacao"
+        ));
+    }
+
+    #[test]
+    fn a_file_is_followed_only_when_it_is_a_path_on_the_gateways_own_host() {
+        assert_eq!(
+            own_path("http://gw", "/arquivos/a.xml").as_deref(),
+            Some("/arquivos/a.xml")
+        );
+        assert_eq!(
+            own_path("http://gw", "http://gw/arquivos/a.xml").as_deref(),
+            Some("/arquivos/a.xml")
+        );
+        assert_eq!(own_path("http://gw", "//other.example/a.xml"), None);
+        assert_eq!(own_path("http://gw", "https://storage.example/a.xml"), None);
+        assert_eq!(own_path("http://gw", "http://gwx/a.xml"), None);
     }
 
     #[tokio::test]

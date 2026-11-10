@@ -142,6 +142,8 @@ struct FakeState {
     /// The last NFS-e number given per issuer and environment: the national system's own counter.
     nfse_counters: HashMap<(String, &'static str), u64>,
     submitted_nfse: Vec<NfseRequest>,
+    /// A gateway that does not issue NFS-e, like NFE.io for now.
+    without_nfse: bool,
     /// The last number given, per issuer, environment and series: the gateway's own counter, like the real one's.
     counters: HashMap<(String, &'static str, u16), u32>,
     submitted: Vec<NfeRequest>,
@@ -233,6 +235,11 @@ impl FakeFiscalGateway {
     /// The ranges of numbers invalidated, in order.
     pub fn invalidated(&self) -> Vec<(u16, u32, u32)> {
         self.lock().invalidated.clone()
+    }
+
+    /// From now on the gateway does not issue NFS-e: an issue is refused before a DPS number is taken.
+    pub fn without_nfse(&self, without: bool) {
+        self.lock().without_nfse = without;
     }
 
     /// The NFS-e submitted, in order, repeats included.
@@ -631,6 +638,10 @@ impl FiscalGateway for FakeFiscalGateway {
             ),
             pdf: None,
         }))
+    }
+
+    fn issues_nfse(&self) -> bool {
+        !self.lock().without_nfse
     }
 
     async fn submit_nfse(
