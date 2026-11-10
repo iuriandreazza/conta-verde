@@ -176,7 +176,9 @@ def main():
         "WOO_URL": f"http://127.0.0.1:{store.port}", "WOO_CONSUMER_KEY": "ck_x", "WOO_CONSUMER_SECRET": "cs_x",
         "PORT": str(port), "POLL_SECONDS": "2", "STATE_FILE": f"{state_dir}/state.json", "START_FROM": "2026-11-01T00:00:00Z",
     }
-    process = subprocess.Popen(["node", "src/main.js"], cwd=PACKAGE, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    log_file = open(f"{state_dir}/connector.log", "w")
+    print(f"  (the connector's log: {state_dir}/connector.log)")
+    process = subprocess.Popen(["node", "src/main.js"], cwd=PACKAGE, env=env, stdout=log_file, stderr=subprocess.STDOUT, text=True)
     try:
         reference = "woocommerce:centro:9001"
         wait_for(lambda: owner.json("GET", f"/v1/sales?external_reference={reference}", bearer=api_key)["items"], "the order to become a sale")

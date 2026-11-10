@@ -41,12 +41,16 @@ catalogue and, if it needs an event or a resource `v1` lacks, an **additive** ch
   catalogue's scopes, named `Conector WooCommerce: <name>`, and a subscription to its events at that address. The answer carries the
   **two secrets, once**; the page shows them with the API address to paste. The subscription address follows the strict policy of
   ADR 0088 unchanged.
-  - **Partial failure is designed for.** The installation's ability to seal the secret is checked **before** the key is made (without
-    `FISCAL_SECRETS_KEY` nothing is made and nothing is left behind). The key is made, then the subscription; if the subscription
-    fails, the key is revoked; the connector is then written **only if it is still as it was read** (`switch(connector,
-    was_active)`), so of two people turning it on at once one wins and the other takes back what it made. What cannot be taken back
-    is logged and never shown.
-  - **Turning it off** revokes the key **first**, switches the subscription off (its address and events stay), and records it;
+  - **Partial failure and races are designed for.** The address is checked (`ConnectorHooks::check_address`, the subscription's own
+    rule) and the installation's ability to seal secrets is checked **before** the key is made, so a typo or a server without
+    `FISCAL_SECRETS_KEY` leaves nothing behind. The **claim** is a conditional write (`switch(connector, was_active)`): of two
+    people turning it on at once one wins. **The first time** the subscription is this call's own: made, then claimed, and if the
+    claim is lost the loser revokes its key and switches off the subscription it made. **Again**, the subscription is shared with
+    whoever turns it on at the same moment, so **the claim comes first and only the winner touches the subscription**; the loser
+    revokes its own key and nothing else. A winner that then fails to switch the subscription on (or to give it a new secret) puts the
+    connector back off, revokes its key and switches the subscription off. What cannot be taken back is logged and never shown.
+  - **Turning it off** revokes the key **first**, switches the subscription off (its address and events stay; the address is not
+    validated again, so an address made under the development opt-in cannot keep it from being switched off), and records it;
     asking again changes and records nothing. A failure after the key was revoked leaves a connector that still says it is on, which
     asking again finishes. **Turning it on again** makes a **new key**, switches the **same subscription** on at the address given
     and gives it a **new secret** (the old one signs for 24 hours, ADR 0088).
@@ -93,6 +97,10 @@ The store's keys are in its own environment.
   it (unless the order is already `completed` in the store: a shipped order is not taken back from here); **an order already in the state asked for is left alone**, which is what ends the loop when the cancellation began in the
   store. When the store cannot be reached the answer is `502` and the delivery is **not** remembered, so conta-verde sends it again
   (ADR 0088's nine hours of retries).
+- **Passes cost little**: an order already dealt with in the state the store has it in (`handled`) is not asked about again while the
+  store does not change it, so the overlap is free; an order edited after import (`409`) is said once and not held; an order the store
+  deleted while it waited is let go; a SKU the API will not search for stops nothing but its own order. A paid order whose sale was
+  cancelled in the ERP is logged and left alone (the person decides).
 - A `429` is waited out as `Retry-After` says (at most a minute, four tries); a failure of the API itself fails the pass, which is
   tried again from the same cursor.
 

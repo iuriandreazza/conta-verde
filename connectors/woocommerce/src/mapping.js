@@ -35,7 +35,7 @@ export function saleOf(order, { storeId, customerId, categoryId, paymentTermId, 
     if (!productId) return { problem: `no product with the SKU ${sku}` };
     try {
       const line = lineOf({ quantity: item.quantity, subtotal: item.subtotal, total: item.total });
-      lines.push({ product_id: productId, description: String(item.name ?? sku).slice(0, 200), quantity: String(item.quantity), unit_price: line.unitPrice, discount: line.discount });
+      lines.push({ product_id: productId, description: Array.from(String(item.name ?? sku).replace(/\s+/g, " ").trim() || sku).slice(0, 200).join(""), quantity: String(item.quantity), unit_price: line.unitPrice, discount: line.discount });
     } catch (error) {
       return { problem: `item ${sku}: ${error.message}` };
     }

@@ -183,6 +183,39 @@ where
         Ok(after)
     }
 
+    /// Whether an address could be the one of a subscription here, without making one.
+    pub fn check_address(&self, address: &str) -> Result<(), ApplicationError> {
+        Ok(WebhookSubscription::check_address(
+            address,
+            self.allow_private_targets,
+        )?)
+    }
+
+    /// Switches a subscription off, keeping its address and events. It never fails on the address, which is not looked at again.
+    pub async fn switch_off(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        id: WebhookSubscriptionId,
+    ) -> Result<WebhookSubscription, ApplicationError> {
+        let before = self.find(company_id, id).await?;
+        if !before.is_active() {
+            return Ok(before);
+        }
+        let after = before.switched_off();
+        let audit = audit_entry(
+            &after,
+            actor,
+            AuditAction::Updated,
+            webhook_subscription_changes(&before, &after),
+        );
+        self.repository
+            .update(&after, &audit)
+            .await
+            .map_err(missing)?;
+        Ok(after)
+    }
+
     /// Replaces the secret with the one typed (`Some`, never given back) or with a new one made here (`None`, given back once).
     /// The one that was replaced goes on signing for 24 hours, so a receiver can switch without a gap.
     pub async fn replace_secret(

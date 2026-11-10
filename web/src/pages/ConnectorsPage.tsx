@@ -120,7 +120,7 @@ export function ConnectorsPage() {
   const [turning, setTurning] = useState<string | null>(null);
   const [historyOf, setHistoryOf] = useState<string | null>(null);
   // The secrets of a connector just turned on are shown here, once.
-  const [shown, setShown] = useState<TurnedOnConnector | null>(null);
+  const [shown, setShown] = useState<TurnedOnConnector[]>([]);
 
   const load = useCallback(async () => {
     setError(null);
@@ -166,18 +166,19 @@ export function ConnectorsPage() {
       {list && !list.available && (
         <Notice message="Conectores desligados: o servidor não tem a chave para guardar os segredos dos webhooks (FISCAL_SECRETS_KEY). Peça a quem cuida do servidor." />
       )}
-      {shown && (
-        <>
-          <ConnectorSecrets
-            name={shown.connector.name}
-            apiKey={shown.api_key_secret}
-            webhookSecret={shown.webhook_secret}
-            packageLink={packageUrl(SOURCE_URL, packagePath(shown.connector.kind))}
-          />
-          <Button type="button" variant="ghost" className="btn-small" onClick={() => setShown(null)}>
-            Já copiei
-          </Button>
-        </>
+      {shown.map((turned) => (
+        <ConnectorSecrets
+          key={turned.connector.id}
+          name={turned.connector.name}
+          apiKey={turned.api_key_secret}
+          webhookSecret={turned.webhook_secret}
+          packageLink={packageUrl(SOURCE_URL, packagePath(turned.connector.kind))}
+        />
+      ))}
+      {shown.length > 0 && (
+        <Button type="button" variant="ghost" className="btn-small" onClick={() => setShown([])}>
+          Já copiei
+        </Button>
       )}
       {canWrite && list && list.available && (
         <CreateForm
@@ -258,7 +259,7 @@ export function ConnectorsPage() {
                               onTurnedOn={(result) => {
                                 setTurning(null);
                                 setNotice(null);
-                                setShown(result);
+                                setShown((held) => [...held, result]);
                                 void load();
                               }}
                             />

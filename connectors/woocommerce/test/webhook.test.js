@@ -60,6 +60,10 @@ test("a delivery that is not genuine is refused before anything is read or done"
   const text = "not json";
   const headers = { "webhook-id": "m9", "webhook-timestamp": String(NOW / 1000), "webhook-signature": sign(secret, "m9", String(NOW / 1000), text) };
   assert.deepEqual(await handle({ headers, body: text }), { status: 400 });
+  // Signed, valid JSON, but not an event.
+  const empty = "null";
+  const nullHeaders = { "webhook-id": "m10", "webhook-timestamp": String(NOW / 1000), "webhook-signature": sign(secret, "m10", String(NOW / 1000), empty) };
+  assert.deepEqual(await handle({ headers: nullHeaders, body: empty }), { status: 400 });
   assert.deepEqual(store.state.updates, []);
 });
 

@@ -11,7 +11,7 @@ const files = (dir) => readdirSync(dir, { withFileTypes: true, recursive: true }
 test("the package imports nothing from outside its own directory, and only the standard library from outside", () => {
   const imports = [];
   for (const file of files(root)) {
-    for (const match of readFileSync(file, "utf8").matchAll(/(?:import|export)[^"'\n]*?from\s+["']([^"']+)["']|import\(\s*["']([^"']+)["']\s*\)/g)) imports.push({ file, spec: match[1] ?? match[2] });
+    for (const match of readFileSync(file, "utf8").matchAll(/(?:^|\n)\s*(?:import|export)\b[^;]*?\bfrom\s*["']([^"']+)["']|(?:^|\n)\s*import\s*["']([^"']+)["']|\bimport\(\s*["']([^"']+)["']\s*\)/g)) imports.push({ file, spec: match[1] ?? match[2] ?? match[3] });
   }
   assert.ok(imports.length > 10);
   for (const { file, spec } of imports) {

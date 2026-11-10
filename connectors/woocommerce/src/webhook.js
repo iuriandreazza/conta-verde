@@ -26,6 +26,7 @@ export function createWebhookHandler({ woo, config, seen, now = () => Date.now()
     } catch {
       return { status: 400 };
     }
+    if (typeof event !== "object" || event === null) return { status: 400 };
     const update = orderUpdateFor({ storeId: config.storeId, type: event.type, sale: event.data?.object });
     if (update) {
       try {

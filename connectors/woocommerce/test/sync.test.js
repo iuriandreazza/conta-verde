@@ -116,3 +116,44 @@ test("the store's pages are all read, and the store's keys never reach conta-ver
   assert.ok(!JSON.stringify(erp.state).includes(store.consumerSecret));
   await assert.rejects(new WooCommerce({ url: store.url, consumerKey: "no", consumerSecret: "no" }).ordersModifiedSince("2026-01-01T00:00:00"), /401/);
 });
+
+test("an order deleted in the store while it waited is let go, a SKU the API will not search for stops nothing, and an edited order is said once", async () => {
+  store.state.orders.push(order({ id: 1, line_items: [{ id: 1, name: "Chá", sku: "cha-100", quantity: 1, subtotal: "8.00", total: "8.00" }] }));
+  const first = await pass();
+  store.state.orders.length = 0;
+  const later = await syncOrders({ woo, api, config, cursor: "2026-11-20T00:00:00.000Z", pending: first.pending, log: (line) => logs.push(line) });
+  assert.deepEqual(later.pending, {});
+  assert.match(logs.join("\n"), /order 1: no longer in the store/);
+
+  const long = "x".repeat(150);
+  store.state.orders.push(order({ id: 2, line_items: [{ id: 1, name: "Longo", sku: long, quantity: 1, subtotal: "1.00", total: "1.00" }] }), order({ id: 3 }));
+  const real = api.call.bind(api);
+  api.call = async (method, path, body) => {
+    if (path.includes(encodeURIComponent(long))) throw new (await import("../src/contaVerde.js")).ApiError(400, "invalid_request", "q too long");
+    return real(method, path, body);
+  };
+  const { report } = await pass();
+  assert.equal(report.made, 1);
+  assert.equal(report.problems, 1);
+});
+
+test("an order already dealt with is not asked about again while the store has not changed it, and an edited one is said once", async () => {
+  store.state.orders.push(order({ id: 1 }));
+  const first = await pass();
+  const callsBefore = erp.state.calls.length;
+  const second = await pass({ handled: first.handled });
+  assert.deepEqual(second.report, { made: 0, already: 0, cancelled: 0, problems: 0 });
+  assert.equal(erp.state.calls.filter((c) => c.startsWith("POST /v1/sales")).length, 1);
+  assert.ok(erp.state.calls.length - callsBefore <= 1, "only the product lookup, if any");
+  store.state.orders[0].line_items[0].quantity = 9;
+  store.state.orders[0].line_items[0].subtotal = "90.90";
+  store.state.orders[0].line_items[0].total = "90.90";
+  store.state.orders[0].date_modified_gmt = "2026-11-05T13:05:00";
+  const edited = await pass({ handled: second.handled });
+  assert.equal(edited.report.problems, 1);
+  logs.length = 0;
+  const again = await pass({ handled: edited.handled, pending: edited.pending });
+  assert.equal(again.report.problems, 0);
+  assert.deepEqual(logs, []);
+  assert.deepEqual(edited.pending, {});
+});

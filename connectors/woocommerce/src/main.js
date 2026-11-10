@@ -12,7 +12,7 @@ function loadState(file, startFrom) {
   try {
     return JSON.parse(readFileSync(file, "utf8"));
   } catch {
-    return { cursor: new Date(startFrom).toISOString(), pending: {} };
+    return { cursor: new Date(startFrom).toISOString(), pending: {}, handled: {} };
   }
 }
 
@@ -45,7 +45,12 @@ export function start(config) {
       else chunks.push(chunk);
     });
     request.on("end", async () => {
-      const { status } = await handle({ headers: request.headers, body: Buffer.concat(chunks).toString("utf8") });
+      let status = 500;
+      try {
+        ({ status } = await handle({ headers: request.headers, body: Buffer.concat(chunks).toString("utf8") }));
+      } catch (error) {
+        log(`a delivery could not be handled: ${error.message}`);
+      }
       response.writeHead(status).end();
     });
   });
@@ -56,9 +61,10 @@ export function start(config) {
     if (running) return;
     running = true;
     try {
-      const { report, cursor, pending } = await syncOrders({ woo, api, config, cursor: state.cursor, pending: state.pending, log });
+      const { report, cursor, pending, handled } = await syncOrders({ woo, api, config, cursor: state.cursor, pending: state.pending, handled: state.handled, log });
       state.cursor = cursor;
       state.pending = pending;
+      state.handled = handled;
       saveState(config.stateFile, state);
       if (report.made || report.cancelled || report.problems) log(`orders: ${JSON.stringify(report)}`);
     } catch (error) {

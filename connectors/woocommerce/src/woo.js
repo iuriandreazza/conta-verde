@@ -13,7 +13,7 @@ export class WooCommerce {
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(8_000),
     });
-    if (!response.ok) throw new Error(`the store answered ${response.status}`);
+    if (!response.ok) throw Object.assign(new Error(`the store answered ${response.status}`), { status: response.status });
     return response.json();
   }
 

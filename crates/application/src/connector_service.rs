@@ -47,6 +47,9 @@ pub trait ConnectorHooks: Send + Sync {
     /// Whether the installation can seal secrets; without it nothing is made.
     fn is_available(&self) -> bool;
 
+    /// Whether an address could be the one of a subscription, so that a typo is refused before anything is made.
+    fn check_address(&self, address: &str) -> Result<(), ApplicationError>;
+
     /// Makes a subscription to `events` at `address` and returns its id and its secret, which exists only in this answer.
     fn create(
         &self,
@@ -119,6 +122,10 @@ impl<T: ConnectorKeys> ConnectorKeys for std::sync::Arc<T> {
 impl<T: ConnectorHooks> ConnectorHooks for std::sync::Arc<T> {
     fn is_available(&self) -> bool {
         ConnectorHooks::is_available(&**self)
+    }
+
+    fn check_address(&self, address: &str) -> Result<(), ApplicationError> {
+        (**self).check_address(address)
     }
 
     async fn create(
@@ -224,6 +231,10 @@ where
         WebhookService::is_available(self)
     }
 
+    fn check_address(&self, address: &str) -> Result<(), ApplicationError> {
+        WebhookService::check_address(self, address)
+    }
+
     async fn create(
         &self,
         company_id: CompanyId,
@@ -278,28 +289,9 @@ where
         actor: &Actor,
         id: WebhookSubscriptionId,
     ) -> Result<(), ApplicationError> {
-        let held = self
-            .list(company_id)
-            .await?
-            .into_iter()
-            .find(|subscription| subscription.id() == id)
-            .ok_or(ApplicationError::WebhookNotFound)?;
-        self.update(
-            company_id,
-            actor,
-            id,
-            WebhookSubscriptionDraft {
-                url: held.url().to_owned(),
-                events: held
-                    .events()
-                    .iter()
-                    .map(|kind| kind.as_str().to_owned())
-                    .collect(),
-                active: false,
-            },
-        )
-        .await
-        .map(|_| ())
+        WebhookService::switch_off(self, company_id, actor, id)
+            .await
+            .map(|_| ())
     }
 
     async fn is_on(
@@ -442,6 +434,8 @@ where
             return Err(RepositoryError::ConnectorChanged.into());
         }
         let kind = before.kind();
+        // A typo in the address is refused before a key exists, so that it leaves nothing behind.
+        self.hooks.check_address(address)?;
         let (key_id, api_key_secret) = self
             .keys
             .issue(
@@ -460,49 +454,92 @@ where
             .iter()
             .map(|event| (*event).to_owned())
             .collect();
-        let hook = match before.webhook_subscription_id() {
+        let (after, webhook_secret) = match before.webhook_subscription_id() {
+            // The first time: the subscription is this call's own, so what fails or loses takes it back.
             None => {
-                self.hooks
+                let (subscription, secret) = match self
+                    .hooks
                     .create(company_id, actor, address.to_owned(), events, now)
                     .await
+                {
+                    Ok(made) => made,
+                    Err(error) => {
+                        self.take_back(company_id, actor, key_id, None).await;
+                        return Err(error);
+                    }
+                };
+                let after = before.turned_on(key_id, subscription);
+                if let Err(error) = self.claim(actor, &before, &after).await {
+                    self.take_back(company_id, actor, key_id, Some(subscription))
+                        .await;
+                    return Err(error);
+                }
+                (after, secret)
             }
-            Some(subscription) => self
-                .hooks
-                .turn_back_on(
-                    company_id,
-                    actor,
-                    subscription,
-                    address.to_owned(),
-                    events,
-                    now,
-                )
-                .await
-                .map(|secret| (subscription, secret)),
-        };
-        let (subscription_id, webhook_secret) = match hook {
-            Ok(made) => made,
-            Err(error) => {
-                self.take_back(company_id, actor, key_id, None).await;
-                return Err(error);
+            // Again: the subscription is shared with whoever turns it on at the same time, so **the claim comes first** and only
+            // the winner touches it. A loser revokes its own key and nothing else.
+            Some(subscription) => {
+                let after = before.turned_on(key_id, subscription);
+                if let Err(error) = self.claim(actor, &before, &after).await {
+                    self.take_back(company_id, actor, key_id, None).await;
+                    return Err(error);
+                }
+                match self
+                    .hooks
+                    .turn_back_on(
+                        company_id,
+                        actor,
+                        subscription,
+                        address.to_owned(),
+                        events,
+                        now,
+                    )
+                    .await
+                {
+                    Ok(secret) => (after, secret),
+                    Err(error) => {
+                        // The winner could not finish: it puts the connector back as it was, off, with its key revoked and its
+                        // subscription off (it may have been switched on before the secret failed).
+                        self.take_back(company_id, actor, key_id, Some(subscription))
+                            .await;
+                        let audit = audit_entry(
+                            &before,
+                            actor,
+                            AuditAction::Updated,
+                            connector_changes(&after, &before),
+                        );
+                        if let Err(storage) = self.connectors.switch(&before, true, &audit).await {
+                            tracing::error!(error = %storage, "a connector that could not be turned on was not put back off");
+                        }
+                        return Err(error);
+                    }
+                }
             }
         };
-        let after = before.turned_on(key_id, subscription_id);
-        let audit = audit_entry(
-            &after,
-            actor,
-            AuditAction::Updated,
-            connector_changes(&before, &after),
-        );
-        if let Err(error) = self.connectors.switch(&after, false, &audit).await {
-            self.take_back(company_id, actor, key_id, Some(subscription_id))
-                .await;
-            return Err(missing(error));
-        }
         Ok(TurnedOn {
             connector: after,
             api_key_secret,
             webhook_secret,
         })
+    }
+
+    /// Writes `after` only while the connector is still as `before` was read: of two turning it on at once, one wins.
+    async fn claim(
+        &self,
+        actor: &Actor,
+        before: &Connector,
+        after: &Connector,
+    ) -> Result<(), ApplicationError> {
+        let audit = audit_entry(
+            after,
+            actor,
+            AuditAction::Updated,
+            connector_changes(before, after),
+        );
+        self.connectors
+            .switch(after, false, &audit)
+            .await
+            .map_err(missing)
     }
 
     /// Revokes the key and switches the subscription off. Asking again for one that is off changes and records nothing. The key

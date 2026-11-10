@@ -47,11 +47,16 @@ export class ContaVerde {
     const found = new Map();
     for (const sku of skus) {
       let after = "";
-      do {
-        const { body } = await this.call("GET", `/products?q=${encodeURIComponent(sku)}&active=true&kind=product&limit=200${after}`);
-        for (const product of body.items) if (product.sku && product.sku.toUpperCase() === sku) found.set(sku, product.id);
-        after = body.next_cursor && !found.has(sku) ? `&after=${encodeURIComponent(body.next_cursor)}` : "";
-      } while (after !== "");
+      try {
+        do {
+          const { body } = await this.call("GET", `/products?q=${encodeURIComponent(sku)}&active=true&kind=product&limit=200${after}`);
+          for (const product of body.items) if (product.sku && product.sku.toUpperCase() === sku) found.set(sku, product.id);
+          after = body.next_cursor && !found.has(sku) ? `&after=${encodeURIComponent(body.next_cursor)}` : "";
+        } while (after !== "");
+      } catch (error) {
+        // A SKU the API refuses to search for (too long, say) is only a product that is not found: it must not stop every other order.
+        if (!(error instanceof ApiError) || error.status !== 400) throw error;
+      }
     }
     return found;
   }

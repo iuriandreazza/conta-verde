@@ -1612,22 +1612,14 @@ pub async fn runs_connectors<C, KR, S, WR, CI, Q>(
             .all(|view| !view.key_usable && !view.subscription_on)
     );
 
-    // A subscription the installation refuses (an address that is not public) takes back the key made before it.
+    // An address the subscription would refuse is refused before anything is made: no key, no subscription, nothing to take back.
     assert!(
         connectors
             .turn_on(company, &ana, shop.id(), "http://localhost/hook", NOW)
             .await
             .is_err()
     );
-    assert_eq!(keys.list(company).await.unwrap().len(), keys_before + 1);
-    assert!(
-        keys.list(company)
-            .await
-            .unwrap()
-            .iter()
-            .all(|key| key.is_revoked()),
-        "the key made for a turning on that failed is revoked"
-    );
+    assert_eq!(keys.list(company).await.unwrap().len(), keys_before);
     assert_eq!(
         hooks.list(company).await.unwrap().len(),
         subscriptions_before
@@ -1758,11 +1750,50 @@ pub async fn runs_connectors<C, KR, S, WR, CI, Q>(
         trail
     );
 
-    // Turned on again it makes a new key, switches the same subscription on and gives a new secret.
-    let again = connectors
-        .turn_on(company, &ana, shop.id(), WEBHOOK_URL, NOW)
+    // Two turning it on again at the same time: one wins and the other takes back its own key and **touches nothing else**, so the
+    // winner's connector, key and subscription (which is shared) stand.
+    let (first, second) = tokio::join!(
+        connectors.turn_on(company, &ana, shop.id(), WEBHOOK_URL, NOW),
+        connectors.turn_on(company, &ana, shop.id(), WEBHOOK_URL, NOW),
+    );
+    let (again, lost) = match (first, second) {
+        (Ok(won), Err(lost)) | (Err(lost), Ok(won)) => (won, lost),
+        other => panic!("exactly one wins: {other:?}"),
+    };
+    assert_eq!(
+        lost,
+        ApplicationError::Repository(RepositoryError::ConnectorChanged)
+    );
+    let live: Vec<_> = keys
+        .list(company)
         .await
+        .unwrap()
+        .into_iter()
+        .filter(|key| !key.is_revoked())
+        .collect();
+    assert_eq!(live.len(), 1);
+    assert_eq!(Some(live[0].id()), again.connector.api_key_id());
+    assert!(
+        hooks
+            .list(company)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(
+                |subscription| Some(subscription.id()) == again.connector.webhook_subscription_id()
+            )
+            .unwrap()
+            .is_active()
+    );
+    let view = connectors
+        .list(company, NOW)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|v| v.connector.id() == shop.id())
         .unwrap();
+    assert!(view.key_usable && view.subscription_on);
+    // Turned on again it makes a new key, switches the same subscription on and gives a new secret.
     assert_ne!(again.connector.api_key_id(), on.connector.api_key_id());
     assert_eq!(
         again.connector.webhook_subscription_id(),
