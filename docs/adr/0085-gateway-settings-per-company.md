@@ -51,6 +51,29 @@ Only the **owner and the admin**: the routes (`/gateway-settings`) are mapped to
   logs it. A test reads the raw column and asserts it is not the plaintext, and another that no response, trail or `Debug` holds it.
 - The environment's secrets are unchanged and still never stored.
 
+### Edited by two people, read with a version
+
+The settings carry a **version** (1 for the first write): a write names the version it read and is **refused with `409`** (`GatewaySettingsChanged`)
+when the stored one has moved, so an admin working from an old read can neither undo a secret another just set nor clear it by keeping what
+it read (the same pattern as `QuoteChanged`). A removal is checked the same way. **Reset** (`DELETE /gateway-settings`, the page's "Voltar ao
+gateway do servidor") removes the company's own settings so the server's come back; the trail records what was cleared, never a value.
+
+### A secret that cannot be read, and what a secret may be
+
+A stored secret that does not open (the key changed or was lost) is a **`409` naming the field** ("type it again"), not a 500, and the page
+says which are unreadable instead of showing them as configured. A secret is **printable ASCII with no space, 8 to 200 bytes**: invisible and
+non-ASCII characters (a copy from a page often adds one) are refused at the door, it is a valid HTTP header and basic-auth value for both
+gateways, and its sealed size (at most 229 bytes) always fits the column. A body of the wrong shape is answered with a **fixed message**,
+never serde's, which quotes the value it found. The key is 64 hexadecimal digits only (no sign) and **not all zeros**.
+
+### What step 2 must do with it
+
+"A company's own settings win" means: **the stored settings are usable when they have what the kind needs for the environment in use**
+(Focus NFe: the token of that environment; NFE.io: the key and the company id of it). A row that is not usable is refused with a clear `422`
+naming what is missing (not silently replaced by the server's, and not used half-built); reset is the way back. **The NFE.io search
+confirmation stays the operator's too**: a company's own flag alone does not allow a production issue, because it is what keeps a document
+from being issued twice ([ADR 0079](0079-nfeio-adapter.md)); production needs the environment's `NFEIO_SEARCH_CONFIRMED` as well.
+
 ### The webhook
 
 A company may have its own webhook secret (sealed like the others). The knock is authenticated against the **company's** secret, else the

@@ -108,6 +108,7 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
             | RepositoryError::ChargeAlreadyOpen
             | RepositoryError::FiscalDocumentAlreadyLive
             | RepositoryError::FiscalDocumentChanged
+            | RepositoryError::GatewaySettingsChanged
             | RepositoryError::DuplicateFiscalFile
             | RepositoryError::DuplicateFiscalDps),
         ) => (StatusCode::CONFLICT, error.to_string()),
@@ -269,6 +270,7 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
         // Internal details can leak: log them, but show clients a generic message.
         ApplicationError::Repository(RepositoryError::Storage(detail)) => internal(detail),
         ApplicationError::Secret(error) => internal(&error.to_string()),
+        ApplicationError::SecretUnreadable(_) => (StatusCode::CONFLICT, error.to_string()),
     }
 }
 

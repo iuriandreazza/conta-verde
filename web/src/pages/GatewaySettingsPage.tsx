@@ -96,9 +96,10 @@ export function GatewaySettingsPage() {
     try {
       const input: GatewaySettingsInput = {
         kind,
-        focus_token_homologation: change(secrets.focus_token_homologation),
-        focus_token_production: change(secrets.focus_token_production),
-        nfeio_api_key: change(secrets.nfeio_api_key),
+        // What belongs to the gateway that is not chosen is not sent: a token typed there and forgotten is not sealed and saved.
+        focus_token_homologation: kind === "focus" ? change(secrets.focus_token_homologation) : { action: "keep" },
+        focus_token_production: kind === "focus" ? change(secrets.focus_token_production) : { action: "keep" },
+        nfeio_api_key: kind === "nfeio" ? change(secrets.nfeio_api_key) : { action: "keep" },
         webhook_secret: change(secrets.webhook_secret),
         nfeio_company_homologation: homologationCompany.trim() || null,
         nfeio_company_production: productionCompany.trim() || null,
@@ -106,6 +107,21 @@ export function GatewaySettingsPage() {
       };
       show(await api.saveGatewaySettings(companyId, input));
       setSaved(true);
+      setVersion((current) => current + 1);
+    } catch (failure) {
+      setError(errorMessage(failure));
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function reset() {
+    if (!window.confirm("Voltar ao gateway do servidor? Os segredos desta empresa serão apagados.")) return;
+    setPending(true);
+    setError(null);
+    setSaved(false);
+    try {
+      show(await api.resetGatewaySettings(companyId));
       setVersion((current) => current + 1);
     } catch (failure) {
       setError(errorMessage(failure));
@@ -140,7 +156,7 @@ export function GatewaySettingsPage() {
         {label}
         <input
           type="password"
-          autoComplete="off"
+          autoComplete="new-password"
           spellCheck={false}
           value={secrets[name].typed}
           disabled={!canWrite || secrets[name].clear}
@@ -174,6 +190,14 @@ export function GatewaySettingsPage() {
         <Notice
           tone="warning"
           message="O servidor não tem a chave de cifragem (FISCAL_SECRETS_KEY): nenhum segredo pode ser salvo até o operador defini-la. O gateway pode ser escolhido mesmo assim."
+        />
+      )}
+      {settings.unreadable.length > 0 && (
+        <Notice
+          tone="warning"
+          message={`Estes segredos estão salvos, mas o servidor não consegue lê-los (a chave de cifragem mudou ou foi perdida): ${settings.unreadable
+            .map((field) => FIELD_LABELS[field] ?? field)
+            .join(", ")}. Digite-os de novo.`}
         />
       )}
       {settings.kind === null && settings.server_gateway !== null && (
@@ -222,9 +246,16 @@ export function GatewaySettingsPage() {
           Endereço do webhook: <code>{webhookUrl}</code> <CopyButton text={webhookUrl} label="Copiar o endereço do webhook" />
         </p>
         {canWrite && (
-          <Button type="submit" pending={pending}>
-            Salvar
-          </Button>
+          <div className="form-actions">
+            <Button type="submit" pending={pending}>
+              Salvar
+            </Button>
+            {settings.kind !== null && (
+              <Button type="button" disabled={pending} onClick={() => void reset()}>
+                Voltar ao gateway do servidor
+              </Button>
+            )}
+          </div>
         )}
       </form>
       <section aria-label="Histórico">

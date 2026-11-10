@@ -35,9 +35,36 @@ impl GatewaySettingsRepository for InMemoryGatewaySettingsRepository {
     ) -> Result<(), RepositoryError> {
         ensure_audit_describes(audit, settings)?;
         let mut state = self.state.lock().expect("repository lock poisoned");
+        // Written only from the version it was made from: the first is 1 and finds none, a later one is the stored plus one.
+        let stored = state
+            .settings
+            .get(&settings.company_id())
+            .map_or(0, GatewaySettings::version);
+        if settings.version() != stored + 1 {
+            return Err(RepositoryError::GatewaySettingsChanged);
+        }
         state
             .settings
             .insert(settings.company_id(), settings.clone());
+        state.audit.record(audit);
+        Ok(())
+    }
+
+    async fn remove(
+        &self,
+        company_id: CompanyId,
+        version: u32,
+        audit: &AuditEntry,
+    ) -> Result<(), RepositoryError> {
+        let mut state = self.state.lock().expect("repository lock poisoned");
+        let Some(held) = state.settings.get(&company_id) else {
+            return Err(RepositoryError::NotFound);
+        };
+        ensure_audit_describes(audit, held)?;
+        if held.version() != version {
+            return Err(RepositoryError::GatewaySettingsChanged);
+        }
+        state.settings.remove(&company_id);
         state.audit.record(audit);
         Ok(())
     }
@@ -70,6 +97,15 @@ mod tests {
             ),
             &conta_verde_application::GatewaySettingsService::new(store, crate::NoSecretCipher),
             CompanyId::generate(),
+            CompanyId::generate(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn refuses_a_write_from_an_old_read() {
+        contract::gateway_settings_refuse_a_write_from_an_old_read(
+            &InMemoryGatewaySettingsRepository::default(),
             CompanyId::generate(),
         )
         .await;

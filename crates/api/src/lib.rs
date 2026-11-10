@@ -696,7 +696,8 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         .route(
             "/companies/{company_id}/gateway-settings",
             get(gateway_settings::get_gateway_settings::<X>)
-                .put(gateway_settings::replace_gateway_settings::<X>),
+                .put(gateway_settings::replace_gateway_settings::<X>)
+                .delete(gateway_settings::reset_gateway_settings::<X>),
         )
         .route(
             "/companies/{company_id}/gateway-settings/history",
@@ -10504,6 +10505,30 @@ mod tests {
                 .len(),
             2
         );
+
+        // Reset: only the owner and the admin, the server's settings come back, the trail says what was cleared and never a value.
+        let reader = member_with_role(&app, &identities, company_id, Role::Financial).await;
+        assert_eq!(
+            send(
+                &app,
+                json_request("DELETE", &uri, Some(&reader), Value::Null)
+            )
+            .await
+            .status,
+            StatusCode::FORBIDDEN
+        );
+        let reset = send(
+            &app,
+            json_request("DELETE", &uri, Some(&admin), Value::Null),
+        )
+        .await;
+        assert_eq!(reset.status, StatusCode::OK, "{}", reset.body);
+        assert_eq!(reset.body["kind"], Value::Null);
+        assert_eq!(reset.body["webhook_secret_set"], false);
+        assert_eq!(reset.body["unreadable"], json!([]));
+        let history = send(&app, get_request(&format!("{uri}/history"), Some(&owner))).await;
+        assert_eq!(history.body.as_array().unwrap().len(), 3);
+        assert!(!leaks(&history.body.to_string()));
     }
 
     /// The invoices issued against the company ([ADR 0083]): fetched from the gateway on request, declared to the authority in the

@@ -769,6 +769,8 @@ export interface GatewaySettings {
   encryption_available: boolean;
   server_gateway: string | null;
   webhook_path: string;
+  /** The secrets that are stored and cannot be read now (the server's key changed or was lost): type them again. */
+  unreadable: string[];
 }
 
 /** What to do with one secret: keep the stored one, set a new one, or clear it. */
@@ -2298,6 +2300,8 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(input),
     }),
+  resetGatewaySettings: (companyId: string) =>
+    request<GatewaySettings>(`/companies/${companyId}/gateway-settings`, { method: "DELETE" }),
   gatewaySettingsHistory: (companyId: string) =>
     request<HistoryEntry[]>(`/companies/${companyId}/gateway-settings/history`),
   listReceivedInvoices: (companyId: string, filters: ReceivedInvoiceFilters, after?: string) => {

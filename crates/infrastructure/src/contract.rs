@@ -20158,12 +20158,117 @@ pub async fn gateway_settings_are_sealed_audited_and_never_shown<R>(
         matches!(&refused, ApplicationError::FiscalRule(text) if text.contains("FISCAL_SECRETS_KEY") && !leaks(text))
     );
     assert_eq!(without_key.history(other_company).await.unwrap().len(), 1);
-    // What was sealed cannot be opened without the key: the answer is an error, not an empty value.
-    assert!(
+    // What was sealed cannot be opened without the key: the answer is a named error, not an empty value, and the secrets that cannot
+    // be read are told apart from the ones that can (the page says so instead of showing them as configured).
+    assert!(matches!(
         without_key
             .open(company, GatewaySecret::FocusTokenProduction)
-            .await
-            .is_err()
+            .await,
+        Err(ApplicationError::SecretUnreadable("focus_token_production"))
+    ));
+    assert_eq!(
+        without_key.unreadable(company).await.unwrap(),
+        vec![
+            GatewaySecret::FocusTokenHomologation,
+            GatewaySecret::FocusTokenProduction
+        ]
+    );
+    assert!(service.unreadable(company).await.unwrap().is_empty());
+
+    // Reset removes the company's own settings (the server's come back), tells the trail what was cleared and never a value, and
+    // resetting again writes nothing. Setting it up again starts from the first version.
+    service.reset(company, &user).await.unwrap();
+    assert!(service.get(company).await.unwrap().is_none());
+    let history = service.history(company).await.unwrap();
+    assert_eq!(history.len(), 3);
+    let gone = &history[2].entry.changes;
+    assert!(gone.iter().any(|change| change.field == "kind"
+        && change.from.as_deref() == Some("nfeio")
+        && change.to.is_none()));
+    assert!(
+        gone.iter()
+            .any(|change| change.field == "focus_token_production"
+                && change.from.as_deref() == Some("set"))
+    );
+    assert!(!leaks(&secrets_in(&history)));
+    service.reset(company, &user).await.unwrap();
+    assert_eq!(service.history(company).await.unwrap().len(), 3);
+    let again = service
+        .replace(company, &user, input(GatewayKind::Focus))
+        .await
+        .unwrap();
+    assert_eq!(again.version(), 1);
+}
+
+/// A write is made from the version it read: one from an old read is refused and changes nothing, and so is a removal from an old
+/// read, so two people editing the settings never undo each other without knowing.
+pub async fn gateway_settings_refuse_a_write_from_an_old_read<R>(repository: &R, company: CompanyId)
+where
+    R: conta_verde_application::GatewaySettingsRepository,
+{
+    use conta_verde_domain::{GatewayKind, GatewaySettings, GatewaySettingsDraft, SealedSecret};
+
+    let draft = |kind, token: Option<u8>| GatewaySettingsDraft {
+        kind,
+        focus_token_homologation: token.map(|byte| SealedSecret::new(vec![byte; 40]).unwrap()),
+        focus_token_production: None,
+        nfeio_api_key: None,
+        webhook_secret: None,
+        nfeio_company_homologation: None,
+        nfeio_company_production: None,
+        nfeio_search_confirmed: false,
+    };
+    let write = || AuditEntry {
+        company_id: company,
+        actor: actor(),
+        entity: AuditEntity::GatewaySettings,
+        entity_id: company.as_uuid(),
+        action: AuditAction::Updated,
+        changes: Vec::new(),
+    };
+    let first = GatewaySettings::new(company, draft(GatewayKind::Focus, None), 1).unwrap();
+    repository.save(&first, &write()).await.unwrap();
+    // A first write again (someone else made it meanwhile) and one that skips a version are refused.
+    assert_eq!(
+        repository.save(&first, &write()).await,
+        Err(RepositoryError::GatewaySettingsChanged)
+    );
+    let skipped = GatewaySettings::new(company, draft(GatewayKind::Focus, None), 3).unwrap();
+    assert_eq!(
+        repository.save(&skipped, &write()).await,
+        Err(RepositoryError::GatewaySettingsChanged)
+    );
+
+    // Two people read version 1: B sets a token, A (from the same old read) changes the kind keeping what it read, which has no token.
+    let by_b = GatewaySettings::new(company, draft(GatewayKind::Focus, Some(7)), 2).unwrap();
+    repository.save(&by_b, &write()).await.unwrap();
+    let by_a = GatewaySettings::new(company, draft(GatewayKind::NfeIo, None), 2).unwrap();
+    assert_eq!(
+        repository.save(&by_a, &write()).await,
+        Err(RepositoryError::GatewaySettingsChanged)
+    );
+    let stored = repository.find(company).await.unwrap().unwrap();
+    assert_eq!(
+        stored, by_b,
+        "B's write stands: the refused one changed nothing"
+    );
+    assert_eq!(
+        repository.history(company).await.unwrap().len(),
+        2,
+        "and left no entry"
+    );
+
+    // A removal from an old read is refused too; from the version it has, it removes.
+    assert_eq!(
+        repository.remove(company, 1, &write()).await,
+        Err(RepositoryError::GatewaySettingsChanged)
+    );
+    assert!(repository.find(company).await.unwrap().is_some());
+    repository.remove(company, 2, &write()).await.unwrap();
+    assert!(repository.find(company).await.unwrap().is_none());
+    assert_eq!(
+        repository.remove(company, 2, &write()).await,
+        Err(RepositoryError::NotFound)
     );
 }
 

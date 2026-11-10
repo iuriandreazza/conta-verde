@@ -83,16 +83,25 @@ pub(crate) struct GatewaySettingsResponse {
     server_gateway: Option<String>,
     /// Where the gateway is told to knock, relative to the server's address.
     webhook_path: String,
+    /// The secrets that are stored and **cannot be read now** (the server's key changed or was lost): they must be typed again.
+    unreadable: Vec<&'static str>,
 }
 
-fn response_of<X: Ports>(
+async fn response_of<X: Ports>(
     state: &SharedState<X>,
     company_id: conta_verde_domain::CompanyId,
     settings: Option<&GatewaySettings>,
-) -> GatewaySettingsResponse {
+) -> Result<GatewaySettingsResponse, ApiError> {
+    let unreadable = state
+        .gateway_settings
+        .unreadable(company_id)
+        .await?
+        .into_iter()
+        .map(GatewaySecret::field)
+        .collect();
     let gateway = state.fiscal_documents.gateway();
     let set = |secret| settings.is_some_and(|settings| settings.secret(secret).is_some());
-    GatewaySettingsResponse {
+    Ok(GatewaySettingsResponse {
         kind: settings.map(|settings| settings.kind().key()),
         focus_token_homologation_set: set(GatewaySecret::FocusTokenHomologation),
         focus_token_production_set: set(GatewaySecret::FocusTokenProduction),
@@ -106,7 +115,8 @@ fn response_of<X: Ports>(
         encryption_available: state.gateway_settings.encryption_available(),
         server_gateway: gateway.is_enabled().then(|| gateway.key().to_owned()),
         webhook_path: format!("/public/fiscal/{}/webhook", company_id.as_uuid()),
-    }
+        unreadable,
+    })
 }
 
 pub(crate) async fn get_gateway_settings<X: Ports>(
@@ -114,19 +124,39 @@ pub(crate) async fn get_gateway_settings<X: Ports>(
     CompanyAccess(company_id, _): CompanyAccess,
 ) -> Result<Json<GatewaySettingsResponse>, ApiError> {
     let settings = state.gateway_settings.get(company_id).await?;
-    Ok(Json(response_of(&state, company_id, settings.as_ref())))
+    Ok(Json(
+        response_of(&state, company_id, settings.as_ref()).await?,
+    ))
 }
 
 pub(crate) async fn replace_gateway_settings<X: Ports>(
     State(state): State<SharedState<X>>,
     CompanyAccess(company_id, actor): CompanyAccess,
-    ApiJson(request): ApiJson<GatewaySettingsRequest>,
+    ApiJson(body): ApiJson<serde_json::Value>,
 ) -> Result<Json<GatewaySettingsResponse>, ApiError> {
+    // Read here, not by the extractor: a body of the wrong shape is answered with a fixed message, because serde's own would quote
+    // the value it found, and the value may be a secret.
+    let request: GatewaySettingsRequest = serde_json::from_value(body).map_err(|_| {
+        ApiError::InvalidField(
+            "the gateway settings have the wrong shape: every secret is { action: keep|clear|set, value? }",
+        )
+    })?;
     let settings = state
         .gateway_settings
         .replace(company_id, &actor, request.into_input()?)
         .await?;
-    Ok(Json(response_of(&state, company_id, Some(&settings))))
+    Ok(Json(
+        response_of(&state, company_id, Some(&settings)).await?,
+    ))
+}
+
+/// Removes the company's own settings: the server's own are used again. A write by the method, so only the owner and the admin.
+pub(crate) async fn reset_gateway_settings<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, actor): CompanyAccess,
+) -> Result<Json<GatewaySettingsResponse>, ApiError> {
+    state.gateway_settings.reset(company_id, &actor).await?;
+    Ok(Json(response_of(&state, company_id, None).await?))
 }
 
 /// What was recorded about the company's gateway settings, oldest first: that a secret was set, changed or cleared, never its value.

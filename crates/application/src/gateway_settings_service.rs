@@ -68,9 +68,53 @@ impl<R: GatewaySettingsRepository, C: SecretCipher> GatewaySettingsService<R, C>
             .map(|sealed| {
                 self.cipher
                     .open(company_id, secret.field(), sealed.as_bytes())
-                    .map_err(ApplicationError::from)
+                    .map_err(|_| ApplicationError::SecretUnreadable(secret.field()))
             })
             .transpose()
+    }
+
+    /// The secrets stored for the company that cannot be opened now (the key changed or was lost), so the page can say so instead
+    /// of showing them as configured. Never their values.
+    pub async fn unreadable(
+        &self,
+        company_id: CompanyId,
+    ) -> Result<Vec<GatewaySecret>, ApplicationError> {
+        let Some(settings) = self.repository.find(company_id).await? else {
+            return Ok(Vec::new());
+        };
+        Ok(GatewaySecret::ALL
+            .into_iter()
+            .filter(|secret| {
+                settings.secret(*secret).is_some_and(|sealed| {
+                    self.cipher
+                        .open(company_id, secret.field(), sealed.as_bytes())
+                        .is_err()
+                })
+            })
+            .collect())
+    }
+
+    /// Removes the company's settings: the server's own are used again. Every secret that was set is recorded as cleared, never its
+    /// value. Nothing to remove writes nothing.
+    pub async fn reset(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+    ) -> Result<(), ApplicationError> {
+        let Some(before) = self.repository.find(company_id).await? else {
+            return Ok(());
+        };
+        let mut changes = vec![change_of("kind", Some(before.kind().key()), None)];
+        for secret in GatewaySecret::ALL {
+            if before.secret(secret).is_some() {
+                changes.push(change_of(secret.field(), Some("set"), None));
+            }
+        }
+        let audit = audit_entry(&before, actor, AuditAction::Updated, changes);
+        self.repository
+            .remove(company_id, before.version(), &audit)
+            .await?;
+        Ok(())
     }
 
     /// Replaces the settings as a whole. A secret that is `Keep` stays as it is (the same sealed bytes, so nothing is rewritten for
@@ -131,11 +175,14 @@ impl<R: GatewaySettingsRepository, C: SecretCipher> GatewaySettingsService<R, C>
             nfeio_company_production: input.nfeio_company_production,
             nfeio_search_confirmed: input.nfeio_search_confirmed,
         };
-        let after = GatewaySettings::new(company_id, draft)?;
+        let version = before.as_ref().map_or(1, |settings| settings.version() + 1);
+        let after = GatewaySettings::new(company_id, draft, version)?;
         let mut plain = plain_changes(before.as_ref(), &after);
         plain.append(&mut changes);
-        if before.is_some() && plain.is_empty() {
-            return Ok(after);
+        if let Some(before) = &before
+            && plain.is_empty()
+        {
+            return Ok(before.clone());
         }
         let action = if before.is_some() {
             AuditAction::Updated

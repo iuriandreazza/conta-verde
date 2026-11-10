@@ -19,6 +19,7 @@ const none: GatewaySettings = {
   encryption_available: true,
   server_gateway: "focus",
   webhook_path: "/public/fiscal/c1/webhook",
+  unreadable: [],
 };
 
 function serve(initial: GatewaySettings, saved?: (body: unknown) => GatewaySettings, me = profile) {
@@ -133,4 +134,29 @@ it("shows a reader the state and nothing to change", async () => {
   expect(await screen.findByLabelText("Token do Focus NFe (produção)")).toBeDisabled();
   expect(screen.queryByRole("button", { name: "Salvar" })).toBeNull();
   expect(within(screen.getByRole("main")).queryByRole("button", { name: /Remover/ })).toBeNull();
+});
+
+it("does not send what belongs to the gateway that is not chosen, even if something was typed there first", async () => {
+  const fetchMock = serve(none, () => ({ ...none, kind: "nfeio", nfeio_api_key_set: true }));
+  renderAt("/companies/c1/gateway");
+  await userEvent.type(await screen.findByLabelText("Token do Focus NFe (produção)"), "tok_forgotten_1234567890");
+  await userEvent.selectOptions(screen.getByLabelText("Gateway"), "nfeio");
+  await userEvent.type(screen.getByLabelText("Chave da API do NFE.io"), "key_1234567890");
+  await userEvent.click(screen.getByRole("button", { name: "Salvar" }));
+
+  await screen.findByText("Salvo.");
+  const sent = puts(fetchMock)[0];
+  expect(sent.focus_token_production).toEqual({ action: "keep" });
+  expect(JSON.stringify(sent)).not.toContain("tok_forgotten");
+});
+
+it("says which stored secrets the server cannot read and goes back to the server's gateway after a confirmation", async () => {
+  const fetchMock = serve({ ...none, kind: "focus", focus_token_production_set: true, unreadable: ["focus_token_production"] });
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  renderAt("/companies/c1/gateway");
+
+  expect(await screen.findByText(/não consegue lê-los.*Token do Focus NFe \(produção\)/)).toBeInTheDocument();
+  expect(screen.getByLabelText("Token do Focus NFe (produção)")).toHaveAttribute("autocomplete", "new-password");
+  await userEvent.click(screen.getByRole("button", { name: "Voltar ao gateway do servidor" }));
+  await vi.waitFor(() => expect(fetchMock.mock.calls.some(([, init]) => init?.method === "DELETE")).toBe(true));
 });

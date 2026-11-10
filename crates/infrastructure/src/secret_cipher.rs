@@ -21,7 +21,8 @@ impl RingSecretCipher {
     /// `hex` is the key: exactly 64 hexadecimal characters. Anything else is an error that names what is wrong, never the value.
     pub fn from_hex(hex: &str) -> Result<Self, SecretError> {
         let bytes = decode_hex(hex.trim())
-            .filter(|bytes| bytes.len() == KEY_BYTES)
+            // An all-zero key is what an unset or placeholder value looks like: it protects nothing.
+            .filter(|bytes| bytes.len() == KEY_BYTES && bytes.iter().any(|byte| *byte != 0))
             .ok_or_else(|| {
                 SecretError(
                     "the secrets key must be 64 hexadecimal characters (32 bytes)".to_owned(),
@@ -116,7 +117,8 @@ impl SecretCipher for NoSecretCipher {
 }
 
 fn decode_hex(text: &str) -> Option<Vec<u8>> {
-    if !text.len().is_multiple_of(2) || !text.is_ascii() {
+    // Only hexadecimal digits: `from_str_radix` also takes a leading `+`, which a typo could make pass as a key.
+    if !text.len().is_multiple_of(2) || !text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return None;
     }
     (0..text.len())

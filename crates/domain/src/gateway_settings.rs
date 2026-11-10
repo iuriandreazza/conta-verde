@@ -66,12 +66,13 @@ impl GatewaySecret {
 pub struct SecretText(String);
 
 impl SecretText {
-    /// 8 to 200 characters with no space and no control character: what a token or a key looks like, so a mistake (a pasted
-    /// sentence, a trailing newline) is refused instead of stored.
+    /// 8 to 200 **printable ASCII** characters with no space: what a token or a key looks like, so a mistake (a pasted sentence, a
+    /// trailing newline, an invisible character a web page adds to a copy) is refused instead of stored. It is also a valid HTTP
+    /// header and basic-auth value for both gateways, and its sealed size is at most 229 bytes.
     pub fn new(raw: &str) -> Result<Self, DomainError> {
         let text = raw.trim();
-        let valid = (8..=200).contains(&text.chars().count())
-            && !text.chars().any(|c| c.is_whitespace() || c.is_control());
+        let valid =
+            (8..=200).contains(&text.len()) && text.bytes().all(|byte| byte.is_ascii_graphic());
         if valid {
             Ok(Self(text.to_owned()))
         } else {
@@ -120,6 +121,9 @@ impl fmt::Debug for SealedSecret {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GatewaySettings {
     company_id: CompanyId,
+    /// How many times the settings were written (1 for the first): a write names the version it was made from, so one made from an
+    /// old read is refused instead of undoing what another changed.
+    version: u32,
     kind: GatewayKind,
     focus_token_homologation: Option<SealedSecret>,
     focus_token_production: Option<SealedSecret>,
@@ -144,9 +148,17 @@ pub struct GatewaySettingsDraft {
 }
 
 impl GatewaySettings {
-    pub fn new(company_id: CompanyId, draft: GatewaySettingsDraft) -> Result<Self, DomainError> {
+    pub fn new(
+        company_id: CompanyId,
+        draft: GatewaySettingsDraft,
+        version: u32,
+    ) -> Result<Self, DomainError> {
+        if version == 0 {
+            return Err(DomainError::InvalidGatewaySettings("version"));
+        }
         Ok(Self {
             company_id,
+            version,
             kind: draft.kind,
             focus_token_homologation: draft.focus_token_homologation,
             focus_token_production: draft.focus_token_production,
@@ -164,6 +176,10 @@ impl GatewaySettings {
 
     pub fn kind(&self) -> GatewayKind {
         self.kind
+    }
+
+    pub fn version(&self) -> u32 {
+        self.version
     }
 
     pub fn secret(&self, which: GatewaySecret) -> Option<&SealedSecret> {
@@ -253,7 +269,7 @@ mod tests {
 
     #[test]
     fn the_settings_keep_what_is_not_secret_in_the_clear_and_clean() {
-        let settings = GatewaySettings::new(CompanyId::generate(), draft()).unwrap();
+        let settings = GatewaySettings::new(CompanyId::generate(), draft(), 1).unwrap();
         assert_eq!(settings.kind(), GatewayKind::Focus);
         assert_eq!(settings.nfeio_company_homologation(), Some("abc-123_X"));
         assert_eq!(settings.nfeio_company_production(), None, "blank is none");
@@ -267,12 +283,27 @@ mod tests {
         assert!(rendered.contains("<sealed>"), "{rendered}");
         let mut bad = draft();
         bad.nfeio_company_production = Some("has space".into());
-        assert!(GatewaySettings::new(CompanyId::generate(), bad).is_err());
+        assert!(GatewaySettings::new(CompanyId::generate(), bad, 1).is_err());
+        assert!(GatewaySettings::new(CompanyId::generate(), draft(), 0).is_err());
         assert_eq!(GatewayKind::parse("nfeio"), Some(GatewayKind::NfeIo));
         assert_eq!(
             GatewayKind::parse("fake"),
             None,
             "the fake is never a company's choice"
+        );
+    }
+
+    #[test]
+    fn the_field_names_a_secret_is_sealed_for_never_change() {
+        // They are the associated data of what is stored: renaming one makes every secret sealed under it unreadable.
+        assert_eq!(
+            GatewaySecret::ALL.map(GatewaySecret::field),
+            [
+                "focus_token_homologation",
+                "focus_token_production",
+                "nfeio_api_key",
+                "webhook_secret"
+            ]
         );
     }
 

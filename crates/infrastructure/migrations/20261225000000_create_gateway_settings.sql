@@ -4,6 +4,8 @@
 -- the server's environment: a company cannot set them.
 CREATE TABLE gateway_settings (
     company_id                  UUID PRIMARY KEY REFERENCES companies (id),
+    -- How many times the settings were written: a write names the version it was made from (a stale one is refused).
+    version                     INTEGER NOT NULL,
     kind                        TEXT    NOT NULL,
     focus_token_homologation    BYTEA,
     focus_token_production      BYTEA,
@@ -13,6 +15,7 @@ CREATE TABLE gateway_settings (
     nfeio_company_production    TEXT,
     nfeio_search_confirmed      BOOLEAN NOT NULL,
     CONSTRAINT gateway_settings_kind_valid CHECK (kind IN ('focus', 'nfeio')),
+    CONSTRAINT gateway_settings_version_valid CHECK (version >= 1),
     -- A sealed secret is a version byte, a 12-byte nonce, at least one byte of text and a 16-byte tag, and at most 400 bytes.
     CONSTRAINT gateway_settings_sealed_valid CHECK (
         (focus_token_homologation IS NULL OR octet_length(focus_token_homologation) BETWEEN 30 AND 400)
