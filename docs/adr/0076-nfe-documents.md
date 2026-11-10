@@ -16,12 +16,14 @@ its own, and the roadmap item "NF-e" is ticked only when the third lands:
 
 | PR | What it holds |
 |----|---------------|
-| **4a, the store** | `FiscalDocument` and its state machine in `domain`, the `FiscalDocumentRepository` port, both adapters, the migration, files in the `BlobStore` (`BlobId`), contract tests |
-| **4b, issuing and events** | the use cases (issue from a sale, refresh, cancel, correction letter, invalidation), the `FiscalPoll` job, the routes under `/fiscal`, the period lock |
-| **4c, the package and the screens** | `fiscal.csv` and the XML/PDF files in the accountant's package, the documents page and its actions |
+| **4a, the store** (merged) | `FiscalDocument` and its state machine in `domain`, the `FiscalDocumentRepository` port, both adapters, the migration, files in the `BlobStore` (`BlobId`), contract tests |
+| **4b, issuing** | `FiscalDocumentService`: issue from a sale, refresh, send again, cancel (with the period lock), download the files; the poll; the routes under `/fiscal/documents`; the certificate and Simples-only checks |
+| **4c, events** | the correction letter and the invalidation of numbers (their tables, their file kind, record-before-send) |
+| **4d, the package and the screens** | `fiscal.csv` and the XML/PDF files in the accountant's package, the documents page and its actions |
 
-This ADR records the decisions of all three so that each pull request can be read against it; the sections say which pull request
-carries what.
+This ADR records the decisions of all four so that each pull request can be read against it; the sections say which pull request
+carries what. (It was three pull requests when this was first written; the events were split from issuing because each is a
+review of its own.)
 
 ## Decisions
 
@@ -89,18 +91,22 @@ already recorded does not write it again.
   document; (2) mark it `processing` and `submit` with the document's id as the reference; (3) store the outcome and, if authorized,
   the files. A failure after any step is finished by asking again. `Unavailable` leaves the document `processing` (the gateway may
   have taken it) and the poll or the person's refresh asks the state, **never a second submit with another reference**.
-- **`Unknown` from a query of a reference we submitted** means the gateway never took it: a `processing` document that gets `Unknown`
-  is shown as such and may be **submitted again with the same reference** by the person (never automatically), because the gateway
-  owns no document under it. This is the one place a submit repeats; it is safe because ADR 0075's submit is idempotent by reference.
-- **The poll**: a `FiscalPoll` job (a new `JobKind`, a value in the table's `CHECK`), whose one argument is the document's id and whose
-  company it finds in the document; `JobRunner` reaches it through a narrow `FiscalPoller` trait that the fiscal service implements,
-  so the runner does not depend on the whole service. It queries and applies the answer, harmless to repeat; while the answer is
-  still `Processing` or `Contingency` it **queues itself again** a minute later up to a limit, then stops and leaves the document for the
-  person's refresh. A document that authorizes through the poll is written **whatever the period lock says, with a note**.
+- **`Unknown` from a query of a reference we submitted** means the gateway has no document under it (the submission never
+  reached it, or it was lost): the document is marked **rejected** with the code `unknown` and a text that says to send it again,
+  and the person sends it again **under the same id** (`POST .../resend`, which builds it again from the sale). Never automatic,
+  and never under another reference. The same path serves a submission that failed with `Disabled`, `WrongIssuer` or
+  `Unsupported`: nothing was sent, so the document is rejected with the code `gateway` and the error's words.
+- **The poll is a pass, not a job.** ADR 0073 planned a `FiscalPoll` job on the queue. A pass over what waits is simpler and
+  cannot lose a document: `FiscalDocumentRepository::pending(since, limit)` lists the documents of every company that are
+  `processing` or `contingency` and were issued in the last seven days, oldest first, and `FiscalDocumentService::poll_pending`
+  refreshes each one, once a minute, from a task in `main.rs` (like the recurrences, ADR 0033: every step is harmless to repeat, so
+  overlapping passes and restarts do no harm, and nothing has to be queued by whoever submitted). A document older than a week
+  is left for the person's refresh (`POST .../refresh`). What the poll writes is in the name of **whoever submitted the
+  document**. A document that authorizes through the poll or a refresh is written **whatever the period lock says, with a note**.
 - **The audit trail**: every move is an `AuditEntry` of the document, written in the transaction that stores the move, in the name of
   whoever submitted it for what the poll does.
 
-### Events and invalidation (4b)
+### Events and invalidation (4c; cancel is 4b)
 
 - **Cancel**: queries first (a gateway that already cancelled it says so and the product follows), then asks the gateway with the
   reason (15 to 255 characters, checked by the domain before the call), and marks the document `cancelled` with the cancellation's XML.
@@ -116,7 +122,7 @@ already recorded does not write it again.
   on or before the lock refuses"; a range with no document of ours is allowed. (**Verify with an accountant** whether a closed month
   should ever allow it.)
 
-### The package and the screens (4c)
+### The package and the screens (4d)
 
 As ADR 0073 amended ADR 0071: `fiscal.csv` and the files under `fiscal/nfe/` for documents issued in the span, production
 documents only, the 500-file and 200 MiB limits counted before any file is read. The columns of `fiscal.csv` are fixed in 4c's section of

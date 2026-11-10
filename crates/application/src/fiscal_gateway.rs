@@ -25,6 +25,33 @@ pub enum BuyerPresence {
 }
 
 impl BuyerPresence {
+    /// The key the API takes; it does not change.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::NotApplicable => "not_applicable",
+            Self::InPerson => "in_person",
+            Self::Internet => "internet",
+            Self::Telephone => "telephone",
+            Self::HomeDelivery => "home_delivery",
+            Self::OutsideTheEstablishment => "outside_the_establishment",
+            Self::Other => "other",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        [
+            Self::NotApplicable,
+            Self::InPerson,
+            Self::Internet,
+            Self::Telephone,
+            Self::HomeDelivery,
+            Self::OutsideTheEstablishment,
+            Self::Other,
+        ]
+        .into_iter()
+        .find(|presence| presence.key() == raw)
+    }
+
     pub fn code(self) -> u8 {
         match self {
             Self::NotApplicable => 0,
@@ -55,6 +82,41 @@ pub enum PaymentForm {
 }
 
 impl PaymentForm {
+    /// The key the API takes; it does not change.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Cash => "cash",
+            Self::Cheque => "cheque",
+            Self::CreditCard => "credit_card",
+            Self::DebitCard => "debit_card",
+            Self::StoreCredit => "store_credit",
+            Self::BankSlip => "bank_slip",
+            Self::BankDeposit => "bank_deposit",
+            Self::Pix => "pix",
+            Self::Transfer => "transfer",
+            Self::NoPayment => "no_payment",
+            Self::Other => "other",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        [
+            Self::Cash,
+            Self::Cheque,
+            Self::CreditCard,
+            Self::DebitCard,
+            Self::StoreCredit,
+            Self::BankSlip,
+            Self::BankDeposit,
+            Self::Pix,
+            Self::Transfer,
+            Self::NoPayment,
+            Self::Other,
+        ]
+        .into_iter()
+        .find(|form| form.key() == raw)
+    }
+
     pub fn code(self) -> &'static str {
         match self {
             Self::Cash => "01",

@@ -318,6 +318,20 @@ impl OperationNature {
         &self.rules
     }
 
+    /// The rule for an item of this regime and NCM ([ADR 0074]): the one whose NCM prefix is the **longest** the NCM
+    /// begins with, else the nature's general rule (no prefix); `None` when no rule covers it. A rule of another
+    /// regime never applies.
+    pub fn rule_for(&self, regime: TaxRegime, ncm: &str) -> Option<&TaxRule> {
+        self.rules
+            .iter()
+            .filter(|rule| rule.regime() == regime)
+            .filter(|rule| {
+                rule.ncm_prefix()
+                    .is_none_or(|prefix| ncm.starts_with(prefix))
+            })
+            .max_by_key(|rule| rule.ncm_prefix().map_or(0, str::len))
+    }
+
     fn text(&self) -> String {
         format!(
             "{}|{}|{}|{}|{}|{}|{}",
@@ -673,6 +687,25 @@ mod tests {
             CalendarDate::parse("2027-03-31")
         );
         assert_eq!(stored.natures().len(), 1);
+    }
+
+    #[test]
+    fn the_rule_for_an_item_is_the_one_with_the_longest_prefix_of_the_regime() {
+        let mut nature = sale();
+        nature.rules = vec![
+            rule(TaxRegime::SimplesNacional, None, "102"),
+            rule(TaxRegime::SimplesNacional, Some("2106"), "500"),
+            rule(TaxRegime::SimplesNacional, Some("21"), "400"),
+            rule(TaxRegime::LucroPresumido, Some("21069090"), "41"),
+        ];
+        let stored = settings(|d| d.natures = vec![nature]).unwrap();
+        let nature = &stored.natures()[0];
+        let icms = |regime, ncm| nature.rule_for(regime, ncm).map(TaxRule::icms_code);
+        assert_eq!(icms(TaxRegime::SimplesNacional, "21069090"), Some("500"));
+        assert_eq!(icms(TaxRegime::SimplesNacional, "21011100"), Some("400"));
+        assert_eq!(icms(TaxRegime::SimplesNacional, "09011100"), Some("102"));
+        assert_eq!(icms(TaxRegime::LucroPresumido, "21069090"), Some("41"));
+        assert_eq!(icms(TaxRegime::LucroPresumido, "09011100"), None);
     }
 
     #[test]

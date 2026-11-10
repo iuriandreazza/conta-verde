@@ -1,11 +1,17 @@
 use axum::Json;
-use axum::extract::State;
-use conta_verde_application::FiscalGateway;
+use axum::extract::{Path, State};
+use axum::http::{HeaderValue, header};
+use axum::response::{IntoResponse, Response};
+use conta_verde_application::{
+    ApplicationError, BuyerPresence, FiscalGateway, IssueNfe, PaymentForm,
+};
 use conta_verde_domain::{
-    AddressDraft, FiscalEnvironment, FiscalSettings, FiscalSettingsDraft, NatureKind,
-    OperationNature, OperationNatureDraft, TaxRegime, TaxRule, TaxRuleDraft,
+    AddressDraft, FiscalDocument, FiscalDocumentId, FiscalEnvironment, FiscalFileKind,
+    FiscalSettings, FiscalSettingsDraft, NatureKind, OperationNature, OperationNatureDraft, SaleId,
+    TaxRegime, TaxRule, TaxRuleDraft,
 };
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::access::CompanyAccess;
 use crate::error::ApiError;
@@ -258,8 +264,254 @@ pub(crate) async fn get_gateway<X: Ports>(
     State(state): State<SharedState<X>>,
     CompanyAccess(_, _): CompanyAccess,
 ) -> Json<GatewayResponse> {
-    let gateway = &state.fiscal_gateway;
+    let gateway = state.fiscal_documents.gateway();
     Json(GatewayResponse {
         gateway: gateway.is_enabled().then(|| gateway.key().to_owned()),
     })
+}
+
+#[derive(Serialize)]
+pub(crate) struct RefusalResponse {
+    code: String,
+    message: String,
+}
+
+#[derive(Serialize)]
+pub(crate) struct FiscalDocumentResponse {
+    id: Uuid,
+    kind: &'static str,
+    status: &'static str,
+    sale_id: Uuid,
+    issuer_cnpj: String,
+    issuer_name: String,
+    environment: &'static str,
+    recipient_name: String,
+    recipient_document: Option<String>,
+    nature_code: String,
+    total: String,
+    issued_on: String,
+    access_key: Option<String>,
+    number: Option<u32>,
+    series: Option<u16>,
+    protocol: Option<String>,
+    refusal: Option<RefusalResponse>,
+    note: Option<String>,
+    submitted_by: String,
+    /// The files that can be downloaded: `xml`, `pdf`, `cancellation_xml`.
+    files: Vec<&'static str>,
+}
+
+fn document_response(
+    document: &FiscalDocument,
+    files: &[conta_verde_domain::FiscalFile],
+) -> FiscalDocumentResponse {
+    let conta_verde_domain::FiscalOrigin::Sale(sale) = document.origin();
+    let authorization = document.authorization();
+    FiscalDocumentResponse {
+        id: document.id().as_uuid(),
+        kind: document.kind().key(),
+        status: document.status().key(),
+        sale_id: sale.as_uuid(),
+        issuer_cnpj: document.issuer_cnpj().to_owned(),
+        issuer_name: document.issuer_name().to_owned(),
+        environment: document.environment().key(),
+        recipient_name: document.recipient_name().to_owned(),
+        recipient_document: document.recipient_document().map(str::to_owned),
+        nature_code: document.nature_code().to_owned(),
+        total: document.total().as_decimal().to_string(),
+        issued_on: document.issued_on().to_string(),
+        access_key: authorization.map(|auth| auth.access_key().as_str().to_owned()),
+        number: authorization.map(|auth| auth.number()),
+        series: authorization.map(|auth| auth.series()),
+        protocol: authorization.and_then(|auth| auth.protocol().map(str::to_owned)),
+        refusal: document.refusal().map(|refusal| RefusalResponse {
+            code: refusal.code().to_owned(),
+            message: refusal.message().to_owned(),
+        }),
+        note: document.note().map(str::to_owned),
+        submitted_by: document.submitted_by_name().to_owned(),
+        files: files.iter().map(|file| file.kind().key()).collect(),
+    }
+}
+
+async fn respond<X: Ports>(
+    state: &SharedState<X>,
+    document: &FiscalDocument,
+) -> Result<Json<FiscalDocumentResponse>, ApiError> {
+    let files = state
+        .fiscal_documents
+        .files(document.company_id(), document.id())
+        .await?;
+    Ok(Json(document_response(document, &files)))
+}
+
+fn parse_document(raw: &str) -> Result<FiscalDocumentId, ApiError> {
+    Uuid::parse_str(raw)
+        .map(FiscalDocumentId::from_uuid)
+        .map_err(|_| ApplicationError::FiscalDocumentNotFound.into())
+}
+
+/// What is chosen to issue: every field is a tax fact the product does not know, so none has a default ([ADR 0076]).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct IssueRequest {
+    sale_id: Uuid,
+    nature_code: String,
+    origin: u8,
+    presence: String,
+    payment: String,
+    final_consumer: bool,
+}
+
+impl IssueRequest {
+    fn into_request(self) -> Result<IssueNfe, ApiError> {
+        let rule = |text: &str| ApplicationError::FiscalRule(text.to_owned());
+        Ok(IssueNfe {
+            sale_id: SaleId::from_uuid(self.sale_id),
+            nature_code: self.nature_code,
+            origin: self.origin,
+            presence: BuyerPresence::parse(&self.presence)
+                .ok_or_else(|| rule("presence is not one of the buyer presences"))?,
+            payment: PaymentForm::parse(&self.payment)
+                .ok_or_else(|| rule("payment is not one of the payment forms"))?,
+            final_consumer: self.final_consumer,
+        })
+    }
+}
+
+/// Issues an NF-e from a completed sale, or answers with the one the sale already has.
+pub(crate) async fn issue_document<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, actor): CompanyAccess,
+    ApiJson(request): ApiJson<IssueRequest>,
+) -> Result<Json<FiscalDocumentResponse>, ApiError> {
+    let document = state
+        .fiscal_documents
+        .issue(
+            company_id,
+            &actor,
+            request.into_request()?,
+            crate::now_unix(),
+        )
+        .await?;
+    respond(&state, &document).await
+}
+
+pub(crate) async fn get_document<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, _): CompanyAccess,
+    Path((_, id)): Path<(Uuid, String)>,
+) -> Result<Json<FiscalDocumentResponse>, ApiError> {
+    let document = state
+        .fiscal_documents
+        .get(company_id, parse_document(&id)?)
+        .await?;
+    respond(&state, &document).await
+}
+
+pub(crate) async fn document_history<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, _): CompanyAccess,
+    Path((_, id)): Path<(Uuid, String)>,
+) -> Result<Json<Vec<HistoryEntryResponse>>, ApiError> {
+    let history = state
+        .fiscal_documents
+        .history(company_id, parse_document(&id)?)
+        .await?;
+    Ok(Json(
+        history.iter().map(HistoryEntryResponse::from).collect(),
+    ))
+}
+
+/// Asks the gateway about a document that is still waiting. A write by the method, so the `fiscal` area's writers.
+pub(crate) async fn refresh_document<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, _): CompanyAccess,
+    Path((_, id)): Path<(Uuid, String)>,
+) -> Result<Json<FiscalDocumentResponse>, ApiError> {
+    let document = state
+        .fiscal_documents
+        .refresh(company_id, parse_document(&id)?)
+        .await?;
+    respond(&state, &document).await
+}
+
+/// Sends a rejected document again under the same id, with the choices made again.
+pub(crate) async fn resend_document<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, actor): CompanyAccess,
+    Path((_, id)): Path<(Uuid, String)>,
+    ApiJson(request): ApiJson<IssueRequest>,
+) -> Result<Json<FiscalDocumentResponse>, ApiError> {
+    let document = state
+        .fiscal_documents
+        .resend(
+            company_id,
+            &actor,
+            parse_document(&id)?,
+            request.into_request()?,
+            crate::now_unix(),
+        )
+        .await?;
+    respond(&state, &document).await
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CancelRequest {
+    reason: String,
+}
+
+pub(crate) async fn cancel_document<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, actor): CompanyAccess,
+    Path((_, id)): Path<(Uuid, String)>,
+    ApiJson(request): ApiJson<CancelRequest>,
+) -> Result<Json<FiscalDocumentResponse>, ApiError> {
+    let document = state
+        .fiscal_documents
+        .cancel(company_id, &actor, parse_document(&id)?, &request.reason)
+        .await?;
+    respond(&state, &document).await
+}
+
+/// Always as a download of the type the file has, with no sniffing: a fiscal file is never shown as a page of the
+/// app's own origin.
+pub(crate) async fn download_document_file<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, _): CompanyAccess,
+    Path((_, id, kind)): Path<(Uuid, String, String)>,
+) -> Result<Response, ApiError> {
+    let kind = FiscalFileKind::parse(&kind).ok_or(ApplicationError::FiscalDocumentNotFound)?;
+    let id = parse_document(&id)?;
+    let bytes = state.fiscal_documents.file(company_id, id, kind).await?;
+    let mut response = bytes.into_response();
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static(kind.content_type()),
+    );
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_str(&format!(
+            "attachment; filename=\"{}-{}.{}\"",
+            kind.key(),
+            id.as_uuid(),
+            if kind == FiscalFileKind::Pdf {
+                "pdf"
+            } else {
+                "xml"
+            }
+        ))
+        .expect("a file name made of a key and an id is a header value"),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+    Ok(response)
 }

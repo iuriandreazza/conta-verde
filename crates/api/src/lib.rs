@@ -60,16 +60,17 @@ use conta_verde_application::{
     ContractRepository, ContractService, CostCenterRepository, CostCenterService,
     DocumentMailRepository, DocumentMailService, DocumentReferences, DreService, EmailSender,
     EntryLookups, EntryReferences, ExportLookups, FinancialEntryRepository, FinancialEntryService,
-    FiscalGateway, FiscalSettingsRepository, FiscalSettingsService, IdentityRepository,
-    InventoryCountRepository, InventoryCountService, InvitationRepository, MemberService,
-    OpeningRepository, PackageScheduleRepository, PackageScheduleService, PartyRepository,
-    PartyService, PaymentMethodRepository, PaymentMethodService, PaymentProvider,
-    PaymentTermRepository, PaymentTermService, PostalCodeDirectory, PostalCodeService,
-    PriceListRepository, PriceListService, ProductRepository, ProductService,
-    PurchaseOrderRepository, PurchaseService, QuoteRepository, QuoteService, ReconciliationService,
-    RecurrenceRepository, RecurrenceService, SaleRepository, SaleService, SalesReportService,
-    SecretService, StatementLineRepository, StockMovementRepository, StockService,
-    StockSettingsRepository, TransferRepository, TransferService,
+    FiscalDocumentRepository, FiscalDocumentService, FiscalGateway, FiscalSettingsRepository,
+    FiscalSettingsService, IdentityRepository, InventoryCountRepository, InventoryCountService,
+    InvitationRepository, MemberService, OpeningRepository, PackageScheduleRepository,
+    PackageScheduleService, PartyRepository, PartyService, PaymentMethodRepository,
+    PaymentMethodService, PaymentProvider, PaymentTermRepository, PaymentTermService,
+    PostalCodeDirectory, PostalCodeService, PriceListRepository, PriceListService,
+    ProductRepository, ProductService, PurchaseOrderRepository, PurchaseService, QuoteRepository,
+    QuoteService, ReconciliationService, RecurrenceRepository, RecurrenceService, SaleRepository,
+    SaleService, SalesReportService, SecretService, StatementLineRepository,
+    StockMovementRepository, StockService, StockSettingsRepository, TransferRepository,
+    TransferService,
 };
 use conta_verde_application::{
     CollectionService, CollectionSettingsRepository, DunningPlanRepository, DunningService,
@@ -86,7 +87,7 @@ pub struct ApiConfig {
 
 /// The adapters the use cases run on, named once so that a handler has one type parameter however
 /// many registers there are. Generic rather than `dyn`, like the use cases themselves.
-pub use clock::{customer_today, now_millis, today};
+pub use clock::{customer_today, now_millis, now_unix, today};
 
 pub trait Ports: 'static {
     type Parties: PartyRepository + 'static;
@@ -106,6 +107,7 @@ pub trait Ports: 'static {
     type PackageSchedules: PackageScheduleRepository + 'static;
     type FiscalSettings: FiscalSettingsRepository + 'static;
     type Gateway: FiscalGateway + 'static;
+    type FiscalDocuments: FiscalDocumentRepository + 'static;
     type Attachments: AttachmentRepository + 'static;
     type Blobs: BlobStore + 'static;
     type Charges: ChargeRepository + 'static;
@@ -221,6 +223,18 @@ type SalesOf<X> = SaleService<
 >;
 
 /// The purchase orders use case over the adapters of `X`.
+/// The fiscal documents use case over the adapters of `X`.
+type FiscalDocumentsOf<X> = FiscalDocumentService<
+    <X as Ports>::FiscalDocuments,
+    <X as Ports>::Sales,
+    <X as Ports>::Parties,
+    <X as Ports>::Products,
+    <X as Ports>::FiscalSettings,
+    <X as Ports>::Gateway,
+    <X as Ports>::Blobs,
+    <X as Ports>::EntryReferences,
+>;
+
 /// The e-mailing of documents over the adapters of `X`.
 type DocumentsOf<X> = DocumentMailService<
     <X as Ports>::Purchases,
@@ -297,7 +311,7 @@ pub struct Services<X: Ports> {
     pub exports: ExportsOf<X>,
     pub packages: PackagesOf<X>,
     pub fiscal_settings: FiscalSettingsService<X::FiscalSettings>,
-    pub fiscal_gateway: X::Gateway,
+    pub fiscal_documents: FiscalDocumentsOf<X>,
     pub postal_codes: PostalCodeService<X::PostalCodes>,
     pub members: MemberService<X::Invitations, X::Identity, X::Emails, X::Secrets>,
     pub documents: DocumentsOf<X>,
@@ -338,7 +352,7 @@ pub(crate) struct AppState<X: Ports> {
     exports: ExportsOf<X>,
     packages: PackagesOf<X>,
     fiscal_settings: FiscalSettingsService<X::FiscalSettings>,
-    fiscal_gateway: X::Gateway,
+    fiscal_documents: FiscalDocumentsOf<X>,
     postal_codes: PostalCodeService<X::PostalCodes>,
     members: MemberService<X::Invitations, X::Identity, X::Emails, X::Secrets>,
     documents: DocumentsOf<X>,
@@ -383,7 +397,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         exports: services.exports,
         packages: services.packages,
         fiscal_settings: services.fiscal_settings,
-        fiscal_gateway: services.fiscal_gateway,
+        fiscal_documents: services.fiscal_documents,
         postal_codes: services.postal_codes,
         members: services.members,
         documents: services.documents,
@@ -663,6 +677,34 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         .route(
             "/companies/{company_id}/fiscal/settings/history",
             get(fiscal::settings_history::<X>),
+        )
+        .route(
+            "/companies/{company_id}/fiscal/documents",
+            post(fiscal::issue_document::<X>),
+        )
+        .route(
+            "/companies/{company_id}/fiscal/documents/{id}",
+            get(fiscal::get_document::<X>),
+        )
+        .route(
+            "/companies/{company_id}/fiscal/documents/{id}/history",
+            get(fiscal::document_history::<X>),
+        )
+        .route(
+            "/companies/{company_id}/fiscal/documents/{id}/refresh",
+            post(fiscal::refresh_document::<X>),
+        )
+        .route(
+            "/companies/{company_id}/fiscal/documents/{id}/resend",
+            post(fiscal::resend_document::<X>),
+        )
+        .route(
+            "/companies/{company_id}/fiscal/documents/{id}/cancel",
+            post(fiscal::cancel_document::<X>),
+        )
+        .route(
+            "/companies/{company_id}/fiscal/documents/{id}/files/{kind}",
+            get(fiscal::download_document_file::<X>),
         )
         .route(
             "/companies/{company_id}/accounting/exports/entries",
@@ -1017,9 +1059,10 @@ mod tests {
         InMemoryChargeRepository, InMemoryCnpjRegistry, InMemoryCollectionSettingsRepository,
         InMemoryCommissionRuleRepository, InMemoryContractRepository, InMemoryCostCenterRepository,
         InMemoryDocumentMailRepository, InMemoryDunningPlanRepository, InMemoryEmailSender,
-        InMemoryFinancialEntryRepository, InMemoryFiscalSettingsRepository,
-        InMemoryIdentityRepository, InMemoryInventoryCountRepository, InMemoryInvitationRepository,
-        InMemoryMessageSender, InMemoryNotificationRepository, InMemoryOpeningRepository,
+        InMemoryFinancialEntryRepository, InMemoryFiscalDocumentRepository,
+        InMemoryFiscalSettingsRepository, InMemoryIdentityRepository,
+        InMemoryInventoryCountRepository, InMemoryInvitationRepository, InMemoryMessageSender,
+        InMemoryNotificationRepository, InMemoryOpeningRepository,
         InMemoryPackageScheduleRepository, InMemoryPartyRepository, InMemoryPaymentEventRepository,
         InMemoryPaymentLinkRepository, InMemoryPaymentMethodRepository,
         InMemoryPaymentTermRepository, InMemoryPeriodLockRepository, InMemoryPostalCodeDirectory,
@@ -1098,6 +1141,7 @@ mod tests {
         type PackageSchedules = InMemoryPackageScheduleRepository;
         type FiscalSettings = InMemoryFiscalSettingsRepository;
         type Gateway = FakeFiscalGateway;
+        type FiscalDocuments = InMemoryFiscalDocumentRepository;
         type Attachments = InMemoryAttachmentRepository;
         type Blobs = InMemoryBlobStore;
         type Charges = InMemoryChargeRepository;
@@ -1148,6 +1192,7 @@ mod tests {
         type PackageSchedules = InMemoryPackageScheduleRepository;
         type FiscalSettings = InMemoryFiscalSettingsRepository;
         type Gateway = FakeFiscalGateway;
+        type FiscalDocuments = InMemoryFiscalDocumentRepository;
         type Attachments = InMemoryAttachmentRepository;
         type Blobs = InMemoryBlobStore;
         type Charges = InMemoryChargeRepository;
@@ -1249,6 +1294,53 @@ mod tests {
             bank_accounts.clone(),
             payment_methods.clone(),
             locks(),
+        )
+    }
+
+    type TestFiscalDocuments = FiscalDocumentService<
+        InMemoryFiscalDocumentRepository,
+        InMemorySaleRepository,
+        InMemoryPartyRepository,
+        InMemoryProductRepository,
+        InMemoryFiscalSettingsRepository,
+        FakeFiscalGateway,
+        InMemoryBlobStore,
+        TestReferences,
+    >;
+
+    /// Fiscal documents over the registers a test keeps a handle to, so a sale it saves there can be invoiced.
+    fn fiscal_documents_over(
+        sales: &InMemorySaleRepository,
+        parties: &InMemoryPartyRepository,
+        products: &InMemoryProductRepository,
+        settings: &InMemoryFiscalSettingsRepository,
+        gateway: &FakeFiscalGateway,
+    ) -> TestFiscalDocuments {
+        FiscalDocumentService::new(
+            InMemoryFiscalDocumentRepository::default(),
+            sales.clone(),
+            parties.clone(),
+            products.clone(),
+            settings.clone(),
+            gateway.clone(),
+            InMemoryBlobStore::default(),
+            references_over(
+                &InMemoryCategoryRepository::default(),
+                &InMemoryCostCenterRepository::default(),
+                parties,
+                &InMemoryBankAccountRepository::default(),
+                &InMemoryPaymentMethodRepository::default(),
+            ),
+        )
+    }
+
+    fn standalone_fiscal_documents() -> TestFiscalDocuments {
+        fiscal_documents_over(
+            &InMemorySaleRepository::default(),
+            &InMemoryPartyRepository::default(),
+            &InMemoryProductRepository::default(),
+            &InMemoryFiscalSettingsRepository::default(),
+            &FakeFiscalGateway::default(),
         )
     }
 
@@ -1870,6 +1962,25 @@ mod tests {
         auth: AuthService<InMemoryIdentityRepository, Argon2SecretService>,
         members: TestMembers,
     ) -> Router {
+        app_with_fiscal(
+            parties,
+            postal_codes,
+            auth,
+            members,
+            standalone_fiscal_documents(),
+            InMemoryFiscalSettingsRepository::default(),
+        )
+    }
+
+    /// The app over fiscal documents and settings a test keeps handles to, so the sale it saves is the one invoiced.
+    fn app_with_fiscal(
+        parties: PartyService<InMemoryPartyRepository, InMemoryCnpjRegistry>,
+        postal_codes: InMemoryPostalCodeDirectory,
+        auth: AuthService<InMemoryIdentityRepository, Argon2SecretService>,
+        members: TestMembers,
+        fiscal_documents: TestFiscalDocuments,
+        fiscal_settings: InMemoryFiscalSettingsRepository,
+    ) -> Router {
         router::<MemoryPorts>(
             Services {
                 parties,
@@ -1907,10 +2018,8 @@ mod tests {
                 period_locks: PeriodLockService::new(locks()),
                 exports: standalone_exports(),
                 packages: standalone_packages(),
-                fiscal_gateway: FakeFiscalGateway::default(),
-                fiscal_settings: FiscalSettingsService::new(
-                    InMemoryFiscalSettingsRepository::default(),
-                ),
+                fiscal_documents,
+                fiscal_settings: FiscalSettingsService::new(fiscal_settings),
                 dre: DreService::new(
                     InMemoryFinancialEntryRepository::default(),
                     InMemoryCategoryRepository::default(),
@@ -2573,7 +2682,7 @@ mod tests {
                 period_locks: PeriodLockService::new(locks()),
                 exports: standalone_exports(),
                 packages: standalone_packages(),
-                fiscal_gateway: FakeFiscalGateway::default(),
+                fiscal_documents: standalone_fiscal_documents(),
                 fiscal_settings: FiscalSettingsService::new(
                     InMemoryFiscalSettingsRepository::default(),
                 ),
@@ -4801,7 +4910,7 @@ mod tests {
                 period_locks: PeriodLockService::new(locks()),
                 exports: standalone_exports(),
                 packages: standalone_packages(),
-                fiscal_gateway: FakeFiscalGateway::default(),
+                fiscal_documents: standalone_fiscal_documents(),
                 fiscal_settings: FiscalSettingsService::new(
                     InMemoryFiscalSettingsRepository::default(),
                 ),
@@ -6327,6 +6436,7 @@ mod tests {
         let stock_settings = InMemoryStockSettingsRepository::default();
         let attachment_store = InMemoryAttachmentRepository::default();
         let blob_store = InMemoryBlobStore::default();
+        let fiscal_settings_store = InMemoryFiscalSettingsRepository::default();
         let sales = || {
             sales_over(
                 sale_store.clone(),
@@ -6469,10 +6579,14 @@ mod tests {
                     mailbox.clone(),
                     "http://localhost:5173",
                 ),
-                fiscal_gateway: FakeFiscalGateway::default(),
-                fiscal_settings: FiscalSettingsService::new(
-                    InMemoryFiscalSettingsRepository::default(),
+                fiscal_documents: fiscal_documents_over(
+                    &sale_store,
+                    &parties,
+                    &products,
+                    &fiscal_settings_store,
+                    &FakeFiscalGateway::authorizing_after(1),
                 ),
+                fiscal_settings: FiscalSettingsService::new(fiscal_settings_store.clone()),
                 exports: AccountingExportService::new(
                     entry_store.clone(),
                     transfer_store.clone(),
@@ -10022,6 +10136,229 @@ mod tests {
             };
             assert_eq!(write.status, expected, "{role:?} writes");
         }
+    }
+
+    /// An NF-e through the API ([ADR 0076]): a completed sale to a customer in the issuer's state is invoiced once
+    /// however many times it is asked, the gateway authorizes it after a question, the XML is a download that is never
+    /// shown as a page, a cancellation keeps the file and frees the sale, and each role keeps to its area.
+    #[tokio::test]
+    async fn an_nfe_is_issued_from_a_sale_followed_and_cancelled() {
+        use conta_verde_domain::Role;
+
+        let (app, identities) = entry_app_with_identities();
+        let (owner, company_id) = sign_up(&app, "dona@example.com").await;
+        let seller = member_with_role(&app, &identities, company_id, Role::Sales).await;
+        let accountant = member_with_role(&app, &identities, company_id, Role::Accountant).await;
+        let (stranger, _) = sign_up(&app, "outra@example.com").await;
+        let targets = sales_targets(&app, &owner, company_id).await;
+        let category = revenue_category(&app, &owner, company_id).await;
+
+        // A customer in the issuer's state with a CPF, and a completed sale to them.
+        let customer = send(
+            &app,
+            json_request(
+                "POST",
+                &parties_uri(company_id),
+                Some(&owner),
+                json!({
+                    "name": "Maria Souza",
+                    "document": "529.982.247-25",
+                    "is_customer": true,
+                    "is_supplier": false,
+                    "address": {
+                        "postal_code": "01310-100", "street": "Rua Augusta", "number": "10",
+                        "complement": null, "district": "Consolação", "city": "São Paulo", "state": "SP"
+                    }
+                }),
+            ),
+        )
+        .await;
+        assert_eq!(customer.status, StatusCode::CREATED, "{}", customer.body);
+        let mut sale = sale_body(&targets, &category);
+        sale["customer_id"] = customer.body["id"].clone();
+        let created = send(
+            &app,
+            json_request("POST", &sales_uri(company_id), Some(&owner), sale),
+        )
+        .await;
+        let sale_id = created.body["id"].as_str().unwrap().to_owned();
+        let done = send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{}/{sale_id}/complete", sales_uri(company_id)),
+                Some(&owner),
+                Value::Null,
+            ),
+        )
+        .await;
+        assert_eq!(done.status, StatusCode::OK, "{}", done.body);
+
+        let documents = format!("/companies/{company_id}/fiscal/documents");
+        let choices = json!({
+            "sale_id": sale_id, "nature_code": "sale", "origin": 0, "presence": "internet",
+            "payment": "pix", "final_consumer": true
+        });
+
+        // Nothing is issued before the company says how it issues; and only those who write the area issue.
+        let early = send(
+            &app,
+            json_request("POST", &documents, Some(&owner), choices.clone()),
+        )
+        .await;
+        assert_eq!(
+            early.status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{}",
+            early.body
+        );
+        assert!(
+            early.body["error"]
+                .as_str()
+                .unwrap()
+                .contains("fiscal settings")
+        );
+        assert_eq!(
+            send(
+                &app,
+                json_request(
+                    "PUT",
+                    &format!("/companies/{company_id}/fiscal/settings"),
+                    Some(&owner),
+                    fiscal_settings_body(),
+                ),
+            )
+            .await
+            .status,
+            StatusCode::OK
+        );
+        for cookie in [&seller, &accountant] {
+            let denied = send(
+                &app,
+                json_request("POST", &documents, Some(cookie), choices.clone()),
+            )
+            .await;
+            assert_eq!(denied.status, StatusCode::FORBIDDEN);
+        }
+        let mut bad = choices.clone();
+        bad["presence"] = json!("somewhere");
+        assert_eq!(
+            send(&app, json_request("POST", &documents, Some(&owner), bad))
+                .await
+                .status,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let mut unknown = choices.clone();
+        unknown["extra"] = json!(1);
+        assert_eq!(
+            send(
+                &app,
+                json_request("POST", &documents, Some(&owner), unknown)
+            )
+            .await
+            .status,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+
+        // Issued: waiting for the authority; asking again is the same document, now authorized with its files.
+        let issued = send(
+            &app,
+            json_request("POST", &documents, Some(&owner), choices.clone()),
+        )
+        .await;
+        assert_eq!(issued.status, StatusCode::OK, "{}", issued.body);
+        assert_eq!(issued.body["status"], "processing");
+        assert_eq!(issued.body["total"], "35");
+        let id = issued.body["id"].as_str().unwrap().to_owned();
+        let one = format!("{documents}/{id}");
+        let again = send(
+            &app,
+            json_request("POST", &documents, Some(&owner), choices.clone()),
+        )
+        .await;
+        assert_eq!(again.body["id"], issued.body["id"]);
+        assert_eq!(again.body["status"], "authorized", "{}", again.body);
+        assert_eq!(again.body["access_key"].as_str().unwrap().len(), 44);
+        assert!(
+            again.body["files"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("xml"))
+        );
+
+        // The accountant reads it and downloads the XML, which is never a page of the app's own origin.
+        let read = send(&app, get_request(&one, Some(&accountant))).await;
+        assert_eq!(read.status, StatusCode::OK);
+        let (status, headers, bytes) = raw(
+            &app,
+            get_request(&format!("{one}/files/xml"), Some(&accountant)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers[header::CONTENT_TYPE], "application/xml");
+        assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+        assert!(
+            headers[header::CONTENT_DISPOSITION]
+                .to_str()
+                .unwrap()
+                .starts_with("attachment")
+        );
+        assert!(!bytes.is_empty());
+        let history = send(&app, get_request(&format!("{one}/history"), Some(&owner))).await;
+        assert_eq!(history.body.as_array().unwrap().len(), 3);
+
+        // Another company's person finds nothing.
+        for uri in [
+            one.clone(),
+            format!("{one}/files/xml"),
+            format!("{one}/history"),
+        ] {
+            assert_eq!(
+                send(&app, get_request(&uri, Some(&stranger))).await.status,
+                StatusCode::NOT_FOUND,
+                "{uri}"
+            );
+        }
+
+        // A cancellation needs a real reason; it keeps the files and frees the sale for a new document.
+        assert_eq!(
+            send(
+                &app,
+                json_request(
+                    "POST",
+                    &format!("{one}/cancel"),
+                    Some(&owner),
+                    json!({ "reason": "curto" })
+                ),
+            )
+            .await
+            .status,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let cancelled = send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{one}/cancel"),
+                Some(&owner),
+                json!({ "reason": "Pedido feito em duplicidade" }),
+            ),
+        )
+        .await;
+        assert_eq!(cancelled.status, StatusCode::OK, "{}", cancelled.body);
+        assert_eq!(cancelled.body["status"], "cancelled");
+        assert!(
+            cancelled.body["files"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("cancellation_xml"))
+        );
+        let second = send(
+            &app,
+            json_request("POST", &documents, Some(&owner), choices),
+        )
+        .await;
+        assert_ne!(second.body["id"], issued.body["id"]);
     }
 
     fn quotes_uri(company_id: Uuid) -> String {

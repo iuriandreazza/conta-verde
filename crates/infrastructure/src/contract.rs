@@ -17591,6 +17591,17 @@ pub async fn fiscal_documents_are_kept<R: conta_verde_application::FiscalDocumen
         "a second writer that started from the draft is told it moved"
     );
 
+    // The poll's view: what waits for the authority, from a moment on, across companies.
+    let waiting = repository.pending(0, 1_000_000).await.unwrap();
+    assert!(waiting.iter().any(|stored| stored.id() == draft.id()));
+    assert!(waiting.iter().all(|stored| stored.status().is_pending()));
+    let after = repository
+        .pending(draft.issued_at_unix() + 1, 1_000_000)
+        .await
+        .unwrap();
+    assert!(!after.iter().any(|stored| stored.id() == draft.id()));
+    assert!(repository.pending(0, 0).await.unwrap().is_empty());
+
     // One live document per sale and kind; the refused write leaves nothing in the trail.
     let second = a_fiscal_document(company, sale, "100.50");
     let refused = fiscal_document_audit(&second, AuditAction::Created, Vec::new());
@@ -17935,4 +17946,408 @@ pub async fn authorize_with_the_same_key<R: conta_verde_application::FiscalDocum
         )
         .await
         .unwrap_err()
+}
+
+/// What the fiscal documents' contract points at: a sale a customer with a CPF and an address in the issuer's state
+/// has completed.
+pub struct FiscalSeed {
+    pub customer: PartyId,
+}
+
+/// Saves the customer and returns what the sales are made to. The issuer's state is SP, so is the customer's.
+pub async fn seed_fiscal_customer<P: PartyRepository>(
+    parties: &P,
+    company: CompanyId,
+) -> FiscalSeed {
+    let customer = Party::new(
+        PartyId::generate(),
+        company,
+        PartyDraft {
+            document: Some("529.982.247-25".into()),
+            email: Some("maria@example.com".into()),
+            address: Some(AddressDraft {
+                postal_code: "01310100".into(),
+                street: "Rua Augusta".into(),
+                number: Some("10".into()),
+                complement: None,
+                district: Some("Consolação".into()),
+                city: "São Paulo".into(),
+                state: "SP".into(),
+            }),
+            ..party_draft("Maria Souza", None)
+        },
+    )
+    .unwrap();
+    parties
+        .save(&customer, &created_entry(&customer))
+        .await
+        .unwrap();
+    FiscalSeed {
+        customer: customer.id(),
+    }
+}
+
+/// Saves a completed sale to the customer, of the seed's two products.
+pub async fn save_a_completed_sale<S: conta_verde_application::SaleRepository>(
+    sales: &S,
+    company: CompanyId,
+    entry_seed: &EntrySeed,
+    seed: &SalesSeed,
+    fiscal: &FiscalSeed,
+) -> SaleId {
+    let mut draft = sale_draft(entry_seed, seed);
+    draft.customer_id = fiscal.customer;
+    let sale = Sale::new(SaleId::generate(), company, draft)
+        .unwrap()
+        .completed()
+        .unwrap();
+    let audit = AuditEntry {
+        company_id: company,
+        actor: actor(),
+        entity: AuditEntity::Sale,
+        entity_id: sale.id().as_uuid(),
+        action: AuditAction::Created,
+        changes: Vec::new(),
+    };
+    sales.save(&sale, &audit).await.unwrap();
+    sale.id()
+}
+
+fn issue_request(sale: SaleId) -> conta_verde_application::IssueNfe {
+    conta_verde_application::IssueNfe {
+        sale_id: sale,
+        nature_code: "sale".into(),
+        origin: 0,
+        presence: conta_verde_application::BuyerPresence::Internet,
+        payment: conta_verde_application::PaymentForm::Pix,
+        final_consumer: true,
+    }
+}
+
+/// 2026-11-09 17:30 UTC, which is the same day in São Paulo.
+const FISCAL_NOW: i64 = 1_794_245_400;
+
+/// Issues an NF-e from a completed sale and follows it: refused until the settings, the sale and every choice are
+/// right; sent once and asked again until authorized, with its XML kept; asking twice is the same document; a gateway
+/// that is down leaves it waiting and a rejection may be sent again under the same id; a cancellation keeps the files
+/// and frees the sale; another company sees nothing. The gateway is the fake the service was built with.
+#[allow(clippy::too_many_arguments)]
+pub async fn issues_an_nfe_from_a_sale<D, S, P, Y, F, B, R>(
+    service: &conta_verde_application::FiscalDocumentService<
+        D,
+        S,
+        P,
+        Y,
+        F,
+        crate::FakeFiscalGateway,
+        B,
+        R,
+    >,
+    gateway: &crate::FakeFiscalGateway,
+    settings: &F,
+    sales: &S,
+    company: CompanyId,
+    other_company: CompanyId,
+    entry_seed: &EntrySeed,
+    seed: &SalesSeed,
+    fiscal: &FiscalSeed,
+) where
+    D: conta_verde_application::FiscalDocumentRepository,
+    S: conta_verde_application::SaleRepository,
+    P: PartyRepository,
+    Y: conta_verde_application::ProductRepository,
+    F: conta_verde_application::FiscalSettingsRepository,
+    B: BlobStore,
+    R: conta_verde_application::EntryReferences,
+{
+    use conta_verde_application::ApplicationError;
+    use conta_verde_domain::{FiscalDocumentStatus, FiscalFileKind, TaxRuleDraft};
+
+    let rule = |error: ApplicationError| match error {
+        ApplicationError::FiscalRule(text) => text,
+        other => panic!("a fiscal rule was expected, got {other:?}"),
+    };
+    let user = actor();
+    let sale = save_a_completed_sale(sales, company, entry_seed, seed, fiscal).await;
+
+    // No settings yet.
+    assert!(
+        rule(
+            service
+                .issue(company, &user, issue_request(sale), FISCAL_NOW)
+                .await
+                .unwrap_err()
+        )
+        .contains("fiscal settings")
+    );
+
+    let mut draft = fiscal_settings_draft(
+        "11222333000181",
+        conta_verde_domain::FiscalEnvironment::Homologation,
+    );
+    draft.natures[0].rules = vec![TaxRuleDraft {
+        regime: conta_verde_domain::TaxRegime::SimplesNacional,
+        ncm_prefix: Some("1905".into()),
+        icms_code: "102".into(),
+        pis_code: "49".into(),
+        cofins_code: "49".into(),
+        icms_rate: None,
+        pis_rate: None,
+        cofins_rate: None,
+    }];
+    let company_settings = conta_verde_domain::FiscalSettings::new(company, draft.clone()).unwrap();
+    settings
+        .save(
+            &company_settings,
+            &AuditEntry {
+                company_id: company,
+                actor: actor(),
+                entity: AuditEntity::FiscalSettings,
+                entity_id: company.as_uuid(),
+                action: AuditAction::Created,
+                changes: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+
+    // Every choice is the person's: a nature that is not there, an origin that is not a digit, a sale that is not
+    // finished and a sale of another company are refused before anything is sent.
+    let mut wrong_nature = issue_request(sale);
+    wrong_nature.nature_code = "nothing".into();
+    assert!(
+        rule(
+            service
+                .issue(company, &user, wrong_nature, FISCAL_NOW)
+                .await
+                .unwrap_err()
+        )
+        .contains("operation nature")
+    );
+    let mut wrong_origin = issue_request(sale);
+    wrong_origin.origin = 9;
+    assert!(
+        rule(
+            service
+                .issue(company, &user, wrong_origin, FISCAL_NOW)
+                .await
+                .unwrap_err()
+        )
+        .contains("origin")
+    );
+    assert!(matches!(
+        service
+            .issue(other_company, &user, issue_request(sale), FISCAL_NOW)
+            .await,
+        Err(ApplicationError::FiscalRule(_) | ApplicationError::SaleNotFound)
+    ));
+    assert!(gateway.submitted().is_empty());
+
+    // Issued: sent once, waiting for the authority.
+    let issued = service
+        .issue(company, &user, issue_request(sale), FISCAL_NOW)
+        .await
+        .unwrap();
+    assert_eq!(issued.status(), FiscalDocumentStatus::Processing);
+    assert_eq!(issued.issued_on().to_string(), "2026-11-09");
+    assert_eq!(issued.recipient_document(), Some("52998224725"));
+    let sent = gateway.submitted();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].reference, issued.id().as_uuid().to_string());
+    assert_eq!(sent[0].items.len(), 2);
+    assert_eq!(sent[0].items[0].cfop, "5102", "inside the state");
+    assert_eq!(sent[0].items[0].icms_code, "102");
+    assert_eq!(sent[0].items[0].ncm, "19059090");
+    assert_eq!(sent[0].items[0].origin, 0);
+    assert_eq!(sent[0].total.as_decimal().to_string(), "35");
+    assert_eq!(sent[0].payments.len(), 1);
+
+    // Asking again asks the gateway, and records the authorization with the files before the status.
+    let authorized = service
+        .issue(company, &user, issue_request(sale), FISCAL_NOW)
+        .await
+        .unwrap();
+    assert_eq!(authorized.id(), issued.id());
+    assert_eq!(authorized.status(), FiscalDocumentStatus::Authorized);
+    let authorization = authorized.authorization().unwrap();
+    assert_eq!(authorization.access_key().as_str().len(), 44);
+    let xml = service
+        .file(company, issued.id(), FiscalFileKind::Xml)
+        .await
+        .unwrap();
+    assert!(!xml.is_empty());
+    assert_eq!(
+        gateway.submitted().len(),
+        1,
+        "asking twice sends nothing twice"
+    );
+    let again = service
+        .issue(company, &user, issue_request(sale), FISCAL_NOW)
+        .await
+        .unwrap();
+    assert_eq!(again.id(), issued.id());
+    let trail = service.history(company, issued.id()).await.unwrap();
+    assert_eq!(trail.len(), 3, "created, sent and authorized");
+
+    // Another company sees nothing.
+    assert!(matches!(
+        service.get(other_company, issued.id()).await,
+        Err(ApplicationError::FiscalDocumentNotFound)
+    ));
+    assert!(matches!(
+        service
+            .file(other_company, issued.id(), FiscalFileKind::Xml)
+            .await,
+        Err(ApplicationError::FiscalDocumentNotFound)
+    ));
+
+    // A cancellation needs a reason of 15 characters, is the authority's to refuse, keeps its XML and frees the sale.
+    assert!(
+        rule(
+            service
+                .cancel(company, &user, issued.id(), "too short")
+                .await
+                .unwrap_err()
+        )
+        .contains("15")
+    );
+    gateway.refuse_events_with("501", "Prazo de cancelamento excedido");
+    assert!(
+        rule(
+            service
+                .cancel(company, &user, issued.id(), "Pedido feito em duplicidade")
+                .await
+                .unwrap_err()
+        )
+        .contains("Prazo")
+    );
+    assert_eq!(
+        service.get(company, issued.id()).await.unwrap().status(),
+        FiscalDocumentStatus::Authorized
+    );
+    gateway.accept_events_again();
+    let cancelled = service
+        .cancel(company, &user, issued.id(), "Pedido feito em duplicidade")
+        .await
+        .unwrap();
+    assert_eq!(cancelled.status(), FiscalDocumentStatus::Cancelled);
+    assert!(
+        !service
+            .file(company, issued.id(), FiscalFileKind::CancellationXml)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        service
+            .file(company, issued.id(), FiscalFileKind::Xml)
+            .await
+            .is_ok(),
+        "the authorized XML is kept"
+    );
+    let second = service
+        .issue(company, &user, issue_request(sale), FISCAL_NOW)
+        .await
+        .unwrap();
+    assert_ne!(
+        second.id(),
+        issued.id(),
+        "a cancelled document frees the sale"
+    );
+
+    // A gateway that is down leaves the document waiting and is asked again, never submitted twice.
+    let sale = save_a_completed_sale(sales, company, entry_seed, seed, fiscal).await;
+    gateway.set_unavailable(true);
+    let waiting = service
+        .issue(company, &user, issue_request(sale), FISCAL_NOW)
+        .await
+        .unwrap();
+    assert_eq!(waiting.status(), FiscalDocumentStatus::Processing);
+    assert!(matches!(
+        service.refresh(company, waiting.id()).await,
+        Err(ApplicationError::FiscalGateway(_))
+    ));
+    gateway.set_unavailable(false);
+    // The gateway never took it (it was down when sent), so it has no document under the reference: the document is
+    // refused in words the person can act on and is sent again under the same id.
+    let unknown = service.refresh(company, waiting.id()).await.unwrap();
+    assert_eq!(unknown.status(), FiscalDocumentStatus::Rejected);
+    assert_eq!(unknown.refusal().unwrap().code(), "unknown");
+    let sent_again = service
+        .resend(
+            company,
+            &user,
+            waiting.id(),
+            issue_request(sale),
+            FISCAL_NOW,
+        )
+        .await
+        .unwrap();
+    assert_eq!(sent_again.id(), waiting.id());
+    assert_eq!(sent_again.status(), FiscalDocumentStatus::Processing);
+    // The poll finishes what is still waiting, in the name of whoever submitted it (it reaches every company, so only
+    // this document is asserted on).
+    let report = service.poll_pending(0, 1_000).await.unwrap();
+    assert!(report.asked >= 1);
+    let polled = service.get(company, sent_again.id()).await.unwrap();
+    assert_eq!(polled.status(), FiscalDocumentStatus::Authorized);
+    let trail = service.history(company, polled.id()).await.unwrap();
+    assert_eq!(trail.last().unwrap().entry.actor, user);
+
+    // A rejection keeps the authority's words and may be sent again under the same id.
+    let sale = save_a_completed_sale(sales, company, entry_seed, seed, fiscal).await;
+    gateway.reject_with("225", "Falha no Schema XML");
+    let rejected = service
+        .issue(company, &user, issue_request(sale), FISCAL_NOW)
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), FiscalDocumentStatus::Rejected);
+    assert_eq!(rejected.refusal().unwrap().code(), "225");
+    gateway.accept_again();
+    let resent = service
+        .resend(
+            company,
+            &user,
+            rejected.id(),
+            issue_request(sale),
+            FISCAL_NOW,
+        )
+        .await
+        .unwrap();
+    assert_eq!(resent.id(), rejected.id());
+    assert_ne!(resent.status(), FiscalDocumentStatus::Rejected);
+    assert!(matches!(
+        service
+            .resend(company, &user, resent.id(), issue_request(sale), FISCAL_NOW)
+            .await,
+        Err(ApplicationError::Domain(_))
+    ));
+
+    // After the certificate's day nothing is sent.
+    let mut expired = draft;
+    expired.certificate_valid_until = Some("2026-11-08".into());
+    settings
+        .save(
+            &conta_verde_domain::FiscalSettings::new(company, expired).unwrap(),
+            &AuditEntry {
+                company_id: company,
+                actor: actor(),
+                entity: AuditEntity::FiscalSettings,
+                entity_id: company.as_uuid(),
+                action: AuditAction::Updated,
+                changes: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    let sale = save_a_completed_sale(sales, company, entry_seed, seed, fiscal).await;
+    assert!(
+        rule(
+            service
+                .issue(company, &user, issue_request(sale), FISCAL_NOW)
+                .await
+                .unwrap_err()
+        )
+        .contains("certificate")
+    );
 }

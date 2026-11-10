@@ -45,6 +45,15 @@ pub trait FiscalDocumentRepository: Send + Sync {
         kind: FiscalDocumentKind,
     ) -> impl Future<Output = Result<Option<FiscalDocument>, RepositoryError>> + Send;
 
+    /// The documents of every company that are waiting for the authority (processing or contingency) and were issued
+    /// at or after `since_unix`, oldest first, at most `limit`: what the poll asks about. It reaches every company, so
+    /// it is for the background pass, never for a request.
+    fn pending(
+        &self,
+        since_unix: i64,
+        limit: usize,
+    ) -> impl Future<Output = Result<Vec<FiscalDocument>, RepositoryError>> + Send;
+
     /// What was recorded about the document, oldest first. Empty for another company's.
     fn history(
         &self,

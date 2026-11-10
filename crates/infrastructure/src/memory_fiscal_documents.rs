@@ -154,6 +154,23 @@ impl FiscalDocumentRepository for InMemoryFiscalDocumentRepository {
             .cloned())
     }
 
+    async fn pending(
+        &self,
+        since_unix: i64,
+        limit: usize,
+    ) -> Result<Vec<FiscalDocument>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        let mut waiting: Vec<FiscalDocument> = state
+            .documents
+            .iter()
+            .filter(|stored| stored.status().is_pending() && stored.issued_at_unix() >= since_unix)
+            .cloned()
+            .collect();
+        waiting.sort_by_key(|stored| (stored.issued_at_unix(), stored.id().as_uuid()));
+        waiting.truncate(limit);
+        Ok(waiting)
+    }
+
     async fn history(
         &self,
         company_id: CompanyId,
@@ -233,6 +250,54 @@ mod tests {
             CompanyId::generate(),
             SaleId::generate(),
             SaleId::generate(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn issues_an_nfe_from_a_sale() {
+        use crate::memory_entries::tests::Registers;
+        use crate::{
+            FakeFiscalGateway, InMemoryBlobStore, InMemoryFiscalSettingsRepository,
+            InMemoryPaymentTermRepository, InMemoryProductRepository, InMemorySaleRepository,
+        };
+        use conta_verde_application::FiscalDocumentService;
+
+        let registers = Registers::new();
+        let (company, other_company) = (CompanyId::generate(), CompanyId::generate());
+        let entry_seed = registers.seed(company).await;
+        let products = InMemoryProductRepository::default();
+        let seed = contract::seed_sales_records(
+            &registers.parties,
+            &products,
+            &InMemoryPaymentTermRepository::default(),
+            company,
+        )
+        .await;
+        let fiscal = contract::seed_fiscal_customer(&registers.parties, company).await;
+        let gateway = FakeFiscalGateway::authorizing_after(1);
+        let settings = InMemoryFiscalSettingsRepository::default();
+        let sales = InMemorySaleRepository::default();
+        let service = FiscalDocumentService::new(
+            InMemoryFiscalDocumentRepository::default(),
+            sales.clone(),
+            registers.parties.clone(),
+            products,
+            settings.clone(),
+            gateway.clone(),
+            InMemoryBlobStore::default(),
+            registers.references(),
+        );
+        contract::issues_an_nfe_from_a_sale(
+            &service,
+            &gateway,
+            &settings,
+            &sales,
+            company,
+            other_company,
+            &entry_seed,
+            &seed,
+            &fiscal,
         )
         .await;
     }

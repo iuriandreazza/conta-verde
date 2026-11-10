@@ -4,11 +4,11 @@ use conta_verde_api::{ApiConfig, Ports, Services, router};
 use conta_verde_application::{
     AccountingExportService, AttachmentService, AuthService, BalanceService, BankAccountService,
     CategoryService, CommissionService, ContractService, CostCenterService, DocumentMailService,
-    DreService, FinancialEntryService, FiscalSettingsService, InventoryCountService, JobRunner,
-    MemberService, PackageScheduleService, PartyService, PaymentMethodService, PaymentTermService,
-    PeriodLockService, PostalCodeService, PriceListService, ProductService, PurchaseService,
-    QuoteService, ReconciliationService, RecurrenceService, SaleService, SalesReportService,
-    StockService, TransferService,
+    DreService, FinancialEntryService, FiscalDocumentService, FiscalSettingsService,
+    InventoryCountService, JobRunner, MemberService, PackageScheduleService, PartyService,
+    PaymentMethodService, PaymentTermService, PeriodLockService, PostalCodeService,
+    PriceListService, ProductService, PurchaseService, QuoteService, ReconciliationService,
+    RecurrenceService, SaleService, SalesReportService, StockService, TransferService,
 };
 use conta_verde_application::{
     BrandedEmailSender, ChargeService, CollectionService, DocumentOutcome, DunningService,
@@ -24,14 +24,15 @@ use conta_verde_infrastructure::{
     PostgresAttachmentRepository, PostgresBankAccountRepository, PostgresCategoryRepository,
     PostgresCommissionRuleRepository, PostgresContractRepository, PostgresCostCenterRepository,
     PostgresDocumentMailRepository, PostgresFinancialEntryRepository,
-    PostgresFiscalSettingsRepository, PostgresIdentityRepository, PostgresInventoryCountRepository,
-    PostgresInvitationRepository, PostgresJobQueue, PostgresOpeningRepository,
-    PostgresPackageScheduleRepository, PostgresPartyRepository, PostgresPaymentMethodRepository,
-    PostgresPaymentTermRepository, PostgresPeriodLockRepository, PostgresPriceListRepository,
-    PostgresProductRepository, PostgresPurchaseOrderRepository, PostgresQuoteRepository,
-    PostgresRecurrenceRepository, PostgresSaleRepository, PostgresStatementLineRepository,
-    PostgresStockMovementRepository, PostgresStockSettingsRepository, PostgresTransferRepository,
-    RegisterDocumentReferences, RegisterReferences, SmtpEmailSender, connect_and_migrate,
+    PostgresFiscalDocumentRepository, PostgresFiscalSettingsRepository, PostgresIdentityRepository,
+    PostgresInventoryCountRepository, PostgresInvitationRepository, PostgresJobQueue,
+    PostgresOpeningRepository, PostgresPackageScheduleRepository, PostgresPartyRepository,
+    PostgresPaymentMethodRepository, PostgresPaymentTermRepository, PostgresPeriodLockRepository,
+    PostgresPriceListRepository, PostgresProductRepository, PostgresPurchaseOrderRepository,
+    PostgresQuoteRepository, PostgresRecurrenceRepository, PostgresSaleRepository,
+    PostgresStatementLineRepository, PostgresStockMovementRepository,
+    PostgresStockSettingsRepository, PostgresTransferRepository, RegisterDocumentReferences,
+    RegisterReferences, SmtpEmailSender, connect_and_migrate,
 };
 use conta_verde_infrastructure::{
     AsaasProvider, NoMessageSender, PostgresDunningPlanRepository, PostgresNotificationRepository,
@@ -72,6 +73,7 @@ impl Ports for PostgresPorts {
     type PackageSchedules = PostgresPackageScheduleRepository;
     type FiscalSettings = PostgresFiscalSettingsRepository;
     type Gateway = ConfiguredFiscalGateway;
+    type FiscalDocuments = PostgresFiscalDocumentRepository;
     type Attachments = PostgresAttachmentRepository;
     type Blobs = LocalBlobStore;
     type Charges = PostgresChargeRepository;
@@ -368,7 +370,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     );
     let fiscal_settings =
         FiscalSettingsService::new(PostgresFiscalSettingsRepository::new(pool.clone()));
-    let fiscal_gateway = fiscal_gateway_from_env()?;
+    // The poll that finishes what the gateway answered "processing" to has a service of its own over its own gateway
+    // client: the one the app serves from is owned by its state.
+    let fiscal_documents = || {
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(FiscalDocumentService::new(
+            PostgresFiscalDocumentRepository::new(pool.clone()),
+            PostgresSaleRepository::new(pool.clone()),
+            PostgresPartyRepository::new(pool.clone()),
+            PostgresProductRepository::new(pool.clone()),
+            PostgresFiscalSettingsRepository::new(pool.clone()),
+            fiscal_gateway_from_env()?,
+            LocalBlobStore::new(attachments_dir_from_env()),
+            references(),
+        ))
+    };
+    tokio::spawn(poll_fiscal_documents(fiscal_documents()?));
+    let fiscal_documents = fiscal_documents()?;
     let auth = AuthService::new(
         PostgresIdentityRepository::new(pool),
         Argon2SecretService::new()?,
@@ -412,7 +429,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 exports,
                 packages,
                 fiscal_settings,
-                fiscal_gateway,
+                fiscal_documents,
                 postal_codes,
                 members,
                 documents,
@@ -458,6 +475,41 @@ where
             }
             Ok(_) => {}
             Err(error) => tracing::error!(%error, "sending reminders failed"),
+        }
+    }
+}
+
+/// Every minute, asks the gateway about the fiscal documents that are still waiting for the authority and records the
+/// answer ([ADR 0076]). Each step is harmless to repeat, so a pass that overlaps another, or a restart, does no harm;
+/// a document older than a week is left for the person's refresh.
+async fn poll_fiscal_documents<D, S, P, Y, F, G, B, R>(
+    service: FiscalDocumentService<D, S, P, Y, F, G, B, R>,
+) where
+    D: conta_verde_application::FiscalDocumentRepository,
+    S: conta_verde_application::SaleRepository,
+    P: conta_verde_application::PartyRepository,
+    Y: conta_verde_application::ProductRepository,
+    F: conta_verde_application::FiscalSettingsRepository,
+    G: FiscalGateway,
+    B: conta_verde_application::BlobStore,
+    R: conta_verde_application::EntryReferences,
+{
+    const FISCAL_POLL_INTERVAL: Duration = Duration::from_secs(60);
+    const POLL_WINDOW_SECONDS: i64 = 7 * 86_400;
+    const POLL_BATCH: usize = 50;
+    let mut tick = tokio::time::interval(FISCAL_POLL_INTERVAL);
+    loop {
+        tick.tick().await;
+        let since = conta_verde_api::now_unix() - POLL_WINDOW_SECONDS;
+        match service.poll_pending(since, POLL_BATCH).await {
+            Ok(report) if report.asked > 0 => tracing::info!(
+                asked = report.asked,
+                settled = report.settled,
+                failed = report.failed,
+                "fiscal documents polled"
+            ),
+            Ok(_) => {}
+            Err(error) => tracing::error!(%error, "polling the fiscal documents failed"),
         }
     }
 }

@@ -31,3 +31,13 @@ pub fn now_millis() -> i64 {
             i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX)
         })
 }
+
+/// The moment now in Unix seconds: the moment an invoice is issued at, which the use case takes as an argument so a test
+/// moves it ([ADR 0076]).
+pub fn now_unix() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX)
+        })
+}

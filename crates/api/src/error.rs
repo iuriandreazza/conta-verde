@@ -146,6 +146,7 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
         | ApplicationError::PaymentTermNotFound
         | ApplicationError::PriceListNotFound
         | ApplicationError::ChargeNotFound
+        | ApplicationError::FiscalDocumentNotFound
         | ApplicationError::CategoryNotFound => (StatusCode::NOT_FOUND, error.to_string()),
         ApplicationError::LookupDisabled | ApplicationError::PostalCodeLookupDisabled => {
             (StatusCode::CONFLICT, error.to_string())
@@ -236,6 +237,25 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
             (
                 StatusCode::BAD_GATEWAY,
                 "the payment provider is not reachable".to_owned(),
+            )
+        }
+        ApplicationError::FiscalRule(_) => (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()),
+        // The operator has configured none, or another CNPJ: nothing to ask, like a payment provider that is off.
+        ApplicationError::FiscalGateway(
+            conta_verde_application::GatewayError::Disabled
+            | conta_verde_application::GatewayError::WrongIssuer,
+        ) => (StatusCode::CONFLICT, error.to_string()),
+        ApplicationError::FiscalGateway(conta_verde_application::GatewayError::Unsupported(_)) => {
+            (StatusCode::UNPROCESSABLE_ENTITY, error.to_string())
+        }
+        // The text can name the gateway's answer: it stays in the log.
+        ApplicationError::FiscalGateway(conta_verde_application::GatewayError::Unavailable(
+            detail,
+        )) => {
+            tracing::warn!(%detail, "the fiscal gateway is unavailable");
+            (
+                StatusCode::BAD_GATEWAY,
+                "the fiscal gateway is not reachable".to_owned(),
             )
         }
         ApplicationError::PostalCodeNotFound => (StatusCode::NOT_FOUND, error.to_string()),

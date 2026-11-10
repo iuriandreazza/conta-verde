@@ -131,6 +131,12 @@ pub enum ApplicationError {
     ChargeFromAnotherProvider,
     /// The payment provider could not make or call off the charge.
     Provider(ProviderError),
+    /// The fiscal gateway could not be asked, or does not do this.
+    FiscalGateway(crate::GatewayError),
+    /// No fiscal document with this id in the company (another company's looks the same).
+    FiscalDocumentNotFound,
+    /// A rule of issuing a fiscal document, or the authority's own refusal of an event, in words the person can act on.
+    FiscalRule(String),
     /// No financial entry with this id in the company (another company's looks the same).
     EntryNotFound,
     /// No attachment with this id in the entry (another company's looks the same), or it was removed
@@ -279,6 +285,12 @@ impl From<ProviderError> for ApplicationError {
     }
 }
 
+impl From<crate::GatewayError> for ApplicationError {
+    fn from(error: crate::GatewayError) -> Self {
+        Self::FiscalGateway(error)
+    }
+}
+
 impl From<WebhookError> for ApplicationError {
     fn from(error: WebhookError) -> Self {
         Self::Webhook(error)
@@ -391,6 +403,9 @@ impl fmt::Display for ApplicationError {
                 f.write_str("the charge was made at another payment provider than the configured one")
             }
             Self::Provider(error) => error.fmt(f),
+            Self::FiscalGateway(error) => error.fmt(f),
+            Self::FiscalDocumentNotFound => f.write_str("fiscal document not found"),
+            Self::FiscalRule(rule) => f.write_str(rule),
             Self::EntryNotFound => f.write_str("entry not found"),
             Self::AttachmentNotFound => f.write_str("attachment not found"),
             Self::TooManyAttachments => {
