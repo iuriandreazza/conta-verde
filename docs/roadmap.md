@@ -178,6 +178,8 @@ provider's test environment and the XMLs reach the accountant export.
 
 ## Phase 8 — Integrations and mobile (v0.9)
 
+The plan, the order of the slices and what each settles are in [ADR 0085](adr/0085-integrations-and-mobile-plan.md).
+
 - [ ] Public API `v1` frozen: OpenAPI document, API keys per company, rate limits ([ADR 0015](adr/0015-public-api-and-webhooks.md))
 - [ ] Webhooks: subscriptions, signed deliveries, retries, delivery log
 - [ ] Automatic bank statement sync through an aggregator adapter ([ADR 0011](adr/0011-bank-data-ingestion.md))

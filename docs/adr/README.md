@@ -30,7 +30,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0012](0012-managerial-accounting-model.md) | Managerial chart of accounts, not a general ledger | accepted | 1, 2, 6 |
 | [0013](0013-accountant-access-and-exports.md) | Accountant access and exports | accepted | 6 |
 | [0014](0014-notifications.md) | Notifications behind ports | accepted | 4 |
-| [0015](0015-public-api-and-webhooks.md) | Public API and webhooks | proposed | 8 |
+| [0015](0015-public-api-and-webhooks.md) | Public API and webhooks (amended by 0085) | accepted | 8 |
 | [0016](0016-ui-motion-and-icons.md) | Motion for animation, vendored Lucide Animated icons | accepted | 1 |
 | [0017](0017-cnpj-registry-lookup.md) | CNPJ checked against the federal registry behind a port | accepted | 1 |
 | [0018](0018-list-endpoints-search-filter-sort.md) | List endpoints share one search, filter and sort convention | accepted | 1 |
@@ -100,6 +100,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0082](0082-nfce-and-point-of-sale.md) | NFC-e at the counter and the minimal point of sale | accepted | 7 |
 | [0083](0083-received-invoices-and-the-fiscal-webhook.md) | Received invoices, the recipient's manifestation and the fiscal webhook | accepted | 7 |
 | [0084](0084-tax-calculation-behind-a-port.md) | The tax calculation behind a port, and the accountant's checklist | accepted | 7 |
+| [0085](0085-integrations-and-mobile-plan.md) | Integrations and mobile: the plan for Phase 8 | accepted | 8 |
 
 ## Template
 

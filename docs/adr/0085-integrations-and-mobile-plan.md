@@ -1,0 +1,283 @@
+---
+title: "ADR 0085: Integrations and mobile: the plan for Phase 8"
+status: accepted
+date: 2026-11-10
+tags: [adr, api, integrations, webhooks, pwa, phase-8]
+---
+
+# ADR 0085: Integrations and mobile: the plan for Phase 8
+
+## Context
+
+Phase 8 has five roadmap items: a frozen public API with keys and rate limits, webhooks, an automatic bank statement
+sync, a first e-commerce connector and a PWA. Two accepted ADRs describe them from before the code existed:
+[ADR 0011](0011-bank-data-ingestion.md) (accepted) and [ADR 0015](0015-public-api-and-webhooks.md) (proposed). Several of
+their promises no longer match the repository, and a phase starts by accepting the ADRs it depends on, so this ADR
+settles each point against what the code is today and **amends** both (they stay; the deltas are here).
+
+What the code is today, and ADR 0015 did not know:
+
+- **There is no `/api/v1`.** The routes are `/companies/{company_id}/...`; the SPA reaches them through `/api` with the
+  prefix stripped by its proxy. About 150 routes, changing every phase, authenticated by a **session cookie** only.
+- **No generated client and no OpenAPI.** `web/src/api.ts` is kept in step with the Rust DTOs by hand
+  ([`CLAUDE.md`](../../CLAUDE.md)). Errors are `{"error": "message"}`, not RFC 9457. No creates take an idempotency key.
+- **Who acts is a user.** `Actor` has one variant, `audit_log.actor_kind` is `CHECK (actor_kind IN ('user'))`, and
+  `postgres_audit::insert` and about fifteen other places destructure `Actor::User`.
+- **What a role may do is the route's:** `CompanyAccess` reads the area from the segment after `{company_id}`
+  (`SEGMENT_AREAS`, [ADR 0026](0026-membership-roles-and-permissions.md)) and the method gives read or write.
+- **Background work exists** ([ADR 0059](0059-job-queue.md)): a table of jobs with fixed-arity plain-text arguments,
+  at-least-once delivery, doubling retry capped at one hour, five tries, finished jobs deleted. There is no screen for
+  failed jobs.
+- **Audit is atomic with the write; nothing else is.** Every write carries an `AuditEntry` stored in the same
+  transaction. Each in-memory repository keeps its own audit log inside its own state.
+- **Secrets are never stored raw:** a token is shown once and only its SHA-256 digest is kept
+  ([ADR 0027](0027-invitations.md), [ADR 0038](0038-quotes.md)). Credentials of external services come from the
+  environment ([ADR 0044](0044-collection-module-plan.md), [ADR 0075](0075-fiscal-gateway-port.md)).
+- **The server reads a clock in very few places** (recurrences, contracts, reminders, the job queue, document e-mail
+  limits).
+
+## Options considered
+
+### Which API is "public"
+
+| Option | Pros | Cons |
+|--------|------|------|
+| Freeze the SPA's API (what ADR 0015 and principle 7 of the macro plan say) | One contract; the SPA proves it | 150 routes, built in the open and still moving, would stop moving; the DTOs carry what the screens need, not what an integrator should depend on; every Phase 9 refactor would need a version |
+| A separate frozen `/v1` of curated resources, with its own DTOs, calling the same use cases (chosen) | Small surface that can honestly be kept for a year; the SPA stays free; no rule is skipped because the use cases are the same | A second set of DTOs for those resources; "no private API" becomes "the SPA's API is not a contract" |
+| GraphQL | Flexible queries | Harder caching, authentication and limits; less familiar to integrators |
+
+### Where the webhook's event comes from
+
+| Option | Pros | Cons |
+|--------|------|------|
+| An outbox row written in the same transaction as the business write | No event lost on a crash | Every write method of both adapters would carry an event as well as an audit entry (the signatures of about thirty ports change), and the in-memory adapters keep one audit log **per repository**, so there is nowhere common to write it |
+| The use case publishes after its write succeeded (chosen) | One place per event; both adapters behave alike; no port changes | A crash between the commit and the publish loses that event (see Consequences) |
+| Derive events by scanning `audit_log` | Atomic with the write | Postgres only; `sequence` is an identity, so a transaction that commits late can be skipped by a cursor; the memory adapters cannot do it |
+
+### What a webhook's signing secret is
+
+| Option | Pros | Cons |
+|--------|------|------|
+| Only its digest, like a token | Nothing recoverable | The server must sign, so it must know the secret: impossible |
+| Encrypted at rest (AEAD, a key from the environment) | Stored per subscription, any value | A new crate for the cipher; a key to guard, rotate and back up; a format to version |
+| **Derived**: `HMAC-SHA256(WEBHOOK_SECRET_KEY, "subscription" . id . version)` (chosen) | **Nothing secret is stored**; no new crate (`hmac` is already used for payment webhooks); rotating one secret is bumping a number | Losing or changing the key invalidates every subscription's secret; the master key is one more environment secret |
+
+### Idempotency of a create
+
+| Option | Pros | Cons |
+|--------|------|------|
+| An `Idempotency-Key` header with a table of stored responses (what ADR 0015 promised) | Works for every POST | A crash after the write and before the response is stored leaves a claim that cannot say whether the write happened; another table, kept and pruned |
+| A natural key on the record, unique per company (chosen) | Crash-proof (the unique index is the claim); the record can be found again by it; it is the repository's own idiom (a purchase invoice's access key, an import's `reference`, a contract's cycle day) | Only for the records that get one |
+
+## Decision
+
+### 1. The slices, in order
+
+Each slice is one pull request with its own ADR (numbers taken when written) and updates the roadmap, the ADR index and
+the rules in `CLAUDE.md`.
+
+1. **This ADR**, and the amendments to 0011 and 0015. Documents only.
+2. **Public API `v1`**: keys, scopes, rate limits, the OpenAPI document and its drift tests, the first resources, the
+   page for keys.
+3. **Webhooks**: subscriptions, signed deliveries, retries, the delivery log, the page.
+4. **Automatic bank statement sync** through an aggregator port.
+5. **The first e-commerce connector**, a separate package.
+6. **PWA**.
+
+The order follows the dependency: the connector needs the API and the webhooks; the sync and the PWA need neither and
+could move earlier. They stay where the roadmap put them unless a slice says why not.
+
+### 2. What "`v1` frozen" means
+
+- **A prefix and a curated set.** The routes are `/v1/{resource}`, **without the company in the path**: a key belongs to
+  one company, which is where the request is made. The SPA's cookie routes are **not** under it and are **not a contract**
+  (principle 7 of the macro plan is amended: the SPA and `v1` are two front doors to the same use cases, so no rule, check
+  or audit entry can be skipped through either). The exit criterion "without any private endpoint" is this distinction.
+- **Its own types.** `v1` has request and response DTOs of its own (`crates/api/src/v1/`), written from the domain types,
+  never the SPA's DTOs. A change to a screen cannot change the contract.
+- **Disjoint authentication.** A `v1` route reads only `Authorization: Bearer <key>` and ignores cookies; the SPA's routes
+  read only the cookie and ignore the bearer. A request with both is answered as what its path says. No CSRF surface
+  exists on `v1`.
+- **The rule of compatibility is additive only.** Within `v1` the API may gain endpoints, optional request fields,
+  response fields and query parameters; it may not remove or rename any of them, change a type, make an optional request
+  field required, tighten what a field accepts or change what an existing value means. Clients must ignore response
+  fields they do not know **and treat an enum value they do not know as "other"**, so a new value is not a break. A
+  breaking change is a `v2`, and `v1` is kept for **at least one year** after `v2` ships, announced by the `Deprecation`
+  and `Sunset` headers.
+- **The document is served and checked.** `GET /v1/openapi.json` (no key) serves the OpenAPI 3.1 document checked in at
+  `docs/api/v1/openapi.json`. It is written by hand, **not generated** (no `utoipa`: it would need an annotation on every
+  handler and a derive on every DTO for fifteen endpoints, and still would not catch a field the handler leaves out).
+  Three tests keep it honest, with no new crate:
+  1. every `/v1` route of `router` (read from its source, as the accountant test reads every route) is in the document
+     with the same method, and every operation of the document is a route;
+  2. for every operation the tests exercise, the **shape of the real JSON** is checked against the document's schema
+     (no key outside `properties`, every `required` key present, enum values and formats respected);
+  3. the document **contains** `docs/api/v1/openapi.frozen.json`, a copy made when `v1` first shipped (every path and
+     method, every property, every enum value; a request's required list may not grow). The frozen copy is a tripwire,
+     not a lock: changing it is a visible act that a review must question, and a PR that does so says it breaks `v1`.
+- **Errors are RFC 9457** (`application/problem+json`) on `v1` only: `type` (`urn:conta-verde:problem:<code>`), `title`,
+  `status`, `detail` and a stable machine `code` (`invalid_request`, `unauthenticated`, `insufficient_scope`,
+  `not_found`, `conflict`, `rate_limited`, `internal`; finer codes may be added). The SPA's `{"error": ...}` is unchanged.
+  A storage error is a `500` with a generic `detail`, as everywhere ([`CLAUDE.md`](../../CLAUDE.md)).
+- **Conventions carried from the product:** JSON; decimals as strings, never numbers ([ADR 0003](0003-money-as-decimal.md));
+  dates `YYYY-MM-DD`; moments are **RFC 3339 UTC strings**; lists take `limit`, `after`, `q`,
+  closed-value filters and `sort`, with the keyset cursor ([ADR 0018](0018-list-endpoints-search-filter-sort.md)); an
+  unknown parameter is `400`, never ignored.
+- **Idempotency is a natural key** (amending 0015's `Idempotency-Key`): a party is found again by its document, a product
+  by its SKU, and a **sale gets an optional `external_reference`** (1 to 100 characters, no control characters, unique
+  per company, a partial unique index). Creating a sale whose reference exists returns **that sale** (`200` instead of
+  `201`, the stored sale wins over what the second request says), and `GET /v1/sales?external_reference=` finds it. This
+  is what lets a connector replay an order without making it twice, even across a crash.
+- **The first resources**: parties, products with their stock position, sales (create, read, complete, cancel) and the
+  status of a sale's charges, with reads on all and writes through the same use cases as the web (every rule applies and
+  every write is audited with the key as the actor). Webhook payloads reuse the `v1` DTO of the resource, so a consumer
+  parses one shape, and the document describes them (`webhooks` of OpenAPI 3.1).
+
+### 3. API keys
+
+- A key belongs to **one company**, has a name, an optional expiry day and a set of **scopes**. Its secret is made by
+  `SecretService::new_token` with the prefix `cvk_`, **shown once** when created, and only its **SHA-256 digest** is
+  kept (`digest_token`, unique); the first characters are kept as a **label** so a person can tell keys apart. A lookup
+  is one indexed query by digest.
+- **Scopes map onto the existing table**: a scope is `{area}:{read|write}` (`sales:write`, `products:read`), `write`
+  includes `read`, and a route's area and method decide what it needs, exactly as `CompanyAccess` does for a role. The
+  areas a key may be given are `parties`, `products`, `finance`, `sales` and `purchases`; **never `members`,
+  `accounting` or `fiscal`** (they hold who belongs to the company, the books' closing and documents with legal weight).
+  A key refused for a scope is `403 insufficient_scope`: the holder owns the key, so there is nothing to hide.
+- **Keys are managed by owners and admins only**: the routes (`/companies/{company_id}/api-keys`, in the SPA's API, never
+  in `v1`) sit in the `members` area, and so do the webhook subscriptions. A key cannot make or change keys.
+- **Rotation** makes a new key with the same name and scopes and gives the old one an expiry of 0 to 168 hours from now
+  (24 by default), so a client can switch without a gap. **Revocation** marks the key (`revoked`) and is immediate. A key
+  is never edited (except its name) and never deleted; creating, rotating and revoking are audited
+  (`AuditEntity::ApiKey`), and the audit entry never holds the secret or its digest.
+- **The actor is a variant**: `Actor::ApiKey { id, name }`, with `Actor::id()` and `Actor::name()` so no caller has to
+  match. `audit_log.actor_kind` widens to `('user', 'api_key')` in a new migration; both adapters write and read it;
+  the history shows who it was. The few columns that keep "the person in whose name later work is done" (a charge's issuer,
+  a contract's last saver, a quote's sender, a fiscal document's submitter) hold a UUID and a name **with no foreign
+  key**, so a key fits: its id is stored and the name is stored as `"{name} (API key)"`, and it reads back as an
+  `Actor::User` with that name, so no reader takes it for a person. The `v1` writes of this phase do not reach the ones
+  that keep a foreign key to `users` (document e-mails, invitations).
+- **Rate limits** are a **token bucket per key, in the memory of the process**: a capacity and a refill of
+  `API_RATE_LIMIT_PER_MINUTE` (300 by default, `0` is refused) a minute. **Said plainly: with N instances behind a
+  balancer a key's real limit is N times that**, and a restart forgets the buckets. A Postgres-backed counter would turn
+  every request into a write; if an operator needs an exact limit, the proxy in front of the API is the place for it.
+  Every `v1` answer carries `RateLimit-Limit`, `RateLimit-Remaining` and `RateLimit-Reset`; a refused request is `429
+  rate_limited` with `Retry-After`. Wrong keys are not throttled (there is no client address behind a proxy, the same
+  gap as the login's, [`CLAUDE.md`](../../CLAUDE.md)): a 256-bit secret cannot be guessed, and a wrong one costs one
+  indexed query.
+- **Two new places read a clock**, both passed in as `now` by the caller so a test moves it
+  ([ADR 0065](0065-document-mail-limits-and-log.md)): a key's expiry (judged at each request) and its **last use**,
+  written as a **day** only when the day changes (bookkeeping, not audited, so reading never writes more than once a
+  day). The rate limiter uses a monotonic `Instant` and no wall clock.
+- `access::area_of` and the walk over every route of the router keep covering the SPA's routes; `v1` has its **own** table
+  of segments and areas and its **own** walk: a test goes through every `/v1` route and expects `401` with no key,
+  `403` with a key of a lacking scope, `403` for a write with a read-only key, `404` for another company's record, and
+  `429` past the limit.
+
+### 4. Webhooks
+
+- A **subscription** is a company's, with an `https` URL, a list of event types (or all) and an `active` flag, at most 20
+  per company, audited (without the secret). Its **signing secret** is derived from `WEBHOOK_SECRET_KEY` (at least 32
+  characters) and the subscription's `secret_version`; it is **shown once**, on creation and on rotation, and rotating
+  bumps the version and keeps signing with the previous one too for 24 hours. **Without `WEBHOOK_SECRET_KEY` webhooks are
+  off** and the page says so (the pattern of `PAYMENT_PROVIDER`). **Nothing secret is stored**; losing the key means
+  every subscription needs a rotation.
+- **The catalogue of events** starts with `sale.created`, `sale.completed`, `sale.cancelled`, `charge.paid`,
+  `stock.below_minimum` and `webhook.test`. It only grows. `stock.below_minimum` is derived on read in the product (it is
+  never stored), so the event fires on a **crossing**: when a movement takes a product that has a minimum from a balance
+  at or above it to one below it, decided by the stock use case from the balance before and after.
+- **A delivery** is a `POST` of `{ "id", "type", "created_at", "company_id", "data" }` with the headers
+  `Webhook-Id` (the event's, the same on every try), `Webhook-Timestamp` (Unix seconds, **new on every try**) and
+  `Webhook-Signature: v1=<hex HMAC-SHA256 of "{id}.{timestamp}.{body}">`. A receiver **verifies the signature in
+  constant time, refuses a timestamp more than five minutes off and remembers ids it has seen**: that is the replay
+  protection. Success is any `2xx` within 10 seconds; the response body is never read or kept.
+- **Retries go through the job queue** ([ADR 0059](0059-job-queue.md)): a `deliver_webhook` job carries only the
+  **delivery id** (its arguments are fixed-arity plain text and a finished job is deleted), and the payload, the status
+  and what happened live in a **delivery log** table (`pending`, `delivered`, `failed`, the tries, the last status code
+  and a short reason, never a response body), pruned after 30 days. The queue's rule of five tries with the wait capped at
+  an hour is **not enough** for a subscriber that is down overnight, so the maximum of tries becomes a property of the
+  **job kind** (`JobKind::max_attempts`: 5 for e-mail as before, 8 for webhooks, about two hours in all). A failed
+  delivery can be sent again by hand, and "send a test event" makes a `webhook.test` delivery that shows in the log.
+- **The event is published by the use case after its write succeeds** (a new `EventPublisher` port: it stores the event,
+  one delivery per matching subscription, and queues their jobs). See the consequences for what that costs.
+- **SSRF.** The URL is checked when the subscription is made (https only, no credentials in it, a host, no IP literal in a
+  private range) **and again at every delivery**, because a name can change what it points at: the delivery resolves the
+  host, **refuses every address that is loopback, private, link-local (including the metadata address), unique-local,
+  carrier-grade NAT, multicast, unspecified or documentation**, and connects **to the address it checked**, never
+  resolving twice. **Redirects are not followed** (`redirect::Policy::none()`). A development and test opt-in,
+  `WEBHOOK_ALLOW_PRIVATE_TARGETS=true`, lets a local listener be the target (and allows `http`); the server logs a warning
+  when it is on, and the exit-criterion test uses it, while other tests hold the strict policy against private targets
+  without opening a connection.
+
+### 5. The bank aggregator
+
+- **A `BankAggregator` port** (ADR 0011 called it `BankConnector`; the word now belongs to the e-commerce packages) that
+  starts a **connection** (the aggregator's own consent flow in the SPA gives back an id), lists what it can see, pulls the
+  transactions of an account since a day, and disconnects. It has a fake adapter and **one real adapter written from the
+  public documentation of a Brazilian Open Finance aggregator**; which one, and what the documentation does not say, is
+  settled and said honestly in slice 4's ADR. **It cannot be validated without an account**; the adapter says so, as the
+  fiscal ones do, and is never described as verified.
+- **No secret per company is stored.** The aggregator's credentials are the installation's, in the environment (one
+  account per installation, like the fiscal gateway); what is stored per company is a **connection record**: the bank
+  account it feeds, the provider, the aggregator's connection id and the day of the last pull. A connection id alone
+  gives nothing without the installation's credentials. An adapter that needed a token per company would need its own ADR
+  and an AEAD at rest, which this phase does not add.
+- **It feeds what already exists.** Transactions become statement lines through the **same import and fingerprint**
+  ([ADR 0034](0034-statement-import-and-reconciliation.md)): the aggregator's transaction id takes the place of the bank
+  reference, so a pull that overlaps the last one adds nothing, and reconciliation does not know where a line came from.
+  A pull is a **`sync_bank_connection` job** per connection, queued by an hourly pass (the day is the worker's) and
+  harmless to repeat. OFX stays and is the only path for a company without an aggregator.
+
+### 6. The first e-commerce connector
+
+- A **separate package** in `connectors/`, with its own README, tests and lockfile, **importing no crate and no file of
+  the workspace**: it speaks only the `v1` API with a key and receives only webhooks. The target is **WooCommerce**
+  (justified in slice 5's ADR: it is open source and self-hosted like this product, its REST API and signed webhooks need
+  no partner registration or OAuth app, whereas the largest Brazilian hosted platforms require one before any token
+  exists). It is tested against a **local stand-in** and **cannot be validated against a real store without an account**.
+- It maps an order to a sale with the order's id as the `external_reference`, so replaying an order is safe.
+
+### 7. The PWA
+
+- Installable (manifest, icons rendered from the logo, a service worker) with **offline read** of recent data and an
+  offline indicator. **There are no offline writes**: a form that cannot reach the server says so. The cache rules are
+  written as rules because a cache is another place a company's data lives:
+  1. **An allowlist of what may be cached**, not a list of what may not: only `GET` of the dashboard's sources and the
+     lists the person opened (parties, products, entries, sales, quotes, stock positions, balances, cash flow). Never
+     `/auth`, `/public`, `members`, `api-keys`, `webhook-subscriptions`, `accounting`, `fiscal`, attachments, exports,
+     histories, payment links, or any response that says `no-store`.
+  2. **Per person and per company**: entries are keyed by the user and the company, and a different user's `/auth/me`
+     empties the cache before anything is read.
+  3. **Cleared at sign-out and on any `401`**: the page tells the worker, which deletes every data cache.
+  4. **Bounded**: at most 7 days old when read, 1 MB a body, a few dozen entries; an entry read from the cache is marked,
+     and the page shows "offline, data of {time}".
+  5. The application's own files (hashed assets) are cached by name and are not data.
+  The rules are tested in `web/` against a fake `caches` and `fetch`; slice 6's ADR holds the details.
+
+## Consequences
+
+- Integrators get a small contract that can be kept; the SPA is free to change. The price is a second set of DTOs for the
+  `v1` resources and a document maintained by hand, held by three tests rather than by generation.
+- A key cannot do anything its scopes do not name, cannot reach another company, never reads fiscal, accounting or members,
+  and leaves its name in the trail.
+- **Webhooks are an at-least-once hint, not the record.** A crash between a write's commit and its publish loses that event;
+  a delivery may arrive twice; deliveries of different events may arrive out of order. The `v1` reads are the truth, and
+  the documentation tells consumers to reconcile with them (`GET /v1/sales?updated...` and by `external_reference`).
+  Moving to an outbox in the transaction would remove the first gap at the price of every write's signature; it is the
+  first thing to revisit if the loss is ever seen.
+- The rate limit is approximate across instances and forgotten on restart.
+- `WEBHOOK_SECRET_KEY` becomes a secret to keep and back up; the derivation means no secret is at rest and no cipher crate
+  is added.
+- `Actor` gaining a variant touches about fifteen places once, in slice 2, and the audit CHECK is widened by a new
+  migration (the one already merged is not edited).
+- `JobKind` gets a per-kind retry limit, and `MAX_ATTEMPTS` stops being a single number.
+- Not validated, and said so in each slice: the aggregator adapter and the WooCommerce connector (no real account), and
+  deliveries to a real subscriber over the internet (tests use a local listener with the private-target opt-in).
+
+## Revisit when
+
+- A real integrator needs an exact distributed rate limit, a per-key limit or a per-IP throttle.
+- An event is seen lost: move events to an outbox written in the business transaction.
+- A client needs real-time push beyond webhooks (server-sent events).
+- A second aggregator or an adapter with per-company credentials needs encryption at rest.
+- `v1` needs a breaking change: write `v2` and start the year.
