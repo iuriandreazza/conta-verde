@@ -17318,6 +17318,165 @@ pub fn nfe_request(
 /// asking with the same reference gives the same document, the gateway numbers in order, a correction letter is
 /// numbered, a cancellation is refused for a short reason and for a document that is not authorized, a cancelled
 /// document is told so, and a range of numbers is invalidated. `issuer` is the company the adapter issues for.
+/// A service nature the NFS-e is issued under: the national code and the taxation are the company's, here a plain test
+/// value.
+pub fn service_nature_draft() -> conta_verde_domain::OperationNatureDraft {
+    use conta_verde_domain::{IssTaxation, NatureKind, OperationNatureDraft, ServiceTermsDraft};
+
+    OperationNatureDraft {
+        code: "consulting".into(),
+        name: "Consultoria".into(),
+        kind: NatureKind::Service,
+        cfop_in_state: None,
+        cfop_interstate: None,
+        active: true,
+        rules: vec![],
+        service: Some(ServiceTermsDraft {
+            national_tax_code: "171001".into(),
+            municipal_service_code: Some("1701".into()),
+            iss_taxation: IssTaxation::Taxable,
+            iss_rate: Some("2.5".into()),
+        }),
+    }
+}
+
+/// The settings of [`fiscal_issuer`] with a service nature added: what an NFS-e is issued from.
+pub fn fiscal_service_issuer(
+    cnpj: &str,
+    environment: conta_verde_domain::FiscalEnvironment,
+) -> conta_verde_domain::FiscalSettings {
+    let mut draft = fiscal_settings_draft(cnpj, environment);
+    draft.natures.push(service_nature_draft());
+    conta_verde_domain::FiscalSettings::new(CompanyId::generate(), draft).unwrap()
+}
+
+pub fn nfse_request(
+    issuer: &conta_verde_domain::FiscalSettings,
+    reference: &str,
+    dps_number: u64,
+) -> conta_verde_application::NfseRequest {
+    use conta_verde_application::{NfseRecipient, NfseRequest, SpecialTaxRegime};
+    use conta_verde_domain::{Amount, CalendarDate, IssTaxation};
+
+    let amount = |text: &str| Amount::parse(text).unwrap();
+    NfseRequest {
+        reference: reference.to_owned(),
+        issuer: issuer.clone(),
+        // 2026-11-09 17:30:00 UTC.
+        issued_at_unix: 1_794_245_400,
+        dps_series: issuer.nfse_series(),
+        dps_number,
+        competence: CalendarDate::parse("2026-11-09").unwrap(),
+        service_city_code: "3550308".into(),
+        special_regime: SpecialTaxRegime::None,
+        recipient: NfseRecipient {
+            name: "Maria Souza".into(),
+            document: "52998224725".into(),
+            email: Some("maria@example.com".into()),
+            address: None,
+        },
+        description: "Consultoria em gestão".into(),
+        national_tax_code: "171001".into(),
+        municipal_service_code: Some("1701".into()),
+        taxation: IssTaxation::Taxable,
+        iss_rate: Some("2.5".parse().unwrap()),
+        gross: amount("250.00"),
+        discount: amount("0"),
+        total: amount("250.00"),
+    }
+}
+
+/// What every gateway does with an NFS-e: authorizes it, keeps the document under our reference (asking again is the
+/// same document), gives each a number of its own, refuses a DPS number another reference used, and cancels only what
+/// is authorized.
+pub async fn a_gateway_authorizes_and_cancels_an_nfse<G: conta_verde_application::FiscalGateway>(
+    gateway: &G,
+    issuer: &conta_verde_domain::FiscalSettings,
+) {
+    use conta_verde_application::{DocumentOutcome, EventOutcome};
+
+    let first = Uuid::new_v4().to_string();
+    let second = Uuid::new_v4().to_string();
+    assert_eq!(
+        gateway.query_nfse(issuer, &first).await.unwrap(),
+        DocumentOutcome::Unknown
+    );
+    let authorized =
+        |outcome: DocumentOutcome<conta_verde_application::AuthorizedNfse>| match outcome {
+            DocumentOutcome::Authorized(document) => document,
+            other => panic!("authorized was expected, got {other:?}"),
+        };
+    let settle = |reference: String| async move {
+        for _ in 0..6 {
+            match gateway.query_nfse(issuer, &reference).await.unwrap() {
+                DocumentOutcome::Processing => {}
+                other => return other,
+            }
+        }
+        panic!("the document never left processing");
+    };
+    let send = |reference: String, dps: u64| async move {
+        match gateway
+            .submit_nfse(&nfse_request(issuer, &reference, dps))
+            .await
+            .unwrap()
+            .outcome
+        {
+            DocumentOutcome::Processing => settle(reference).await,
+            other => other,
+        }
+    };
+    let one = authorized(send(first.clone(), 1).await);
+    assert!(one.number >= 1);
+    assert!(!one.xml.is_empty());
+    // Asking again with the same reference and DPS is the same document, never a second one.
+    let again = authorized(send(first.clone(), 1).await);
+    assert_eq!(again.number, one.number);
+    let two = authorized(send(second.clone(), 2).await);
+    assert_ne!(two.number, one.number);
+
+    // A DPS number another reference used is refused, and nothing of it is taken for a document.
+    let third = Uuid::new_v4().to_string();
+    assert!(matches!(
+        send(third.clone(), 1).await,
+        DocumentOutcome::Rejected(_)
+    ));
+    assert!(!matches!(
+        gateway.query_nfse(issuer, &third).await.unwrap(),
+        DocumentOutcome::Authorized(_)
+    ));
+
+    // A cancellation needs its reason and takes only a document that is authorized.
+    assert!(matches!(
+        gateway.cancel_nfse(issuer, &first, "short").await.unwrap(),
+        EventOutcome::Refused(_)
+    ));
+    let reason = "Serviço não prestado, nota emitida por engano";
+    assert!(matches!(
+        gateway
+            .cancel_nfse(issuer, &Uuid::new_v4().to_string(), reason)
+            .await
+            .unwrap(),
+        EventOutcome::Refused(_)
+    ));
+    assert!(matches!(
+        gateway.cancel_nfse(issuer, &first, reason).await.unwrap(),
+        EventOutcome::Accepted(_)
+    ));
+    match gateway.query_nfse(issuer, &first).await.unwrap() {
+        DocumentOutcome::Cancelled { document, .. } => assert_eq!(document.number, one.number),
+        other => panic!("cancelled was expected, got {other:?}"),
+    }
+    assert!(matches!(
+        gateway.cancel_nfse(issuer, &first, reason).await.unwrap(),
+        EventOutcome::Refused(_)
+    ));
+    assert!(matches!(
+        gateway.query_nfse(issuer, &second).await.unwrap(),
+        DocumentOutcome::Authorized(_)
+    ));
+}
+
 pub async fn a_gateway_authorizes_cancels_and_corrects<
     G: conta_verde_application::FiscalGateway,
 >(
@@ -17490,7 +17649,7 @@ pub async fn save_a_sale<S: conta_verde_application::SaleRepository>(
     sale.id()
 }
 
-fn fiscal_document_draft(sale: SaleId, total: &str) -> conta_verde_domain::FiscalDocumentDraft {
+pub fn fiscal_document_draft(sale: SaleId, total: &str) -> conta_verde_domain::FiscalDocumentDraft {
     conta_verde_domain::FiscalDocumentDraft {
         origin: conta_verde_domain::FiscalOrigin::Sale(sale),
         issuer_cnpj: "11222333000181".to_owned(),
@@ -17508,7 +17667,7 @@ fn fiscal_document_draft(sale: SaleId, total: &str) -> conta_verde_domain::Fisca
     }
 }
 
-fn a_fiscal_document(
+pub fn a_fiscal_document(
     company: CompanyId,
     sale: SaleId,
     total: &str,
@@ -17521,7 +17680,7 @@ fn a_fiscal_document(
     .unwrap()
 }
 
-fn fiscal_document_audit(
+pub fn fiscal_document_audit(
     document: &conta_verde_domain::FiscalDocument,
     action: AuditAction,
     changes: Vec<FieldChange>,
@@ -17549,6 +17708,278 @@ fn fiscal_authorization(number: u32) -> conta_verde_domain::FiscalAuthorization 
     )
     .unwrap();
     conta_verde_domain::FiscalAuthorization::new(key, number, 1, Some("135260000000001")).unwrap()
+}
+
+fn a_service_document(
+    company: CompanyId,
+    sale: SaleId,
+    total: &str,
+) -> conta_verde_domain::FiscalDocument {
+    conta_verde_domain::FiscalDocument::new_of_kind(
+        conta_verde_domain::FiscalDocumentKind::Nfse,
+        conta_verde_domain::FiscalDocumentId::generate(),
+        company,
+        fiscal_document_draft(sale, total),
+    )
+    .unwrap()
+}
+
+/// An NFS-e is written like any fiscal document and numbered by the issuer: the next DPS number is one more than the
+/// biggest in use (never reused), a number names one document of the company in an environment, and a document keeps its
+/// number through every move. It has its own identity once authorized, never an NF-e's, lives beside the NF-e of the
+/// same sale, and is fixed once authorized. The sales belong to `company`.
+pub async fn fiscal_nfse_documents_are_kept<
+    R: conta_verde_application::FiscalDocumentRepository,
+>(
+    repository: &R,
+    company: CompanyId,
+    other_company: CompanyId,
+    sale: SaleId,
+    other_sales: [SaleId; 2],
+) {
+    use conta_verde_domain::{
+        Dps, FiscalDocumentKind, FiscalDocumentStatus, FiscalEnvironment, FiscalOrigin,
+        NfseAuthorization, fiscal_document_changes, fiscal_document_creation_changes,
+    };
+    let environment = FiscalEnvironment::Homologation;
+    let write = |document: &conta_verde_domain::FiscalDocument| {
+        fiscal_document_audit(
+            document,
+            AuditAction::Created,
+            fiscal_document_creation_changes(document),
+        )
+    };
+
+    // The first number is 1, and another company's numbers are its own.
+    assert_eq!(
+        repository
+            .next_dps_number(company, environment, 1)
+            .await
+            .unwrap(),
+        1
+    );
+    let draft = a_service_document(company, sale, "250.00");
+    repository.create(&draft, &write(&draft)).await.unwrap();
+    assert_eq!(
+        repository.find(company, draft.id()).await.unwrap(),
+        Some(draft.clone())
+    );
+    assert_eq!(
+        repository
+            .find_live(company, FiscalOrigin::Sale(sale), FiscalDocumentKind::Nfse)
+            .await
+            .unwrap(),
+        Some(draft.clone())
+    );
+
+    // Numbered, it is written with the number, and the next number is one more. A number is never given back.
+    let numbered = draft.numbered(Dps::new(1, 1).unwrap()).unwrap();
+    let audit = fiscal_document_audit(
+        &numbered,
+        AuditAction::Updated,
+        fiscal_document_changes(&draft, &numbered),
+    );
+    repository
+        .replace(&numbered, FiscalDocumentStatus::Draft, &audit)
+        .await
+        .unwrap();
+    assert_eq!(
+        repository
+            .find(company, draft.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .dps(),
+        Some(Dps::new(1, 1).unwrap())
+    );
+    assert_eq!(
+        repository
+            .next_dps_number(company, environment, 1)
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        repository
+            .next_dps_number(company, environment, 2)
+            .await
+            .unwrap(),
+        1,
+        "each series counts on its own"
+    );
+    assert_eq!(
+        repository
+            .next_dps_number(other_company, environment, 1)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        repository
+            .next_dps_number(company, FiscalEnvironment::Production, 1)
+            .await
+            .unwrap(),
+        1,
+        "homologation numbers do not use production's"
+    );
+
+    // The same number on another document is refused and leaves nothing in the trail; a different one is fine.
+    let other = a_service_document(company, other_sales[0], "10");
+    let collision = other.numbered(Dps::new(1, 1).unwrap()).unwrap();
+    assert_eq!(
+        repository.create(&collision, &write(&collision)).await,
+        Err(RepositoryError::DuplicateFiscalDps)
+    );
+    assert!(
+        repository
+            .history(company, collision.id())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // A number set is never changed (asking for the same one again changes nothing).
+    let changed = conta_verde_domain::FiscalDocument::new_of_kind(
+        FiscalDocumentKind::Nfse,
+        numbered.id(),
+        company,
+        fiscal_document_draft(sale, "250.00"),
+    )
+    .unwrap()
+    .numbered(Dps::new(1, 5).unwrap())
+    .unwrap();
+    assert!(
+        repository
+            .replace(
+                &changed,
+                FiscalDocumentStatus::Draft,
+                &fiscal_document_audit(&changed, AuditAction::Updated, Vec::new()),
+            )
+            .await
+            .is_err(),
+        "the DPS number of a document never changes"
+    );
+
+    // The NF-e of the same sale lives beside it: one live document per sale **and kind**.
+    let nfe = a_fiscal_document(company, sale, "100.50");
+    repository.create(&nfe, &write(&nfe)).await.unwrap();
+    assert_eq!(
+        repository
+            .find_live(company, FiscalOrigin::Sale(sale), FiscalDocumentKind::Nfe)
+            .await
+            .unwrap(),
+        Some(nfe.clone())
+    );
+    let second = a_service_document(company, sale, "1");
+    assert_eq!(
+        repository.create(&second, &write(&second)).await,
+        Err(RepositoryError::FiscalDocumentAlreadyLive)
+    );
+
+    // Authorized, it has an NFS-e's identity and is fixed from then on.
+    let processing = numbered.submitted().unwrap();
+    repository
+        .replace(
+            &processing,
+            FiscalDocumentStatus::Draft,
+            &fiscal_document_audit(&processing, AuditAction::Updated, Vec::new()),
+        )
+        .await
+        .unwrap();
+    let identity =
+        NfseAuthorization::new(77, Some("NFS35503082"), Some("ABC123"), Some("P1")).unwrap();
+    let authorized = processing.authorized_nfse(identity.clone(), None).unwrap();
+    repository
+        .replace(
+            &authorized,
+            FiscalDocumentStatus::Processing,
+            &fiscal_document_audit(
+                &authorized,
+                AuditAction::Updated,
+                fiscal_document_changes(&processing, &authorized),
+            ),
+        )
+        .await
+        .unwrap();
+    let found = repository
+        .find(company, authorized.id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(found.nfse_authorization(), Some(&identity));
+    assert_eq!(found.authorization(), None);
+    assert_eq!(found.dps(), Some(Dps::new(1, 1).unwrap()));
+    let history = repository.history(company, authorized.id()).await.unwrap();
+    assert!(
+        history.iter().any(|record| {
+            record
+                .entry
+                .changes
+                .iter()
+                .any(|change| change.field == "nfse_number" && change.to.as_deref() == Some("77"))
+        }),
+        "the trail says the number the authority gave"
+    );
+    // Its content never changes: another amount is refused.
+    let tampered = conta_verde_domain::FiscalDocument::new_of_kind(
+        FiscalDocumentKind::Nfse,
+        authorized.id(),
+        company,
+        fiscal_document_draft(sale, "999.00"),
+    )
+    .unwrap()
+    .numbered(Dps::new(1, 1).unwrap())
+    .unwrap()
+    .submitted()
+    .unwrap()
+    .authorized_nfse(identity.clone(), None)
+    .unwrap();
+    assert!(
+        repository
+            .replace(
+                &tampered,
+                FiscalDocumentStatus::Authorized,
+                &fiscal_document_audit(&tampered, AuditAction::Updated, Vec::new()),
+            )
+            .await
+            .is_err()
+    );
+    // The national key names one NFS-e of the company in the environment.
+    let rival = a_service_document(company, other_sales[1], "20");
+    repository.create(&rival, &write(&rival)).await.unwrap();
+    let rival_sent = rival
+        .numbered(Dps::new(1, 2).unwrap())
+        .unwrap()
+        .submitted()
+        .unwrap();
+    repository
+        .replace(
+            &rival.numbered(Dps::new(1, 2).unwrap()).unwrap(),
+            FiscalDocumentStatus::Draft,
+            &fiscal_document_audit(&rival, AuditAction::Updated, Vec::new()),
+        )
+        .await
+        .unwrap();
+    repository
+        .replace(
+            &rival_sent,
+            FiscalDocumentStatus::Draft,
+            &fiscal_document_audit(&rival, AuditAction::Updated, Vec::new()),
+        )
+        .await
+        .unwrap();
+    let same_key = rival_sent.authorized_nfse(identity, None).unwrap();
+    assert!(
+        repository
+            .replace(
+                &same_key,
+                FiscalDocumentStatus::Processing,
+                &fiscal_document_audit(&same_key, AuditAction::Updated, Vec::new()),
+            )
+            .await
+            .is_err(),
+        "a national key names one NFS-e"
+    );
 }
 
 /// A fiscal document is written with its trail, is found only by its company, moves only from the status the write
@@ -18130,6 +18561,518 @@ fn issue_request(sale: SaleId) -> conta_verde_application::IssueNfe {
 
 /// 2026-11-09 17:30 UTC, which is the same day in São Paulo.
 const FISCAL_NOW: i64 = 1_794_245_400;
+
+fn issue_nfse_request(sale: SaleId) -> conta_verde_application::IssueNfse {
+    conta_verde_application::IssueNfse {
+        sale_id: sale,
+        nature_code: "consulting".into(),
+        competence: conta_verde_domain::CalendarDate::parse("2026-11-09").unwrap(),
+        service_city_code: "3550308".into(),
+        special_regime: conta_verde_application::SpecialTaxRegime::None,
+    }
+}
+
+/// A completed sale of one product and two services: the NF-e is the product's and the NFS-e the services'.
+async fn save_a_mixed_sale<S: conta_verde_application::SaleRepository>(
+    sales: &S,
+    company: CompanyId,
+    entry_seed: &EntrySeed,
+    seed: &SalesSeed,
+    fiscal: &FiscalSeed,
+) -> SaleId {
+    let mut draft = sale_draft(entry_seed, seed);
+    draft.customer_id = fiscal.customer;
+    draft.lines = vec![
+        sale_line(seed.product, "Café 500g", "3", "10.10", "0.30"),
+        sale_line(seed.service, "Consultoria", "2", "100.00", "10"),
+        sale_line(seed.service, "Treinamento", "1", "50.00", "0"),
+    ];
+    let sale = Sale::new(SaleId::generate(), company, draft)
+        .unwrap()
+        .completed()
+        .unwrap();
+    let audit = AuditEntry {
+        company_id: company,
+        actor: actor(),
+        entity: AuditEntity::Sale,
+        entity_id: sale.id().as_uuid(),
+        action: AuditAction::Created,
+        changes: Vec::new(),
+    };
+    sales.save(&sale, &audit).await.unwrap();
+    sale.id()
+}
+
+/// An NFS-e is issued from the **service lines** of a completed sale under a service nature that carries the company's
+/// ISSQN terms; the DPS is numbered once and never reused (not by a cancelled document, not by a resend, not after a
+/// gateway that was down); the NF-e of the same sale covers only the products; and nothing is sent until every choice is
+/// the person's.
+#[allow(clippy::too_many_arguments)]
+pub async fn issues_an_nfse_from_a_sale<D, S, P, Y, F, B, R>(
+    service: &conta_verde_application::FiscalDocumentService<
+        D,
+        S,
+        P,
+        Y,
+        F,
+        crate::FakeFiscalGateway,
+        B,
+        R,
+    >,
+    gateway: &crate::FakeFiscalGateway,
+    settings: &F,
+    sales: &S,
+    company: CompanyId,
+    other_company: CompanyId,
+    entry_seed: &EntrySeed,
+    seed: &SalesSeed,
+    fiscal: &FiscalSeed,
+) where
+    D: conta_verde_application::FiscalDocumentRepository,
+    S: conta_verde_application::SaleRepository,
+    P: PartyRepository,
+    Y: conta_verde_application::ProductRepository,
+    F: conta_verde_application::FiscalSettingsRepository,
+    B: BlobStore,
+    R: conta_verde_application::EntryReferences,
+{
+    use conta_verde_application::ApplicationError;
+    use conta_verde_domain::{
+        Dps, FiscalDocumentKind, FiscalDocumentStatus, FiscalFileKind, NatureKind,
+        OperationNatureDraft, TaxRuleDraft,
+    };
+
+    let rule = |error: ApplicationError| match error {
+        ApplicationError::FiscalRule(text) => text,
+        other => panic!("a fiscal rule was expected, got {other:?}"),
+    };
+    let user = actor();
+    let mixed = save_a_mixed_sale(sales, company, entry_seed, seed, fiscal).await;
+
+    let mut draft = fiscal_settings_draft(
+        "11222333000181",
+        conta_verde_domain::FiscalEnvironment::Homologation,
+    );
+    draft.natures[0].rules = vec![TaxRuleDraft {
+        regime: conta_verde_domain::TaxRegime::SimplesNacional,
+        ncm_prefix: Some("1905".into()),
+        icms_code: "102".into(),
+        pis_code: "49".into(),
+        cofins_code: "49".into(),
+        icms_rate: None,
+        pis_rate: None,
+        cofins_rate: None,
+    }];
+    draft.natures.push(service_nature_draft());
+    // A service the company has not yet described: its terms are not written.
+    draft.natures.push(OperationNatureDraft {
+        code: "plain".into(),
+        name: "Serviço sem termos".into(),
+        kind: NatureKind::Service,
+        cfop_in_state: None,
+        cfop_interstate: None,
+        active: true,
+        rules: vec![],
+        service: None,
+    });
+    settings
+        .save(
+            &conta_verde_domain::FiscalSettings::new(company, draft.clone()).unwrap(),
+            &AuditEntry {
+                company_id: company,
+                actor: actor(),
+                entity: AuditEntity::FiscalSettings,
+                entity_id: company.as_uuid(),
+                action: AuditAction::Created,
+                changes: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+
+    // Every choice is the person's, and a nature that is not the service's, has no terms, or a sale with no service line
+    // is refused before anything is sent.
+    let mut product_nature = issue_nfse_request(mixed);
+    product_nature.nature_code = "sale".into();
+    assert!(
+        rule(
+            service
+                .issue_nfse(company, &user, product_nature, FISCAL_NOW)
+                .await
+                .unwrap_err()
+        )
+        .contains("for services")
+    );
+    let mut no_terms = issue_nfse_request(mixed);
+    no_terms.nature_code = "plain".into();
+    assert!(
+        rule(
+            service
+                .issue_nfse(company, &user, no_terms, FISCAL_NOW)
+                .await
+                .unwrap_err()
+        )
+        .contains("Serviço sem termos")
+    );
+    let mut wrong_city = issue_nfse_request(mixed);
+    wrong_city.service_city_code = "São Paulo".into();
+    assert!(
+        rule(
+            service
+                .issue_nfse(company, &user, wrong_city, FISCAL_NOW)
+                .await
+                .unwrap_err()
+        )
+        .contains("IBGE")
+    );
+    let products_only = save_a_completed_sale(sales, company, entry_seed, seed, fiscal).await;
+    assert!(
+        rule(
+            service
+                .issue_nfse(
+                    company,
+                    &user,
+                    issue_nfse_request(products_only),
+                    FISCAL_NOW
+                )
+                .await
+                .unwrap_err()
+        )
+        .contains("no service line")
+    );
+    assert!(matches!(
+        service
+            .issue_nfse(other_company, &user, issue_nfse_request(mixed), FISCAL_NOW)
+            .await,
+        Err(ApplicationError::FiscalRule(_) | ApplicationError::SaleNotFound)
+    ));
+    assert!(gateway.submitted_nfse().is_empty());
+
+    // Issued: the DPS is numbered, then sent once, with the service lines only and the nature's terms.
+    let issued = service
+        .issue_nfse(company, &user, issue_nfse_request(mixed), FISCAL_NOW)
+        .await
+        .unwrap();
+    assert_eq!(issued.kind(), FiscalDocumentKind::Nfse);
+    assert_eq!(issued.status(), FiscalDocumentStatus::Processing);
+    assert_eq!(issued.dps(), Some(Dps::new(1, 1).unwrap()));
+    assert_eq!(issued.total().as_decimal().to_string(), "240");
+    let sent = gateway.submitted_nfse();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].reference, issued.id().as_uuid().to_string());
+    assert_eq!(sent[0].dps_number, 1);
+    assert_eq!(sent[0].description, "Consultoria; Treinamento");
+    assert_eq!(sent[0].gross.as_decimal().to_string(), "250");
+    assert_eq!(sent[0].discount.as_decimal().to_string(), "10");
+    assert_eq!(sent[0].total.as_decimal().to_string(), "240");
+    assert_eq!(sent[0].national_tax_code, "171001");
+    assert_eq!(sent[0].municipal_service_code.as_deref(), Some("1701"));
+    assert_eq!(sent[0].service_city_code, "3550308");
+    assert_eq!(sent[0].competence.to_string(), "2026-11-09");
+    assert_eq!(sent[0].recipient.document, "52998224725");
+
+    // Asking again asks the gateway and records what the authority gave with the files first.
+    let authorized = service
+        .issue_nfse(company, &user, issue_nfse_request(mixed), FISCAL_NOW)
+        .await
+        .unwrap();
+    assert_eq!(authorized.id(), issued.id());
+    assert_eq!(authorized.status(), FiscalDocumentStatus::Authorized);
+    let identity = authorized.nfse_authorization().unwrap();
+    assert_eq!(identity.number(), 1);
+    assert_eq!(authorized.authorization(), None, "an NFS-e has no NF-e key");
+    for kind in [FiscalFileKind::Xml, FiscalFileKind::Pdf] {
+        assert!(
+            !service
+                .file(company, issued.id(), kind)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+    assert_eq!(
+        gateway.submitted_nfse().len(),
+        1,
+        "asking twice sends nothing twice"
+    );
+    let trail = service.history(company, issued.id()).await.unwrap();
+    assert_eq!(trail.len(), 4, "created, numbered, sent and authorized");
+
+    // The NF-e of the same sale is the products' alone, and lives beside the NFS-e.
+    let nfe = service
+        .issue(company, &user, issue_request(mixed), FISCAL_NOW)
+        .await
+        .unwrap();
+    assert_eq!(nfe.kind(), FiscalDocumentKind::Nfe);
+    let sent_nfe = gateway.submitted();
+    assert_eq!(sent_nfe.last().unwrap().items.len(), 1);
+    assert_eq!(
+        sent_nfe.last().unwrap().total.as_decimal().to_string(),
+        "30"
+    );
+    assert_ne!(nfe.id(), issued.id());
+
+    // The national NFS-e has no correction letter; a cancellation needs its reason and is the authority's to refuse.
+    assert!(
+        rule(
+            service
+                .correct(
+                    company,
+                    &user,
+                    issued.id(),
+                    "Corrige a descrição do serviço"
+                )
+                .await
+                .unwrap_err()
+        )
+        .contains("no correction letter")
+    );
+    assert!(
+        rule(
+            service
+                .cancel(company, &user, issued.id(), "too short")
+                .await
+                .unwrap_err()
+        )
+        .contains("15")
+    );
+    gateway.refuse_events_with("E500", "Prazo de cancelamento excedido");
+    assert!(
+        rule(
+            service
+                .cancel(
+                    company,
+                    &user,
+                    issued.id(),
+                    "Serviço não prestado, nota por engano"
+                )
+                .await
+                .unwrap_err()
+        )
+        .contains("Prazo")
+    );
+    gateway.accept_events_again();
+    let cancelled = service
+        .cancel(
+            company,
+            &user,
+            issued.id(),
+            "Serviço não prestado, nota por engano",
+        )
+        .await
+        .unwrap();
+    assert_eq!(cancelled.status(), FiscalDocumentStatus::Cancelled);
+    assert!(
+        !service
+            .file(company, issued.id(), FiscalFileKind::CancellationXml)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        service
+            .file(company, issued.id(), FiscalFileKind::Xml)
+            .await
+            .is_ok(),
+        "the authorized XML is kept"
+    );
+
+    // A cancelled document frees the sale, and its DPS number is never used again.
+    let second = service
+        .issue_nfse(company, &user, issue_nfse_request(mixed), FISCAL_NOW)
+        .await
+        .unwrap();
+    assert_ne!(second.id(), issued.id());
+    assert_eq!(second.dps(), Some(Dps::new(1, 2).unwrap()));
+
+    // A gateway that was down leaves the document waiting with its number; when the gateway never took it and says so, the
+    // document is sent again under the same id and the **same** DPS number, never a second one.
+    let other_sale = save_a_mixed_sale(sales, company, entry_seed, seed, fiscal).await;
+    gateway.set_unavailable(true);
+    let waiting = service
+        .issue_nfse(company, &user, issue_nfse_request(other_sale), FISCAL_NOW)
+        .await
+        .unwrap();
+    assert_eq!(waiting.status(), FiscalDocumentStatus::Processing);
+    assert_eq!(waiting.dps(), Some(Dps::new(1, 3).unwrap()));
+    gateway.set_unavailable(false);
+    let unknown = service
+        .refresh(company, waiting.id(), FISCAL_NOW + 3_600)
+        .await
+        .unwrap();
+    assert_eq!(unknown.status(), FiscalDocumentStatus::Rejected);
+    assert_eq!(unknown.refusal().unwrap().code(), "unknown");
+    let sent_again = service
+        .resend_nfse(
+            company,
+            &user,
+            waiting.id(),
+            issue_nfse_request(other_sale),
+            FISCAL_NOW,
+        )
+        .await
+        .unwrap();
+    assert_eq!(sent_again.id(), waiting.id());
+    assert_eq!(sent_again.dps(), Some(Dps::new(1, 3).unwrap()));
+    assert_eq!(gateway.submitted_nfse().last().unwrap().dps_number, 3);
+
+    // A rejection keeps the authority's words; sending it again keeps the number. Only a rejected document of its own
+    // kind is sent again.
+    let rejected_sale = save_a_mixed_sale(sales, company, entry_seed, seed, fiscal).await;
+    gateway.reject_with("E0014", "Número de DPS inválido");
+    let rejected = service
+        .issue_nfse(
+            company,
+            &user,
+            issue_nfse_request(rejected_sale),
+            FISCAL_NOW,
+        )
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), FiscalDocumentStatus::Rejected);
+    assert_eq!(rejected.refusal().unwrap().code(), "E0014");
+    assert_eq!(rejected.dps(), Some(Dps::new(1, 4).unwrap()));
+    gateway.accept_again();
+    assert!(matches!(
+        service
+            .resend(
+                company,
+                &user,
+                rejected.id(),
+                issue_request(rejected_sale),
+                FISCAL_NOW
+            )
+            .await,
+        Err(ApplicationError::Domain(_))
+    ));
+    let resent = service
+        .resend_nfse(
+            company,
+            &user,
+            rejected.id(),
+            issue_nfse_request(rejected_sale),
+            FISCAL_NOW,
+        )
+        .await
+        .unwrap();
+    assert_eq!(resent.id(), rejected.id());
+    assert_eq!(resent.dps(), Some(Dps::new(1, 4).unwrap()));
+    assert_ne!(resent.status(), FiscalDocumentStatus::Rejected);
+    // The numbers the company has used are 1 to 4, in order and without a gap.
+    let mut numbers: Vec<u64> = service
+        .list(
+            company,
+            &conta_verde_application::FiscalDocumentQuery::default(),
+            None,
+            Some(100),
+        )
+        .await
+        .unwrap()
+        .items
+        .iter()
+        .filter_map(|document| document.dps().map(|dps| dps.number()))
+        .collect();
+    numbers.sort_unstable();
+    assert_eq!(numbers, vec![1, 2, 3, 4]);
+
+    // A gateway that does not issue NFS-e is refused before a number is taken: nothing is written and no number is spent.
+    let unissued_sale = save_a_mixed_sale(sales, company, entry_seed, seed, fiscal).await;
+    gateway.without_nfse(true);
+    assert!(matches!(
+        service
+            .issue_nfse(
+                company,
+                &user,
+                issue_nfse_request(unissued_sale),
+                FISCAL_NOW
+            )
+            .await,
+        Err(ApplicationError::FiscalGateway(
+            conta_verde_application::GatewayError::Unsupported(_)
+        ))
+    ));
+    gateway.without_nfse(false);
+    let after = service
+        .issue_nfse(
+            company,
+            &user,
+            issue_nfse_request(unissued_sale),
+            FISCAL_NOW,
+        )
+        .await
+        .unwrap();
+    assert_eq!(after.dps(), Some(Dps::new(1, 5).unwrap()), "no gap");
+
+    // The accountant's package holds the NFS-e issued in production with its files, under its key (or its number when the
+    // gateway gave none); the numbers of production are its own, from 1 again.
+    let mut production = draft;
+    production.environment = conta_verde_domain::FiscalEnvironment::Production;
+    settings
+        .save(
+            &conta_verde_domain::FiscalSettings::new(company, production).unwrap(),
+            &AuditEntry {
+                company_id: company,
+                actor: actor(),
+                entity: AuditEntity::FiscalSettings,
+                entity_id: company.as_uuid(),
+                action: AuditAction::Updated,
+                changes: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    let production_sale = save_a_mixed_sale(sales, company, entry_seed, seed, fiscal).await;
+    let made = service
+        .issue_nfse(
+            company,
+            &user,
+            issue_nfse_request(production_sale),
+            FISCAL_NOW,
+        )
+        .await
+        .unwrap();
+    assert_eq!(made.dps(), Some(Dps::new(1, 1).unwrap()));
+    let made = service
+        .refresh(company, made.id(), FISCAL_NOW + 3_600)
+        .await
+        .unwrap();
+    assert_eq!(made.status(), FiscalDocumentStatus::Authorized);
+    let day = conta_verde_domain::CalendarDate::parse("2026-11-09").unwrap();
+    let roomy = conta_verde_application::ExportLimits {
+        rows: 100,
+        attached_files: 10,
+        attached_bytes: 1 << 20,
+    };
+    let (table, files) = service.package(company, day, day, roomy).await.unwrap();
+    assert_eq!(
+        table.rows.len(),
+        1,
+        "the homologation documents are not in it"
+    );
+    let identity = made.nfse_authorization().unwrap();
+    let key = identity.key().unwrap().to_owned();
+    assert_eq!(
+        table.rows[0][1],
+        conta_verde_application::ExportCell::Text("nfse".into())
+    );
+    assert_eq!(
+        table.rows[0][3],
+        conta_verde_application::ExportCell::Amount(identity.number().to_string())
+    );
+    assert_eq!(
+        table.rows[0][4],
+        conta_verde_application::ExportCell::Amount("1".into()),
+        "the series of an NFS-e is its DPS's"
+    );
+    assert_eq!(
+        table.rows[0][5],
+        conta_verde_application::ExportCell::Text(key.clone())
+    );
+    let paths: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
+    assert!(paths.contains(&format!("fiscal/nfse/{key}.xml").as_str()));
+    assert!(paths.contains(&format!("fiscal/nfse/{key}.pdf").as_str()));
+    assert!(files.iter().all(|file| !file.bytes.is_empty()));
+}
 
 /// Issues an NF-e from a completed sale and follows it: refused until the settings, the sale and every choice are
 /// right; sent once and asked again until authorized, with its XML kept; asking twice is the same document; a gateway

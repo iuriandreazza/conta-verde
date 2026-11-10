@@ -32,6 +32,8 @@ const document = (over: Partial<FiscalDocument> = {}): FiscalDocument => ({
   number: 7,
   series: 1,
   protocol: "135260000000001",
+  nfse: null,
+  dps: null,
   refusal: null,
   note: null,
   submitted_by: "Ana",

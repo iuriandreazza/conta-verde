@@ -1,7 +1,9 @@
 use std::fmt;
 use std::future::Future;
 
-use conta_verde_domain::{AccessKey, Address, Amount, Decimal, FiscalSettings};
+use conta_verde_domain::{
+    AccessKey, Address, Amount, CalendarDate, Decimal, FiscalSettings, IssTaxation,
+};
 
 /// Where the goods of an operation go, as the NF-e's layout asks (`local_destino`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -193,6 +195,106 @@ pub struct NfeRequest {
     pub total: Amount,
 }
 
+/// The special tax regime of the provider that the national DPS asks for (`regEspTrib`). The person chooses it: which one
+/// holds is the company's and its accountant's to say, so there is no default ([ADR 0081]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpecialTaxRegime {
+    None,
+    CooperativeAct,
+    Estimate,
+    MunicipalMicroenterprise,
+    NotaryOrRegistrar,
+    AutonomousProfessional,
+    ProfessionalsSociety,
+    Other,
+}
+
+impl SpecialTaxRegime {
+    const ALL: [Self; 8] = [
+        Self::None,
+        Self::CooperativeAct,
+        Self::Estimate,
+        Self::MunicipalMicroenterprise,
+        Self::NotaryOrRegistrar,
+        Self::AutonomousProfessional,
+        Self::ProfessionalsSociety,
+        Self::Other,
+    ];
+
+    /// The key the API takes; it does not change.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::CooperativeAct => "cooperative_act",
+            Self::Estimate => "estimate",
+            Self::MunicipalMicroenterprise => "municipal_microenterprise",
+            Self::NotaryOrRegistrar => "notary_or_registrar",
+            Self::AutonomousProfessional => "autonomous_professional",
+            Self::ProfessionalsSociety => "professionals_society",
+            Self::Other => "other",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|regime| regime.key() == raw)
+    }
+
+    /// The national layout's code.
+    pub fn code(self) -> u8 {
+        match self {
+            Self::None => 0,
+            Self::CooperativeAct => 1,
+            Self::Estimate => 2,
+            Self::MunicipalMicroenterprise => 3,
+            Self::NotaryOrRegistrar => 4,
+            Self::AutonomousProfessional => 5,
+            Self::ProfessionalsSociety => 6,
+            Self::Other => 9,
+        }
+    }
+}
+
+/// Who is served: the taker of the service. A company may be one, unlike the NF-e's recipient for now, because an NFS-e
+/// does not depend on its state registration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NfseRecipient {
+    pub name: String,
+    /// The CPF or CNPJ, stored without punctuation.
+    pub document: String,
+    pub email: Option<String>,
+    pub address: Option<Address>,
+}
+
+/// An NFS-e of the national standard to be authorized: the DPS the issuer numbered. The tax **terms** are the nature's
+/// (the company's and its accountant's); nothing here is calculated ([ADR 0081]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NfseRequest {
+    /// Our id of the document, which a gateway that keeps our reference uses as it is.
+    pub reference: String,
+    pub issuer: FiscalSettings,
+    pub issued_at_unix: i64,
+    /// The DPS's series and number: the issuer's own, taken once for the document.
+    pub dps_series: u16,
+    pub dps_number: u64,
+    /// The competence day of the service.
+    pub competence: CalendarDate,
+    /// The IBGE code of where the service was rendered, which decides the municipality of the ISSQN.
+    pub service_city_code: String,
+    pub special_regime: SpecialTaxRegime,
+    pub recipient: NfseRecipient,
+    /// What the services are, as the nature and the sale name them.
+    pub description: String,
+    /// The six digits of the national list of services.
+    pub national_tax_code: String,
+    pub municipal_service_code: Option<String>,
+    pub taxation: IssTaxation,
+    /// The rate the company set for the nature, when it did: otherwise the municipality's system supplies it.
+    pub iss_rate: Option<Decimal>,
+    pub gross: Amount,
+    pub discount: Amount,
+    pub total: Amount,
+}
+
 /// A document the tax authority authorized, with its files.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthorizedDocument {
@@ -232,12 +334,27 @@ impl Refusal {
     }
 }
 
-/// What the gateway says about a document at this moment.
+/// An NFS-e the authority authorized, with its files ([ADR 0081]). Unlike the NF-e it has no 44-digit key: the number is
+/// all it always has, and the national key and the verification code come when the gateway gives them.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DocumentOutcome {
+pub struct AuthorizedNfse {
+    pub number: u64,
+    /// The key of the national standard, when the gateway gives it.
+    pub key: Option<String>,
+    pub verification_code: Option<String>,
+    pub protocol: Option<String>,
+    pub xml: Vec<u8>,
+    /// The printed form (the DANFSe), when the gateway made one.
+    pub pdf: Option<Vec<u8>>,
+}
+
+/// What the gateway says about a document at this moment. `D` is what it hands over once authorized: an NF-e's by
+/// default, an NFS-e's for a service invoice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DocumentOutcome<D = AuthorizedDocument> {
     /// Sent to the authority, not answered yet: ask again.
     Processing,
-    Authorized(AuthorizedDocument),
+    Authorized(D),
     /// Issued while the authority was out, and still waiting to be authorized: ask again.
     Contingency,
     Rejected(Refusal),
@@ -245,7 +362,7 @@ pub enum DocumentOutcome {
     Denied(Refusal),
     /// The document was authorized and then cancelled; the XML of the cancellation.
     Cancelled {
-        document: AuthorizedDocument,
+        document: D,
         cancellation_xml: Vec<u8>,
     },
     /// The gateway has no document with this reference.
@@ -283,16 +400,16 @@ pub enum EventQuery {
 
 /// What a submission answered: the document's state and, when the gateway names its documents itself, the name it gave.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Submission {
+pub struct Submission<D = AuthorizedDocument> {
     /// The gateway's own identifier of the document, when it assigns one (NFE.io does, Focus NFe uses ours). The
     /// document stores it and every later call passes it back as the reference ([ADR 0078]).
     pub reference: Option<String>,
-    pub outcome: DocumentOutcome,
+    pub outcome: DocumentOutcome<D>,
 }
 
-impl Submission {
+impl<D> Submission<D> {
     /// A gateway that keeps the reference we gave it.
-    pub fn of(outcome: DocumentOutcome) -> Self {
+    pub fn of(outcome: DocumentOutcome<D>) -> Self {
         Self {
             reference: None,
             outcome,
@@ -392,6 +509,37 @@ pub trait FiscalGateway: Send + Sync {
         series: u16,
         first: u32,
         last: u32,
+        reason: &str,
+    ) -> impl Future<Output = Result<EventOutcome, GatewayError>> + Send;
+
+    /// Whether the gateway issues NFS-e. One that does not is refused **before** a DPS number is taken, so a number is
+    /// never spent on a document that cannot be sent ([ADR 0081]).
+    fn issues_nfse(&self) -> bool {
+        true
+    }
+
+    /// Asks the gateway to authorize an NFS-e of the national standard. Same rule as [`submit_nfe`](Self::submit_nfe): the
+    /// reference is ours, and a gateway that cannot find what it made for it before submitting **never submits** when it
+    /// cannot tell, because issuing twice is a fiscal fault. One that cannot promise that answers `Unsupported`.
+    fn submit_nfse(
+        &self,
+        request: &NfseRequest,
+    ) -> impl Future<Output = Result<Submission<AuthorizedNfse>, GatewayError>> + Send;
+
+    /// The state of the NFS-e with this reference.
+    fn query_nfse(
+        &self,
+        issuer: &FiscalSettings,
+        reference: &str,
+    ) -> impl Future<Output = Result<DocumentOutcome<AuthorizedNfse>, GatewayError>> + Send;
+
+    /// Cancels an authorized NFS-e. The national standard has no correction letter and no invalidation of numbers, so
+    /// the port has no call for them. An answer is never `Queued` here: a gateway that answers a cancellation later
+    /// would need the event query to know NFS-e too ([ADR 0081]).
+    fn cancel_nfse(
+        &self,
+        issuer: &FiscalSettings,
+        reference: &str,
         reason: &str,
     ) -> impl Future<Output = Result<EventOutcome, GatewayError>> + Send;
 }

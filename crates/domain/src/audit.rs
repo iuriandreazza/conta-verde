@@ -1445,7 +1445,14 @@ fn fiscal_document_fields(document: &FiscalDocument) -> Fields {
         ),
         (
             "protocol",
-            authorization.and_then(|auth| auth.protocol().map(str::to_owned)),
+            authorization
+                .and_then(|auth| auth.protocol())
+                .or_else(|| {
+                    document
+                        .nfse_authorization()
+                        .and_then(|nfse| nfse.protocol())
+                })
+                .map(str::to_owned),
         ),
         (
             "refusal",
@@ -1457,6 +1464,30 @@ fn fiscal_document_fields(document: &FiscalDocument) -> Fields {
         (
             "gateway_reference",
             document.gateway_reference().map(str::to_owned),
+        ),
+        (
+            "dps",
+            document
+                .dps()
+                .map(|dps| format!("{}/{}", dps.series(), dps.number())),
+        ),
+        (
+            "nfse_number",
+            document
+                .nfse_authorization()
+                .map(|nfse| nfse.number().to_string()),
+        ),
+        (
+            "nfse_key",
+            document
+                .nfse_authorization()
+                .and_then(|nfse| nfse.key().map(str::to_owned)),
+        ),
+        (
+            "verification_code",
+            document
+                .nfse_authorization()
+                .and_then(|nfse| nfse.verification_code().map(str::to_owned)),
         ),
     ]
 }
