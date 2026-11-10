@@ -105,7 +105,10 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
             | RepositoryError::ContractChanged
             | RepositoryError::ReturnTooMuch
             | RepositoryError::SaleHasReturns
-            | RepositoryError::ChargeAlreadyOpen),
+            | RepositoryError::ChargeAlreadyOpen
+            | RepositoryError::FiscalDocumentAlreadyLive
+            | RepositoryError::FiscalDocumentChanged
+            | RepositoryError::DuplicateFiscalFile),
         ) => (StatusCode::CONFLICT, error.to_string()),
         ApplicationError::Auth(error) => {
             let status = match error {

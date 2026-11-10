@@ -48,6 +48,14 @@ pub fn state_utc_offset_minutes(state: &str) -> Option<i16> {
     })
 }
 
+/// The day of a moment on the clock of the issuer's state: what an invoice's issue day is, and what the period lock
+/// judges. `None` for a state that does not exist or a moment outside the years a date may have.
+pub fn fiscal_day(unix_seconds: i64, state: &str) -> Option<CalendarDate> {
+    let offset = state_utc_offset_minutes(state)?;
+    let local = unix_seconds.checked_add(i64::from(offset) * 60)?;
+    CalendarDate::from_unix_days(local.div_euclid(86_400))
+}
+
 /// A moment as the SEFAZ writes it: `2026-11-09T14:30:00-03:00`, the clock of the issuer's state. `None` for a
 /// state that does not exist or a moment outside the years a date may have.
 pub fn fiscal_timestamp(unix_seconds: i64, state: &str) -> Option<String> {

@@ -68,7 +68,9 @@ where
         {
             return Err(ApplicationError::TooManyAttachments);
         }
-        self.blobs.put(company_id, attachment.id(), bytes).await?;
+        self.blobs
+            .put(company_id, attachment.id().into(), bytes)
+            .await?;
         let audit = audit_entry(
             &attachment,
             actor,
@@ -78,7 +80,7 @@ where
         if let Err(error) = self.repository.save(&attachment, &audit).await {
             // The write failed, so nothing refers to the bytes: a leftover file would only be clutter,
             // and the error to report is the write's.
-            let _ = self.blobs.delete(company_id, attachment.id()).await;
+            let _ = self.blobs.delete(company_id, attachment.id().into()).await;
             return Err(error.into());
         }
         Ok(attachment)
@@ -102,9 +104,13 @@ where
         id: AttachmentId,
     ) -> Result<AttachedFile, ApplicationError> {
         let attachment = self.find(company_id, entry_id, id).await?;
-        let bytes = self.blobs.get(company_id, id).await?.ok_or_else(|| {
-            RepositoryError::Storage(format!("the bytes of attachment {id:?} are missing"))
-        })?;
+        let bytes = self
+            .blobs
+            .get(company_id, id.into())
+            .await?
+            .ok_or_else(|| {
+                RepositoryError::Storage(format!("the bytes of attachment {id:?} are missing"))
+            })?;
         Ok(AttachedFile { attachment, bytes })
     }
 
@@ -133,7 +139,7 @@ where
             })?;
         // The record is what says the file exists, and it is gone: bytes that could not be dropped are
         // unreachable clutter, not something to fail a removal that has happened.
-        let _ = self.blobs.delete(company_id, id).await;
+        let _ = self.blobs.delete(company_id, id.into()).await;
         Ok(())
     }
 

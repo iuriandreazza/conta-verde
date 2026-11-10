@@ -332,7 +332,7 @@ where
         let mut files = Vec::with_capacity(attached.len());
         let mut index = Vec::with_capacity(attached.len());
         for attachment in &attached {
-            let Some(bytes) = self.blobs.get(company_id, attachment.id()).await? else {
+            let Some(bytes) = self.blobs.get(company_id, attachment.id().into()).await? else {
                 // The record says the file exists, so a store that lost it is a storage fault: logged with which.
                 return Err(RepositoryError::Storage(format!(
                     "the file of attachment {} is missing",

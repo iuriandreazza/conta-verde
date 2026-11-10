@@ -5,7 +5,7 @@ use conta_verde_application::{
     AttachmentRepository, BlobStore, RepositoryError, ensure_audit_describes,
 };
 use conta_verde_domain::{
-    Attachment, AttachmentId, AuditEntity, AuditEntry, AuditRecord, CompanyId, EntryId,
+    Attachment, AttachmentId, AuditEntity, AuditEntry, AuditRecord, BlobId, CompanyId, EntryId,
 };
 
 use crate::memory_audit::AuditLog;
@@ -136,13 +136,13 @@ pub struct InMemoryBlobStore {
     files: Arc<Mutex<HashMap<BlobKey, Vec<u8>>>>,
 }
 
-type BlobKey = (CompanyId, AttachmentId);
+type BlobKey = (CompanyId, BlobId);
 
 impl BlobStore for InMemoryBlobStore {
     async fn put(
         &self,
         company_id: CompanyId,
-        id: AttachmentId,
+        id: BlobId,
         bytes: &[u8],
     ) -> Result<(), RepositoryError> {
         self.files
@@ -155,7 +155,7 @@ impl BlobStore for InMemoryBlobStore {
     async fn get(
         &self,
         company_id: CompanyId,
-        id: AttachmentId,
+        id: BlobId,
     ) -> Result<Option<Vec<u8>>, RepositoryError> {
         Ok(self
             .files
@@ -165,7 +165,7 @@ impl BlobStore for InMemoryBlobStore {
             .cloned())
     }
 
-    async fn delete(&self, company_id: CompanyId, id: AttachmentId) -> Result<(), RepositoryError> {
+    async fn delete(&self, company_id: CompanyId, id: BlobId) -> Result<(), RepositoryError> {
         self.files
             .lock()
             .expect("blob store lock poisoned")

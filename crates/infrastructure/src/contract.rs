@@ -37,7 +37,6 @@ use conta_verde_application::{
 use conta_verde_application::{
     StockMovementQuery, StockMovementRepository, StockService, StockSettingsRepository,
 };
-use conta_verde_domain::FiscalSettingsDraft;
 use conta_verde_domain::{
     Account, AccountDraft, Actor, AddressDraft, AuditAction, AuditEntity, AuditEntry, BankAccount,
     BankAccountDraft, BankAccountId, BankAccountKind, CashFlowGroup, Category, CategoryId,
@@ -51,6 +50,7 @@ use conta_verde_domain::{
     product_changes, product_creation_changes,
 };
 use conta_verde_domain::{BillingCycle, CommissionRuleDraft, ContractDraft, ContractStatus};
+use conta_verde_domain::{BlobId, FiscalSettingsDraft};
 use conta_verde_domain::{ChargeMethod, ChargeStatus};
 use conta_verde_domain::{Decimal, PriceListDraft, PriceListItemDraft, StockSituation};
 use conta_verde_domain::{
@@ -63,6 +63,7 @@ use conta_verde_domain::{PaymentEvent, PaymentEventId, PaymentEventKind, Payment
 use conta_verde_domain::{
     PurchaseOrderDraft, PurchaseReceiptDraft, PurchaseReceiptId, PurchaseStatus, ReceiptItemDraft,
 };
+use conta_verde_domain::{Sale, SaleId};
 use sqlx::PgPool;
 use std::time::Duration;
 use uuid::Uuid;
@@ -8456,7 +8457,7 @@ use conta_verde_domain::{Attachment, AttachmentDraft, AttachmentId, MAX_ENTRY_AT
 /// A blob store keeps what is put under a company and an id, apart by company, and takes a delete
 /// twice.
 pub async fn keeps_blobs<B: BlobStore>(store: &B, company: CompanyId, other_company: CompanyId) {
-    let id = AttachmentId::generate();
+    let id = BlobId::generate();
     assert_eq!(store.get(company, id).await.unwrap(), None);
     store.put(company, id, b"first").await.unwrap();
     assert_eq!(
@@ -8547,7 +8548,10 @@ pub async fn attaches_files<R, B, E, F>(
         .unwrap();
     assert_eq!(file.attachment, invoice);
     assert_eq!(file.bytes, b"%PDF-1.4 nota");
-    assert_eq!(blobs.get(other_company, invoice.id()).await.unwrap(), None);
+    assert_eq!(
+        blobs.get(other_company, invoice.id().into()).await.unwrap(),
+        None
+    );
     for (who, under) in [(other_company, entry.id()), (company, other_entry.id())] {
         assert_eq!(
             service
@@ -8678,7 +8682,7 @@ pub async fn attaches_files<R, B, E, F>(
             .unwrap()
             .is_empty()
     );
-    assert_eq!(blobs.get(company, invoice.id()).await.unwrap(), None);
+    assert_eq!(blobs.get(company, invoice.id().into()).await.unwrap(), None);
     assert_eq!(
         service
             .download(company, entry.id(), invoice.id())
@@ -17433,4 +17437,471 @@ pub async fn a_gateway_authorizes_cancels_and_corrects<
         gateway.query_nfe(issuer, &second).await.unwrap(),
         DocumentOutcome::Authorized(_)
     ));
+}
+
+/// Saves an open sale of the company, for what a fiscal document points at.
+pub async fn save_a_sale<S: conta_verde_application::SaleRepository>(
+    sales: &S,
+    company: CompanyId,
+    entry_seed: &EntrySeed,
+    seed: &SalesSeed,
+) -> SaleId {
+    let sale = Sale::new(SaleId::generate(), company, sale_draft(entry_seed, seed)).unwrap();
+    let audit = AuditEntry {
+        company_id: company,
+        actor: actor(),
+        entity: AuditEntity::Sale,
+        entity_id: sale.id().as_uuid(),
+        action: AuditAction::Created,
+        changes: Vec::new(),
+    };
+    sales.save(&sale, &audit).await.unwrap();
+    sale.id()
+}
+
+fn fiscal_document_draft(sale: SaleId, total: &str) -> conta_verde_domain::FiscalDocumentDraft {
+    conta_verde_domain::FiscalDocumentDraft {
+        origin: conta_verde_domain::FiscalOrigin::Sale(sale),
+        issuer_cnpj: "11222333000181".to_owned(),
+        issuer_name: "Acme Comércio Ltda".to_owned(),
+        regime: conta_verde_domain::TaxRegime::SimplesNacional,
+        environment: conta_verde_domain::FiscalEnvironment::Homologation,
+        recipient_name: "Cliente Exemplo".to_owned(),
+        recipient_document: Some("12345678909".to_owned()),
+        nature_code: "venda".to_owned(),
+        total: conta_verde_domain::Amount::parse(total).unwrap(),
+        issued_at_unix: 1_794_000_000,
+        issued_on: conta_verde_domain::CalendarDate::parse("2026-11-09").unwrap(),
+        submitted_by: UserId::generate(),
+        submitted_by_name: "Maria Contadora".to_owned(),
+    }
+}
+
+fn a_fiscal_document(
+    company: CompanyId,
+    sale: SaleId,
+    total: &str,
+) -> conta_verde_domain::FiscalDocument {
+    conta_verde_domain::FiscalDocument::new(
+        conta_verde_domain::FiscalDocumentId::generate(),
+        company,
+        fiscal_document_draft(sale, total),
+    )
+    .unwrap()
+}
+
+fn fiscal_document_audit(
+    document: &conta_verde_domain::FiscalDocument,
+    action: AuditAction,
+    changes: Vec<FieldChange>,
+) -> AuditEntry {
+    AuditEntry {
+        company_id: document.company_id(),
+        actor: actor(),
+        entity: AuditEntity::FiscalDocument,
+        entity_id: document.id().as_uuid(),
+        action,
+        changes,
+    }
+}
+
+fn fiscal_authorization(number: u32) -> conta_verde_domain::FiscalAuthorization {
+    let key = conta_verde_domain::AccessKey::from_parts(
+        35,
+        conta_verde_domain::CalendarDate::parse("2026-11-09").unwrap(),
+        "11222333000181",
+        55,
+        1,
+        number,
+        1,
+        10_000_000 + number,
+    )
+    .unwrap();
+    conta_verde_domain::FiscalAuthorization::new(key, number, 1, Some("135260000000001")).unwrap()
+}
+
+/// A fiscal document is written with its trail, is found only by its company, moves only from the status the write
+/// was made from, never has its content rewritten once authorized, holds one live document per sale (a rejected or
+/// cancelled one frees it), keeps a refused write out of the trail, and records one file per kind.
+/// `sale` and `other_sale` belong to `company` and `other_company`.
+pub async fn fiscal_documents_are_kept<R: conta_verde_application::FiscalDocumentRepository>(
+    repository: &R,
+    company: CompanyId,
+    other_company: CompanyId,
+    sale: SaleId,
+    other_sale: SaleId,
+) {
+    use conta_verde_domain::{
+        FiscalDocumentKind, FiscalDocumentStatus, FiscalFile, FiscalFileKind, FiscalOrigin,
+        FiscalRefusal, fiscal_document_changes, fiscal_document_creation_changes,
+    };
+    let origin = FiscalOrigin::Sale(sale);
+    let draft = a_fiscal_document(company, sale, "100.50");
+    let created = fiscal_document_audit(
+        &draft,
+        AuditAction::Created,
+        fiscal_document_creation_changes(&draft),
+    );
+    repository.create(&draft, &created).await.unwrap();
+    assert_eq!(
+        repository.find(company, draft.id()).await.unwrap(),
+        Some(draft.clone())
+    );
+    assert_eq!(
+        repository
+            .find_live(company, origin, FiscalDocumentKind::Nfe)
+            .await
+            .unwrap(),
+        Some(draft.clone())
+    );
+    // Another company sees nothing of it, and cannot move it.
+    assert_eq!(
+        repository.find(other_company, draft.id()).await.unwrap(),
+        None
+    );
+    assert!(
+        repository
+            .history(other_company, draft.id())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        repository
+            .replace(
+                &draft.submitted().unwrap(),
+                FiscalDocumentStatus::Draft,
+                &fiscal_document_audit(&draft, AuditAction::Updated, Vec::new()),
+            )
+            .await,
+        Ok(()),
+        "a document moves from the status the write was made from"
+    );
+    let processing = draft.submitted().unwrap();
+    let moved = fiscal_document_audit(
+        &processing,
+        AuditAction::Updated,
+        fiscal_document_changes(&draft, &processing),
+    );
+    assert_eq!(
+        repository
+            .replace(&processing, FiscalDocumentStatus::Draft, &moved)
+            .await,
+        Err(RepositoryError::FiscalDocumentChanged),
+        "a second writer that started from the draft is told it moved"
+    );
+
+    // One live document per sale and kind; the refused write leaves nothing in the trail.
+    let second = a_fiscal_document(company, sale, "100.50");
+    let refused = fiscal_document_audit(&second, AuditAction::Created, Vec::new());
+    assert_eq!(
+        repository.create(&second, &refused).await,
+        Err(RepositoryError::FiscalDocumentAlreadyLive)
+    );
+    assert_eq!(repository.find(company, second.id()).await.unwrap(), None);
+    assert!(
+        repository
+            .history(company, second.id())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        repository
+            .create(
+                &a_fiscal_document(other_company, other_sale, "10"),
+                &fiscal_document_audit(
+                    &a_fiscal_document(other_company, other_sale, "10"),
+                    AuditAction::Created,
+                    Vec::new(),
+                ),
+            )
+            .await
+            .map_err(|_| ()),
+        Err(()),
+        "an audit entry of another document is refused"
+    );
+
+    // Authorized: the content is fixed, only the status moves.
+    let authorized = processing
+        .authorized(fiscal_authorization(7), None)
+        .unwrap();
+    let audit = fiscal_document_audit(
+        &authorized,
+        AuditAction::Updated,
+        fiscal_document_changes(&processing, &authorized),
+    );
+    repository
+        .replace(&authorized, FiscalDocumentStatus::Processing, &audit)
+        .await
+        .unwrap();
+    let stored = repository.find(company, draft.id()).await.unwrap().unwrap();
+    assert_eq!(stored.status(), FiscalDocumentStatus::Authorized);
+    assert_eq!(stored.authorization().unwrap().number(), 7);
+    let tampered = conta_verde_domain::FiscalDocument::new(
+        draft.id(),
+        company,
+        fiscal_document_draft(sale, "999.99"),
+    )
+    .unwrap()
+    .restored(
+        FiscalDocumentStatus::Authorized,
+        None,
+        Some(fiscal_authorization(7)),
+        None,
+    );
+    assert!(matches!(
+        repository
+            .replace(
+                &tampered,
+                FiscalDocumentStatus::Authorized,
+                &fiscal_document_audit(&tampered, AuditAction::Updated, Vec::new()),
+            )
+            .await,
+        Err(RepositoryError::Storage(_))
+    ));
+    assert_eq!(
+        repository
+            .find(company, draft.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .total(),
+        conta_verde_domain::Amount::parse("100.50").unwrap()
+    );
+
+    // Files: one per kind, never replaced, the company's own.
+    let blob = BlobId::generate();
+    let xml = FiscalFile::new(blob, company, draft.id(), FiscalFileKind::Xml, 120).unwrap();
+    repository.save_file(&xml).await.unwrap();
+    assert_eq!(
+        repository
+            .save_file(
+                &FiscalFile::new(
+                    BlobId::generate(),
+                    company,
+                    draft.id(),
+                    FiscalFileKind::Xml,
+                    99
+                )
+                .unwrap()
+            )
+            .await,
+        Err(RepositoryError::DuplicateFiscalFile)
+    );
+    repository
+        .save_file(
+            &FiscalFile::new(
+                BlobId::generate(),
+                company,
+                draft.id(),
+                FiscalFileKind::Pdf,
+                5,
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let files = repository.files_of(company, draft.id()).await.unwrap();
+    assert_eq!(
+        files.iter().map(|file| file.kind()).collect::<Vec<_>>(),
+        vec![FiscalFileKind::Pdf, FiscalFileKind::Xml]
+    );
+    assert_eq!(
+        repository
+            .find_file(company, draft.id(), FiscalFileKind::Xml)
+            .await
+            .unwrap(),
+        Some(xml.clone())
+    );
+    assert!(
+        repository
+            .files_of(other_company, draft.id())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        repository
+            .find_file(other_company, draft.id(), FiscalFileKind::Xml)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        repository
+            .save_file(
+                &FiscalFile::new(
+                    BlobId::generate(),
+                    other_company,
+                    draft.id(),
+                    FiscalFileKind::Xml,
+                    1
+                )
+                .unwrap()
+            )
+            .await,
+        Err(RepositoryError::NotFound)
+    );
+
+    // Cancelling keeps the content and frees the sale.
+    let cancelled = authorized.cancelled().unwrap();
+    repository
+        .replace(
+            &cancelled,
+            FiscalDocumentStatus::Authorized,
+            &fiscal_document_audit(
+                &cancelled,
+                AuditAction::Updated,
+                fiscal_document_changes(&authorized, &cancelled),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        repository
+            .find_live(company, origin, FiscalDocumentKind::Nfe)
+            .await
+            .unwrap(),
+        None
+    );
+    let again = a_fiscal_document(company, sale, "100.50");
+    repository
+        .create(
+            &again,
+            &fiscal_document_audit(&again, AuditAction::Created, Vec::new()),
+        )
+        .await
+        .unwrap();
+
+    // A rejected one frees the sale too, and keeps what the authority said.
+    let rejected = again
+        .submitted()
+        .unwrap()
+        .rejected(FiscalRefusal::new("225", "Falha no Schema XML"))
+        .unwrap();
+    repository
+        .replace(
+            &again.submitted().unwrap(),
+            FiscalDocumentStatus::Draft,
+            &fiscal_document_audit(&again, AuditAction::Updated, Vec::new()),
+        )
+        .await
+        .unwrap();
+    repository
+        .replace(
+            &rejected,
+            FiscalDocumentStatus::Processing,
+            &fiscal_document_audit(&rejected, AuditAction::Updated, Vec::new()),
+        )
+        .await
+        .unwrap();
+    let stored = repository.find(company, again.id()).await.unwrap().unwrap();
+    assert_eq!(stored.refusal().unwrap().code(), "225");
+    assert_eq!(stored.refusal().unwrap().message(), "Falha no Schema XML");
+    let third = a_fiscal_document(company, sale, "100.50");
+    repository
+        .create(
+            &third,
+            &fiscal_document_audit(&third, AuditAction::Created, Vec::new()),
+        )
+        .await
+        .unwrap();
+    // A rejected document may be built again, with new content, and sent again under the same id.
+    let rebuilt = rejected
+        .rebuilt_with(fiscal_document_draft(sale, "250"))
+        .unwrap();
+    assert_eq!(
+        repository
+            .replace(
+                &rebuilt.submitted().unwrap(),
+                FiscalDocumentStatus::Rejected,
+                &fiscal_document_audit(&rebuilt, AuditAction::Updated, Vec::new()),
+            )
+            .await,
+        Err(RepositoryError::FiscalDocumentAlreadyLive),
+        "the sale has a live document again, so the old one cannot be sent again"
+    );
+    let trail = repository.history(company, draft.id()).await.unwrap();
+    assert_eq!(trail.len(), 4);
+    assert_eq!(trail[0].entry.action, AuditAction::Created);
+}
+
+/// Writes a document of the sale and authorizes it with the access key of number 7, for tests of what the database
+/// itself refuses afterwards. Returns its id.
+pub async fn fiscal_document_ready_to_authorize<
+    R: conta_verde_application::FiscalDocumentRepository,
+>(
+    repository: &R,
+    company: CompanyId,
+    sale: SaleId,
+) -> conta_verde_domain::FiscalDocumentId {
+    use conta_verde_domain::FiscalDocumentStatus;
+    let document = a_fiscal_document(company, sale, "100.50");
+    repository
+        .create(
+            &document,
+            &fiscal_document_audit(&document, AuditAction::Created, Vec::new()),
+        )
+        .await
+        .unwrap();
+    let processing = document.submitted().unwrap();
+    repository
+        .replace(
+            &processing,
+            FiscalDocumentStatus::Draft,
+            &fiscal_document_audit(&processing, AuditAction::Updated, Vec::new()),
+        )
+        .await
+        .unwrap();
+    let authorized = processing
+        .authorized(fiscal_authorization(7), None)
+        .unwrap();
+    repository
+        .replace(
+            &authorized,
+            FiscalDocumentStatus::Processing,
+            &fiscal_document_audit(&authorized, AuditAction::Updated, Vec::new()),
+        )
+        .await
+        .unwrap();
+    document.id()
+}
+
+/// Tries to authorize another document of the company with the access key of number 7, which a document of the
+/// company already has.
+pub async fn authorize_with_the_same_key<R: conta_verde_application::FiscalDocumentRepository>(
+    repository: &R,
+    company: CompanyId,
+    sale: SaleId,
+) -> RepositoryError {
+    use conta_verde_domain::FiscalDocumentStatus;
+    let document = a_fiscal_document(company, sale, "10");
+    repository
+        .create(
+            &document,
+            &fiscal_document_audit(&document, AuditAction::Created, Vec::new()),
+        )
+        .await
+        .unwrap();
+    let processing = document.submitted().unwrap();
+    repository
+        .replace(
+            &processing,
+            FiscalDocumentStatus::Draft,
+            &fiscal_document_audit(&processing, AuditAction::Updated, Vec::new()),
+        )
+        .await
+        .unwrap();
+    let authorized = processing
+        .authorized(fiscal_authorization(7), None)
+        .unwrap();
+    repository
+        .replace(
+            &authorized,
+            FiscalDocumentStatus::Processing,
+            &fiscal_document_audit(&authorized, AuditAction::Updated, Vec::new()),
+        )
+        .await
+        .unwrap_err()
 }

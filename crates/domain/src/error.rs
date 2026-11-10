@@ -48,6 +48,10 @@ pub enum DomainError {
     /// Names the field: the fiscal settings are many small fields, each with its own shape.
     InvalidFiscalField(&'static str),
     ProductionNeedsCertificate,
+    /// A fiscal document cannot move from where it is to where it was asked to go.
+    InvalidFiscalTransition,
+    /// Names the field of a fiscal document that is not valid.
+    InvalidFiscalDocument(&'static str),
     ServiceNatureHasNoCfop,
     ServiceNatureHasNoRules,
     TooManyNatures,
@@ -226,6 +230,10 @@ impl fmt::Display for DomainError {
                 f,
                 "{field} is not valid: only its shape is checked (CNPJ, series 1 to 999, CFOP 5xxx inside the state and 6xxx to another, CSOSN 3 digits, CST, PIS and COFINS 2 digits, rates 0 to 100 with two decimals, NCM prefix 2 to 8 digits)"
             ),
+            Self::InvalidFiscalTransition => {
+                f.write_str("the fiscal document cannot move from its status to that one")
+            }
+            Self::InvalidFiscalDocument(field) => write!(f, "{field} of the fiscal document is not valid"),
             Self::ProductionNeedsCertificate => f.write_str(
                 "the production environment needs the day the A1 certificate expires",
             ),

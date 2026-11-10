@@ -91,6 +91,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0073](0073-fiscal-module-plan.md) | The fiscal module: plan, shared rules and what it changes underneath | accepted | 7 |
 | [0074](0074-fiscal-settings.md) | Fiscal settings per company | accepted | 7 |
 | [0075](0075-fiscal-gateway-port.md) | The fiscal gateway port, its fake and the Focus NFe adapter | accepted | 7 |
+| [0076](0076-nfe-documents.md) | NF-e documents: the store, issuing from a sale, events and the package | accepted | 7 |
 
 ## Template
 
