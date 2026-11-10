@@ -92,8 +92,10 @@
             "schema": {
               "type": "integer",
               "minimum": 1,
-              "maximum": 100
-            }
+              "maximum": 200,
+              "default": 50
+            },
+            "description": "A value outside 1 to 200 is brought into it."
           },
           {
             "name": "after",
@@ -379,8 +381,10 @@
             "schema": {
               "type": "integer",
               "minimum": 1,
-              "maximum": 100
-            }
+              "maximum": 200,
+              "default": 50
+            },
+            "description": "A value outside 1 to 200 is brought into it."
           },
           {
             "name": "after",
@@ -737,8 +741,10 @@
             "schema": {
               "type": "integer",
               "minimum": 1,
-              "maximum": 100
-            }
+              "maximum": 200,
+              "default": 50
+            },
+            "description": "A value outside 1 to 200 is brought into it."
           },
           {
             "name": "after",
@@ -844,8 +850,10 @@
             "schema": {
               "type": "integer",
               "minimum": 1,
-              "maximum": 100
-            }
+              "maximum": 200,
+              "default": 50
+            },
+            "description": "A value outside 1 to 200 is brought into it."
           },
           {
             "name": "after",
@@ -2007,7 +2015,7 @@
             "enum": [
               "boleto",
               "pix",
-              "card"
+              "card_link"
             ]
           },
           "status": {

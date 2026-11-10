@@ -8,9 +8,8 @@ use conta_verde_application::{
     ApplicationError, PartyKind, PartyQuery, ProductQuery, SaleClaimRepository, SaleQuery,
 };
 use conta_verde_domain::{
-    Address, AddressDraft, Category, CategoryId, CostCenterId, EntryId, LineDraft, Party,
-    PartyDraft, PartyId, PaymentTerm, PaymentTermId, Product, ProductId, Sale, SaleDraft, SaleId,
-    SaleStatus,
+    Address, AddressDraft, Category, CategoryId, CostCenterId, LineDraft, Party, PartyDraft,
+    PartyId, PaymentTerm, PaymentTermId, Product, ProductId, Sale, SaleDraft, SaleId, SaleStatus,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -587,13 +586,27 @@ pub(crate) async fn list_sales<X: Ports>(
 ) -> Result<axum::Json<Page<V1Sale>>, ApiError> {
     // By the reference an order was made with: at most one sale, so there is no page to turn.
     if let Some(reference) = query.external_reference.as_deref() {
+        if query.q.is_some()
+            || query.status.is_some()
+            || query.customer.is_some()
+            || query.after.is_some()
+        {
+            return Err(ApiError::InvalidQuery(
+                "external_reference cannot be combined with q, status, customer or after",
+            ));
+        }
         let claim = state
             .sale_claims
             .find(who.company_id, reference.trim())
             .await
             .map_err(ApplicationError::from)?;
+        // A claim whose sale was never written (a crash between the two) is no sale yet; anything else is an error.
         let sale = match claim {
-            Some(claim) => state.sales.get(who.company_id, claim.sale_id).await.ok(),
+            Some(claim) => match state.sales.get(who.company_id, claim.sale_id).await {
+                Ok(sale) => Some(sale),
+                Err(ApplicationError::SaleNotFound) => None,
+                Err(error) => return Err(error.into()),
+            },
             None => None,
         };
         let items = match sale {
@@ -723,7 +736,7 @@ pub(crate) struct V1Charge {
     id: Uuid,
     /// The place of the installment of the receivable, from 1.
     installment: u16,
-    /// `boleto`, `pix` or `card`.
+    /// `boleto`, `pix` or `card_link`.
     method: &'static str,
     /// `open`, `paid`, `cancelled` or `expired`.
     status: &'static str,
@@ -749,13 +762,7 @@ pub(crate) async fn sale_charges<X: Ports>(
     let Some(receivable) = state.sales.receivable(who.company_id, sale_id).await? else {
         return Ok(axum::Json(List { items: Vec::new() }));
     };
-    let charges = state
-        .charges
-        .list(
-            who.company_id,
-            EntryId::from_uuid(receivable.id().as_uuid()),
-        )
-        .await?;
+    let charges = state.charges.list(who.company_id, receivable.id()).await?;
     Ok(axum::Json(List {
         items: charges
             .iter()

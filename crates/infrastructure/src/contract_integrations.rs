@@ -6,8 +6,8 @@ use conta_verde_application::{
     SaleRepository, SaleService, SecretService,
 };
 use conta_verde_domain::{
-    Access, ApiKeyDraft, Area, AuditAction, CalendarDate, CompanyId, DomainError, MAX_API_KEYS,
-    SaleId, SaleStatus,
+    Access, Actor, ApiKeyDraft, ApiKeyId, Area, AuditAction, CalendarDate, CompanyId, DomainError,
+    MAX_API_KEYS, SaleId, SaleStatus,
 };
 
 use crate::contract::{EntrySeed, SalesSeed, actor, sale_draft};
@@ -381,7 +381,11 @@ pub async fn registers_an_order_once_by_its_reference<S, Q, E, F, R, T, C>(
     T: DocumentStock,
     C: SaleClaimRepository,
 {
-    let ana = actor();
+    // The order is made by a key, and the trail must read back as one (kind and all) on every adapter.
+    let ana = Actor::ApiKey {
+        id: ApiKeyId::generate(),
+        name: "Loja online".into(),
+    };
     let (sale, made) = sales
         .register_external(
             claims,
@@ -409,7 +413,9 @@ pub async fn registers_an_order_once_by_its_reference<S, Q, E, F, R, T, C>(
         .unwrap();
     assert!(!made);
     assert_eq!(again, sale);
-    assert_eq!(sales.history(company, sale.id()).await.unwrap().len(), 1);
+    let trail = sales.history(company, sale.id()).await.unwrap();
+    assert_eq!(trail.len(), 1);
+    assert_eq!(trail[0].entry.actor, ana);
     // Another request under it is refused, and nothing changes.
     assert_eq!(
         sales

@@ -114,9 +114,18 @@ where
         draft: SaleDraft,
     ) -> Result<(Sale, bool), ApplicationError> {
         let reference = clean_external_reference(reference)?;
-        let claim = claims
-            .claim(company_id, &reference, SaleId::generate(), request)
-            .await?;
+        let claim = match claims.find(company_id, &reference).await? {
+            Some(held) => held,
+            None => {
+                // What a rule refuses must not take the reference for good: the order is checked before it is claimed, so a
+                // client that fixes its request may send it again under the same reference.
+                let probe = Sale::new(SaleId::generate(), company_id, draft.clone())?;
+                self.check_references(&probe, None).await?;
+                claims
+                    .claim(company_id, &reference, probe.id(), request)
+                    .await?
+            }
+        };
         if claim.request != request {
             return Err(ApplicationError::IdempotencyMismatch);
         }

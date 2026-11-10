@@ -340,6 +340,29 @@ fn the_checker_of_shapes_refuses_what_the_document_does_not_say() {
     assert!(problems.iter().any(|problem| problem.contains("changed whether it is required")));
 }
 
+#[test]
+fn the_enums_of_the_document_are_the_ones_the_domain_writes() {
+    use conta_verde_domain::{ChargeMethod, ChargeStatus, ProductKind, SaleStatus};
+    let in_document = |schema: &str, field: &str, value: &str| {
+        v1_schema(schema)["properties"][field]["enum"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(value))
+    };
+    for method in [ChargeMethod::Boleto, ChargeMethod::Pix, ChargeMethod::CardLink] {
+        assert!(in_document("Charge", "method", method.as_str()), "{method:?}");
+    }
+    for status in [ChargeStatus::Open, ChargeStatus::Paid, ChargeStatus::Cancelled, ChargeStatus::Expired] {
+        assert!(in_document("Charge", "status", status.as_str()), "{status:?}");
+    }
+    for status in [SaleStatus::Open, SaleStatus::Completed, SaleStatus::Cancelled] {
+        assert!(in_document("Sale", "status", status.as_str()), "{status:?}");
+    }
+    for kind in [ProductKind::Product, ProductKind::Service] {
+        assert!(in_document("Product", "kind", kind.as_str()), "{kind:?}");
+    }
+}
+
 #[tokio::test]
 async fn keys_are_made_rotated_and_revoked_by_owners_and_admins_only() {
     let (app, identities) = entry_app_with_identities();
@@ -660,6 +683,16 @@ async fn a_third_party_makes_a_sale_once_over_v1_and_it_is_the_keys_in_the_trail
     .await;
     assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY, "{}", refused.body);
     assert_eq!(refused.body["code"], "invalid_request");
+    // What a rule refuses does not take the reference: the same reference with a request that was fixed makes the sale.
+    let mut broken = json!({ "external_reference": "loja-1099", "customer_id": Uuid::new_v4(), "sold_on": "2026-11-06",
+        "category_id": category, "lines": [{ "product_id": targets.product, "description": "x", "quantity": "1", "unit_price": "1" }] });
+    assert_eq!(v1(&app, "POST", "/v1/sales", &secret, Some(broken.clone())).await.status, StatusCode::UNPROCESSABLE_ENTITY);
+    broken["customer_id"] = json!(targets.customer);
+    let fixed = v1(&app, "POST", "/v1/sales", &secret, Some(broken)).await;
+    assert_eq!(fixed.status, StatusCode::CREATED, "{}", fixed.body);
+    // A reference lookup takes no other filter, and a bad one is not an empty answer.
+    let combined = v1(&app, "GET", "/v1/sales?external_reference=loja-1099&status=open", &secret, None).await;
+    assert_eq!(combined.status, StatusCode::BAD_REQUEST);
     // A decimal sent as a number is refused: decimals travel as strings.
     let number = v1(
         &app,
