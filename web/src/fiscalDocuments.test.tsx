@@ -75,7 +75,8 @@ function serve(documents: FiscalDocument[], me = profile, posts: Record<string, 
     if (path === "/fiscal/invalidations") return { status: 200, body: [] };
     const one = /^\/fiscal\/documents\/(\w+)$/.exec(path);
     if (one) return { status: 200, body: documents.find((item) => item.id === one[1]) };
-    if (path.startsWith("/fiscal/documents")) return { status: 200, body: { items: documents, next_cursor: null } };
+    // Like the server, the list does not carry the files: the detail does.
+    if (path.startsWith("/fiscal/documents")) return { status: 200, body: { items: documents.map((item) => ({ ...item, files: [] })), next_cursor: null } };
     return { status: 404, body: { error: "not found" } };
   });
 }

@@ -38,15 +38,9 @@ export function FiscalDocumentsPage() {
       .catch(() => setNatures([]));
   }, [companyId]);
 
-  const open = list.items.find((item) => item.id === shown) ?? null;
-
+  // The list does not carry the files: the sheet loads the document itself, so it opens whatever the filter shows.
   function changed(document: FiscalDocument) {
-    list.setItems((items) => items.map((item) => (item.id === document.id ? document : item)));
-    // The list does not carry the files: the detail asks again.
-    void api
-      .getFiscalDocument(companyId, document.id)
-      .then((full) => list.setItems((items) => items.map((item) => (item.id === full.id ? full : item))))
-      .catch(() => undefined);
+    list.setItems((items) => items.map((item) => (item.id === document.id ? { ...document, files: [] } : item)));
   }
 
   return (
@@ -134,10 +128,62 @@ export function FiscalDocumentsPage() {
           }}
         />
       </Sheet>
-      <Sheet open={open !== null} title="Documento fiscal" onClose={() => setShown(null)}>
-        {open && <FiscalDocumentSheet companyId={companyId} document={open} natures={natures} canWrite={canWrite} onChanged={changed} />}
+      <Sheet open={shown !== null} title="Documento fiscal" onClose={() => setShown(null)}>
+        {shown && <OpenDocument companyId={companyId} id={shown} natures={natures} canWrite={canWrite} onChanged={changed} />}
       </Sheet>
     </>
+  );
+}
+
+/** One document, read from the server when its sheet opens and kept as the actions on it answer. */
+function OpenDocument({
+  companyId,
+  id,
+  natures,
+  canWrite,
+  onChanged,
+}: {
+  companyId: string;
+  id: string;
+  natures: OperationNature[];
+  canWrite: boolean;
+  onChanged: (document: FiscalDocument) => void;
+}) {
+  const [document, setDocument] = useState<FiscalDocument | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let current = true;
+    setDocument(null);
+    setError(null);
+    api
+      .getFiscalDocument(companyId, id)
+      .then((found) => current && setDocument(found))
+      .catch((failure) => current && setError(errorMessage(failure)));
+    return () => {
+      current = false;
+    };
+  }, [companyId, id]);
+
+  if (error) return <Notice message={error} />;
+  if (!document) {
+    return (
+      <p role="status" className="status">
+        <Spinner /> Carregando…
+      </p>
+    );
+  }
+  return (
+    <FiscalDocumentSheet
+      companyId={companyId}
+      document={document}
+      natures={natures}
+      canWrite={canWrite}
+      onChanged={(changed) => {
+        setDocument(changed);
+        onChanged(changed);
+      }}
+    />
   );
 }
 
@@ -162,15 +208,15 @@ function Invalidations({ companyId, canWrite }: { companyId: string; canWrite: b
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    const [series, first, last] = [form.series, form.first, form.last].map(Number);
+    if (![series, first, last].every(Number.isInteger)) {
+      setError("A série e os números são números inteiros.");
+      return;
+    }
     setPending(true);
     setError(null);
     try {
-      await api.invalidateNumbers(companyId, {
-        series: Number(form.series),
-        first: Number(form.first),
-        last: Number(form.last),
-        reason: form.reason,
-      });
+      await api.invalidateNumbers(companyId, { series, first, last, reason: form.reason });
       setForm({ ...form, first: "", last: "", reason: "" });
     } catch (failure) {
       setError(errorMessage(failure));

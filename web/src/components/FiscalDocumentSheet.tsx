@@ -66,6 +66,12 @@ export function FiscalDocumentSheet({ companyId, document, natures, canWrite, on
     }
   }, [companyId, document.id]);
 
+  // Stable between keystrokes, new when the document moves, so the trail is read again only then.
+  const loadHistory = useCallback(
+    () => api.fiscalDocumentHistory(companyId, document.id),
+    [companyId, document.id, document.status],
+  );
+
   useEffect(() => {
     if (document.status === "authorized") void loadLetters();
   }, [document.status, loadLetters]);
@@ -231,6 +237,7 @@ export function FiscalDocumentSheet({ companyId, document, natures, canWrite, on
                 {item.has_file && (
                   <Button
                     type="button"
+                    disabled={pending !== null}
                     onClick={() =>
                       void run("event", async () => {
                         const saved = await api.fiscalEventFile(companyId, item.id);
@@ -244,6 +251,7 @@ export function FiscalDocumentSheet({ companyId, document, natures, canWrite, on
                 {canWrite && item.status === "sent" && (
                   <Button
                     type="button"
+                    disabled={pending !== null}
                     onClick={() =>
                       void run("abandon", async () => {
                         await api.abandonFiscalEvent(companyId, item.id);
@@ -263,7 +271,7 @@ export function FiscalDocumentSheet({ companyId, document, natures, canWrite, on
       <section aria-label="Histórico">
         <h3>Histórico</h3>
         <History
-          load={() => api.fiscalDocumentHistory(companyId, document.id)}
+          load={loadHistory}
           fieldLabel={(field) => FIELD_LABELS[field] ?? field}
           valueLabel={(field, value) => {
             if (value === null) return "—";
