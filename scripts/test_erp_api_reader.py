@@ -137,6 +137,28 @@ class ErpApiReaderTest(unittest.TestCase):
         with self.assertRaises(tool.ErpApiError):
             client.pages("/v1/bad")
 
+    def test_the_code_is_taken_from_the_address_the_browser_landed_on_or_given_bare(self):
+        landed = "https://example.org/?code=abc123&state=S"
+        self.assertEqual(tool.code_from_callback(landed, "S"), "abc123")
+        self.assertEqual(tool.code_from_callback(" abc123 ", "S"), "abc123")
+        with self.assertRaises(tool.ErpApiError):
+            tool.code_from_callback(landed, "OTHER")
+        with self.assertRaises(tool.ErpApiError):
+            tool.code_from_callback("https://example.org/?code=", "S")
+
+    def test_the_registered_address_may_sit_behind_a_hash_route(self):
+        url = "https://login.example.org/#/oauth/authorize?response_type=code&client_id=i&redirect_uri=https://example.org&state=ESTADO"
+        parameters = tool.authorization_parameters(url)
+        self.assertEqual((parameters["redirect_uri"], parameters["state"]), ("https://example.org", "ESTADO"))
+
+    def test_an_env_file_fills_only_what_the_environment_lacks(self):
+        path = Path(self.dir.name) / "env"
+        path.write_text("# c\nERP_CLIENT_ID=from-file\nERP_X=\"quoted\"\n")
+        os.environ.pop("ERP_X", None)
+        tool.load_env_file(path)
+        self.assertEqual(os.environ["ERP_CLIENT_ID"], "the-id")
+        self.assertEqual(os.environ["ERP_X"], "quoted")
+
     def test_windows_cover_the_span_once_without_overlap(self):
         spans = list(tool.windows(date(2024, 1, 1), date(2024, 12, 31), days=90))
         self.assertEqual(spans[0][0], date(2024, 1, 1))
