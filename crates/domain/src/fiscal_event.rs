@@ -21,6 +21,12 @@ pub enum FiscalEventSubject {
         sequence: u8,
         text: String,
     },
+    /// The cancellation of an authorized document, with the reason the person gave ([ADR 0078]: a gateway may answer it
+    /// later, so it is recorded like the other events).
+    Cancellation {
+        document: FiscalDocumentId,
+        reason: String,
+    },
     /// A range of numbers of a series declared unused (inutilização), in one environment.
     Invalidation {
         series: u16,
@@ -47,6 +53,13 @@ impl FiscalEventSubject {
         })
     }
 
+    pub fn cancellation(document: FiscalDocumentId, reason: &str) -> Result<Self, DomainError> {
+        Ok(Self::Cancellation {
+            document,
+            reason: one_line(reason, MAX_REASON_CHARS, "reason")?,
+        })
+    }
+
     pub fn invalidation(
         series: u16,
         first: u32,
@@ -69,6 +82,7 @@ impl FiscalEventSubject {
     pub fn key(&self) -> &'static str {
         match self {
             Self::Correction { .. } => "correction",
+            Self::Cancellation { .. } => "cancellation",
             Self::Invalidation { .. } => "invalidation",
         }
     }
@@ -77,7 +91,7 @@ impl FiscalEventSubject {
     pub fn body(&self) -> &str {
         match self {
             Self::Correction { text, .. } => text,
-            Self::Invalidation { reason, .. } => reason,
+            Self::Cancellation { reason, .. } | Self::Invalidation { reason, .. } => reason,
         }
     }
 }
@@ -280,6 +294,15 @@ mod tests {
         assert!(FiscalEventSubject::correction(document, 1, "curto").is_err());
         assert!(FiscalEventSubject::correction(document, 1, &"a".repeat(1001)).is_err());
         assert!(FiscalEventSubject::correction(document, 1, &format!("{text}\nlinha")).is_err());
+    }
+
+    #[test]
+    fn a_cancellation_has_a_reason_of_15_to_255_characters_on_one_line() {
+        let document = FiscalDocumentId::generate();
+        assert!(FiscalEventSubject::cancellation(document, "Pedido feito em duplicidade").is_ok());
+        assert!(FiscalEventSubject::cancellation(document, "curto").is_err());
+        assert!(FiscalEventSubject::cancellation(document, &"a".repeat(256)).is_err());
+        assert!(FiscalEventSubject::cancellation(document, "duas\nlinhas aqui dentro").is_err());
     }
 
     #[test]

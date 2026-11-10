@@ -12,10 +12,10 @@ use conta_verde_application::{
 };
 use conta_verde_application::{
     BrandedEmailSender, ChargeService, CollectionService, DocumentOutcome, DunningService,
-    EmailError, EmailMessage, EmailSender, EventOutcome, FiscalGateway, GatewayError, MessageError,
-    MessageSender, NfeRequest, PaymentPageService, PaymentProvider, PaymentWebhookService,
-    ProviderCharge, ProviderChargeRequest, ProviderError, ProviderEvent, QueuedEmailSender,
-    TextMessage, WebhookError, WebhookHeaders,
+    EmailError, EmailMessage, EmailSender, EventOutcome, EventQuery, FiscalGateway, GatewayError,
+    MessageError, MessageSender, NfeRequest, PaymentPageService, PaymentProvider,
+    PaymentWebhookService, ProviderCharge, ProviderChargeRequest, ProviderError, ProviderEvent,
+    QueuedEmailSender, Submission, TextMessage, WebhookError, WebhookHeaders,
 };
 use conta_verde_domain::FiscalSettings;
 use conta_verde_infrastructure::{
@@ -641,7 +641,7 @@ impl FiscalGateway for ConfiguredFiscalGateway {
         on_gateway!(self, gateway => gateway.is_enabled())
     }
 
-    async fn submit_nfe(&self, request: &NfeRequest) -> Result<DocumentOutcome, GatewayError> {
+    async fn submit_nfe(&self, request: &NfeRequest) -> Result<Submission, GatewayError> {
         on_gateway!(self, gateway => gateway.submit_nfe(request).await)
     }
 
@@ -669,6 +669,15 @@ impl FiscalGateway for ConfiguredFiscalGateway {
         text: &str,
     ) -> Result<EventOutcome, GatewayError> {
         on_gateway!(self, gateway => gateway.correct_nfe(issuer, reference, text).await)
+    }
+
+    async fn query_event(
+        &self,
+        issuer: &FiscalSettings,
+        reference: &str,
+        event: EventQuery,
+    ) -> Result<EventOutcome, GatewayError> {
+        on_gateway!(self, gateway => gateway.query_event(issuer, reference, event).await)
     }
 
     async fn invalidate_nfe_numbers(

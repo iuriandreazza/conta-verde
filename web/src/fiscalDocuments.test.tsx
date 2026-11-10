@@ -18,6 +18,7 @@ const document = (over: Partial<FiscalDocument> = {}): FiscalDocument => ({
   id: "d1",
   kind: "nfe",
   status: "authorized",
+  cancellation: null,
   sale_id: "s1",
   issuer_cnpj: "11222333000181",
   issuer_name: "Verde Comércio Ltda",
@@ -161,6 +162,19 @@ it("cancels with a reason and sends a correction letter", async () => {
     ["/fiscal/documents/d1/corrections", { text: "Corrige o endereço de entrega do destinatário" }],
     ["/fiscal/documents/d1/cancel", { reason: "Pedido feito em duplicidade" }],
   ]);
+});
+
+it("says a cancellation is waiting for the authority and offers no second one, only to give up on it", async () => {
+  const waiting = document({ cancellation: letter({ id: "c1", kind: "cancellation", status: "sent", text: "Pedido feito em duplicidade", sequence: null }) });
+  const fetchMock = serve([waiting], profile, { "/fiscal/events/c1/abandon": letter({ id: "c1", kind: "cancellation", status: "refused", sequence: null }) });
+  renderAt("/companies/c1/fiscal/documents");
+  await userEvent.click(await screen.findByRole("button", { name: "1/7" }));
+
+  const sheet = within(await screen.findByRole("dialog"));
+  expect(await sheet.findByText(/O cancelamento foi enviado e a SEFAZ ainda não respondeu/)).toBeInTheDocument();
+  expect(sheet.queryByRole("button", { name: "Cancelar nota" })).toBeNull();
+  await userEvent.click(sheet.getByRole("button", { name: "Desistir do cancelamento" }));
+  expect(postsOf(fetchMock)).toEqual([["/fiscal/events/c1/abandon", null]]);
 });
 
 it("says why a document was rejected and sends it again with the choices made again", async () => {

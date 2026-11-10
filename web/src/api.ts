@@ -651,6 +651,8 @@ export interface FiscalDocument {
   id: string;
   kind: "nfe";
   status: FiscalDocumentStatus;
+  /** The cancellation waiting for the authority's answer, or accepted (a gateway may answer it later, ADR 0078). */
+  cancellation: FiscalEvent | null;
   sale_id: string;
   issuer_cnpj: string;
   issuer_name: string;
@@ -715,7 +717,7 @@ export type FiscalEventStatus = "sent" | "accepted" | "refused";
 /** A correction letter or an invalidation of numbers (ADR 0076). */
 export interface FiscalEvent {
   id: string;
-  kind: "correction" | "invalidation";
+  kind: "correction" | "cancellation" | "invalidation";
   status: FiscalEventStatus;
   text: string;
   sequence: number | null;

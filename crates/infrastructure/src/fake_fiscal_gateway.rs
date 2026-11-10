@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use conta_verde_application::{
-    AcceptedEvent, AuthorizedDocument, DocumentOutcome, EventOutcome, FiscalGateway, GatewayError,
-    NfeRequest, Refusal,
+    AcceptedEvent, AuthorizedDocument, DocumentOutcome, EventOutcome, EventQuery, FiscalGateway,
+    GatewayError, NfeRequest, Refusal, Submission,
 };
 use conta_verde_domain::{
     AccessKey, CalendarDate, FiscalSettings, state_code, state_utc_offset_minutes,
@@ -28,7 +28,7 @@ impl FiscalGateway for NoFiscalGateway {
         false
     }
 
-    async fn submit_nfe(&self, _request: &NfeRequest) -> Result<DocumentOutcome, GatewayError> {
+    async fn submit_nfe(&self, _request: &NfeRequest) -> Result<Submission, GatewayError> {
         Err(GatewayError::Disabled)
     }
 
@@ -54,6 +54,15 @@ impl FiscalGateway for NoFiscalGateway {
         _issuer: &FiscalSettings,
         _reference: &str,
         _text: &str,
+    ) -> Result<EventOutcome, GatewayError> {
+        Err(GatewayError::Disabled)
+    }
+
+    async fn query_event(
+        &self,
+        _issuer: &FiscalSettings,
+        _reference: &str,
+        _event: EventQuery,
     ) -> Result<EventOutcome, GatewayError> {
         Err(GatewayError::Disabled)
     }
@@ -102,6 +111,18 @@ struct FakeState {
     refuse_events: Option<Refusal>,
     queries_before_authorized: u32,
     unavailable: bool,
+    /// Names its documents itself, like NFE.io: `by_request` finds what a request of ours made.
+    assigns_references: bool,
+    by_request: HashMap<String, String>,
+    /// Answers cancellations and correction letters "queued" and does them when asked again, like NFE.io.
+    queues_events: bool,
+    queued: Vec<(String, QueuedEvent)>,
+}
+
+#[derive(Debug, Clone)]
+enum QueuedEvent {
+    Cancel(String),
+    Correct(String),
 }
 
 /// A gateway that answers from memory, for development and tests: it never reaches a network, follows the same moves
@@ -146,6 +167,17 @@ impl FakeFiscalGateway {
 
     pub fn accept_events_again(&self) {
         self.lock().refuse_events = None;
+    }
+
+    /// From now on the gateway names the documents itself (the reference it answers is not ours) and finds what a
+    /// request of ours already made, like NFE.io does.
+    pub fn assigning_references(&self) {
+        self.lock().assigns_references = true;
+    }
+
+    /// From now on cancellations and correction letters answer "queued" and are done when asked about again.
+    pub fn queueing_events(&self) {
+        self.lock().queues_events = true;
     }
 
     /// Whether every call fails as if the network were down.
@@ -218,6 +250,81 @@ fn event(xml: String) -> EventOutcome {
     })
 }
 
+/// The name the fake keeps a document under: what a request of ours made, when the gateway names its own documents.
+fn resolve(state: &FakeState, reference: &str) -> String {
+    state
+        .by_request
+        .get(reference)
+        .cloned()
+        .unwrap_or_else(|| reference.to_owned())
+}
+
+fn do_cancel(state: &mut FakeState, reference: &str, reason: &str) -> EventOutcome {
+    if let Some(refusal) = state.refuse_events.clone() {
+        return EventOutcome::Refused(refusal);
+    }
+    let length = reason.trim().chars().count();
+    if !(MIN_REASON_CHARS..=MAX_CANCEL_REASON_CHARS).contains(&length) {
+        return EventOutcome::Refused(Refusal::new(
+            "justificativa",
+            "the reason has from 15 to 255 characters",
+        ));
+    }
+    match state.documents.get_mut(reference) {
+        Some(document) if document.stage == Stage::Authorized => {
+            document.stage = Stage::Cancelled;
+            let key = document.access_key.as_str().to_owned();
+            event(format!(
+                "<?xml version=\"1.0\"?><!-- fake gateway: no fiscal value --><procEventoNFe>\
+                 <chNFe>{key}</chNFe><tpEvento>110111</tpEvento></procEventoNFe>"
+            ))
+        }
+        _ => EventOutcome::Refused(Refusal::new(
+            "nao_autorizada",
+            "only an authorized document can be cancelled",
+        )),
+    }
+}
+
+fn do_correct(state: &mut FakeState, reference: &str, text: &str) -> EventOutcome {
+    if let Some(refusal) = state.refuse_events.clone() {
+        return EventOutcome::Refused(refusal);
+    }
+    let length = text.trim().chars().count();
+    if !(MIN_REASON_CHARS..=MAX_CORRECTION_CHARS).contains(&length) {
+        return EventOutcome::Refused(Refusal::new(
+            "correcao",
+            "the correction has from 15 to 1000 characters",
+        ));
+    }
+    match state.documents.get_mut(reference) {
+        Some(document)
+            if document.stage == Stage::Authorized && document.corrections < MAX_CORRECTIONS =>
+        {
+            document.corrections += 1;
+            let number = document.corrections;
+            let key = document.access_key.as_str().to_owned();
+            EventOutcome::Accepted(AcceptedEvent {
+                protocol: Some(format!("FAKEEVENT{number}")),
+                number: Some(number),
+                xml: Some(
+                    format!(
+                        "<?xml version=\"1.0\"?><!-- fake gateway: no fiscal value --><procEventoNFe>\
+                         <chNFe>{key}</chNFe><tpEvento>110110</tpEvento><nSeqEvento>{number}</nSeqEvento>\
+                         </procEventoNFe>"
+                    )
+                    .into_bytes(),
+                ),
+                pdf: Some(b"%PDF-1.4\n% fake CC-e, no fiscal value\n%%EOF\n".to_vec()),
+            })
+        }
+        _ => EventOutcome::Refused(Refusal::new(
+            "nao_corrigivel",
+            "only an authorized document can be corrected, up to 20 times",
+        )),
+    }
+}
+
 impl FiscalGateway for FakeFiscalGateway {
     fn key(&self) -> &str {
         "fake"
@@ -227,23 +334,42 @@ impl FiscalGateway for FakeFiscalGateway {
         true
     }
 
-    async fn submit_nfe(&self, request: &NfeRequest) -> Result<DocumentOutcome, GatewayError> {
+    async fn submit_nfe(&self, request: &NfeRequest) -> Result<Submission, GatewayError> {
         let mut state = self.lock();
         if state.unavailable {
             return Err(GatewayError::Unavailable("the fake is switched off".into()));
         }
         state.submitted.push(request.clone());
         // The same reference again is the same document, unless it was refused: then it is another try.
-        if let Some(known) = state.documents.get(&request.reference)
+        let known_as = resolve(&state, &request.reference);
+        if let Some(known) = state.documents.get(&known_as)
             && !matches!(known.stage, Stage::Rejected(_))
         {
-            return Ok(outcome(known));
+            let named = state.assigns_references.then(|| known_as.clone());
+            return Ok(Submission {
+                reference: named,
+                outcome: outcome(known),
+            });
         }
+        let assigned = if state.assigns_references {
+            format!("gw-{}", state.documents.len() + 1)
+        } else {
+            request.reference.clone()
+        };
+        if state.assigns_references {
+            state
+                .by_request
+                .insert(request.reference.clone(), assigned.clone());
+        }
+        let named = state.assigns_references.then(|| assigned.clone());
         if let Some(refusal) = state.rejection.clone() {
             let document = refused_document(request, Stage::Rejected(refusal));
             let answer = outcome(&document);
-            state.documents.insert(request.reference.clone(), document);
-            return Ok(answer);
+            state.documents.insert(assigned, document);
+            return Ok(Submission {
+                reference: named,
+                outcome: answer,
+            });
         }
         let issuer = &request.issuer;
         let series = issuer.nfe_series();
@@ -288,8 +414,11 @@ impl FiscalGateway for FakeFiscalGateway {
             corrections: 0,
         };
         let answer = outcome(&document);
-        state.documents.insert(request.reference.clone(), document);
-        Ok(answer)
+        state.documents.insert(assigned, document);
+        Ok(Submission {
+            reference: named,
+            outcome: answer,
+        })
     }
 
     async fn query_nfe(
@@ -301,7 +430,8 @@ impl FiscalGateway for FakeFiscalGateway {
         if state.unavailable {
             return Err(GatewayError::Unavailable("the fake is switched off".into()));
         }
-        let Some(document) = state.documents.get_mut(reference) else {
+        let known_as = resolve(&state, reference);
+        let Some(document) = state.documents.get_mut(&known_as) else {
             return Ok(DocumentOutcome::Unknown);
         };
         if let Stage::Processing { queries_left } = &mut document.stage {
@@ -323,30 +453,14 @@ impl FiscalGateway for FakeFiscalGateway {
         if state.unavailable {
             return Err(GatewayError::Unavailable("the fake is switched off".into()));
         }
-        if let Some(refusal) = state.refuse_events.clone() {
-            return Ok(EventOutcome::Refused(refusal));
+        let known_as = resolve(&state, reference);
+        if state.queues_events && state.refuse_events.is_none() {
+            state
+                .queued
+                .push((known_as, QueuedEvent::Cancel(reason.to_owned())));
+            return Ok(EventOutcome::Queued);
         }
-        let length = reason.trim().chars().count();
-        if !(MIN_REASON_CHARS..=MAX_CANCEL_REASON_CHARS).contains(&length) {
-            return Ok(EventOutcome::Refused(Refusal::new(
-                "justificativa",
-                "the reason has from 15 to 255 characters",
-            )));
-        }
-        match state.documents.get_mut(reference) {
-            Some(document) if document.stage == Stage::Authorized => {
-                document.stage = Stage::Cancelled;
-                let key = document.access_key.as_str().to_owned();
-                Ok(event(format!(
-                    "<?xml version=\"1.0\"?><!-- fake gateway: no fiscal value --><procEventoNFe>\
-                     <chNFe>{key}</chNFe><tpEvento>110111</tpEvento></procEventoNFe>"
-                )))
-            }
-            _ => Ok(EventOutcome::Refused(Refusal::new(
-                "nao_autorizada",
-                "only an authorized document can be cancelled",
-            ))),
-        }
+        Ok(do_cancel(&mut state, &known_as, reason))
     }
 
     async fn correct_nfe(
@@ -359,43 +473,43 @@ impl FiscalGateway for FakeFiscalGateway {
         if state.unavailable {
             return Err(GatewayError::Unavailable("the fake is switched off".into()));
         }
+        let known_as = resolve(&state, reference);
+        if state.queues_events && state.refuse_events.is_none() {
+            state
+                .queued
+                .push((known_as, QueuedEvent::Correct(text.to_owned())));
+            return Ok(EventOutcome::Queued);
+        }
+        Ok(do_correct(&mut state, &known_as, text))
+    }
+
+    async fn query_event(
+        &self,
+        _issuer: &FiscalSettings,
+        reference: &str,
+        _event: EventQuery,
+    ) -> Result<EventOutcome, GatewayError> {
+        let mut state = self.lock();
+        if state.unavailable {
+            return Err(GatewayError::Unavailable("the fake is switched off".into()));
+        }
+        let known_as = resolve(&state, reference);
         if let Some(refusal) = state.refuse_events.clone() {
+            state.queued.retain(|(queued, _)| *queued != known_as);
             return Ok(EventOutcome::Refused(refusal));
         }
-        let length = text.trim().chars().count();
-        if !(MIN_REASON_CHARS..=MAX_CORRECTION_CHARS).contains(&length) {
-            return Ok(EventOutcome::Refused(Refusal::new(
-                "correcao",
-                "the correction has from 15 to 1000 characters",
-            )));
-        }
-        match state.documents.get_mut(reference) {
-            Some(document)
-                if document.stage == Stage::Authorized
-                    && document.corrections < MAX_CORRECTIONS =>
-            {
-                document.corrections += 1;
-                let number = document.corrections;
-                let key = document.access_key.as_str().to_owned();
-                Ok(EventOutcome::Accepted(AcceptedEvent {
-                    protocol: Some(format!("FAKEEVENT{number}")),
-                    number: Some(number),
-                    xml: Some(
-                        format!(
-                            "<?xml version=\"1.0\"?><!-- fake gateway: no fiscal value --><procEventoNFe>\
-                             <chNFe>{key}</chNFe><tpEvento>110110</tpEvento><nSeqEvento>{number}</nSeqEvento>\
-                             </procEventoNFe>"
-                        )
-                        .into_bytes(),
-                    ),
-                    pdf: Some(b"%PDF-1.4\n% fake CC-e, no fiscal value\n%%EOF\n".to_vec()),
-                }))
-            }
-            _ => Ok(EventOutcome::Refused(Refusal::new(
-                "nao_corrigivel",
-                "only an authorized document can be corrected, up to 20 times",
-            ))),
-        }
+        let Some(place) = state
+            .queued
+            .iter()
+            .position(|(queued, _)| *queued == known_as)
+        else {
+            return Ok(EventOutcome::Queued);
+        };
+        let (_, queued) = state.queued.remove(place);
+        Ok(match queued {
+            QueuedEvent::Cancel(reason) => do_cancel(&mut state, &known_as, &reason),
+            QueuedEvent::Correct(text) => do_correct(&mut state, &known_as, &text),
+        })
     }
 
     async fn invalidate_nfe_numbers(
@@ -492,6 +606,7 @@ mod tests {
         let sent = gateway
             .submit_nfe(&nfe_request(&issuer(), &reference))
             .await
+            .map(|submission| submission.outcome)
             .unwrap();
         assert_eq!(sent, DocumentOutcome::Processing);
         assert_eq!(
@@ -515,6 +630,7 @@ mod tests {
         let refused = gateway
             .submit_nfe(&nfe_request(&issuer(), &reference))
             .await
+            .map(|submission| submission.outcome)
             .unwrap();
         // Control characters are gone, so the text is one line a row can hold.
         assert_eq!(
@@ -532,6 +648,7 @@ mod tests {
         match gateway
             .submit_nfe(&nfe_request(&issuer(), &reference))
             .await
+            .map(|submission| submission.outcome)
             .unwrap()
         {
             DocumentOutcome::Authorized(document) => assert_eq!(document.number, 1),
@@ -549,6 +666,7 @@ mod tests {
             gateway
                 .submit_nfe(&nfe_request(&issuer(), &reference))
                 .await
+                .map(|submission| submission.outcome)
                 .unwrap(),
             DocumentOutcome::Denied(_)
         ));
@@ -556,6 +674,7 @@ mod tests {
             gateway
                 .submit_nfe(&nfe_request(&issuer(), &reference))
                 .await
+                .map(|submission| submission.outcome)
                 .unwrap(),
             DocumentOutcome::Denied(_)
         ));
@@ -586,6 +705,7 @@ mod tests {
                 match gateway
                     .submit_nfe(&nfe_request(&settings, &reference))
                     .await
+                    .map(|submission| submission.outcome)
                     .unwrap()
                 {
                     DocumentOutcome::Authorized(document) => document.number,
@@ -611,7 +731,10 @@ mod tests {
         assert!(!gateway.is_enabled());
         assert_eq!(gateway.key(), "off");
         assert_eq!(
-            gateway.submit_nfe(&nfe_request(&issuer(), "x")).await,
+            gateway
+                .submit_nfe(&nfe_request(&issuer(), "x"))
+                .await
+                .map(|submission| submission.outcome),
             Err(GatewayError::Disabled)
         );
         assert_eq!(

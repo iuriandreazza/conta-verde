@@ -45,6 +45,9 @@ sandbox call. Prices of neither gateway are published on their sites' front page
 | Tax calculation | none (we send the codes the company registered) | the same, **but a paid "calculation engine" is triggered** when an item carries `taxDetermination`; sending the taxes in `tax` avoids it |
 | Maturity | documented, widely used | pages disagree: one calls the NF-e and NFC-e APIs beta, another documents a v3 revised in October 2025; **confirm with them** |
 
+> **Update:** the two changes below were made by [ADR 0078](0078-gateway-reference-and-queued-events.md). The adapter itself is
+> the next step and still needs the operator's choice.
+
 ## What an NFE.io adapter needs that the port does not have
 
 Writing the adapter against the port as it is today would be unsafe, because of two differences found in the real specification:
@@ -80,7 +83,7 @@ documents needed (NF-e only, or NFS-e and NFC-e too), and weigh:
 
 - **Focus NFe stays the one real adapter** and `FISCAL_GATEWAY=focus` the way to use it. Everything above the port (documents,
   events, the package, the screens) is independent of the gateway.
-- **NFE.io is not built.** It becomes a second adapter **only after the port gains the two things above** (a gateway reference and
+- **NFE.io is not built (as of this ADR).** It becomes a second adapter **only after the port gains the two things above** (a gateway reference and
   an asynchronous event answer), which is its own change with its own ADR and a migration, and after the operator has chosen it:
   building it first on guesses risks double issuing.
 - **An installation uses exactly one gateway**, named by `FISCAL_GATEWAY` (`off`, `fake`, `focus`; `nfeio` when it exists). The

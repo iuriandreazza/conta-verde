@@ -18,6 +18,7 @@ use crate::postgres_audit;
 const ONE_LIVE_PER_SALE: &str = "fiscal_documents_one_live_per_sale_key";
 const ONE_FILE_PER_KIND: &str = "fiscal_files_one_per_kind_key";
 const ONE_LETTER_PER_PLACE: &str = "fiscal_events_sequence_key";
+const ONE_OPEN_CANCELLATION: &str = "fiscal_events_one_open_cancellation_key";
 
 const EVENT_COLUMNS: &str = "id, company_id, kind, document_id, sequence, body, series, first_number, last_number, \
      environment, status, protocol, refusal_code, refusal_message, blob_id, xml_size, requested_by_user_id, \
@@ -37,7 +38,7 @@ impl PostgresFiscalDocumentRepository {
 const COLUMNS: &str = "id, company_id, kind, sale_id, issuer_cnpj, issuer_name, regime, environment, \
      recipient_name, recipient_document, nature_code, total::text AS total, issued_at, \
      issued_on::text AS issued_on, submitted_by_user_id, submitted_by_name, status, refusal_code, \
-     refusal_message, access_key, number, series, protocol, note";
+     refusal_message, access_key, number, series, protocol, note, gateway_reference";
 
 fn stored<T>(value: Option<T>, what: &str) -> Result<T, RepositoryError> {
     value.ok_or_else(|| RepositoryError::Storage(format!("stored {what} is not known")))
@@ -117,7 +118,8 @@ fn document_from_row(row: &PgRow) -> Result<FiscalDocument, RepositoryError> {
         draft,
     )
     .map_err(|error| RepositoryError::Storage(error.to_string()))?
-    .restored(status, refusal, authorization, note))
+    .restored(status, refusal, authorization, note)
+    .with_gateway_reference(row.try_get("gateway_reference").map_err(storage_error)?))
 }
 
 fn event_from_row(row: &PgRow) -> Result<FiscalEvent, RepositoryError> {
@@ -137,6 +139,11 @@ fn event_from_row(row: &PgRow) -> Result<FiscalEvent, RepositoryError> {
             )
             .map_err(storage)?
         }
+        "cancellation" => FiscalEventSubject::cancellation(
+            FiscalDocumentId::from_uuid(row.try_get("document_id").map_err(storage_error)?),
+            &text("body")?,
+        )
+        .map_err(storage)?,
         "invalidation" => {
             let series: i16 = row.try_get("series").map_err(storage_error)?;
             let first: i64 = row.try_get("first_number").map_err(storage_error)?;
@@ -248,7 +255,8 @@ fn bind_values<'q>(
         .bind(number)
         .bind(series)
         .bind(authorization.and_then(|auth| auth.protocol().map(str::to_owned)))
-        .bind(document.note()))
+        .bind(document.note())
+        .bind(document.gateway_reference()))
 }
 
 impl FiscalDocumentRepository for PostgresFiscalDocumentRepository {
@@ -264,9 +272,9 @@ impl FiscalDocumentRepository for PostgresFiscalDocumentRepository {
                 "INSERT INTO fiscal_documents (id, company_id, kind, sale_id, issuer_cnpj, issuer_name, \
                  regime, environment, recipient_name, recipient_document, nature_code, total, issued_at, \
                  issued_on, submitted_by_user_id, submitted_by_name, status, refusal_code, refusal_message, \
-                 access_key, number, series, protocol, note) \
+                 access_key, number, series, protocol, note, gateway_reference) \
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CAST($12 AS numeric), $13, \
-                 CAST($14 AS date), $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)",
+                 CAST($14 AS date), $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)",
             ),
             document,
         )?
@@ -313,7 +321,7 @@ impl FiscalDocumentRepository for PostgresFiscalDocumentRepository {
                  recipient_document = $10, nature_code = $11, total = CAST($12 AS numeric), \
                  issued_at = $13, issued_on = CAST($14 AS date), submitted_by_user_id = $15, \
                  submitted_by_name = $16, status = $17, refusal_code = $18, refusal_message = $19, \
-                 access_key = $20, number = $21, series = $22, protocol = $23, note = $24 \
+                 access_key = $20, number = $21, series = $22, protocol = $23, note = $24, gateway_reference = $25 \
                  WHERE id = $1",
             ),
             document,
@@ -464,6 +472,15 @@ impl FiscalDocumentRepository for PostgresFiscalDocumentRepository {
                 None,
                 None,
             ),
+            FiscalEventSubject::Cancellation { document, .. } => (
+                "cancellation",
+                Some(document.as_uuid()),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
             FiscalEventSubject::Invalidation {
                 series,
                 first,
@@ -520,7 +537,12 @@ impl FiscalDocumentRepository for PostgresFiscalDocumentRepository {
         .execute(&mut *tx)
         .await
         .map_err(|error| match &error {
-            sqlx::Error::Database(db) if db.constraint() == Some(ONE_LETTER_PER_PLACE) => {
+            sqlx::Error::Database(db)
+                if matches!(
+                    db.constraint(),
+                    Some(ONE_LETTER_PER_PLACE | ONE_OPEN_CANCELLATION)
+                ) =>
+            {
                 RepositoryError::FiscalDocumentChanged
             }
             sqlx::Error::Database(db) if db.constraint() == Some("fiscal_events_document_fk") => {
@@ -616,6 +638,35 @@ impl FiscalDocumentRepository for PostgresFiscalDocumentRepository {
         ))
         .bind(company_id.as_uuid())
         .bind(id.as_uuid())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        rows.iter().map(event_from_row).collect()
+    }
+
+    async fn open_cancellation(
+        &self,
+        company_id: CompanyId,
+        id: FiscalDocumentId,
+    ) -> Result<Option<FiscalEvent>, RepositoryError> {
+        let row = sqlx::query(&format!(
+            "SELECT {EVENT_COLUMNS} FROM fiscal_events WHERE company_id = $1 AND document_id = $2 \
+             AND kind = 'cancellation' AND status IN ('sent', 'accepted')"
+        ))
+        .bind(company_id.as_uuid())
+        .bind(id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        row.as_ref().map(event_from_row).transpose()
+    }
+
+    async fn pending_events(&self, limit: usize) -> Result<Vec<FiscalEvent>, RepositoryError> {
+        let rows = sqlx::query(&format!(
+            "SELECT {EVENT_COLUMNS} FROM fiscal_events WHERE status = 'sent' \
+             AND kind IN ('correction', 'cancellation') ORDER BY recorded LIMIT $1"
+        ))
+        .bind(i64::try_from(limit).unwrap_or(i64::MAX))
         .fetch_all(&self.pool)
         .await
         .map_err(storage_error)?;
@@ -822,6 +873,13 @@ mod tests {
             "never changes",
         );
         refused(
+            sqlx::query("UPDATE fiscal_documents SET gateway_reference = 'other' WHERE id = $1")
+                .bind(document.as_uuid())
+                .execute(&pool)
+                .await,
+            "never changes",
+        );
+        refused(
             sqlx::query("DELETE FROM fiscal_documents WHERE id = $1")
                 .bind(document.as_uuid())
                 .execute(&pool)
@@ -999,6 +1057,56 @@ mod tests {
             &sales,
             company,
             other_company,
+            &entry_seed,
+            &seed,
+            &fiscal,
+        )
+        .await;
+        std::fs::remove_dir_all(root).expect("the test's own directory is removed");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn follows_a_gateway_that_names_and_queues() {
+        use crate::{
+            FakeFiscalGateway, LocalBlobStore, PostgresFiscalSettingsRepository,
+            PostgresPeriodLockRepository, RegisterReferences,
+        };
+        use conta_verde_application::FiscalDocumentService;
+
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let (entry_seed, seed) = seeds(&pool, company).await;
+        let parties = PostgresPartyRepository::new(pool.clone());
+        let fiscal = contract::seed_fiscal_customer(&parties, company).await;
+        let gateway = FakeFiscalGateway::default();
+        let settings = PostgresFiscalSettingsRepository::new(pool.clone());
+        let sales = PostgresSaleRepository::new(pool.clone());
+        let root =
+            std::env::temp_dir().join(format!("conta-verde-fiscal-{}", uuid::Uuid::new_v4()));
+        let service = FiscalDocumentService::new(
+            PostgresFiscalDocumentRepository::new(pool.clone()),
+            sales.clone(),
+            parties,
+            PostgresProductRepository::new(pool.clone()),
+            settings.clone(),
+            gateway.clone(),
+            LocalBlobStore::new(&root),
+            RegisterReferences::new(
+                PostgresCategoryRepository::new(pool.clone()),
+                PostgresCostCenterRepository::new(pool.clone()),
+                PostgresPartyRepository::new(pool.clone()),
+                PostgresBankAccountRepository::new(pool.clone()),
+                PostgresPaymentMethodRepository::new(pool.clone()),
+                PostgresPeriodLockRepository::new(pool.clone()),
+            ),
+        );
+        contract::follows_a_gateway_that_names_and_queues(
+            &service,
+            &gateway,
+            &settings,
+            &sales,
+            company,
             &entry_seed,
             &seed,
             &fiscal,

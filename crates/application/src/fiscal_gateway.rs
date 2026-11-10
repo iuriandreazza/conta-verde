@@ -266,6 +266,38 @@ pub struct AcceptedEvent {
 pub enum EventOutcome {
     Accepted(AcceptedEvent),
     Refused(Refusal),
+    /// The gateway took the request and will do it later: the answer comes by asking again with [`EventQuery`]
+    /// ([ADR 0078]). Only a gateway whose events are asynchronous answers so.
+    Queued,
+}
+
+/// Which event is asked about when the gateway has not answered it yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventQuery {
+    /// The cancellation of the document.
+    Cancellation,
+    /// The correction letter that follows this many letters the authority already accepted for the document: asked
+    /// about by how many came before it, because attempts that were refused never reach the authority's count.
+    Correction { accepted_before: u8 },
+}
+
+/// What a submission answered: the document's state and, when the gateway names its documents itself, the name it gave.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Submission {
+    /// The gateway's own identifier of the document, when it assigns one (NFE.io does, Focus NFe uses ours). The
+    /// document stores it and every later call passes it back as the reference ([ADR 0078]).
+    pub reference: Option<String>,
+    pub outcome: DocumentOutcome,
+}
+
+impl Submission {
+    /// A gateway that keeps the reference we gave it.
+    pub fn of(outcome: DocumentOutcome) -> Self {
+        Self {
+            reference: None,
+            outcome,
+        }
+    }
 }
 
 /// Why a call did not give an answer. The text is for the server's log: it is never sent to a client, and it never
@@ -308,14 +340,16 @@ pub trait FiscalGateway: Send + Sync {
     /// Whether the operator configured one. When not, issuing is refused before asking.
     fn is_enabled(&self) -> bool;
 
-    /// Asks the gateway to authorize an NF-e. The reference makes it idempotent: the same reference again gives the
-    /// state of the document it made, never a second one.
+    /// Asks the gateway to authorize an NF-e. The request's reference is **ours**: asking again with it gives the state
+    /// of the document it made, never a second one. A gateway that cannot keep our reference (it assigns its own) must
+    /// find the document it made for it before submitting, and **never submits when it cannot tell** (`Unavailable`):
+    /// issuing twice is a fiscal fault. The answer names the gateway's own reference when there is one.
     fn submit_nfe(
         &self,
         request: &NfeRequest,
-    ) -> impl Future<Output = Result<DocumentOutcome, GatewayError>> + Send;
+    ) -> impl Future<Output = Result<Submission, GatewayError>> + Send;
 
-    /// The state of the document with this reference.
+    /// The state of the document with this reference: the gateway's own when the submission returned one, ours otherwise.
     fn query_nfe(
         &self,
         issuer: &FiscalSettings,
@@ -340,6 +374,15 @@ pub trait FiscalGateway: Send + Sync {
         issuer: &FiscalSettings,
         reference: &str,
         text: &str,
+    ) -> impl Future<Output = Result<EventOutcome, GatewayError>> + Send;
+
+    /// Asks again about an event that answered [`EventOutcome::Queued`]: `Accepted`, `Refused`, or `Queued` while it is
+    /// still waiting. A gateway whose events are synchronous never queues one, so it never gets asked.
+    fn query_event(
+        &self,
+        issuer: &FiscalSettings,
+        reference: &str,
+        event: EventQuery,
     ) -> impl Future<Output = Result<EventOutcome, GatewayError>> + Send;
 
     /// Declares a range of numbers of a series unused (inutilização).

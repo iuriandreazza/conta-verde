@@ -144,7 +144,8 @@ pub use fiscal_document_service::{
 };
 pub use fiscal_gateway::{
     AcceptedEvent, AuthorizedDocument, BuyerPresence, Destination, DocumentOutcome, EventOutcome,
-    FiscalGateway, GatewayError, NfeItem, NfeRecipient, NfeRequest, PaymentForm, Refusal,
+    EventQuery, FiscalGateway, GatewayError, NfeItem, NfeRecipient, NfeRequest, PaymentForm,
+    Refusal, Submission,
 };
 pub use fiscal_settings_repository::FiscalSettingsRepository;
 pub use fiscal_settings_service::FiscalSettingsService;

@@ -125,7 +125,7 @@ already recorded does not write it again.
 
 ### Events and invalidation (4c; cancel is 4b)
 
-- **Cancel**: queries first (a gateway that already cancelled it says so and the product follows), then asks the gateway with the
+- **Cancel** (since [ADR 0078](0078-gateway-reference-and-queued-events.md) it is recorded as an event before the gateway is asked, and a gateway that answers it later leaves it `sent` until the poll learns the answer): queries first (a gateway that already cancelled it says so and the product follows), then asks the gateway with the
   reason (15 to 255 characters, checked by the domain before the call), and marks the document `cancelled` with the cancellation's XML.
   A refusal (`Refused`) is `422` with the authority's text and changes nothing. **Closed month: `409 PeriodLocked`**.
 - **Events are recorded before the gateway is asked** (`fiscal_events`, one table, `FiscalEvent` in `domain`): a row with status

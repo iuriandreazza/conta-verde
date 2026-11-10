@@ -191,8 +191,33 @@ export function FiscalDocumentSheet({ companyId, document, natures, canWrite, on
         />
       )}
 
+      {document.status === "authorized" && document.cancellation?.status === "sent" && (
+        <>
+          <Notice
+            tone="warning"
+            message="O cancelamento foi enviado e a SEFAZ ainda não respondeu. O sistema pergunta de novo sozinho; a nota continua autorizada até lá."
+          />
+          {canWrite && (
+            <Button
+              type="button"
+              pending={pending === "abandon-cancellation"}
+              disabled={pending !== null}
+              onClick={() =>
+                void run("abandon-cancellation", async () => {
+                  await api.abandonFiscalEvent(companyId, document.cancellation!.id);
+                  onChanged(await api.getFiscalDocument(companyId, document.id));
+                })
+              }
+            >
+              Desistir do cancelamento
+            </Button>
+          )}
+        </>
+      )}
+
       {canWrite && document.status === "authorized" && (
         <>
+          {document.cancellation === null && (
           <form className="record-form" onSubmit={(event) => void cancel(event)}>
             <HelpTitle title="Cancelar a nota" level={3}>
               <p>
@@ -208,6 +233,7 @@ export function FiscalDocumentSheet({ companyId, document, natures, canWrite, on
               Cancelar nota
             </Button>
           </form>
+          )}
           <form className="record-form" onSubmit={(event) => void correct(event)}>
             <HelpTitle title="Carta de correção" level={3}>
               <p>

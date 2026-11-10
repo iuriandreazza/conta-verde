@@ -17325,6 +17325,7 @@ pub async fn a_gateway_authorizes_cancels_and_corrects<
     let sent = gateway
         .submit_nfe(&nfe_request(issuer, &first))
         .await
+        .map(|submission| submission.outcome)
         .unwrap();
     let one = match sent {
         DocumentOutcome::Processing => authorized(settle(first.clone()).await),
@@ -17341,6 +17342,7 @@ pub async fn a_gateway_authorizes_cancels_and_corrects<
         gateway
             .submit_nfe(&nfe_request(issuer, &first))
             .await
+            .map(|submission| submission.outcome)
             .map(|outcome| match outcome {
                 DocumentOutcome::Processing => DocumentOutcome::Authorized(one.clone()),
                 other => other,
@@ -17354,6 +17356,7 @@ pub async fn a_gateway_authorizes_cancels_and_corrects<
     let sent = gateway
         .submit_nfe(&nfe_request(issuer, &second))
         .await
+        .map(|submission| submission.outcome)
         .unwrap();
     let two = match sent {
         DocumentOutcome::Processing => authorized(settle(second.clone()).await),
@@ -17952,9 +17955,26 @@ pub async fn fiscal_document_ready_to_authorize<
         )
         .await
         .unwrap();
-    let authorized = processing
-        .authorized(fiscal_authorization(7), None)
+    // The gateway names the document: kept while it waits, and found again with it.
+    let named = processing.referenced("gw-7").unwrap();
+    repository
+        .replace(
+            &named,
+            FiscalDocumentStatus::Processing,
+            &fiscal_document_audit(&named, AuditAction::Updated, Vec::new()),
+        )
+        .await
         .unwrap();
+    assert_eq!(
+        repository
+            .find(company, document.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .gateway_reference(),
+        Some("gw-7")
+    );
+    let authorized = named.authorized(fiscal_authorization(7), None).unwrap();
     repository
         .replace(
             &authorized,
@@ -18840,5 +18860,197 @@ pub async fn fiscal_events_are_kept<R: conta_verde_application::FiscalDocumentRe
             .await
             .unwrap()
             .is_empty()
+    );
+}
+
+/// A gateway that names the documents itself and answers cancellations and correction letters later (NFE.io's way,
+/// [ADR 0078]): the document keeps the name it was given and every later call uses it; asking to issue again finds the
+/// document instead of making a second; a cancellation and a letter are recorded as sent, the document stays
+/// authorized until the poll learns the answer, and a second cancellation waits for the first. The service was built
+/// with the fake `gateway`, whose references and queued events this switches on.
+#[allow(clippy::too_many_arguments)]
+pub async fn follows_a_gateway_that_names_and_queues<D, S, P, Y, F, B, R>(
+    service: &conta_verde_application::FiscalDocumentService<
+        D,
+        S,
+        P,
+        Y,
+        F,
+        crate::FakeFiscalGateway,
+        B,
+        R,
+    >,
+    gateway: &crate::FakeFiscalGateway,
+    settings: &F,
+    sales: &S,
+    company: CompanyId,
+    entry_seed: &EntrySeed,
+    seed: &SalesSeed,
+    fiscal: &FiscalSeed,
+) where
+    D: conta_verde_application::FiscalDocumentRepository,
+    S: conta_verde_application::SaleRepository,
+    P: PartyRepository,
+    Y: conta_verde_application::ProductRepository,
+    F: conta_verde_application::FiscalSettingsRepository,
+    B: BlobStore,
+    R: conta_verde_application::EntryReferences,
+{
+    use conta_verde_application::ApplicationError;
+    use conta_verde_domain::{
+        FiscalDocumentStatus, FiscalEventStatus, FiscalFileKind, TaxRuleDraft,
+    };
+
+    // A moment of its own: the poll reaches every company, so what it asks about is cut by the moment of issue and the
+    // other tests' documents (issued earlier) are left alone.
+    let named_at = FISCAL_NOW + 30 * 86_400;
+    gateway.assigning_references();
+    gateway.queueing_events();
+    let mut draft = fiscal_settings_draft(
+        "11222333000181",
+        conta_verde_domain::FiscalEnvironment::Homologation,
+    );
+    draft.natures[0].rules = vec![TaxRuleDraft {
+        regime: conta_verde_domain::TaxRegime::SimplesNacional,
+        ncm_prefix: None,
+        icms_code: "102".into(),
+        pis_code: "49".into(),
+        cofins_code: "49".into(),
+        icms_rate: None,
+        pis_rate: None,
+        cofins_rate: None,
+    }];
+    settings
+        .save(
+            &conta_verde_domain::FiscalSettings::new(company, draft).unwrap(),
+            &AuditEntry {
+                company_id: company,
+                actor: actor(),
+                entity: AuditEntity::FiscalSettings,
+                entity_id: company.as_uuid(),
+                action: AuditAction::Created,
+                changes: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    let user = actor();
+    let sale = save_a_completed_sale(sales, company, entry_seed, seed, fiscal).await;
+
+    // Issued: the gateway's own name is kept on the document, and asking again makes no second document.
+    let issued = service
+        .issue(company, &user, issue_request(sale), named_at)
+        .await
+        .unwrap();
+    assert_eq!(issued.gateway_reference(), Some("gw-1"));
+    assert_ne!(
+        issued.gateway_reference(),
+        Some(issued.id().as_uuid().to_string().as_str())
+    );
+    let authorized = service
+        .issue(company, &user, issue_request(sale), named_at)
+        .await
+        .unwrap();
+    assert_eq!(authorized.id(), issued.id());
+    assert_eq!(authorized.status(), FiscalDocumentStatus::Authorized);
+    assert_eq!(authorized.gateway_reference(), Some("gw-1"));
+
+    // A cancellation is queued: the document stays authorized, the cancellation is recorded as sent, and a second one waits.
+    let reason = "Pedido feito em duplicidade";
+    let still = service
+        .cancel(company, &user, issued.id(), reason)
+        .await
+        .unwrap();
+    assert_eq!(still.status(), FiscalDocumentStatus::Authorized);
+    let waiting = service
+        .open_cancellation(company, issued.id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(waiting.status(), FiscalEventStatus::Sent);
+    assert!(matches!(
+        service.cancel(company, &user, issued.id(), reason).await,
+        Err(ApplicationError::FiscalRule(_))
+    ));
+    // A letter is queued too, and a new one waits for it.
+    let text = "Corrige o endereço de entrega do destinatário";
+    let letter = service
+        .correct(company, &user, issued.id(), text)
+        .await
+        .unwrap();
+    assert_eq!(letter.status(), FiscalEventStatus::Sent);
+    assert!(matches!(
+        service.correct(company, &user, issued.id(), text).await,
+        Err(ApplicationError::FiscalRule(_))
+    ));
+
+    // The poll learns the answers, in the name of whoever asked: the document is cancelled and keeps its files.
+    let report = service
+        .poll_pending(named_at, 1_000, named_at + 3_600)
+        .await
+        .unwrap();
+    assert!(report.asked >= 1);
+    let cancelled = service.get(company, issued.id()).await.unwrap();
+    assert_eq!(cancelled.status(), FiscalDocumentStatus::Cancelled);
+    assert!(
+        !service
+            .file(company, issued.id(), FiscalFileKind::CancellationXml)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        service
+            .open_cancellation(company, issued.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .status(),
+        FiscalEventStatus::Accepted
+    );
+    let letters = service.corrections(company, issued.id()).await.unwrap();
+    assert_eq!(letters.len(), 1);
+    assert!(matches!(
+        letters[0].status(),
+        FiscalEventStatus::Accepted | FiscalEventStatus::Refused
+    ));
+    // Nothing is left waiting that the poll could answer.
+    let again = service
+        .poll_pending(named_at, 1_000, named_at + 7_200)
+        .await
+        .unwrap();
+    assert_eq!(again.settled, 0);
+
+    // A cancellation the authority refuses is kept refused, and the person may ask again.
+    let sale = save_a_completed_sale(sales, company, entry_seed, seed, fiscal).await;
+    let second = service
+        .issue(company, &user, issue_request(sale), named_at)
+        .await
+        .unwrap();
+    service
+        .issue(company, &user, issue_request(sale), named_at)
+        .await
+        .unwrap();
+    service
+        .cancel(company, &user, second.id(), reason)
+        .await
+        .unwrap();
+    gateway.refuse_events_with("501", "Prazo de cancelamento excedido");
+    service
+        .poll_pending(named_at, 1_000, named_at + 3_600)
+        .await
+        .unwrap();
+    gateway.accept_events_again();
+    assert_eq!(
+        service.get(company, second.id()).await.unwrap().status(),
+        FiscalDocumentStatus::Authorized
+    );
+    assert!(
+        service
+            .open_cancellation(company, second.id())
+            .await
+            .unwrap()
+            .is_none(),
+        "a refused cancellation does not count"
     );
 }
