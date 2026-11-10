@@ -59,8 +59,8 @@ What the code is today, and ADR 0015 did not know:
 | Option | Pros | Cons |
 |--------|------|------|
 | Only its digest, like a token | Nothing recoverable | The server must sign, so it must know the secret: impossible |
-| Encrypted at rest (AEAD, a key from the environment) | Stored per subscription, any value | A new crate for the cipher; a key to guard, rotate and back up; a format to version |
-| **Derived**: `HMAC-SHA256(WEBHOOK_SECRET_KEY, "subscription" . id . version)` (chosen) | **Nothing secret is stored**; no new crate (`hmac` is already used for payment webhooks); rotating one secret is bumping a number | Losing or changing the key invalidates every subscription's secret; the master key is one more environment secret |
+| Derived from a master key and the subscription's id and version | Nothing secret stored; no new crate | The person **cannot choose or edit it** (a requirement: the secret is editable in the interface, so a receiver that already has one can keep it), and a leaked master key exposes every secret ever issued |
+| **Encrypted at rest with an AEAD, a key from the environment** (chosen) | Any value, generated or typed by the person; shown and edited in the interface; no plain secret in the database | A new crate for the cipher (`chacha20poly1305`, from RustCrypto, like the `hmac` and `sha2` already used); a key to guard, back up and rotate |
 
 ### Idempotency of a create
 
@@ -81,7 +81,8 @@ the rules in `CLAUDE.md`.
    page for keys.
 3. **Webhooks**: subscriptions, signed deliveries, retries, the delivery log, the page.
 4. **Automatic bank statement sync** through an aggregator port.
-5. **The first e-commerce connector**, a separate package.
+5. **E-commerce connectors**: the settings page where a company **activates** one, and the first connector
+   (WooCommerce), a separate package.
 6. **PWA**.
 
 The order follows the dependency: the connector needs the API and the webhooks; the sync and the PWA need neither and
@@ -189,15 +190,21 @@ could move earlier. They stay where the roadmap put them unless a slice says why
 ### 4. Webhooks
 
 - A **subscription** is a company's, with an `https` URL, a list of event types (or all) and an `active` flag, at most 20
-  per company, audited (without the secret). Its **signing secret** is `HMAC-SHA256(WEBHOOK_SECRET_KEY, len-prefixed("webhook", subscription id, version))`
-  (the key at least 32 characters; the length prefixes keep two inputs from ever making the same string). It is **shown
-  once**, on creation and on rotation, as a matter of policy: the server could derive it again, and no endpoint does.
-  Rotating a subscription bumps the version and keeps signing with the previous one too for 24 hours. **The master key
-  rotates too**: `WEBHOOK_SECRET_KEY_PREVIOUS` (optional) is tried for every subscription made before the change, and a
-  subscription records which key generation signed it; if the master key leaks, every subscription must be rotated, which
-  the page offers in one action. **Without `WEBHOOK_SECRET_KEY` webhooks are
-  off** and the page says so (the pattern of `PAYMENT_PROVIDER`). **Nothing secret is stored**; losing the key means
-  every subscription needs a rotation.
+  per company, audited (without the secret). Its **signing secret is editable in the interface**: it is made at random
+  when the subscription is created (`whsec_` and 32 random bytes in base64), the owner or admin can **see it** (a reveal
+  action, answered `no-store`) and **replace it** with a value of their own (24 to 128 printable characters, no spaces),
+  for a receiver that already has one. Replacing it keeps the previous one signing too for 24 hours, so a receiver can
+  switch without a gap. A change is audited **without the values**; seeing it is not a write and is not audited.
+  **It is stored encrypted, never in plain text**: a new `SecretBox` port (`seal`/`open`) with an adapter over
+  **ChaCha20-Poly1305** (the `chacha20poly1305` crate, the one new dependency of the phase) and a key from the
+  environment, `SECRETS_KEY` (32 random bytes, 64 hex characters). A sealed value is a version byte, a key id (the first
+  bytes of the key's SHA-256), a nonce and the ciphertext, in one text column, with **the company and the subscription as
+  associated data** so a value copied to another row does not open. `SECRETS_KEY_PREVIOUS` (optional) opens what was sealed
+  before a key change, and the next edit of a secret seals it with the current one; if the key leaks, every secret must be
+  replaced, which the page offers in one action. **Without `SECRETS_KEY` webhooks are off** and the page says so (the
+  pattern of `PAYMENT_PROVIDER`); losing the key means every secret has to be replaced, never that data is lost. The key
+  is the installation's, so the aggregator of slice 4 and any later adapter that needs a per-company secret use the same
+  port.
 - **The catalogue of events** starts with `sale.created`, `sale.completed`, `sale.cancelled`, `charge.paid`,
   `stock.below_minimum` and `webhook.test`. It only grows. `stock.below_minimum` is derived on read in the product (it is
   never stored), so the event fires on a **crossing**: when a movement takes a product that has a minimum from a balance
@@ -250,21 +257,38 @@ could move earlier. They stay where the roadmap put them unless a slice says why
 - **No secret per company is stored.** The aggregator's credentials are the installation's, in the environment (one
   account per installation, like the fiscal gateway); what is stored per company is a **connection record**: the bank
   account it feeds, the provider, the aggregator's connection id and the day of the last pull. A connection id alone
-  gives nothing without the installation's credentials. An adapter that needed a token per company would need its own ADR
-  and an AEAD at rest, which this phase does not add.
+  gives nothing without the installation's credentials. An adapter that needed a token per company would store it through the
+  `SecretBox` of slice 3 and say so in its own ADR.
 - **It feeds what already exists.** Transactions become statement lines through the **same import and fingerprint**
   ([ADR 0034](0034-statement-import-and-reconciliation.md)): the aggregator's transaction id takes the place of the bank
   reference, so a pull that overlaps the last one adds nothing, and reconciliation does not know where a line came from.
   A pull is a **`sync_bank_connection` job** per connection, queued by an hourly pass (the day is the worker's) and
   harmless to repeat. OFX stays and is the only path for a company without an aggregator.
 
-### 6. The first e-commerce connector
+### 6. E-commerce connectors
 
-- A **separate package** in `connectors/`, with its own README, tests and lockfile, **importing no crate and no file of
-  the workspace**: it speaks only the `v1` API with a key and receives only webhooks. The target is **WooCommerce**
-  (justified in slice 5's ADR: it is open source and self-hosted like this product, its REST API and signed webhooks need
-  no partner registration or OAuth app, whereas the largest Brazilian hosted platforms require one before any token
-  exists). It is tested against a **local stand-in** and **cannot be validated against a real store without an account**.
+- **There are several, and a company turns them on in the settings.** Under **Configurações > Integrações** (the same
+  place as the API keys, the webhooks and, later, the bank connections) a page lists the **catalogue of connectors** the
+  product knows (a fixed list in the domain, WooCommerce first, each with a name, what it does, what it needs and a link
+  to its README) and the company's **connectors**: a connector is a record of a kind, a name given by the person (several
+  of one kind are allowed, one per store, at most 10), an **active** switch and the identifiers of what it uses. Only
+  owners and admins reach it (the `members` area, with the keys and the subscriptions). Activating, deactivating and
+  deleting are audited.
+- **Activating makes only what any integrator could make by hand**: an **API key** with the scopes the kind needs, named
+  after the connector, shown once, and a **webhook subscription** to the events the kind needs, whose secret the page
+  shows (and edits, as for any subscription). The page then tells the person what to paste into the connector (the
+  product's address, the key, the secret). **Deactivating revokes the key and switches the subscription off**; turning it
+  on again makes a new key. The product therefore holds **no credential of the store** and never calls the store: the
+  connector does, from where it runs, and its own settings (the store's address and keys) live in its own configuration.
+  That is what keeps it a separate package and the activation honest: nothing the connector can do is outside `v1` and the
+  webhooks.
+- **A connector is a separate package** in `connectors/<kind>/`, with its own README, tests and lockfile, **importing no
+  crate and no file of the workspace**: it speaks only the `v1` API with its key and receives only webhooks. The first is
+  **WooCommerce** (justified in slice 5's ADR: it is open source and self-hosted like this product, its REST API and signed
+  webhooks need no partner registration or OAuth app, whereas the largest Brazilian hosted platforms require one before
+  any token exists). It is tested against a **local stand-in** and **cannot be validated against a real store without an
+  account**. Another connector is a new package, one entry in the catalogue and, if it needs an event or a resource `v1`
+  lacks, an **additive** change to `v1`.
 - It maps an order to a sale with the order's id as the `external_reference`, so replaying an order is safe.
 
 ### 7. The PWA
@@ -301,8 +325,8 @@ could move earlier. They stay where the roadmap put them unless a slice says why
   Moving to an outbox in the transaction would remove the first gap at the price of every write's signature; it is the
   first thing to revisit if the loss is ever seen.
 - The rate limit is approximate across instances and forgotten on restart.
-- `WEBHOOK_SECRET_KEY` becomes a secret to keep and back up; the derivation means no secret is at rest and no cipher crate
-  is added.
+- `SECRETS_KEY` becomes a secret to keep and back up, and `chacha20poly1305` the phase's one new dependency; in return
+  no webhook secret is ever at rest in plain text and the person can see and choose it.
 - `Actor` gaining a variant touches about two dozen places once, in slice 2, and the audit CHECK is widened by a new
   migration (the one already merged is not edited).
 - `JobKind` gets a per-kind retry limit, and `MAX_ATTEMPTS` stops being a single number.
@@ -314,5 +338,5 @@ could move earlier. They stay where the roadmap put them unless a slice says why
 - A real integrator needs an exact distributed rate limit, a per-key limit or a per-IP throttle.
 - An event is seen lost: move events to an outbox written in the business transaction.
 - A client needs real-time push beyond webhooks (server-sent events).
-- A second aggregator or an adapter with per-company credentials needs encryption at rest.
+- The `SecretBox` needs a key per company, a hardware-backed key or an external key service instead of one environment key.
 - `v1` needs a breaking change: write `v2` and start the year.
