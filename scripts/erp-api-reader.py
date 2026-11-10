@@ -280,8 +280,8 @@ def by_due_date(client: Client, path: str, start: date, end: date) -> list:
 def fetch(client: Client, start: date, end: date, out_dir: Path, reuse: bool = False) -> dict[str, int]:
     out_dir.mkdir(parents=True, exist_ok=True)
     registers = {
-        "categories-income": lambda: client.pages("/v1/categorias", {"tipo": "RECEITA", "permite_apenas_filhos": "false"}),
-        "categories-expense": lambda: client.pages("/v1/categorias", {"tipo": "DESPESA", "permite_apenas_filhos": "false"}),
+        "categories-income": lambda: client.pages("/v1/categorias", {"tipo": "RECEITA", "permite_apenas_filhos": "false", "apenas_filhos": "false"}),
+        "categories-expense": lambda: client.pages("/v1/categorias", {"tipo": "DESPESA", "permite_apenas_filhos": "false", "apenas_filhos": "false"}),
         "cost-centers": lambda: client.pages("/v1/centro-de-custo", {"filtro_rapido": "TODOS"}),
         "financial-accounts": lambda: client.pages("/v1/conta-financeira", {"apenas_ativo": "false"}),
         "people": lambda: all_people(client),
