@@ -140,9 +140,17 @@ pub(crate) async fn replace_gateway_settings<X: Ports>(
             "the gateway settings have the wrong shape: every secret is { action: keep|clear|set, value? }",
         )
     })?;
+    let input = request.into_input()?;
+    let before = state.gateway_settings.get(company_id).await?;
+    if input.changes_the_gateway(before.as_ref()) {
+        state
+            .fiscal_documents
+            .ensure_gateway_may_change(company_id)
+            .await?;
+    }
     let settings = state
         .gateway_settings
-        .replace(company_id, &actor, request.into_input()?)
+        .replace(company_id, &actor, input)
         .await?;
     Ok(Json(
         response_of(&state, company_id, Some(&settings)).await?,
@@ -154,6 +162,12 @@ pub(crate) async fn reset_gateway_settings<X: Ports>(
     State(state): State<SharedState<X>>,
     CompanyAccess(company_id, actor): CompanyAccess,
 ) -> Result<Json<GatewaySettingsResponse>, ApiError> {
+    if state.gateway_settings.get(company_id).await?.is_some() {
+        state
+            .fiscal_documents
+            .ensure_gateway_may_change(company_id)
+            .await?;
+    }
     state.gateway_settings.reset(company_id, &actor).await?;
     Ok(Json(response_of(&state, company_id, None).await?))
 }

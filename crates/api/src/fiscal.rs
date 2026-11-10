@@ -1308,7 +1308,12 @@ pub(crate) async fn receive_fiscal_webhook<X: Ports>(
                 let now = crate::now_unix();
                 if let Err(error) = state
                     .fiscal_documents
-                    .poll_pending(now - WEBHOOK_POLL_WINDOW_SECONDS, WEBHOOK_POLL_BATCH, now)
+                    .poll_company(
+                        company_id,
+                        now - WEBHOOK_POLL_WINDOW_SECONDS,
+                        WEBHOOK_POLL_BATCH,
+                        now,
+                    )
                     .await
                 {
                     tracing::warn!(%error, "a fiscal webhook could not poll the documents");

@@ -511,15 +511,17 @@ impl FiscalDocumentRepository for PostgresFiscalDocumentRepository {
 
     async fn pending(
         &self,
+        company: Option<CompanyId>,
         since_unix: i64,
         limit: usize,
     ) -> Result<Vec<FiscalDocument>, RepositoryError> {
         let rows = sqlx::query(&format!(
             "SELECT {COLUMNS} FROM fiscal_documents WHERE status IN ('processing', 'contingency') \
-             AND issued_at >= $1 ORDER BY issued_at, id LIMIT $2"
+             AND issued_at >= $1 AND ($3::uuid IS NULL OR company_id = $3) ORDER BY issued_at, id LIMIT $2"
         ))
         .bind(since_unix)
         .bind(i64::try_from(limit).unwrap_or(i64::MAX))
+        .bind(company.map(|company| company.as_uuid()))
         .fetch_all(&self.pool)
         .await
         .map_err(storage_error)?;

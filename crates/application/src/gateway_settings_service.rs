@@ -28,6 +28,23 @@ pub struct GatewaySettingsInput {
     pub nfeio_search_confirmed: bool,
 }
 
+impl GatewaySettingsInput {
+    /// Whether saving this would change **which gateway account the company's documents go through**: a first row (it replaces the
+    /// server's gateway), another kind, another token, key or company id. The webhook secret and the NFE.io search flag do not.
+    pub fn changes_the_gateway(&self, before: Option<&GatewaySettings>) -> bool {
+        let Some(before) = before else {
+            return true;
+        };
+        let replaced = |change: &SecretChange| !matches!(change, SecretChange::Keep);
+        self.kind != before.kind()
+            || replaced(&self.focus_token_homologation)
+            || replaced(&self.focus_token_production)
+            || replaced(&self.nfeio_api_key)
+            || self.nfeio_company_homologation.as_deref() != before.nfeio_company_homologation()
+            || self.nfeio_company_production.as_deref() != before.nfeio_company_production()
+    }
+}
+
 /// How a company reaches its fiscal gateway ([ADR 0085]): the kind, the secrets (sealed, write-only) and the company's ids at the
 /// gateway. **Nothing in the trail or in what this returns is a secret.**
 pub struct GatewaySettingsService<R, C> {
@@ -253,4 +270,67 @@ fn plain_changes(before: Option<&GatewaySettings>, after: &GatewaySettings) -> V
         Some(after.nfeio_search_confirmed().to_string()),
     );
     changes
+}
+
+#[cfg(test)]
+mod tests {
+    use conta_verde_domain::{GatewaySettingsDraft, SealedSecret};
+
+    use super::*;
+
+    fn input(kind: GatewayKind) -> GatewaySettingsInput {
+        GatewaySettingsInput {
+            kind,
+            focus_token_homologation: SecretChange::Keep,
+            focus_token_production: SecretChange::Keep,
+            nfeio_api_key: SecretChange::Keep,
+            webhook_secret: SecretChange::Keep,
+            nfeio_company_homologation: None,
+            nfeio_company_production: None,
+            nfeio_search_confirmed: false,
+        }
+    }
+
+    fn stored(kind: GatewayKind) -> GatewaySettings {
+        GatewaySettings::new(
+            CompanyId::generate(),
+            GatewaySettingsDraft {
+                kind,
+                focus_token_homologation: Some(SealedSecret::new(vec![1; 30]).unwrap()),
+                focus_token_production: None,
+                nfeio_api_key: None,
+                webhook_secret: None,
+                nfeio_company_homologation: None,
+                nfeio_company_production: None,
+                nfeio_search_confirmed: false,
+            },
+            1,
+        )
+        .unwrap()
+    }
+
+    /// Only what changes the account the documents go through is held back while documents wait.
+    #[test]
+    fn only_a_change_of_account_changes_the_gateway() {
+        let before = stored(GatewayKind::Focus);
+        assert!(input(GatewayKind::Focus).changes_the_gateway(None));
+        assert!(!input(GatewayKind::Focus).changes_the_gateway(Some(&before)));
+        assert!(input(GatewayKind::NfeIo).changes_the_gateway(Some(&before)));
+        let new_token = GatewaySettingsInput {
+            focus_token_production: SecretChange::Clear,
+            ..input(GatewayKind::Focus)
+        };
+        assert!(new_token.changes_the_gateway(Some(&before)));
+        let new_company = GatewaySettingsInput {
+            nfeio_company_production: Some("company-1".to_owned()),
+            ..input(GatewayKind::Focus)
+        };
+        assert!(new_company.changes_the_gateway(Some(&before)));
+        let only_the_webhook = GatewaySettingsInput {
+            webhook_secret: SecretChange::Clear,
+            nfeio_search_confirmed: true,
+            ..input(GatewayKind::Focus)
+        };
+        assert!(!only_the_webhook.changes_the_gateway(Some(&before)));
+    }
 }

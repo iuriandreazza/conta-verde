@@ -18138,15 +18138,15 @@ pub async fn fiscal_documents_are_kept<R: conta_verde_application::FiscalDocumen
     );
 
     // The poll's view: what waits for the authority, from a moment on, across companies.
-    let waiting = repository.pending(0, 1_000_000).await.unwrap();
+    let waiting = repository.pending(None, 0, 1_000_000).await.unwrap();
     assert!(waiting.iter().any(|stored| stored.id() == draft.id()));
     assert!(waiting.iter().all(|stored| stored.status().is_pending()));
     let after = repository
-        .pending(draft.issued_at_unix() + 1, 1_000_000)
+        .pending(None, draft.issued_at_unix() + 1, 1_000_000)
         .await
         .unwrap();
     assert!(!after.iter().any(|stored| stored.id() == draft.id()));
-    assert!(repository.pending(0, 0).await.unwrap().is_empty());
+    assert!(repository.pending(None, 0, 0).await.unwrap().is_empty());
 
     // One live document per sale and kind; the refused write leaves nothing in the trail.
     let second = a_fiscal_document(company, sale, "100.50");
@@ -18779,6 +18779,13 @@ pub async fn a_pass_over_many_companies_asks_each_through_its_own_gateway<D, S, 
         assert_eq!(document.status(), FiscalDocumentStatus::Processing);
         documents.push(document.id());
     }
+    // The gateway of a company is not changed while its document waits for the authority.
+    for company in [&first, &second] {
+        assert!(matches!(
+            service.ensure_gateway_may_change(company.id).await,
+            Err(conta_verde_application::ApplicationError::FiscalRule(text)) if text.contains("waiting")
+        ));
+    }
     // Each document went out through the gateway of its own company, and only through it.
     assert_eq!(first_gateway.submitted().len(), 1);
     assert_eq!(second_gateway.submitted().len(), 1);
@@ -18791,10 +18798,20 @@ pub async fn a_pass_over_many_companies_asks_each_through_its_own_gateway<D, S, 
         documents[1].as_uuid().to_string()
     );
 
-    // One pass over both: the second company's gateway cannot be reached, the first's answers.
+    // A pass for one company asks that company's gateway only: the second's cannot be reached, and asking about it leaves the
+    // first's document alone.
     second_gateway.set_unavailable(true);
     service
-        .poll_pending(0, 1_000, FISCAL_NOW + 1)
+        .poll_company(second.id, 0, 1_000, FISCAL_NOW + 1)
+        .await
+        .unwrap();
+    assert_eq!(
+        service.get(first.id, documents[0]).await.unwrap().status(),
+        FiscalDocumentStatus::Processing,
+        "a pass for the second company does not ask about the first's document"
+    );
+    service
+        .poll_company(first.id, 0, 1_000, FISCAL_NOW + 1)
         .await
         .unwrap();
     assert_eq!(
@@ -18819,6 +18836,11 @@ pub async fn a_pass_over_many_companies_asks_each_through_its_own_gateway<D, S, 
     );
     assert_eq!(first_gateway.submitted().len(), 1);
     assert_eq!(second_gateway.submitted().len(), 1);
+
+    // Nothing waits any more: the gateway may be changed.
+    for company in [&first, &second] {
+        service.ensure_gateway_may_change(company.id).await.unwrap();
+    }
 
     // A company whose gateway is gone is refused, not served by another's.
     gateways.remove(second.id);

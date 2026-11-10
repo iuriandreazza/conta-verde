@@ -102,15 +102,22 @@ no oracle for which companies exist or have a secret ([ADR 0083](0083-received-i
 (no secret to compare with at all) is the same `401`. What is still `404`, for a knock that carries the right secret, is a company with no
 fiscal settings. A storage failure is a `5xx`, so the gateway retries instead of reading it as a wrong secret. The body is still never read.
 
-### What this does not solve (known limits, for a follow-up)
+### Changing the gateway while documents wait, and the polls
 
-- **Changing a company's gateway while documents are in flight.** A document submitted through one gateway and then asked about through
-  another (the settings were saved or reset meanwhile) gets `Unknown`, and after the grace period is marked `rejected`: sending it again
-  could issue it twice if the first gateway had taken it. The document does not remember which gateway submitted it. Until it does,
-  **do not change or reset the gateway settings while documents are `processing`**.
-- **The pass is global and oldest first.** A company whose gateway cannot be resolved keeps its waiting documents at the front of the
-  50 the minute pass takes, which can starve the others; the webhook's poll also covers every company (the knock is per company, the
-  poll is not). Both want a poll scoped by company and a fair order.
+- **The gateway account is not changed while a document waits.** A document sent through one gateway and then asked about through
+  another gets "no such document", is rejected after the grace period and, sent again, could be issued twice. Saving settings that change
+  the account (a first row, another kind, token, key or company id; not the webhook secret or the search flag) and resetting them are
+  refused with `422` while the company has a document `processing` or in `contingency`
+  (`FiscalDocumentService::ensure_gateway_may_change`). The person waits, or asks about it again until the authority answers. Not covered:
+  a cancellation or correction waiting as a `sent` event, and a document the authority never answers (the person's refresh settles it).
+- **A knock polls its own company** (`poll_company`, `pending(Some(company), ..)`): it no longer makes the server ask the gateways of
+  the others. The queued events are left to the minute pass, which covers every company.
+- **`refresh` reads again** when another writer moved the document between its read and its write (up to three times).
+
+### What this does not solve (known limits)
+
+- **The minute pass is global and oldest first.** A company whose gateway cannot be resolved keeps its waiting documents at the front of
+  the 50 the pass takes, which can starve the others. It wants a fair order (for instance by the last time a document was asked about).
 - **Error precedence.** Fiscal settings are read before the gateway is resolved, so a company with none gets "set the fiscal settings"
   even on a server with no gateway, where it used to get `Disabled` first.
 - A client is built on every resolve and the row is read and opened every time: cheap at this volume, not measured.
