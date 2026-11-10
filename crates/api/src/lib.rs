@@ -51,6 +51,7 @@ mod stock;
 mod stock_reports;
 mod transfers;
 mod v1;
+mod webhooks;
 
 use std::sync::Arc;
 
@@ -66,7 +67,7 @@ use conta_verde_application::{
     FinancialEntryRepository, FinancialEntryService, FiscalDocumentRepository,
     FiscalDocumentService, FiscalGatewayResolver, FiscalSettingsRepository, FiscalSettingsService,
     GatewaySettingsRepository, GatewaySettingsService, IdentityRepository,
-    InventoryCountRepository, InventoryCountService, InvitationRepository, MemberService,
+    InventoryCountRepository, InventoryCountService, InvitationRepository, JobQueue, MemberService,
     OpeningRepository, PackageScheduleRepository, PackageScheduleService, PartyRepository,
     PartyService, PaymentMethodRepository, PaymentMethodService, PaymentProvider,
     PaymentTermRepository, PaymentTermService, PostalCodeDirectory, PostalCodeService,
@@ -74,7 +75,8 @@ use conta_verde_application::{
     PurchaseOrderRepository, PurchaseService, QuoteRepository, QuoteService, ReconciliationService,
     RecurrenceRepository, RecurrenceService, SaleClaimRepository, SaleRepository, SaleService,
     SalesReportService, SecretService, StatementLineRepository, StockMovementRepository,
-    StockService, StockSettingsRepository, TransferRepository, TransferService,
+    StockService, StockSettingsRepository, TransferRepository, TransferService, WebhookRepository,
+    WebhookService,
 };
 use conta_verde_application::{
     CollectionService, CollectionSettingsRepository, DunningPlanRepository, DunningService,
@@ -83,7 +85,7 @@ use conta_verde_application::{
 };
 use serde::Serialize;
 
-pub use v1::{V1Clock, V1Config};
+pub use v1::{V1Clock, V1Config, V1Events};
 
 #[derive(Debug, Clone, Default)]
 pub struct ApiConfig {
@@ -134,6 +136,8 @@ pub use clock::{customer_today, now_millis, now_unix, today};
 
 pub trait Ports: 'static {
     type ApiKeys: ApiKeyRepository + 'static;
+    type WebhookSubscriptions: WebhookRepository + 'static;
+    type Jobs: JobQueue + 'static;
     type SaleClaims: SaleClaimRepository + 'static;
     type Parties: PartyRepository + 'static;
     type Registry: CnpjRegistry + 'static;
@@ -324,8 +328,19 @@ type PriceListsOf<X> = PriceListService<<X as Ports>::PriceLists, <X as Ports>::
 /// The sales reports use case over the adapters of `X`.
 type SalesReportsOf<X> = SalesReportService<<X as Ports>::Sales>;
 
+/// The subscriptions to webhooks and the sending of them ([ADR 0088]), shared with what raises the events.
+pub type OutgoingHooksOf<X> = Arc<
+    WebhookService<
+        <X as Ports>::WebhookSubscriptions,
+        <X as Ports>::Cipher,
+        <X as Ports>::Jobs,
+        <X as Ports>::Secrets,
+    >,
+>;
+
 /// The use cases the API serves.
 pub struct Services<X: Ports> {
+    pub webhook_subscriptions: OutgoingHooksOf<X>,
     pub api_keys: ApiKeyService<X::ApiKeys, X::Secrets>,
     pub sale_claims: X::SaleClaims,
     pub parties: PartyService<X::Parties, X::Registry>,
@@ -370,6 +385,7 @@ pub struct Services<X: Ports> {
 }
 
 pub(crate) struct AppState<X: Ports> {
+    webhook_subscriptions: OutgoingHooksOf<X>,
     api_keys: ApiKeyService<X::ApiKeys, X::Secrets>,
     sale_claims: X::SaleClaims,
     limiter: v1::RateLimiter,
@@ -421,6 +437,7 @@ pub(crate) type SharedState<X> = Arc<AppState<X>>;
 pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
     let limiter = v1::RateLimiter::new(config.v1.rate_limit_per_minute);
     let state = Arc::new(AppState {
+        webhook_subscriptions: services.webhook_subscriptions,
         api_keys: services.api_keys,
         sale_claims: services.sale_claims,
         limiter,
@@ -485,6 +502,34 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         .route(
             "/auth/password-reset/confirm",
             post(auth::reset_password::<X>),
+        )
+        .route(
+            "/companies/{company_id}/webhook-subscriptions",
+            get(webhooks::list_subscriptions::<X>).post(webhooks::create_subscription::<X>),
+        )
+        .route(
+            "/companies/{company_id}/webhook-subscriptions/{subscription_id}",
+            put(webhooks::update_subscription::<X>),
+        )
+        .route(
+            "/companies/{company_id}/webhook-subscriptions/{subscription_id}/secret",
+            post(webhooks::replace_secret::<X>),
+        )
+        .route(
+            "/companies/{company_id}/webhook-subscriptions/{subscription_id}/test",
+            post(webhooks::send_test::<X>),
+        )
+        .route(
+            "/companies/{company_id}/webhook-subscriptions/{subscription_id}/deliveries",
+            get(webhooks::list_deliveries::<X>),
+        )
+        .route(
+            "/companies/{company_id}/webhook-subscriptions/{subscription_id}/deliveries/{delivery_id}/redeliver",
+            post(webhooks::redeliver::<X>),
+        )
+        .route(
+            "/companies/{company_id}/webhook-subscriptions/{subscription_id}/history",
+            get(webhooks::subscription_history::<X>),
         )
         .route(
             "/companies/{company_id}/api-keys",
@@ -1205,16 +1250,16 @@ mod tests {
         InMemoryDunningPlanRepository, InMemoryEmailSender, InMemoryFinancialEntryRepository,
         InMemoryFiscalDocumentRepository, InMemoryFiscalSettingsRepository,
         InMemoryGatewaySettingsRepository, InMemoryIdentityRepository,
-        InMemoryInventoryCountRepository, InMemoryInvitationRepository, InMemoryMessageSender,
-        InMemoryNotificationRepository, InMemoryOpeningRepository,
+        InMemoryInventoryCountRepository, InMemoryInvitationRepository, InMemoryJobQueue,
+        InMemoryMessageSender, InMemoryNotificationRepository, InMemoryOpeningRepository,
         InMemoryPackageScheduleRepository, InMemoryPartyRepository, InMemoryPaymentEventRepository,
         InMemoryPaymentLinkRepository, InMemoryPaymentMethodRepository,
         InMemoryPaymentTermRepository, InMemoryPeriodLockRepository, InMemoryPostalCodeDirectory,
         InMemoryPriceListRepository, InMemoryProductRepository, InMemoryPurchaseOrderRepository,
         InMemoryQuoteRepository, InMemoryRecurrenceRepository, InMemorySaleClaimRepository,
         InMemorySaleRepository, InMemoryStatementLineRepository, InMemoryStockMovementRepository,
-        InMemoryStockSettingsRepository, InMemoryTransferRepository, RegisterDocumentReferences,
-        RegisterReferences, RingSecretCipher,
+        InMemoryStockSettingsRepository, InMemoryTransferRepository, InMemoryWebhookRepository,
+        RegisterDocumentReferences, RegisterReferences, RingSecretCipher,
     };
     use http_body_util::BodyExt;
     use serde_json::{Value, json};
@@ -1284,6 +1329,8 @@ mod tests {
         type PeriodLocks = InMemoryPeriodLockRepository;
         type PackageSchedules = InMemoryPackageScheduleRepository;
         type ApiKeys = InMemoryApiKeyRepository;
+        type WebhookSubscriptions = InMemoryWebhookRepository;
+        type Jobs = InMemoryJobQueue;
         type SaleClaims = InMemorySaleClaimRepository;
         type FiscalSettings = InMemoryFiscalSettingsRepository;
         type GatewaySettings = InMemoryGatewaySettingsRepository;
@@ -1339,6 +1386,8 @@ mod tests {
         type PeriodLocks = InMemoryPeriodLockRepository;
         type PackageSchedules = InMemoryPackageScheduleRepository;
         type ApiKeys = InMemoryApiKeyRepository;
+        type WebhookSubscriptions = InMemoryWebhookRepository;
+        type Jobs = InMemoryJobQueue;
         type SaleClaims = InMemorySaleClaimRepository;
         type FiscalSettings = InMemoryFiscalSettingsRepository;
         type GatewaySettings = InMemoryGatewaySettingsRepository;
@@ -1585,6 +1634,29 @@ mod tests {
     }
 
     /// The schedule over stores that the app's own services do not share: for the tests that never use it.
+    type TestHooks = WebhookService<
+        InMemoryWebhookRepository,
+        RingSecretCipher,
+        InMemoryJobQueue,
+        Argon2SecretService,
+    >;
+
+    /// Webhooks that go to a listener on this machine: the opt-in a test makes.
+    fn standalone_hooks() -> Arc<TestHooks> {
+        Arc::new(WebhookService::new(
+            InMemoryWebhookRepository::default(),
+            RingSecretCipher::from_hex(&"33".repeat(32)).unwrap(),
+            InMemoryJobQueue::default(),
+            Argon2SecretService::new().unwrap(),
+            true,
+        ))
+    }
+
+    thread_local! {
+        /// The webhooks of the app of this test, so a test can run the worker that sends them.
+        static HOOKS: std::cell::RefCell<Option<Arc<TestHooks>>> = const { std::cell::RefCell::new(None) };
+    }
+
     fn standalone_api_keys() -> ApiKeyService<InMemoryApiKeyRepository, Argon2SecretService> {
         ApiKeyService::new(
             InMemoryApiKeyRepository::default(),
@@ -2195,6 +2267,7 @@ mod tests {
     ) -> Router {
         router::<MemoryPorts>(
             Services {
+                webhook_subscriptions: standalone_hooks(),
                 api_keys: standalone_api_keys(),
                 sale_claims: InMemorySaleClaimRepository::default(),
                 parties,
@@ -2862,6 +2935,7 @@ mod tests {
     async fn a_postal_code_lookup_switched_off_is_a_409() {
         let app = router::<NoLookupPorts>(
             Services {
+                webhook_subscriptions: standalone_hooks(),
                 api_keys: standalone_api_keys(),
                 sale_claims: InMemorySaleClaimRepository::default(),
                 parties: PartyService::new(InMemoryPartyRepository::default(), None),
@@ -5093,6 +5167,7 @@ mod tests {
         let registry: Option<InMemoryCnpjRegistry> = None;
         let app = router::<NoLookupPorts>(
             Services {
+                webhook_subscriptions: standalone_hooks(),
                 api_keys: standalone_api_keys(),
                 sale_claims: InMemorySaleClaimRepository::default(),
                 parties: PartyService::new(InMemoryPartyRepository::default(), registry),
@@ -6656,12 +6731,23 @@ mod tests {
         let products = InMemoryProductRepository::default();
         let payment_terms = InMemoryPaymentTermRepository::default();
         let entry_store = InMemoryFinancialEntryRepository::default();
-        let charge_store = InMemoryChargeRepository::default();
+        // Sales, charges and stock tell the webhooks of this app what happens to them.
+        let claims = InMemorySaleClaimRepository::default();
+        let hooks = standalone_hooks();
+        HOOKS.with(|held| held.replace(Some(hooks.clone())));
+        let events: conta_verde_application::SharedEvents = Arc::new(V1Events::new(
+            hooks.clone(),
+            claims.clone(),
+            entry_store.clone(),
+            products.clone(),
+            v1.clock.clone(),
+        ));
+        let charge_store = InMemoryChargeRepository::default().with_events(events.clone());
         let settings_store = InMemoryCollectionSettingsRepository::default();
         let transfer_store = InMemoryTransferRepository::default();
         let quote_store = InMemoryQuoteRepository::default();
-        let sale_store = InMemorySaleRepository::default();
-        let ledger = InMemoryStockMovementRepository::default();
+        let sale_store = InMemorySaleRepository::default().with_events(events.clone());
+        let ledger = InMemoryStockMovementRepository::default().with_events(events.clone());
         let stock_settings = InMemoryStockSettingsRepository::default();
         let attachment_store = InMemoryAttachmentRepository::default();
         let blob_store = InMemoryBlobStore::default();
@@ -6684,8 +6770,9 @@ mod tests {
         };
         let app = router::<MemoryPorts>(
             Services {
+                webhook_subscriptions: hooks.clone(),
                 api_keys: standalone_api_keys(),
-                sale_claims: InMemorySaleClaimRepository::default(),
+                sale_claims: claims.clone(),
                 parties: PartyService::new(parties.clone(), known_companies())
                     .with_recheck_interval(Duration::ZERO),
                 products: ProductService::new(products.clone()),
@@ -15304,4 +15391,5 @@ mod tests {
     }
 
     include!("v1/tests.rs");
+    include!("v1/webhook_tests.rs");
 }

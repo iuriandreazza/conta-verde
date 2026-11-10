@@ -304,6 +304,20 @@ pub(crate) struct V1Stock {
     minimum_stock: Option<String>,
 }
 
+impl V1Stock {
+    pub(crate) fn new(
+        product_id: Uuid,
+        quantity: conta_verde_domain::Decimal,
+        minimum_stock: Option<String>,
+    ) -> Self {
+        Self {
+            product_id,
+            quantity: quantity.normalize().to_string(),
+            minimum_stock,
+        }
+    }
+}
+
 pub(crate) async fn product_stock<X: Ports>(
     State(state): State<SharedState<X>>,
     Extension(who): Extension<Principal>,
@@ -316,11 +330,11 @@ pub(crate) async fn product_stock<X: Ports>(
     )?;
     let product = state.products.get(who.company_id, product_id).await?;
     let balance = state.stock.balance_of(who.company_id, product_id).await?;
-    Ok(axum::Json(V1Stock {
-        product_id: product_id.as_uuid(),
-        quantity: balance.quantity().normalize().to_string(),
-        minimum_stock: product.minimum_stock().map(|minimum| minimum.to_string()),
-    }))
+    Ok(axum::Json(V1Stock::new(
+        product_id.as_uuid(),
+        balance.quantity(),
+        product.minimum_stock().map(|minimum| minimum.to_string()),
+    )))
 }
 
 // ---- what a sale needs to name: categories and payment terms ----
@@ -464,7 +478,11 @@ pub(crate) struct V1Sale {
 }
 
 impl V1Sale {
-    fn new(sale: &Sale, external_reference: Option<String>, receivable_id: Option<Uuid>) -> Self {
+    pub(crate) fn new(
+        sale: &Sale,
+        external_reference: Option<String>,
+        receivable_id: Option<Uuid>,
+    ) -> Self {
         Self {
             id: sale.id().as_uuid(),
             number: sale.number(),
@@ -752,6 +770,26 @@ pub(crate) struct V1Charge {
     paid_amount: Option<String>,
 }
 
+impl From<&conta_verde_domain::Charge> for V1Charge {
+    fn from(charge: &conta_verde_domain::Charge) -> Self {
+        Self {
+            id: charge.id().as_uuid(),
+            installment: charge.installment(),
+            method: charge.method().as_str(),
+            status: charge.status().as_str(),
+            amount: charge.amount().to_string(),
+            due_on: charge.due_on().to_string(),
+            digitable_line: charge.payment().digitable_line.clone(),
+            pix_payload: charge.payment().pix_payload.clone(),
+            payment_url: charge.payment().payment_url.clone(),
+            paid_on: charge.receipt().map(|receipt| receipt.paid_on.to_string()),
+            paid_amount: charge
+                .receipt()
+                .map(|receipt| receipt.paid_amount.to_string()),
+        }
+    }
+}
+
 /// The charges made to collect what a sale billed, and whether they were paid. A sale that is not completed has none.
 pub(crate) async fn sale_charges<X: Ports>(
     State(state): State<SharedState<X>>,
@@ -764,23 +802,6 @@ pub(crate) async fn sale_charges<X: Ports>(
     };
     let charges = state.charges.list(who.company_id, receivable.id()).await?;
     Ok(axum::Json(List {
-        items: charges
-            .iter()
-            .map(|charge| V1Charge {
-                id: charge.id().as_uuid(),
-                installment: charge.installment(),
-                method: charge.method().as_str(),
-                status: charge.status().as_str(),
-                amount: charge.amount().to_string(),
-                due_on: charge.due_on().to_string(),
-                digitable_line: charge.payment().digitable_line.clone(),
-                pix_payload: charge.payment().pix_payload.clone(),
-                payment_url: charge.payment().payment_url.clone(),
-                paid_on: charge.receipt().map(|receipt| receipt.paid_on.to_string()),
-                paid_amount: charge
-                    .receipt()
-                    .map(|receipt| receipt.paid_amount.to_string()),
-            })
-            .collect(),
+        items: charges.iter().map(V1Charge::from).collect(),
     }))
 }

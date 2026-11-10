@@ -57,6 +57,8 @@ uuid_id!(StatementLineId);
 uuid_id!(StockMovementId);
 uuid_id!(TransferId);
 uuid_id!(UserId);
+uuid_id!(WebhookDeliveryId);
+uuid_id!(WebhookSubscriptionId);
 
 impl From<AttachmentId> for BlobId {
     /// A file of an attachment is kept under the attachment's own id, so it stays where it always was.

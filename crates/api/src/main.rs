@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use conta_verde_api::{ApiConfig, Ports, Services, V1Config, router};
+use conta_verde_api::{ApiConfig, Ports, Services, V1Config, V1Events, router};
 use conta_verde_application::{
     AccountingExportService, ApiKeyService, AttachmentService, AuthService, BalanceService,
     BankAccountService, CategoryService, CommissionService, ContractService, CostCenterService,
@@ -9,7 +9,7 @@ use conta_verde_application::{
     PackageScheduleService, PartyService, PaymentMethodService, PaymentTermService,
     PeriodLockService, PostalCodeService, PriceListService, ProductService, PurchaseService,
     QuoteService, ReconciliationService, RecurrenceService, SaleService, SalesReportService,
-    StockService, TransferService,
+    StockService, TransferService, WebhookService,
 };
 use conta_verde_application::{
     BrandedEmailSender, ChargeService, CollectionService, DunningService, EmailError, EmailMessage,
@@ -20,8 +20,8 @@ use conta_verde_application::{
 use conta_verde_infrastructure::{
     Argon2SecretService, BrasilApiCityCodes, BrasilApiCnpjRegistry, BrasilApiPostalCodeDirectory,
     CachedCnpjRegistry, CompanyFiscalGateways, ConfiguredFiscalGateway, FakeFiscalGateway,
-    FocusNfeGateway, GatewayEndpoints, LocalBlobStore, LogEmailSender, NfeIoGateway,
-    NoFiscalGateway, PostgresApiKeyRepository, PostgresAttachmentRepository,
+    FocusNfeGateway, GatewayEndpoints, HttpWebhookSender, LocalBlobStore, LogEmailSender,
+    NfeIoGateway, NoFiscalGateway, PostgresApiKeyRepository, PostgresAttachmentRepository,
     PostgresBankAccountRepository, PostgresCategoryRepository, PostgresCommissionRuleRepository,
     PostgresContractRepository, PostgresCostCenterRepository, PostgresDocumentMailRepository,
     PostgresFinancialEntryRepository, PostgresFiscalDocumentRepository,
@@ -33,7 +33,8 @@ use conta_verde_infrastructure::{
     PostgresPurchaseOrderRepository, PostgresQuoteRepository, PostgresRecurrenceRepository,
     PostgresSaleClaimRepository, PostgresSaleRepository, PostgresStatementLineRepository,
     PostgresStockMovementRepository, PostgresStockSettingsRepository, PostgresTransferRepository,
-    RegisterDocumentReferences, RegisterReferences, SmtpEmailSender, connect_and_migrate,
+    PostgresWebhookRepository, RegisterDocumentReferences, RegisterReferences, SmtpEmailSender,
+    connect_and_migrate,
 };
 use conta_verde_infrastructure::{
     AsaasProvider, NoMessageSender, PostgresDunningPlanRepository, PostgresNotificationRepository,
@@ -50,6 +51,8 @@ use tracing_subscriber::EnvFilter;
 struct PostgresPorts;
 
 impl Ports for PostgresPorts {
+    type WebhookSubscriptions = PostgresWebhookRepository;
+    type Jobs = PostgresJobQueue;
     type ApiKeys = PostgresApiKeyRepository;
     type SaleClaims = PostgresSaleClaimRepository;
     type Parties = PostgresPartyRepository;
@@ -118,6 +121,10 @@ const JOB_INTERVAL: Duration = Duration::from_secs(60 * 60);
 /// How often the worker looks for jobs that are due: a message waits at most this long.
 const JOBS_POLL_INTERVAL: Duration = Duration::from_secs(5);
 const JOBS_PER_PASS: usize = 50;
+/// How many tasks send webhooks: a slow subscriber holds up one of them, not the rest ([ADR 0088]).
+const WEBHOOK_WORKERS: usize = 4;
+const WEBHOOK_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const WEBHOOK_PER_PASS: usize = 10;
 const CNPJ_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 
 #[tokio::main]
@@ -136,6 +143,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
 
     let pool = connect_and_migrate(&database_url).await?;
+    let cipher = secrets_cipher_from_env()?;
+    // What tells the subscribers of webhooks ([ADR 0088]): the adapters of sales, charges and stock raise events after their
+    // writes, and this turns them into deliveries and queues them for the webhook workers below.
+    let allow_private_targets = parse_flag("WEBHOOK_ALLOW_PRIVATE_TARGETS")?;
+    if allow_private_targets {
+        tracing::warn!(
+            "WEBHOOK_ALLOW_PRIVATE_TARGETS is on: webhooks may go to http and to private addresses (development only)"
+        );
+    }
+    let webhook_subscriptions = std::sync::Arc::new(WebhookService::new(
+        PostgresWebhookRepository::new(pool.clone()),
+        cipher.clone(),
+        PostgresJobQueue::new(pool.clone()),
+        Argon2SecretService::new()?,
+        allow_private_targets,
+    ));
+    let events: conta_verde_application::SharedEvents = std::sync::Arc::new(V1Events::new(
+        webhook_subscriptions.clone(),
+        PostgresSaleClaimRepository::new(pool.clone()),
+        PostgresFinancialEntryRepository::new(pool.clone()),
+        PostgresProductRepository::new(pool.clone()),
+        config.v1.clock.clone(),
+    ));
+    for _ in 0..WEBHOOK_WORKERS {
+        tokio::spawn(run_webhook_worker(
+            webhook_subscriptions.clone(),
+            HttpWebhookSender::new(allow_private_targets),
+        ));
+    }
     let parties = PartyService::new(
         PostgresPartyRepository::new(pool.clone()),
         cnpj_registry_from_env()?,
@@ -189,7 +225,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     refuse_a_link_without_a_scheme("PUBLIC_URL", &public_url)?;
     let payment_provider = payment_provider_from_env(&public_url)?;
     let charges = ChargeService::new(
-        PostgresChargeRepository::new(pool.clone()),
+        PostgresChargeRepository::new(pool.clone()).with_events(events.clone()),
         PostgresFinancialEntryRepository::new(pool.clone()),
         PostgresPartyRepository::new(pool.clone()),
         payment_provider.clone(),
@@ -197,7 +233,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     );
     let webhooks = PaymentWebhookService::new(
         payment_provider,
-        PostgresChargeRepository::new(pool.clone()),
+        PostgresChargeRepository::new(pool.clone()).with_events(events.clone()),
         PostgresPaymentEventRepository::new(pool.clone()),
         PostgresCollectionSettingsRepository::new(pool.clone()),
         FinancialEntryService::new(
@@ -254,7 +290,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let payment_page_service = || {
         Ok::<_, Box<dyn std::error::Error + Send + Sync>>(PaymentPageService::new(
             PostgresPaymentLinkRepository::new(pool.clone()),
-            PostgresChargeRepository::new(pool.clone()),
+            PostgresChargeRepository::new(pool.clone()).with_events(events.clone()),
             PostgresFinancialEntryRepository::new(pool.clone()),
             Argon2SecretService::new()?,
             &public_url,
@@ -293,10 +329,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             PostgresPaymentTermRepository::new(pool.clone()),
         ),
     );
-    let sales_reports = SalesReportService::new(PostgresSaleRepository::new(pool.clone()));
+    let sales_reports = SalesReportService::new(
+        PostgresSaleRepository::new(pool.clone()).with_events(events.clone()),
+    );
     let stock_service = || {
         StockService::new(
-            PostgresStockMovementRepository::new(pool.clone()),
+            PostgresStockMovementRepository::new(pool.clone()).with_events(events.clone()),
             PostgresProductRepository::new(pool.clone()),
             PostgresStockSettingsRepository::new(pool.clone()),
         )
@@ -304,7 +342,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
     let sale_service = || {
         SaleService::new(
-            PostgresSaleRepository::new(pool.clone()),
+            PostgresSaleRepository::new(pool.clone()).with_events(events.clone()),
             PostgresQuoteRepository::new(pool.clone()),
             FinancialEntryService::new(
                 PostgresFinancialEntryRepository::new(pool.clone()),
@@ -327,7 +365,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
     let commissions = CommissionService::new(
         PostgresCommissionRuleRepository::new(pool.clone()),
-        PostgresSaleRepository::new(pool.clone()),
+        PostgresSaleRepository::new(pool.clone()).with_events(events.clone()),
         RegisterDocumentReferences::new(
             PostgresPartyRepository::new(pool.clone()),
             PostgresProductRepository::new(pool.clone()),
@@ -377,7 +415,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     );
     let fiscal_settings =
         FiscalSettingsService::new(PostgresFiscalSettingsRepository::new(pool.clone()));
-    let cipher = secrets_cipher_from_env()?;
     let gateway_settings = GatewaySettingsService::new(
         PostgresGatewaySettingsRepository::new(pool.clone()),
         cipher.clone(),
@@ -390,7 +427,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let fiscal_documents = || {
         FiscalDocumentService::new(
             PostgresFiscalDocumentRepository::new(pool.clone()),
-            PostgresSaleRepository::new(pool.clone()),
+            PostgresSaleRepository::new(pool.clone()).with_events(events.clone()),
             PostgresPartyRepository::new(pool.clone()),
             PostgresProductRepository::new(pool.clone()),
             PostgresFiscalSettingsRepository::new(pool.clone()),
@@ -424,6 +461,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         listener,
         router::<PostgresPorts>(
             Services {
+                webhook_subscriptions,
                 api_keys,
                 sale_claims,
                 parties,
@@ -1036,6 +1074,50 @@ fn refuse_a_link_without_a_scheme(
 
 /// The worker of ADR 0059: every few seconds, does the jobs that are due. Safe to run in several instances, since a
 /// job is taken by one worker at a time and one a dead worker held is taken again when its lease ends.
+/// Sends the deliveries that are due, one pass every couple of seconds, and once an hour deletes what is older than 30 days from the
+/// log. Several of these run at once; the queue gives each job to one of them.
+async fn run_webhook_worker<R, C, Q, S>(
+    service: std::sync::Arc<WebhookService<R, C, Q, S>>,
+    sender: HttpWebhookSender,
+) where
+    R: conta_verde_application::WebhookRepository,
+    C: conta_verde_application::SecretCipher,
+    Q: conta_verde_application::JobQueue,
+    S: conta_verde_application::SecretService,
+{
+    let mut tick = tokio::time::interval(WEBHOOK_POLL_INTERVAL);
+    let mut passes = 0_u64;
+    loop {
+        tick.tick().await;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| {
+                i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX)
+            });
+        match service.run_due(now, WEBHOOK_PER_PASS, &sender).await {
+            Ok(report) if report.done > 0 || report.retried > 0 || report.dead > 0 => {
+                tracing::info!(
+                    done = report.done,
+                    retried = report.retried,
+                    dead = report.dead,
+                    "webhooks sent"
+                );
+            }
+            Ok(_) => {}
+            Err(error) => tracing::error!(%error, "sending webhooks failed"),
+        }
+        passes += 1;
+        if passes.is_multiple_of(1800) {
+            if let Err(error) = service.prune(now.saturating_mul(1000)).await {
+                tracing::error!(%error, "pruning the webhook log failed");
+            }
+            if let Err(error) = service.requeue_stale(now.saturating_mul(1000)).await {
+                tracing::error!(%error, "queuing the webhook deliveries that had no job failed");
+            }
+        }
+    }
+}
+
 async fn run_jobs<Q, E>(runner: JobRunner<Q, E>)
 where
     Q: conta_verde_application::JobQueue,

@@ -1,3 +1,4 @@
+use conta_verde_application::{DomainEvent, SharedEvents};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -20,6 +21,7 @@ use crate::memory_audit::AuditLog;
 #[derive(Default, Clone)]
 pub struct InMemoryStockMovementRepository {
     state: Arc<Mutex<StockState>>,
+    events: Option<SharedEvents>,
 }
 
 #[derive(Default)]
@@ -43,8 +45,20 @@ impl StockState {
     }
 }
 
-impl StockMovementRepository for InMemoryStockMovementRepository {
-    async fn record(
+impl InMemoryStockMovementRepository {
+    /// The events a successful write raises go here ([ADR 0088]); none when nobody listens.
+    pub fn with_events(mut self, events: SharedEvents) -> Self {
+        self.events = Some(events);
+        self
+    }
+
+    async fn raise(&self, event: DomainEvent) {
+        if let Some(events) = &self.events {
+            events.publish(event).await;
+        }
+    }
+
+    async fn record_now(
         &self,
         company_id: CompanyId,
         movements: &[StockMovement],
@@ -116,6 +130,24 @@ impl StockMovementRepository for InMemoryStockMovementRepository {
         state.movements.extend(movements.iter().cloned());
         for audit in audits {
             state.audit.record(audit);
+        }
+        Ok(())
+    }
+}
+
+impl StockMovementRepository for InMemoryStockMovementRepository {
+    async fn record(
+        &self,
+        company_id: CompanyId,
+        movements: &[StockMovement],
+        seen: &[(ProductId, StockBalance)],
+        floor: StockFloor,
+        audits: &[AuditEntry],
+    ) -> Result<(), RepositoryError> {
+        self.record_now(company_id, movements, seen, floor, audits)
+            .await?;
+        for event in conta_verde_application::stock_events(company_id, movements, seen) {
+            self.raise(event).await;
         }
         Ok(())
     }

@@ -1,4 +1,4 @@
-use conta_verde_domain::{Email, Job, JobKind, MAX_ATTEMPTS, NewJob};
+use conta_verde_domain::{Email, Job, JobKind, NewJob};
 
 use crate::{ApplicationError, EmailError, EmailMessage, EmailSender, JobQueue};
 
@@ -35,11 +35,15 @@ where
     pub async fn run_due(&self, now: i64, limit: usize) -> Result<JobReport, ApplicationError> {
         let mut report = JobReport::default();
         for _ in 0..limit {
-            let Some(job) = self.queue.claim_next(now, LEASE_SECONDS).await? else {
+            let Some(job) = self
+                .queue
+                .claim_next_of(now, LEASE_SECONDS, &[JobKind::SendEmail])
+                .await?
+            else {
                 break;
             };
             // A worker that died on this job every time it tried never got to say so: it has had its tries.
-            if job.attempts > MAX_ATTEMPTS {
+            if job.attempts > job.kind.max_attempts() {
                 self.queue
                     .fail(job.id, "gave up after repeated crashes", None)
                     .await?;
@@ -71,6 +75,10 @@ where
 
     async fn execute(&self, job: &Job) -> Outcome {
         match job.kind {
+            // Webhook deliveries are done by the webhook workers, which claim only their kind.
+            JobKind::DeliverWebhook => {
+                Outcome::Unrunnable("a webhook delivery is not done by this worker")
+            }
             JobKind::SendEmail => {
                 let (to, subject, body, html) = match job.args.as_slice() {
                     [to, subject, body] => (to, subject, body, None),

@@ -33,6 +33,7 @@ mod email_sender;
 mod entry_import;
 mod entry_repository;
 mod error;
+mod event_publisher;
 mod financial_entry_service;
 mod fiscal_document_repository;
 mod fiscal_document_service;
@@ -97,6 +98,9 @@ mod tax_calculator;
 mod text;
 mod transfer_repository;
 mod transfer_service;
+mod webhook_repository;
+mod webhook_sender;
+mod webhook_service;
 
 pub use accounting_export_service::{
     AccountingExportService, ExportCell, ExportFile, ExportLimits, ExportLookups, ExportNames,
@@ -144,6 +148,7 @@ pub use entry_repository::{
     ReportGroup, ReportRow,
 };
 pub use error::{ApplicationError, AuthError, RepositoryError};
+pub use event_publisher::{DomainEvent, EventPublisher, SharedEvents, stock_events};
 pub use financial_entry_service::{FinancialEntryPage, FinancialEntryService};
 pub use fiscal_document_repository::{
     FiscalDocumentCursor, FiscalDocumentQuery, FiscalDocumentRepository, ReceivedInvoiceCursor,
@@ -239,3 +244,6 @@ pub use transfer_repository::{
 pub use transfer_service::{
     AccountBalance, BalanceService, Balances, TransferPage, TransferService,
 };
+pub use webhook_repository::{DeliveryCursor, WebhookRepository, WebhookSecrets};
+pub use webhook_sender::{Outgoing, SendOutcome, WebhookSender};
+pub use webhook_service::{DeliveryPage, Subscribed, WebhookService, envelope, event_id, rfc3339};

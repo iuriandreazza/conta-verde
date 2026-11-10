@@ -6,18 +6,24 @@ pub enum JobKind {
     /// Sends one e-mail: `to`, `subject`, `body`, and the `html` of the layout when it has one (a job queued before the
     /// layout has only the first three).
     SendEmail,
+    /// Sends one webhook delivery: its `delivery_id`. The body and the address are in the delivery's own table ([ADR 0088]).
+    DeliverWebhook,
 }
 
 impl JobKind {
+    pub const ALL: [JobKind; 2] = [Self::SendEmail, Self::DeliverWebhook];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::SendEmail => "send_email",
+            Self::DeliverWebhook => "deliver_webhook",
         }
     }
 
     pub fn parse(raw: &str) -> Option<Self> {
         match raw {
             "send_email" => Some(Self::SendEmail),
+            "deliver_webhook" => Some(Self::DeliverWebhook),
             _ => None,
         }
     }
@@ -26,6 +32,16 @@ impl JobKind {
     fn arity(self) -> std::ops::RangeInclusive<usize> {
         match self {
             Self::SendEmail => 3..=4,
+            Self::DeliverWebhook => 1..=1,
+        }
+    }
+
+    /// How many times a job of the kind is tried before it is given up on. A subscriber that is down overnight needs far more
+    /// tries than a mail server ([ADR 0088]): with the waits of 1, 2, 4, 8, 16, 32 and then 60 minutes, 15 tries are about nine hours.
+    pub fn max_attempts(self) -> u32 {
+        match self {
+            Self::SendEmail => MAX_ATTEMPTS,
+            Self::DeliverWebhook => 15,
         }
     }
 }
@@ -89,7 +105,7 @@ impl Job {
     /// When to try again after a failed try, or `None` when it has been tried enough: the wait doubles from a
     /// minute and stops growing at an hour.
     pub fn retry_after(&self) -> Option<i64> {
-        (self.attempts < MAX_ATTEMPTS).then(|| {
+        (self.attempts < self.kind.max_attempts()).then(|| {
             let doubled = 60_i64.saturating_mul(1_i64 << (self.attempts.saturating_sub(1)).min(20));
             doubled.min(MAX_RETRY_DELAY_SECONDS)
         })

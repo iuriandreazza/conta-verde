@@ -33,21 +33,24 @@ impl JobQueue for PostgresJobQueue {
         Ok(id)
     }
 
-    async fn claim_next(
+    async fn claim_next_of(
         &self,
         now: i64,
         lease_seconds: i64,
+        kinds: &[JobKind],
     ) -> Result<Option<Job>, RepositoryError> {
+        let kinds: Vec<String> = kinds.iter().map(|kind| kind.as_str().to_owned()).collect();
         let row = sqlx::query(
             "UPDATE jobs SET status = 'running', attempts = attempts + 1, locked_until = $1 + $2 \
              WHERE id = (SELECT id FROM jobs \
-                         WHERE (status = 'pending' AND run_at <= $1) \
-                            OR (status = 'running' AND locked_until <= $1) \
+                         WHERE kind = ANY($3) AND ((status = 'pending' AND run_at <= $1) \
+                            OR (status = 'running' AND locked_until <= $1)) \
                          ORDER BY run_at, id FOR UPDATE SKIP LOCKED LIMIT 1) \
              RETURNING id, kind, args, attempts",
         )
         .bind(now)
         .bind(lease_seconds)
+        .bind(kinds)
         .fetch_optional(&self.pool)
         .await
         .map_err(storage_error)?;
@@ -104,7 +107,15 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires DATABASE_URL"]
+    async fn claims_jobs_by_kind() {
+        let pool = contract::test_pool().await;
+        crate::contract_integrations::claims_jobs_by_kind(&PostgresJobQueue::new(pool)).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
     async fn runs_the_job_queue() {
+        let _lock = crate::contract_integrations::QUEUE.lock().await;
         let pool = contract::test_pool().await;
         contract::runs_the_job_queue(&PostgresJobQueue::new(pool)).await;
     }

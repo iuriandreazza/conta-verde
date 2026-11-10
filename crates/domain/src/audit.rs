@@ -8,7 +8,7 @@ use crate::{
     GatewaySettings, InventoryCount, LineMatch, PackageSchedule, Party, PaymentMethod, PaymentTerm,
     PeriodLock, PriceList, Product, PurchaseOrder, PurchaseReceipt, Quote, ReceivedInvoice,
     Recurrence, Sale, SaleReturn, Settlement, StatementLine, StockMovement, StockSettings, Tag,
-    Transfer, UserId,
+    Transfer, UserId, WebhookSubscription,
 };
 
 /// Who made a change. The name is a snapshot: history must keep reading the same after the user is
@@ -62,6 +62,7 @@ impl Actor {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuditEntity {
     ApiKey,
+    WebhookSubscription,
     Party,
     Product,
     CostCenter,
@@ -112,6 +113,7 @@ impl AuditEntity {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::ApiKey => "api_key",
+            Self::WebhookSubscription => "webhook_subscription",
             Self::Party => "party",
             Self::Product => "product",
             Self::CostCenter => "cost_center",
@@ -680,6 +682,20 @@ impl Audited for AccountOpening {
 impl Audited for ApiKey {
     fn audit_entity(&self) -> AuditEntity {
         AuditEntity::ApiKey
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.id().as_uuid()
+    }
+}
+
+impl Audited for WebhookSubscription {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::WebhookSubscription
     }
 
     fn audit_company(&self) -> CompanyId {
@@ -1855,6 +1871,47 @@ pub fn api_key_creation_changes(key: &ApiKey) -> Vec<FieldChange> {
 
 pub fn api_key_changes(before: &ApiKey, after: &ApiKey) -> Vec<FieldChange> {
     changes_between(api_key_fields(before), api_key_fields(after))
+}
+
+/// What the trail says of a subscription: never its secret, which this type does not hold (a change of it is a field of its own,
+/// `secret`, with the word `set` or `changed` and no value).
+fn webhook_subscription_fields(subscription: &WebhookSubscription) -> Fields {
+    vec![
+        ("url", Some(subscription.url().to_owned())),
+        ("events", Some(subscription.events_text())),
+        ("active", Some(subscription.is_active().to_string())),
+    ]
+}
+
+pub fn webhook_subscription_creation_changes(
+    subscription: &WebhookSubscription,
+) -> Vec<FieldChange> {
+    let mut changes = creation_from(webhook_subscription_fields(subscription));
+    changes.push(FieldChange {
+        field: "secret".to_owned(),
+        from: None,
+        to: Some("set".to_owned()),
+    });
+    changes
+}
+
+pub fn webhook_subscription_changes(
+    before: &WebhookSubscription,
+    after: &WebhookSubscription,
+) -> Vec<FieldChange> {
+    changes_between(
+        webhook_subscription_fields(before),
+        webhook_subscription_fields(after),
+    )
+}
+
+/// The trail's entry for a secret that was replaced: the fact, never a value.
+pub fn webhook_secret_change() -> FieldChange {
+    FieldChange {
+        field: "secret".to_owned(),
+        from: Some("set".to_owned()),
+        to: Some("changed".to_owned()),
+    }
 }
 
 fn cost_center_fields(cost_center: &CostCenter) -> Fields {
