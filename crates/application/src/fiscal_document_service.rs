@@ -549,6 +549,12 @@ where
                 text(pdf),
                 text(cancellation),
             ]);
+            // Refused as soon as the records pass a limit, so a span that cannot fit costs no more queries.
+            if planned.len() > limits.attached_files
+                || planned.iter().map(|(_, _, size)| *size).sum::<u64>() > limits.attached_bytes
+            {
+                break;
+            }
         }
         if planned.len() > limits.attached_files {
             return Err(ApplicationError::ExportTooLarge(
