@@ -3,6 +3,15 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DomainError {
     EmptyName,
+    /// A scope of an API key that is not `area:read` or `area:write` of an area a key may have.
+    InvalidApiScope,
+    NoApiScopes,
+    InvalidApiKeyExpiry,
+    InvalidApiKeyGrace,
+    InvalidExternalReference,
+    /// A revoked or expired key cannot be rotated.
+    ApiKeyIsNotActive,
+    TooManyApiKeys,
     InvalidDocument,
     InvalidEmail,
     MissingRole,
@@ -168,6 +177,21 @@ impl fmt::Display for DomainError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::EmptyName => f.write_str("name must not be empty"),
+            Self::InvalidApiScope => f.write_str(
+                "a scope is an area and an access, like sales:write; the areas are parties, products, finance, sales and purchases",
+            ),
+            Self::InvalidExternalReference => f.write_str(
+                "an external reference has 1 to 100 characters and no control characters",
+            ),
+            Self::NoApiScopes => f.write_str("a key needs at least one scope"),
+            Self::InvalidApiKeyGrace => {
+                f.write_str("the old key may live on for 0 to 168 hours after a rotation")
+            }
+            Self::ApiKeyIsNotActive => f.write_str("the key is revoked or has expired"),
+            Self::TooManyApiKeys => f.write_str("a company has at most 50 keys"),
+            Self::InvalidApiKeyExpiry => {
+                f.write_str("a key lives from 1 hour to 5 years, or does not expire")
+            }
             Self::InvalidDocument => f.write_str("document is not a valid CPF or CNPJ"),
             Self::InvalidEmail => f.write_str("email is not valid"),
             Self::MissingRole => f.write_str("party must be a customer, a supplier, a carrier or a seller"),

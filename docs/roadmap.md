@@ -183,7 +183,7 @@ provider's test environment and the XMLs reach the accountant export.
 
 The plan, the order of the slices and what each settles are in [ADR 0086](adr/0086-integrations-and-mobile-plan.md).
 
-- [ ] Public API `v1` frozen: OpenAPI document, API keys per company, rate limits ([ADR 0015](adr/0015-public-api-and-webhooks.md))
+- [x] Public API `v1` frozen: OpenAPI document, API keys per company, rate limits ([ADR 0015](adr/0015-public-api-and-webhooks.md), [ADR 0087](adr/0087-public-api-v1.md)) — keys with scopes over five areas (never members, accounting or fiscal), shown once and stored as a digest, rotated with a grace and revoked, with the key as the actor in the audit trail; `/v1` of parties, products and their stock, categories, payment terms, sales (made once by an `external_reference`) and the charges of a sale, in problem documents with `RateLimit-*` headers and a per-process limit per key; the hand-written document `docs/api/v1/openapi.json` held by tests to the router, to the real answers and to a frozen copy; the page **Chaves de API**
 - [ ] Webhooks: subscriptions, signed deliveries, retries, delivery log
 - [ ] Automatic bank statement sync through an aggregator adapter ([ADR 0011](adr/0011-bank-data-ingestion.md))
 - [ ] First e-commerce connector as a separate package using only the public API

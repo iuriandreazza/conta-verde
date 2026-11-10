@@ -108,6 +108,15 @@ impl<R: ProductRepository> ProductService<R> {
         Ok(after)
     }
 
+    /// The product, only if it belongs to the company.
+    pub async fn get(
+        &self,
+        company_id: CompanyId,
+        id: ProductId,
+    ) -> Result<Product, ApplicationError> {
+        self.find(company_id, id).await
+    }
+
     /// What was recorded about the product, oldest first.
     pub async fn history(
         &self,

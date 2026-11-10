@@ -29,8 +29,9 @@ impl PostgresRecurrenceRepository {
 }
 
 fn saved_by(recurrence: &Recurrence) -> (Uuid, &str) {
-    let Actor::User { id, name } = recurrence.saved_by();
-    (id.as_uuid(), name)
+    // The column holds a person's id and name; no key reaches it ([ADR 0087]).
+    let by = recurrence.saved_by();
+    (by.id(), by.name())
 }
 
 impl RecurrenceRepository for PostgresRecurrenceRepository {

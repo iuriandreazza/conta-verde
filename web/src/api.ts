@@ -45,6 +45,32 @@ export interface Invited extends Invitation {
   emailed: boolean;
 }
 
+/** A key a program uses to speak to the company's public API. Times are milliseconds since the epoch. */
+export interface ApiKey {
+  id: string;
+  name: string;
+  /** The start of the secret, to tell keys apart. */
+  label: string;
+  /** `area:read` or `area:write`. */
+  scopes: string[];
+  status: "active" | "expired" | "revoked";
+  expires_at: number | null;
+  created_at: number;
+  created_by: string;
+  rotated_from: string | null;
+  /** `YYYY-MM-DD`. */
+  last_used_on: string | null;
+}
+
+/** A key just made: its secret exists only in this answer. */
+export interface IssuedApiKey {
+  key: ApiKey;
+  secret: string;
+}
+
+/** What a person may be given in an API key: the same areas the roles speak of, never members, accounting or fiscal. */
+export const API_KEY_AREAS = ["parties", "products", "finance", "sales", "purchases"] as const;
+
 /** What a link leads to, shown before the person accepts. */
 export interface InvitationPreview {
   company_name: string;
@@ -2063,6 +2089,16 @@ export const api = {
     request<InvitationPreview>(`/invitations/${encodeURIComponent(token)}`),
   acceptInvitation: (token: string) =>
     post<{ company_id: string }>(`/invitations/${encodeURIComponent(token)}/accept`),
+  listApiKeys: (companyId: string) =>
+    request<{ items: ApiKey[] }>(`/companies/${companyId}/api-keys`).then((reply) => reply.items),
+  createApiKey: (companyId: string, input: { name: string; scopes: string[]; expires_in_hours?: number }) =>
+    post<IssuedApiKey>(`/companies/${companyId}/api-keys`, input),
+  rotateApiKey: (companyId: string, keyId: string, graceHours: number) =>
+    post<IssuedApiKey>(`/companies/${companyId}/api-keys/${keyId}/rotate`, { grace_hours: graceHours }),
+  revokeApiKey: (companyId: string, keyId: string) =>
+    post<ApiKey>(`/companies/${companyId}/api-keys/${keyId}/revoke`, {}),
+  apiKeyHistory: (companyId: string, keyId: string) =>
+    request<HistoryEntry[]>(`/companies/${companyId}/api-keys/${keyId}/history`),
   partyHistory: (companyId: string, partyId: string) =>
     request<HistoryEntry[]>(`/companies/${companyId}/parties/${partyId}/history`),
   /** Asks the registry again about the party's CNPJ; resolves with the party and its new answer. */

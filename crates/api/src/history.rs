@@ -1,4 +1,4 @@
-use conta_verde_domain::{Actor, AuditRecord};
+use conta_verde_domain::AuditRecord;
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -31,13 +31,13 @@ struct ChangeResponse {
 
 impl From<&AuditRecord> for HistoryEntryResponse {
     fn from(record: &AuditRecord) -> Self {
-        let Actor::User { id, name } = &record.entry.actor;
+        let actor = &record.entry.actor;
         Self {
             at: record.at_millis,
             actor: ActorResponse {
-                kind: "user",
-                id: id.as_uuid(),
-                name: name.clone(),
+                kind: actor.kind(),
+                id: actor.id(),
+                name: actor.name().to_owned(),
             },
             action: record.entry.action.as_str(),
             changes: record

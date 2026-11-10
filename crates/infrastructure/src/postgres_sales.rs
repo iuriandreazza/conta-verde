@@ -723,6 +723,15 @@ mod tests {
             &seed,
         )
         .await;
+        crate::contract_integrations::registers_an_order_once_by_its_reference(
+            &sales,
+            &crate::PostgresSaleClaimRepository::new(pool.clone()),
+            company,
+            other_company,
+            &entry_seed,
+            &seed,
+        )
+        .await;
     }
 
     #[tokio::test]

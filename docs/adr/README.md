@@ -102,6 +102,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0084](0084-tax-calculation-behind-a-port.md) | The tax calculation behind a port, and the accountant's checklist | accepted | 7 |
 | [0085](0085-gateway-settings-per-company.md) | The gateway's settings, per company, with the secrets sealed | accepted | 7 |
 | [0086](0086-integrations-and-mobile-plan.md) | Integrations and mobile: the plan for Phase 8 | accepted | 8 |
+| [0087](0087-public-api-v1.md) | The public API v1: keys, scopes, limits, the document and the first resources | accepted | 8 |
 
 ## Template
 

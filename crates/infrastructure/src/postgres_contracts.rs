@@ -32,8 +32,9 @@ impl PostgresContractRepository {
 }
 
 fn saved_by(contract: &Contract) -> (Uuid, &str) {
-    let Actor::User { id, name } = contract.saved_by();
-    (id.as_uuid(), name)
+    // The column holds a person's id and name; no key reaches it ([ADR 0087]).
+    let by = contract.saved_by();
+    (by.id(), by.name())
 }
 
 /// Writes the lines of a contract, in order, on the connection of the transaction that writes the contract.

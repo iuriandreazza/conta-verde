@@ -7,8 +7,9 @@ use uuid::Uuid;
 
 use crate::text::{br_date, one_line};
 use crate::{
-    ApplicationError, DocumentMailRepository, EmailContent, EmailSender, FinancialEntryRepository,
-    ItemRow, Items, PartyRepository, PurchaseOrderRepository, Reservation,
+    ApplicationError, AuthError, DocumentMailRepository, EmailContent, EmailSender,
+    FinancialEntryRepository, ItemRow, Items, PartyRepository, PurchaseOrderRepository,
+    Reservation,
 };
 
 /// What goes out: to whom, under what subject, and what it says.
@@ -94,14 +95,15 @@ where
             subject,
             content,
         } = draft;
-        let Actor::User { id: sent_by, .. } = actor;
+        // A document is mailed in the name of a person: a key does not reach this ([ADR 0087]).
+        let sent_by = actor.user_id().ok_or(AuthError::NotAllowed)?;
         let mail = DocumentMail {
             id: DocumentMailId::generate(),
             company_id,
             kind,
             document_id,
             to: to.clone(),
-            sent_by: *sent_by,
+            sent_by,
             sent_at_millis: now_millis,
         };
         match self

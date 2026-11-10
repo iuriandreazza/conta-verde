@@ -2,24 +2,66 @@ use uuid::Uuid;
 
 use crate::line::lines_text;
 use crate::{
-    AccountOpening, Attachment, BankAccount, Category, Charge, CollectionSettings, CommissionRule,
-    CompanyId, Contract, CostCenter, DocumentCheck, DunningPlan, FinancialEntry, FiscalDocument,
-    FiscalEvent, FiscalEventSubject, FiscalSettings, GatewaySettings, InventoryCount, LineMatch,
-    PackageSchedule, Party, PaymentMethod, PaymentTerm, PeriodLock, PriceList, Product,
-    PurchaseOrder, PurchaseReceipt, Quote, ReceivedInvoice, Recurrence, Sale, SaleReturn,
-    Settlement, StatementLine, StockMovement, StockSettings, Tag, Transfer, UserId,
+    AccountOpening, ApiKey, ApiKeyId, Attachment, BankAccount, Category, Charge,
+    CollectionSettings, CommissionRule, CompanyId, Contract, CostCenter, DocumentCheck,
+    DunningPlan, FinancialEntry, FiscalDocument, FiscalEvent, FiscalEventSubject, FiscalSettings,
+    GatewaySettings, InventoryCount, LineMatch, PackageSchedule, Party, PaymentMethod, PaymentTerm,
+    PeriodLock, PriceList, Product, PurchaseOrder, PurchaseReceipt, Quote, ReceivedInvoice,
+    Recurrence, Sale, SaleReturn, Settlement, StatementLine, StockMovement, StockSettings, Tag,
+    Transfer, UserId,
 };
 
 /// Who made a change. The name is a snapshot: history must keep reading the same after the user is
-/// renamed or removed. API keys will join as another variant ([ADR 0007]).
+/// renamed or removed, or the key revoked ([ADR 0007], [ADR 0087]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Actor {
-    User { id: UserId, name: String },
+    User {
+        id: UserId,
+        name: String,
+    },
+    /// A program speaking through the public API with a company's key.
+    ApiKey {
+        id: ApiKeyId,
+        name: String,
+    },
+}
+
+impl Actor {
+    /// The id of the user or of the key.
+    pub fn id(&self) -> Uuid {
+        match self {
+            Self::User { id, .. } => id.as_uuid(),
+            Self::ApiKey { id, .. } => id.as_uuid(),
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        match self {
+            Self::User { name, .. } | Self::ApiKey { name, .. } => name,
+        }
+    }
+
+    /// The user, for the few records that point at one (an invitation, a mailed document); a key is not one.
+    pub fn user_id(&self) -> Option<UserId> {
+        match self {
+            Self::User { id, .. } => Some(*id),
+            Self::ApiKey { .. } => None,
+        }
+    }
+
+    /// The key the trail stores for the kind of actor.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::User { .. } => "user",
+            Self::ApiKey { .. } => "api_key",
+        }
+    }
 }
 
 /// The kind of record that changed. One variant per audited table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuditEntity {
+    ApiKey,
     Party,
     Product,
     CostCenter,
@@ -69,6 +111,7 @@ pub enum AuditEntity {
 impl AuditEntity {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::ApiKey => "api_key",
             Self::Party => "party",
             Self::Product => "product",
             Self::CostCenter => "cost_center",
@@ -631,6 +674,20 @@ impl Audited for AccountOpening {
 
     fn audit_id(&self) -> Uuid {
         self.account_id().as_uuid()
+    }
+}
+
+impl Audited for ApiKey {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::ApiKey
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.id().as_uuid()
     }
 }
 
@@ -1779,6 +1836,25 @@ pub fn price_list_creation_changes(list: &PriceList) -> Vec<FieldChange> {
 
 pub fn price_list_changes(before: &PriceList, after: &PriceList) -> Vec<FieldChange> {
     changes_between(price_list_fields(before), price_list_fields(after))
+}
+
+/// What the trail says of a key: never the secret or its digest, which this type does not hold.
+fn api_key_fields(key: &ApiKey) -> Fields {
+    vec![
+        ("name", Some(key.name().to_owned())),
+        ("scopes", Some(key.scope_keys().join(","))),
+        ("expires_at", key.expires_at().map(|at| at.to_string())),
+        ("revoked", Some(key.is_revoked().to_string())),
+    ]
+}
+
+/// Every field a new key has set.
+pub fn api_key_creation_changes(key: &ApiKey) -> Vec<FieldChange> {
+    creation_from(api_key_fields(key))
+}
+
+pub fn api_key_changes(before: &ApiKey, after: &ApiKey) -> Vec<FieldChange> {
+    changes_between(api_key_fields(before), api_key_fields(after))
 }
 
 fn cost_center_fields(cost_center: &CostCenter) -> Fields {
