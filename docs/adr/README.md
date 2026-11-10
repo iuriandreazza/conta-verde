@@ -93,6 +93,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0075](0075-fiscal-gateway-port.md) | The fiscal gateway port, its fake and the Focus NFe adapter | accepted | 7 |
 | [0076](0076-nfe-documents.md) | NF-e documents: the store, issuing from a sale, events and the package | accepted | 7 |
 | [0077](0077-choosing-a-fiscal-gateway.md) | Choosing a fiscal gateway: Focus NFe or NFE.io | accepted | 7 |
+| [0078](0078-gateway-reference-and-queued-events.md) | A reference the gateway assigns and events it answers later | accepted | 7 |
 
 ## Template
 

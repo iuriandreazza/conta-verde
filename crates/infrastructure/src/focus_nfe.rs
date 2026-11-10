@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use conta_verde_application::{
-    AcceptedEvent, AuthorizedDocument, Destination, DocumentOutcome, EventOutcome, FiscalGateway,
-    GatewayError, NfeRequest, Refusal,
+    AcceptedEvent, AuthorizedDocument, Destination, DocumentOutcome, EventOutcome, EventQuery,
+    FiscalGateway, GatewayError, NfeRequest, Refusal, Submission,
 };
 use conta_verde_domain::{
     AccessKey, Amount, Decimal, FiscalEnvironment, FiscalSettings, TaxRegime, fiscal_timestamp,
@@ -298,6 +298,38 @@ impl FocusNfeGateway {
             pdf: downloaded.next().flatten(),
         }))
     }
+
+    async fn submit(&self, request: &NfeRequest) -> Result<DocumentOutcome, GatewayError> {
+        let (base, token) = self.target(&request.issuer)?;
+        if request.issuer.regime() != TaxRegime::SimplesNacional {
+            return Err(GatewayError::Unsupported(
+                "an NF-e for Lucro Presumido, which needs the tax calculation",
+            ));
+        }
+        let reference = path_reference(&request.reference)?;
+        let answer = self
+            .call(
+                Method::POST,
+                &format!("{base}/v2/nfe?ref={reference}"),
+                token,
+                Some(nfe_body(request)?),
+            )
+            .await?;
+        match answer.status {
+            StatusCode::ACCEPTED => Ok(DocumentOutcome::Processing),
+            status if status.is_success() => self.outcome_of(&base, token, &answer).await,
+            // The reference is already known to the gateway: what it says is the state of that document.
+            StatusCode::UNPROCESSABLE_ENTITY
+                if matches!(
+                    answer.body["codigo"].as_str(),
+                    Some("already_processed" | "pending_operation")
+                ) =>
+            {
+                self.query_nfe(&request.issuer, reference).await
+            }
+            _ => failure(&answer).map(DocumentOutcome::Rejected),
+        }
+    }
 }
 
 /// A string field of an answer, when it is a non-empty one.
@@ -559,36 +591,9 @@ impl FiscalGateway for FocusNfeGateway {
         true
     }
 
-    async fn submit_nfe(&self, request: &NfeRequest) -> Result<DocumentOutcome, GatewayError> {
-        let (base, token) = self.target(&request.issuer)?;
-        if request.issuer.regime() != TaxRegime::SimplesNacional {
-            return Err(GatewayError::Unsupported(
-                "an NF-e for Lucro Presumido, which needs the tax calculation",
-            ));
-        }
-        let reference = path_reference(&request.reference)?;
-        let answer = self
-            .call(
-                Method::POST,
-                &format!("{base}/v2/nfe?ref={reference}"),
-                token,
-                Some(nfe_body(request)?),
-            )
-            .await?;
-        match answer.status {
-            StatusCode::ACCEPTED => Ok(DocumentOutcome::Processing),
-            status if status.is_success() => self.outcome_of(&base, token, &answer).await,
-            // The reference is already known to the gateway: what it says is the state of that document.
-            StatusCode::UNPROCESSABLE_ENTITY
-                if matches!(
-                    answer.body["codigo"].as_str(),
-                    Some("already_processed" | "pending_operation")
-                ) =>
-            {
-                self.query_nfe(&request.issuer, reference).await
-            }
-            _ => failure(&answer).map(DocumentOutcome::Rejected),
-        }
+    async fn submit_nfe(&self, request: &NfeRequest) -> Result<Submission, GatewayError> {
+        // Focus NFe keeps our reference, so it names nothing of its own.
+        self.submit(request).await.map(Submission::of)
     }
 
     async fn query_nfe(
@@ -664,6 +669,16 @@ impl FiscalGateway for FocusNfeGateway {
             &["caminho_xml_carta_correcao", "caminho_pdf_carta_correcao"],
         )
         .await
+    }
+
+    async fn query_event(
+        &self,
+        _issuer: &FiscalSettings,
+        _reference: &str,
+        _event: EventQuery,
+    ) -> Result<EventOutcome, GatewayError> {
+        // Focus NFe answers its events at once, so none is ever queued and none is asked about again.
+        Err(GatewayError::Unsupported("asking again about an event"))
     }
 
     async fn invalidate_nfe_numbers(
@@ -1089,12 +1104,14 @@ mod tests {
         let both = gateway(addr, Some(HOMOLOGATION_TOKEN), Some(PRODUCTION_TOKEN));
         both.submit_nfe(&nfe_request(&homologation(), "a1"))
             .await
+            .map(|submission| submission.outcome)
             .unwrap();
         both.submit_nfe(&nfe_request(
             &fiscal_issuer(CNPJ, FiscalEnvironment::Production),
             "a2",
         ))
         .await
+        .map(|submission| submission.outcome)
         .unwrap();
         assert_eq!(
             fake.lock().unwrap().token_seen,
@@ -1108,6 +1125,7 @@ mod tests {
                 "a3",
             ))
             .await
+            .map(|submission| submission.outcome)
             .unwrap_err();
         assert!(
             matches!(error, GatewayError::Unavailable(reason) if reason.contains("production"))
@@ -1125,7 +1143,10 @@ mod tests {
         );
         let gateway = gateway(addr, Some(HOMOLOGATION_TOKEN), None);
         assert_eq!(
-            gateway.submit_nfe(&nfe_request(&other, "b1")).await,
+            gateway
+                .submit_nfe(&nfe_request(&other, "b1"))
+                .await
+                .map(|submission| submission.outcome),
             Err(GatewayError::WrongIssuer)
         );
         assert_eq!(
@@ -1151,6 +1172,7 @@ mod tests {
         gateway(addr, Some(HOMOLOGATION_TOKEN), None)
             .submit_nfe(&request)
             .await
+            .map(|submission| submission.outcome)
             .unwrap();
         let body = fake.lock().unwrap().bodies[0].clone();
         for fragment in [
@@ -1178,6 +1200,7 @@ mod tests {
         gateway(addr, Some(HOMOLOGATION_TOKEN), None)
             .submit_nfe(&plain)
             .await
+            .map(|submission| submission.outcome)
             .unwrap();
         let plain_body: Value = serde_json::from_str(&fake.lock().unwrap().bodies[1]).unwrap();
         assert!(plain_body["items"][0].get("valor_desconto").is_none());
@@ -1191,6 +1214,7 @@ mod tests {
         let outcome = gateway(addr, Some(HOMOLOGATION_TOKEN), None)
             .submit_nfe(&nfe_request(&homologation(), "d1"))
             .await
+            .map(|submission| submission.outcome)
             .unwrap();
         match outcome {
             DocumentOutcome::Rejected(refusal) => {
@@ -1211,18 +1235,34 @@ mod tests {
         let gateway = gateway(addr, Some(HOMOLOGATION_TOKEN), None);
         let request = nfe_request(&homologation(), "e1");
         assert_eq!(
-            gateway.submit_nfe(&request).await.unwrap(),
+            gateway
+                .submit_nfe(&request)
+                .await
+                .map(|submission| submission.outcome)
+                .unwrap(),
             DocumentOutcome::Processing
         );
         // `pending_operation` while it is processing, `already_processed` once it is not: both mean "query".
-        let second = gateway.submit_nfe(&request).await.unwrap();
+        let second = gateway
+            .submit_nfe(&request)
+            .await
+            .map(|submission| submission.outcome)
+            .unwrap();
         assert!(matches!(
             second,
             DocumentOutcome::Processing | DocumentOutcome::Authorized(_)
         ));
-        let third = gateway.submit_nfe(&request).await.unwrap();
+        let third = gateway
+            .submit_nfe(&request)
+            .await
+            .map(|submission| submission.outcome)
+            .unwrap();
         assert!(matches!(third, DocumentOutcome::Authorized(_)), "{third:?}");
-        let fourth = gateway.submit_nfe(&request).await.unwrap();
+        let fourth = gateway
+            .submit_nfe(&request)
+            .await
+            .map(|submission| submission.outcome)
+            .unwrap();
         assert_eq!(third, fourth);
     }
 
@@ -1234,12 +1274,12 @@ mod tests {
         // The token being refused is not the document's fault.
         let wrong = gateway(addr, Some("another-token"), None);
         assert!(matches!(
-            wrong.submit_nfe(&request).await,
+            wrong.submit_nfe(&request).await.map(|submission| submission.outcome),
             Err(GatewayError::Unavailable(reason)) if reason == "401 Unauthorized"
         ));
         fake.lock().unwrap().server_error = true;
         assert!(matches!(
-            gateway(addr, Some(HOMOLOGATION_TOKEN), None).submit_nfe(&request).await,
+            gateway(addr, Some(HOMOLOGATION_TOKEN), None).submit_nfe(&request).await.map(|submission| submission.outcome),
             Err(GatewayError::Unavailable(reason)) if reason.starts_with("500")
         ));
         // A status this adapter does not know is not guessed at.
@@ -1291,7 +1331,10 @@ mod tests {
         draft.regime = TaxRegime::LucroPresumido;
         let presumed = FiscalSettings::new(homologation().company_id(), draft).unwrap();
         assert!(matches!(
-            gateway.submit_nfe(&nfe_request(&presumed, "g1")).await,
+            gateway
+                .submit_nfe(&nfe_request(&presumed, "g1"))
+                .await
+                .map(|submission| submission.outcome),
             Err(GatewayError::Unsupported(_))
         ));
         assert!(matches!(
@@ -1323,7 +1366,11 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs() as i64;
-        let first = gateway.submit_nfe(&request).await.unwrap();
+        let first = gateway
+            .submit_nfe(&request)
+            .await
+            .map(|submission| submission.outcome)
+            .unwrap();
         println!("submitted: {first:?}");
         for _ in 0..10 {
             tokio::time::sleep(Duration::from_secs(3)).await;
