@@ -27,7 +27,7 @@ run it.
 `NFEIO_API_KEY` (the invoice key, sent as `Authorization`), `NFEIO_COMPANY_ID_HOMOLOGATION` and/or `NFEIO_COMPANY_ID_PRODUCTION` (the
 company's id at the gateway: the environment follows the company, not a flag on the request), `NFEIO_ISSUER_CNPJ` (one issuing CNPJ per
 installation, as with Focus: a call for another company is `WrongIssuer` before anything is sent), optional `NFEIO_API_URL`
-(https, or local) and `NFEIO_FILE_HOSTS`. The server refuses to start with one required value missing. The key is never stored or logged.
+(`https://`, or exactly `http://localhost` / `http://127.0.0.1`, a stand-in) and `NFEIO_FILE_HOSTS`. The server refuses to start with one required value missing. The key is never stored or logged.
 The certificate is uploaded at the gateway and never reaches this server.
 
 ### Never issue twice
@@ -35,8 +35,7 @@ The certificate is uploaded at the gateway and never reaches this server.
 The gateway names the invoice and documents no idempotency. So `submit_nfe` **searches before it submits**: it lists the company's
 invoices with a query on the complementary information, where our reference is written (`Ref. cv-{our id}`, visible on the DANFE),
 **checks the marker in the answer itself** (it does not trust the search to have filtered), ignores a document that ended in `Error`
-(the person is sending it again) and takes the newest of several. **A search that fails, or that has more answers than one page and
-none of ours, is `Unavailable` and nothing is submitted.** The gateway's id is returned as the document's reference
+(the person is sending it again) and takes the newest of several. **A search that fails, or that has more than one page of answers, is `Unavailable` and nothing is submitted.** An invoice that ended in `Error` or was `Disabled` does not count as the document. The gateway's id is returned as the document's reference
 (`nfeio:{id}`), stored by the document (ADR 0078), and every later call uses it; asked about by our own id (the name was never
 stored), the adapter finds it by the same search. An answer to the submit without an id is found by the search too, and if it is
 not found the submission is `Unavailable` (the poll finds it later; it is never submitted again).
@@ -49,7 +48,7 @@ issue in production is refused** (`Unsupported`); homologation is allowed, becau
 |---|---|
 | submit | `POST /v2/companies/{company}/productinvoices`: operation nature, `Outgoing`, `Normal`, the destination, the consumer type, the presence, the buyer, the items with `icms.origin` + `csosn`, `pis.cst`, `cofins.cst`, the payment, the moment in UTC; `400`/`422` is a rejection with the gateway's first error |
 | query | `GET .../{id}`: `Created`/`Processing` waiting, `Issued` authorized (its XML and DANFE fetched), `IssuedContingency`, `IssueDenied` denied, `Error` rejected, `Cancelled`, `Disabled` rejected |
-| cancel | `DELETE .../{id}?reason=` answers `204` "queued": `EventOutcome::Queued`; `400`/`404` a refusal |
+| cancel | `DELETE .../{id}?reason=` answers `204` "queued": `EventOutcome::Queued`; `400`/`404`/`422` a refusal |
 | correction letter | `PUT .../{id}/correctionletter` `{reason}`: queued |
 | ask about a cancellation | the invoice is `Cancelled` |
 | ask about a letter | `GET .../{id}/events` has more letters than the authority had accepted before it |
@@ -69,7 +68,7 @@ would be better (a later slice).
 ### Files
 
 The XML and the DANFE are served from an address the gateway answers with. It is followed **only over https and only to `nfe.io`, `nfse.io`
-or a host the operator named (`NFEIO_FILE_HOSTS`), with no redirect**, and a size limit. If real files are served from a storage host, the
+or a host the operator named (`NFEIO_FILE_HOSTS`), with no redirect**, and a size limit; a local address is followed only when the gateway's own address is local (a stand-in). If real files are served from a storage host, the
 operator names it; until then an authorized document stays waiting (never lost) instead of fetching from an unnamed host.
 
 ## What is not verified, and the consequence
@@ -82,6 +81,8 @@ operator names it; until then an authorized document stays waiting (never lost) 
 - **The cancellation's XML** is not fetched (the authority's events were not verified): a cancelled document is told cancelled **with no
   cancellation file**, so the accountant's package carries none for it.
 - **The authority's protocol** is not in the answer the specification documents: an authorized document has none.
+- **Whether the search index is as fresh as the write.** A retry right after a lost answer could miss a document the index does not show yet; only the production guard covers it, and the sandbox test should wait for it.
+- **A CPF with a leading zero** goes as a JSON integer (the v2 contract) and loses the zero: check it in the sandbox.
 - **That the stand-in is the real API.**
 
 ## Consequences

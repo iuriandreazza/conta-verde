@@ -696,6 +696,20 @@ impl FiscalGateway for ConfiguredFiscalGateway {
     }
 }
 
+/// An address the gateway's credentials may be sent to: over TLS, or on this machine (a stand-in). The host is compared
+/// whole, so `http://localhost.example.com` is not local.
+fn is_https_or_local(url: &str) -> bool {
+    if url.starts_with("https://") {
+        return true;
+    }
+    ["http://localhost", "http://127.0.0.1"]
+        .iter()
+        .any(|local| {
+            url.strip_prefix(local)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with([':', '/']))
+        })
+}
+
 fn fiscal_gateway_from_env()
 -> Result<ConfiguredFiscalGateway, Box<dyn std::error::Error + Send + Sync>> {
     let setting = |name: &str| {
@@ -722,9 +736,7 @@ fn fiscal_gateway_from_env()
             // The tokens go to this address in every call: it is the gateway's over TLS, or a stand-in on this machine.
             let api_url = setting("FOCUS_NFE_API_URL");
             if let Some(url) = &api_url
-                && !(url.starts_with("https://")
-                    || url.starts_with("http://localhost")
-                    || url.starts_with("http://127.0.0.1"))
+                && !is_https_or_local(url)
             {
                 return Err(
                     "FOCUS_NFE_API_URL must be an https:// address (or a local one)".into(),
@@ -759,9 +771,7 @@ fn fiscal_gateway_from_env()
             // The key goes to this address in every call: it is the gateway's over TLS, or a stand-in on this machine.
             let api_url = setting("NFEIO_API_URL");
             if let Some(url) = &api_url
-                && !(url.starts_with("https://")
-                    || url.starts_with("http://localhost")
-                    || url.starts_with("http://127.0.0.1"))
+                && !is_https_or_local(url)
             {
                 return Err("NFEIO_API_URL must be an https:// address (or a local one)".into());
             }
@@ -1215,6 +1225,27 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_gateway_address_is_https_or_exactly_this_machine() {
+        for yes in [
+            "https://api.nfse.io",
+            "http://localhost",
+            "http://localhost:3999",
+            "http://127.0.0.1:8080/x",
+        ] {
+            assert!(is_https_or_local(yes), "{yes}");
+        }
+        for no in [
+            "http://api.nfse.io",
+            "http://localhost.evil.com",
+            "http://localhostevil",
+            "http://127.0.0.1.evil.com",
+            "ftp://localhost",
+        ] {
+            assert!(!is_https_or_local(no), "{no}");
+        }
+    }
 
     #[test]
     fn the_lookup_is_on_by_default_and_off_only_when_asked() {

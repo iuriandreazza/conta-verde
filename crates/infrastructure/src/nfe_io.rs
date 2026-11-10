@@ -113,10 +113,13 @@ impl BrasilApiCityCodes {
                 by_name.entry(fold(name)).or_default().push(code);
             }
         }
-        self.cache
-            .lock()
-            .expect("city cache poisoned")
-            .insert(state.to_owned(), by_name.clone());
+        // An empty list is a source that had nothing: asked again next time, never remembered.
+        if !by_name.is_empty() {
+            self.cache
+                .lock()
+                .expect("city cache poisoned")
+                .insert(state.to_owned(), by_name.clone());
+        }
         Ok(by_name)
     }
 }
@@ -181,6 +184,8 @@ pub struct NfeIoGateway {
     cities: Arc<dyn CityCodes>,
     file_hosts: Vec<String>,
     search_confirmed: bool,
+    /// The gateway's address is on this machine (a stand-in): only then may a file be fetched from here.
+    local: bool,
 }
 
 impl NfeIoGateway {
@@ -207,13 +212,20 @@ impl NfeIoGateway {
             cities,
             file_hosts: vec!["nfe.io".to_owned(), "nfse.io".to_owned()],
             search_confirmed: false,
+            local: base_url.is_some_and(|url| {
+                url.starts_with("http://127.0.0.1") || url.starts_with("http://localhost")
+            }),
         })
     }
 
     /// Other hosts a file may be served from (a storage the gateway uses), besides its own.
     pub fn with_file_hosts(mut self, hosts: &[String]) -> Self {
-        self.file_hosts
-            .extend(hosts.iter().map(|host| host.trim().to_lowercase()));
+        self.file_hosts.extend(
+            hosts
+                .iter()
+                .map(|host| host.trim().trim_matches('.').to_lowercase())
+                .filter(|host| !host.is_empty()),
+        );
         self
     }
 
@@ -363,10 +375,14 @@ impl NfeIoGateway {
                 invoice["additionalInformation"]["taxpayer"]
                     .as_str()
                     .is_some_and(|text| text.contains(&marker))
-                    && invoice["status"].as_str() != Some("Error")
+                    // An invoice that ended in an error, or whose number was declared unused, is not the document:
+                    // the person is sending it again.
+                    && !matches!(invoice["status"].as_str(), Some("Error" | "Disabled"))
             })
             .collect();
-        if found.is_empty() && answer.body["hasMore"].as_bool() == Some(true) {
+        // A marker that is ours alone matches a handful of documents: more than a page is a search that cannot be trusted,
+        // and the next step would be to submit.
+        if answer.body["hasMore"].as_bool() == Some(true) {
             return Err(GatewayError::Unavailable(
                 "the search has more answers than one page".to_owned(),
             ));
@@ -411,11 +427,14 @@ impl NfeIoGateway {
                 .file_hosts
                 .iter()
                 .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")));
-        let local = parsed.scheme() == "http" && (host == "127.0.0.1" || host == "localhost");
+        // A local address is followed only when the gateway itself is local (a stand-in in a test): never from a
+        // gateway's answer in production, where it would reach this server's own routes.
+        let local =
+            self.local && parsed.scheme() == "http" && (host == "127.0.0.1" || host == "localhost");
         if !allowed && !local {
-            return Err(GatewayError::Unavailable(
-                "a file is served from a host the gateway did not name".to_owned(),
-            ));
+            return Err(GatewayError::Unavailable(format!(
+                "a file is served from a host the gateway did not name: {host}"
+            )));
         }
         let response = self.client.get(parsed).send().await.map_err(|error| {
             GatewayError::Unavailable(format!("download failed: {}", error.without_url()))
@@ -425,6 +444,12 @@ impl NfeIoGateway {
                 "a file could not be downloaded: {}",
                 response.status()
             )));
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_FILE_BYTES as u64)
+        {
+            return Err(GatewayError::Unavailable("a file is too big".to_owned()));
         }
         let bytes = response.bytes().await.map_err(|error| {
             GatewayError::Unavailable(format!("download failed: {}", error.without_url()))
@@ -663,8 +688,23 @@ impl NfeIoGateway {
         let mut buyer = Map::new();
         buyer.insert("name".into(), json!(recipient.name));
         buyer.insert("federalTaxNumber".into(), numbers.of(tax_number));
-        buyer.insert("type".into(), json!("NaturalPerson"));
-        buyer.insert("stateTaxNumberIndicator".into(), json!("NonTaxPayer"));
+        buyer.insert(
+            "type".into(),
+            json!(if document.len() == 14 {
+                "LegalEntity"
+            } else {
+                "NaturalPerson"
+            }),
+        );
+        match &recipient.state_registration {
+            Some(registration) => {
+                buyer.insert("stateTaxNumberIndicator".into(), json!("TaxPayer"));
+                buyer.insert("stateTaxNumber".into(), json!(registration));
+            }
+            None => {
+                buyer.insert("stateTaxNumberIndicator".into(), json!("NonTaxPayer"));
+            }
+        }
         if let Some(email) = &recipient.email {
             buyer.insert("email".into(), json!(email));
         }
@@ -711,6 +751,13 @@ impl NfeIoGateway {
         });
         Ok(numbers.render(&body))
     }
+}
+
+/// The name of an event of the gateway that is a correction letter: its own words, not any word that holds the letters
+/// "cce" (`Accepted`).
+fn is_correction_letter(name: &str) -> bool {
+    let name = name.to_lowercase();
+    name.contains("correction") || name == "cce" || name.starts_with("cce_")
 }
 
 fn plain(id: &str) -> bool {
@@ -897,12 +944,7 @@ impl FiscalGateway for NfeIoGateway {
                     .as_array()
                     .into_iter()
                     .flatten()
-                    .filter(|event| {
-                        event["type"].as_str().is_some_and(|name| {
-                            let name = name.to_lowercase();
-                            name.contains("correction") || name.contains("cce")
-                        })
-                    })
+                    .filter(|event| event["type"].as_str().is_some_and(is_correction_letter))
                     .count();
                 Ok(if letters > usize::from(accepted_before) {
                     EventOutcome::Accepted(AcceptedEvent {
@@ -1523,6 +1565,39 @@ mod tests {
             matches!(&error, GatewayError::Unavailable(reason) if reason.contains("did not name")),
             "{error:?}"
         );
+    }
+
+    #[test]
+    fn only_a_correction_letter_counts_as_one() {
+        for yes in [
+            "CorrectionLetter",
+            "correction_letter_issued",
+            "cce",
+            "CCE_Authorized",
+        ] {
+            assert!(is_correction_letter(yes), "{yes}");
+        }
+        for no in [
+            "Accepted",
+            "Success",
+            "Succeeded",
+            "Cancellation",
+            "Authorized",
+        ] {
+            assert!(!is_correction_letter(no), "{no}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_document_whose_number_was_declared_unused_is_not_the_one_found_and_is_made_again() {
+        let stand = Shared::default();
+        let addr = serve(stand.clone()).await;
+        let gateway = gateway(addr, false);
+        gateway.submit_nfe(&request("ref-10")).await.unwrap();
+        stand.lock().unwrap().invoices[0].status = "Disabled";
+        let again = gateway.submit_nfe(&request("ref-10")).await.unwrap();
+        assert_eq!(again.reference.as_deref(), Some("nfeio:inv-2"));
+        assert_eq!(stand.lock().unwrap().posts, 2);
     }
 
     #[tokio::test]
