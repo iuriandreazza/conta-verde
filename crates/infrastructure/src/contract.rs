@@ -18335,6 +18335,114 @@ pub async fn issues_an_nfe_from_a_sale<D, S, P, Y, F, B, R>(
         Err(ApplicationError::Domain(_))
     ));
 
+    // Correction letters: recorded before they are sent, in order, with the authority's answer and its XML.
+    use conta_verde_domain::FiscalEventStatus;
+    let text = "Corrige o endereço de entrega do destinatário";
+    assert!(
+        rule(
+            service
+                .correct(company, &user, polled.id(), "curta")
+                .await
+                .unwrap_err()
+        )
+        .contains("15 to 1000")
+    );
+    let letter = service
+        .correct(company, &user, polled.id(), text)
+        .await
+        .unwrap();
+    assert_eq!(letter.status(), FiscalEventStatus::Accepted);
+    assert!(
+        !service
+            .event_file(company, letter.id())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    gateway.refuse_events_with("494", "Chave de acesso inexistente");
+    assert!(
+        rule(
+            service
+                .correct(company, &user, polled.id(), text)
+                .await
+                .unwrap_err()
+        )
+        .contains("494")
+    );
+    gateway.accept_events_again();
+    // A gateway that is down leaves the letter sent, and a new one waits for it: never repeated blindly.
+    gateway.set_unavailable(true);
+    assert!(matches!(
+        service.correct(company, &user, polled.id(), text).await,
+        Err(ApplicationError::FiscalGateway(_))
+    ));
+    gateway.set_unavailable(false);
+    assert!(
+        rule(
+            service
+                .correct(company, &user, polled.id(), text)
+                .await
+                .unwrap_err()
+        )
+        .contains("waiting")
+    );
+    let letters = service.corrections(company, polled.id()).await.unwrap();
+    assert_eq!(
+        letters
+            .iter()
+            .map(|letter| letter.status())
+            .collect::<Vec<_>>(),
+        vec![
+            FiscalEventStatus::Accepted,
+            FiscalEventStatus::Refused,
+            FiscalEventStatus::Sent
+        ]
+    );
+    assert!(matches!(
+        service.correct(company, &user, issued.id(), text).await,
+        Err(ApplicationError::Domain(_))
+    ));
+    assert!(matches!(
+        service.corrections(other_company, polled.id()).await,
+        Err(ApplicationError::FiscalDocumentNotFound)
+    ));
+
+    // Invalidation: a range nobody holds, never a number a document of the company has.
+    let number = polled.authorization().unwrap().number();
+    let reason = "Numeração pulada por falha do sistema";
+    assert!(
+        rule(
+            service
+                .invalidate(company, &user, 1, number, number, reason)
+                .await
+                .unwrap_err()
+        )
+        .contains("in use")
+    );
+    assert!(
+        rule(
+            service
+                .invalidate(company, &user, 1, 5000, 4999, reason)
+                .await
+                .unwrap_err()
+        )
+        .contains("range")
+    );
+    let range = service
+        .invalidate(company, &user, 1, 5000, 5002, reason)
+        .await
+        .unwrap();
+    assert_eq!(range.status(), FiscalEventStatus::Accepted);
+    assert_eq!(gateway.invalidated(), vec![(1, 5000, 5002)]);
+    assert_eq!(service.invalidations(company, 10).await.unwrap().len(), 1);
+    assert!(
+        service
+            .invalidations(other_company, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
     // After the certificate's day nothing is sent.
     let mut expired = draft;
     expired.certificate_valid_until = Some("2026-11-08".into());
@@ -18361,5 +18469,206 @@ pub async fn issues_an_nfe_from_a_sale<D, S, P, Y, F, B, R>(
                 .unwrap_err()
         )
         .contains("certificate")
+    );
+}
+
+/// Events of fiscal documents are recorded as `sent` before anything is asked, take one place per letter in a
+/// document's sequence, are settled once and never changed otherwise, belong to their company, and tell which numbers
+/// of a series a document holds.
+pub async fn fiscal_events_are_kept<R: conta_verde_application::FiscalDocumentRepository>(
+    repository: &R,
+    company: CompanyId,
+    other_company: CompanyId,
+    sale: SaleId,
+) {
+    use conta_verde_domain::{
+        FiscalEnvironment, FiscalEvent, FiscalEventId, FiscalEventStatus, FiscalEventSubject,
+        FiscalRefusal, fiscal_event_changes, fiscal_event_creation_changes,
+    };
+    let document = fiscal_document_ready_to_authorize(repository, company, sale).await;
+    let user = UserId::generate();
+    let event = |company: CompanyId, subject: FiscalEventSubject| {
+        FiscalEvent::new(FiscalEventId::generate(), company, subject, user, "Maria").unwrap()
+    };
+    let audit = |event: &FiscalEvent, action, changes| AuditEntry {
+        company_id: event.company_id(),
+        actor: actor(),
+        entity: AuditEntity::FiscalEvent,
+        entity_id: event.id().as_uuid(),
+        action,
+        changes,
+    };
+    let letter = |place: u8| {
+        FiscalEventSubject::correction(
+            document,
+            place,
+            "Corrige o endereço de entrega do destinatário",
+        )
+        .unwrap()
+    };
+
+    let first = event(company, letter(1));
+    repository
+        .record_event(
+            &first,
+            &audit(
+                &first,
+                AuditAction::Created,
+                fiscal_event_creation_changes(&first),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        repository.find_event(company, first.id()).await.unwrap(),
+        Some(first.clone())
+    );
+    assert_eq!(
+        repository
+            .find_event(other_company, first.id())
+            .await
+            .unwrap(),
+        None
+    );
+
+    // The place in the sequence is taken once; a document of another company cannot be written to.
+    let again = event(company, letter(1));
+    assert_eq!(
+        repository
+            .record_event(&again, &audit(&again, AuditAction::Created, Vec::new()))
+            .await,
+        Err(RepositoryError::FiscalDocumentChanged)
+    );
+    let foreign = event(other_company, letter(2));
+    assert_eq!(
+        repository
+            .record_event(&foreign, &audit(&foreign, AuditAction::Created, Vec::new()))
+            .await,
+        Err(RepositoryError::NotFound)
+    );
+    assert!(
+        repository
+            .event_history(company, again.id())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // Settled once, with the answer; what was asked never changes.
+    let accepted = first
+        .accepted(Some("135260000000099"), Some((BlobId::generate(), 12)))
+        .unwrap();
+    let settled = audit(
+        &accepted,
+        AuditAction::Updated,
+        fiscal_event_changes(&first, &accepted),
+    );
+    assert_eq!(repository.settle_event(&accepted, &settled).await, Ok(()));
+    assert_eq!(
+        repository.settle_event(&accepted, &settled).await,
+        Err(RepositoryError::FiscalDocumentChanged)
+    );
+    let stored = repository
+        .find_event(company, first.id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.status(), FiscalEventStatus::Accepted);
+    assert_eq!(stored.protocol(), Some("135260000000099"));
+    assert!(stored.xml().is_some());
+    let second = event(company, letter(2));
+    repository
+        .record_event(&second, &audit(&second, AuditAction::Created, Vec::new()))
+        .await
+        .unwrap();
+    let rewritten = event(company, letter(3))
+        .refused(FiscalRefusal::new("1", "x"))
+        .unwrap();
+    let mut forged = FiscalEvent::new(second.id(), company, letter(3), user, "Maria").unwrap();
+    forged = forged.restored(rewritten.status(), None, rewritten.refusal().cloned(), None);
+    // Only the answer is written: an event that says something else of what was asked changes nothing of it.
+    assert_eq!(
+        repository
+            .settle_event(&forged, &audit(&forged, AuditAction::Updated, Vec::new()))
+            .await,
+        Ok(())
+    );
+    let kept = repository
+        .find_event(company, second.id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(kept.subject(), second.subject());
+    assert_eq!(kept.status(), FiscalEventStatus::Refused);
+    let letters = repository.corrections_of(company, document).await.unwrap();
+    assert_eq!(letters.len(), 2);
+    assert!(
+        repository
+            .corrections_of(other_company, document)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        repository
+            .event_history(company, first.id())
+            .await
+            .unwrap()
+            .len(),
+        2,
+        "recorded and answered"
+    );
+
+    // Numbers: the document holds number 7 of series 1 in homologation.
+    let homologation = FiscalEnvironment::Homologation;
+    let used = |series, first, last, environment| {
+        repository.number_is_used(company, environment, series, first, last)
+    };
+    assert!(used(1, 7, 7, homologation).await.unwrap());
+    assert!(used(1, 5, 9, homologation).await.unwrap());
+    assert!(!used(1, 8, 20, homologation).await.unwrap());
+    assert!(!used(2, 7, 7, homologation).await.unwrap());
+    assert!(!used(1, 7, 7, FiscalEnvironment::Production).await.unwrap());
+    assert!(
+        !repository
+            .number_is_used(other_company, homologation, 1, 7, 7)
+            .await
+            .unwrap()
+    );
+
+    // Invalidations are listed newest first, for their company only.
+    let range = |first, last| {
+        FiscalEventSubject::invalidation(
+            1,
+            first,
+            last,
+            homologation,
+            "Numeração pulada por falha do sistema",
+        )
+        .unwrap()
+    };
+    for (low, high) in [(10, 12), (20, 20)] {
+        let invalidation = event(company, range(low, high));
+        repository
+            .record_event(
+                &invalidation,
+                &audit(&invalidation, AuditAction::Created, Vec::new()),
+            )
+            .await
+            .unwrap();
+    }
+    let listed = repository.invalidations(company, 10).await.unwrap();
+    assert_eq!(listed.len(), 2);
+    assert!(matches!(
+        listed[0].subject(),
+        FiscalEventSubject::Invalidation { first: 20, .. }
+    ));
+    assert_eq!(repository.invalidations(company, 1).await.unwrap().len(), 1);
+    assert!(
+        repository
+            .invalidations(other_company, 10)
+            .await
+            .unwrap()
+            .is_empty()
     );
 }

@@ -3,7 +3,8 @@ use std::sync::{Arc, Mutex};
 use conta_verde_application::{FiscalDocumentRepository, RepositoryError, ensure_audit_describes};
 use conta_verde_domain::{
     AuditEntity, AuditEntry, AuditRecord, CompanyId, FiscalDocument, FiscalDocumentId,
-    FiscalDocumentKind, FiscalDocumentStatus, FiscalFile, FiscalFileKind, FiscalOrigin,
+    FiscalDocumentKind, FiscalDocumentStatus, FiscalEnvironment, FiscalEvent, FiscalEventId,
+    FiscalEventStatus, FiscalEventSubject, FiscalFile, FiscalFileKind, FiscalOrigin,
 };
 
 use crate::memory_audit::AuditLog;
@@ -19,6 +20,7 @@ pub struct InMemoryFiscalDocumentRepository {
 struct DocumentState {
     documents: Vec<FiscalDocument>,
     files: Vec<FiscalFile>,
+    events: Vec<FiscalEvent>,
     audit: AuditLog,
 }
 
@@ -182,6 +184,158 @@ impl FiscalDocumentRepository for InMemoryFiscalDocumentRepository {
             .history(company_id, AuditEntity::FiscalDocument, id.as_uuid()))
     }
 
+    async fn record_event(
+        &self,
+        event: &FiscalEvent,
+        audit: &AuditEntry,
+    ) -> Result<(), RepositoryError> {
+        ensure_audit_describes(audit, event)?;
+        let mut state = self.state.lock().expect("repository lock poisoned");
+        if event.status() != FiscalEventStatus::Sent {
+            return Err(RepositoryError::Storage(
+                "an event is recorded before it is answered".to_owned(),
+            ));
+        }
+        if state.events.iter().any(|stored| stored.id() == event.id()) {
+            return Err(RepositoryError::Storage(
+                "the fiscal event already exists".to_owned(),
+            ));
+        }
+        if let FiscalEventSubject::Correction {
+            document, sequence, ..
+        } = event.subject()
+        {
+            if !state
+                .documents
+                .iter()
+                .any(|stored| stored.company_id() == event.company_id() && stored.id() == *document)
+            {
+                return Err(RepositoryError::NotFound);
+            }
+            let taken = state.events.iter().any(|stored| {
+                stored.company_id() == event.company_id()
+                    && matches!(stored.subject(), FiscalEventSubject::Correction { document: other, sequence: place, .. } if other == document && place == sequence)
+            });
+            if taken {
+                return Err(RepositoryError::FiscalDocumentChanged);
+            }
+        }
+        state.events.push(event.clone());
+        state.audit.record(audit);
+        Ok(())
+    }
+
+    async fn settle_event(
+        &self,
+        event: &FiscalEvent,
+        audit: &AuditEntry,
+    ) -> Result<(), RepositoryError> {
+        ensure_audit_describes(audit, event)?;
+        let mut state = self.state.lock().expect("repository lock poisoned");
+        let stored = state
+            .events
+            .iter_mut()
+            .find(|stored| stored.company_id() == event.company_id() && stored.id() == event.id())
+            .ok_or(RepositoryError::NotFound)?;
+        if stored.status() != FiscalEventStatus::Sent {
+            return Err(RepositoryError::FiscalDocumentChanged);
+        }
+        // Only the answer is written: what was asked is the record and is never written again.
+        *stored = stored.clone().restored(
+            event.status(),
+            event.protocol().map(str::to_owned),
+            event.refusal().cloned(),
+            event.xml(),
+        );
+        state.audit.record(audit);
+        Ok(())
+    }
+
+    async fn event_history(
+        &self,
+        company_id: CompanyId,
+        id: FiscalEventId,
+    ) -> Result<Vec<AuditRecord>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        Ok(state
+            .audit
+            .history(company_id, AuditEntity::FiscalEvent, id.as_uuid()))
+    }
+
+    async fn find_event(
+        &self,
+        company_id: CompanyId,
+        id: FiscalEventId,
+    ) -> Result<Option<FiscalEvent>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        Ok(state
+            .events
+            .iter()
+            .find(|stored| stored.company_id() == company_id && stored.id() == id)
+            .cloned())
+    }
+
+    async fn corrections_of(
+        &self,
+        company_id: CompanyId,
+        id: FiscalDocumentId,
+    ) -> Result<Vec<FiscalEvent>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        let mut letters: Vec<FiscalEvent> = state
+            .events
+            .iter()
+            .filter(|stored| {
+                stored.company_id() == company_id
+                    && matches!(stored.subject(), FiscalEventSubject::Correction { document, .. } if *document == id)
+            })
+            .cloned()
+            .collect();
+        letters.sort_by_key(|letter| match letter.subject() {
+            FiscalEventSubject::Correction { sequence, .. } => *sequence,
+            FiscalEventSubject::Invalidation { .. } => 0,
+        });
+        Ok(letters)
+    }
+
+    async fn invalidations(
+        &self,
+        company_id: CompanyId,
+        limit: usize,
+    ) -> Result<Vec<FiscalEvent>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        let mut found: Vec<FiscalEvent> = state
+            .events
+            .iter()
+            .filter(|stored| {
+                stored.company_id() == company_id
+                    && matches!(stored.subject(), FiscalEventSubject::Invalidation { .. })
+            })
+            .cloned()
+            .collect();
+        found.reverse();
+        found.truncate(limit);
+        Ok(found)
+    }
+
+    async fn number_is_used(
+        &self,
+        company_id: CompanyId,
+        environment: FiscalEnvironment,
+        series: u16,
+        first: u32,
+        last: u32,
+    ) -> Result<bool, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        Ok(state.documents.iter().any(|stored| {
+            stored.company_id() == company_id
+                && stored.environment() == environment
+                && stored.authorization().is_some_and(|authorization| {
+                    authorization.series() == series
+                        && (first..=last).contains(&authorization.number())
+                })
+        }))
+    }
+
     async fn save_file(&self, file: &FiscalFile) -> Result<(), RepositoryError> {
         let mut state = self.state.lock().expect("repository lock poisoned");
         if !state.documents.iter().any(|stored| {
@@ -298,6 +452,17 @@ mod tests {
             &entry_seed,
             &seed,
             &fiscal,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn keeps_fiscal_events() {
+        contract::fiscal_events_are_kept(
+            &InMemoryFiscalDocumentRepository::default(),
+            CompanyId::generate(),
+            CompanyId::generate(),
+            SaleId::generate(),
         )
         .await;
     }

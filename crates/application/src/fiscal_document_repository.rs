@@ -2,7 +2,8 @@ use std::future::Future;
 
 use conta_verde_domain::{
     AuditEntry, AuditRecord, CompanyId, FiscalDocument, FiscalDocumentId, FiscalDocumentKind,
-    FiscalDocumentStatus, FiscalFile, FiscalFileKind, FiscalOrigin,
+    FiscalDocumentStatus, FiscalEnvironment, FiscalEvent, FiscalEventId, FiscalFile,
+    FiscalFileKind, FiscalOrigin,
 };
 
 use crate::RepositoryError;
@@ -82,4 +83,58 @@ pub trait FiscalDocumentRepository: Send + Sync {
         id: FiscalDocumentId,
         kind: FiscalFileKind,
     ) -> impl Future<Output = Result<Option<FiscalFile>, RepositoryError>> + Send;
+
+    /// Records an event **before** the gateway is asked, as `sent`. `FiscalDocumentChanged` when the document already
+    /// has a letter in that place of its sequence (someone else took the number): the caller reads again.
+    fn record_event(
+        &self,
+        event: &FiscalEvent,
+        audit: &AuditEntry,
+    ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
+
+    /// Writes the answer to an event that is still `sent`, once: `NotFound` when the company has no such event,
+    /// `FiscalDocumentChanged` when it was settled already. What was asked is never written again.
+    fn settle_event(
+        &self,
+        event: &FiscalEvent,
+        audit: &AuditEntry,
+    ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
+
+    /// What was recorded about the event, oldest first. Empty for another company's.
+    fn event_history(
+        &self,
+        company_id: CompanyId,
+        id: FiscalEventId,
+    ) -> impl Future<Output = Result<Vec<AuditRecord>, RepositoryError>> + Send;
+
+    fn find_event(
+        &self,
+        company_id: CompanyId,
+        id: FiscalEventId,
+    ) -> impl Future<Output = Result<Option<FiscalEvent>, RepositoryError>> + Send;
+
+    /// The correction letters of a document, by their place in its sequence.
+    fn corrections_of(
+        &self,
+        company_id: CompanyId,
+        id: FiscalDocumentId,
+    ) -> impl Future<Output = Result<Vec<FiscalEvent>, RepositoryError>> + Send;
+
+    /// The invalidations of the company, newest first, at most `limit`.
+    fn invalidations(
+        &self,
+        company_id: CompanyId,
+        limit: usize,
+    ) -> impl Future<Output = Result<Vec<FiscalEvent>, RepositoryError>> + Send;
+
+    /// Whether a document of the company, authorized or cancelled, holds a number of the range in this series and
+    /// environment: a number in use is never invalidated.
+    fn number_is_used(
+        &self,
+        company_id: CompanyId,
+        environment: FiscalEnvironment,
+        series: u16,
+        first: u32,
+        last: u32,
+    ) -> impl Future<Output = Result<bool, RepositoryError>> + Send;
 }

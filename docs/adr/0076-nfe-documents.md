@@ -18,7 +18,7 @@ its own, and the roadmap item "NF-e" is ticked only when the third lands:
 |----|---------------|
 | **4a, the store** (merged) | `FiscalDocument` and its state machine in `domain`, the `FiscalDocumentRepository` port, both adapters, the migration, files in the `BlobStore` (`BlobId`), contract tests |
 | **4b, issuing** | `FiscalDocumentService`: issue from a sale, refresh, send again, cancel (with the period lock), download the files; the poll; the routes under `/fiscal/documents`; the certificate and Simples-only checks |
-| **4c, events** | the correction letter and the invalidation of numbers (their tables, their file kind, record-before-send) |
+| **4c, events** | the correction letter and the invalidation of numbers: `fiscal_events`, `FiscalEvent`, record-before-send, the routes |
 | **4d, the package and the screens** | `fiscal.csv` and the XML/PDF files in the accountant's package, the documents page and its actions |
 
 This ADR records the decisions of all four so that each pull request can be read against it; the sections say which pull request
@@ -127,16 +127,27 @@ already recorded does not write it again.
 - **Cancel**: queries first (a gateway that already cancelled it says so and the product follows), then asks the gateway with the
   reason (15 to 255 characters, checked by the domain before the call), and marks the document `cancelled` with the cancellation's XML.
   A refusal (`Refused`) is `422` with the authority's text and changes nothing. **Closed month: `409 PeriodLocked`**.
-- **Correction letter**: an event of an authorized document with a text of 15 to 1000 characters and a sequence of 1 to 20, **recorded
-  before it is sent** as `sent`, then `accepted` with the protocol and the XML or `refused` with the text. A letter left `sent` after
-  an `Unavailable` is **never sent again by the product**: the person sees it, and the gateway's own record is the truth (ADR 0075: events are
-  not idempotent). The deadline (720 hours) and the limit of 20 are the authority's; the product refuses a 21st by its own count only
-  because the sequence has to be a number from 1 to 20.
-- **Invalidation** is a record of a range of numbers of a series (`FiscalInvalidation`: series, first, last, reason of at least 15
-  characters, the outcome), never edited and **recorded as `sent` before the call**, as the letter is. **Closed month**: judged by the
-  day it is asked, since a range has no document: the lock's rule for an invalidation is "the issue day of any document in the range
-  on or before the lock refuses"; a range with no document of ours is allowed. (**Verify with an accountant** whether a closed month
-  should ever allow it.)
+- **Events are recorded before the gateway is asked** (`fiscal_events`, one table, `FiscalEvent` in `domain`): a row with status
+  `sent` is written, then the gateway is called, then the row is **settled once** to `accepted` (with the protocol and the
+  authority's XML) or `refused` (with the authority's words). A settled event never changes, and no event is deleted (a trigger
+  holds both). Its content (what was asked, by whom) is never written again by an adapter; only the answer is.
+  **An answer that never came leaves the event `sent` and the product never sends it again** (ADR 0075: events are not idempotent
+  at the authority); the person sees it and the gateway's own record is the truth. The XML of an event is kept in the `BlobStore`
+  under the event's own `blob_id` (not in `fiscal_files`, whose rows are a document's), downloaded at
+  `GET .../fiscal/events/{id}/file`.
+- **Correction letter** (`POST .../documents/{id}/corrections`): only for an `authorized` document; text of 15 to 1000
+  characters on one line; its place in the document's sequence is `1 + the letters so far`, **at most 20, refused ones counted**
+  (the unique index on `(company, document, sequence)` means two writers cannot both take number 3; the loser is told it
+  changed); **a new letter waits while one is still `sent`**. The authority's deadline (720 hours) and rules are its own to
+  enforce; a refusal is kept and told (`422` with the code and text). A letter changes no figure, so a closed month does not
+  refuse it. Nothing here asks the authority which sequence number it has: the gateway assigns it.
+- **Invalidation** (`POST .../fiscal/invalidations`): a series (1 to 999), a range of numbers (first to last, at most
+  999,999,999) and a reason of 15 to 255 characters, in **the environment the company issues in now**. **A number a document of
+  the company holds in that series and environment (authorized or cancelled) is never invalidated** (`422`): that is the rule
+  that stands in for the period lock, since a range has no document of its own to judge by and an invalidation of a number that
+  was used would be wrong at the authority too; a range none of whose numbers we hold changes no figure of any closed month.
+  (**Verify with an accountant** whether a closed month should also refuse an invalidation of numbers the company never used.)
+  The company's invalidations are listed newest first (the latest 100).
 
 ### The package and the screens (4d)
 
