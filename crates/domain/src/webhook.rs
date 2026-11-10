@@ -231,7 +231,8 @@ fn clean_url(raw: &str, allow_private_targets: bool) -> Result<String, DomainErr
             Ok(address) if is_blocked_address(address) => return Err(refused()),
             Ok(_) => {}
             Err(_) => {
-                let lower = host.to_ascii_lowercase();
+                // A trailing dot names the same host.
+                let lower = host.trim_end_matches('.').to_ascii_lowercase();
                 let is_name = !lower.is_empty()
                     && lower
                         .chars()
@@ -292,6 +293,19 @@ fn is_blocked_v4(address: Ipv4Addr) -> bool {
 
 fn is_blocked_v6(address: Ipv6Addr) -> bool {
     let segments = address.segments();
+    // `::a.b.c.d` (IPv4-compatible, deprecated) carries an IPv4 in its last 32 bits: it is judged as that one.
+    if segments[..6].iter().all(|segment| *segment == 0)
+        && !address.is_unspecified()
+        && !address.is_loopback()
+    {
+        let [high, low] = [segments[6], segments[7]];
+        return is_blocked_v4(Ipv4Addr::new(
+            (high >> 8) as u8,
+            high as u8,
+            (low >> 8) as u8,
+            low as u8,
+        ));
+    }
     address.is_unspecified()
         || address.is_loopback()
         || address.is_multicast()
@@ -302,6 +316,11 @@ fn is_blocked_v6(address: Ipv6Addr) -> bool {
         || (segments[0] == 0x2001 && segments[1] == 0x0db8)
         || (segments[0] == 0x0064 && segments[1] == 0xff9b)
         || segments[0] == 0x2002
+        // Site-local fec0::/10, discard 100::/64, Teredo 2001::/32 and the SIIT range ::ffff:0:0:0/96.
+        || (segments[0] & 0xffc0) == 0xfec0
+        || (segments[0] == 0x0100 && segments[1..4].iter().all(|segment| *segment == 0))
+        || (segments[0] == 0x2001 && segments[1] == 0)
+        || (segments[..4].iter().all(|segment| *segment == 0) && segments[4] == 0xffff && segments[5] == 0)
 }
 
 /// Where a delivery stands.
@@ -412,6 +431,7 @@ mod tests {
             "https://exa mple.com/x",
             "https://localhost/x",
             "https://a.localhost/x",
+            "https://localhost./x",
             "https://127.0.0.1/x",
             "https://10.1.2.3/x",
             "https://169.254.169.254/latest/meta-data",
@@ -464,6 +484,12 @@ mod tests {
             "2001:db8::1",
             "64:ff9b::7f00:1",
             "2002:7f00:1::1",
+            "::7f00:1",
+            "::a00:1",
+            "fec0::1",
+            "100::1",
+            "2001::1",
+            "64:ff9b:1::1",
         ];
         for text in blocked {
             assert!(is_blocked_address(text.parse().unwrap()), "{text}");

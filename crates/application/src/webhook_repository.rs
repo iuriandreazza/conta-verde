@@ -127,8 +127,9 @@ pub trait WebhookRepository: Send + Sync {
         now: i64,
     ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
 
-    /// Puts a delivery of the company back to pending with no tries, to be sent again by hand. `None` when the company has no
-    /// such delivery of that subscription.
+    /// Puts a delivery of the company that is **not pending** (delivered, or given up on) back to pending with no tries, to be
+    /// sent again by hand: a pending one has a job of its own, and a second would send it twice. `None` when the company has no
+    /// such delivery of that subscription, or it is pending.
     fn reset_delivery(
         &self,
         company_id: CompanyId,
@@ -136,6 +137,14 @@ pub trait WebhookRepository: Send + Sync {
         id: WebhookDeliveryId,
         now: i64,
     ) -> impl Future<Output = Result<Option<WebhookDelivery>, RepositoryError>> + Send;
+
+    /// The pending deliveries nobody has touched since `before`: a retry waits at most an hour and every try writes the delivery, so
+    /// one that is older than that has **no job** (a failure between making it and queuing it). Oldest first.
+    fn stale_pending(
+        &self,
+        before: i64,
+        limit: usize,
+    ) -> impl Future<Output = Result<Vec<WebhookDelivery>, RepositoryError>> + Send;
 
     /// Newest first.
     fn list_deliveries(

@@ -333,6 +333,22 @@ where
                 break;
             };
             let now = now_seconds.saturating_mul(1000);
+            // A worker that died on this job every time it tried never got to say so: it has had its tries.
+            if job.attempts > job.kind.max_attempts() {
+                if let Some(id) = job
+                    .args
+                    .first()
+                    .and_then(|text| Uuid::parse_str(text).ok())
+                    .map(WebhookDeliveryId::from_uuid)
+                {
+                    self.give_up(id, now).await?;
+                }
+                self.queue
+                    .fail(job.id, "gave up after repeated crashes", None)
+                    .await?;
+                report.dead += 1;
+                continue;
+            }
             let delivery_id = job
                 .args
                 .first()
@@ -363,6 +379,46 @@ where
             }
         }
         Ok(report)
+    }
+
+    /// Queues again the pending deliveries that have no job (a failure between making a delivery and queuing it left them): the
+    /// ones nobody has written to for two hours, longer than any wait of a retry. Each is written to, so it is not queued again
+    /// next hour. Gives how many were queued.
+    pub async fn requeue_stale(&self, now: i64) -> Result<usize, ApplicationError> {
+        const STALE_MILLIS: i64 = 2 * 3_600_000;
+        let stale = self
+            .repository
+            .stale_pending(now - STALE_MILLIS, 100)
+            .await?;
+        for delivery in &stale {
+            self.enqueue(delivery, now).await?;
+            self.repository
+                .record_attempt(
+                    delivery.id,
+                    DeliveryStatus::Pending,
+                    delivery.attempts,
+                    delivery.last_status,
+                    delivery.last_error.as_deref(),
+                    now,
+                )
+                .await?;
+        }
+        Ok(stale.len())
+    }
+
+    /// Whether any subscription of the company wants an event of this kind: one small read, so that a company with no webhooks
+    /// costs a write only that.
+    pub async fn is_wanted(
+        &self,
+        company_id: CompanyId,
+        kind: WebhookEventKind,
+    ) -> Result<bool, ApplicationError> {
+        Ok(self
+            .repository
+            .list(company_id)
+            .await?
+            .iter()
+            .any(|subscription| subscription.wants(kind)))
     }
 
     /// Deletes what is older than 30 days from the log.

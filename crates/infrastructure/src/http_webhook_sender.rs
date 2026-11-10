@@ -208,6 +208,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_status_that_is_not_http_is_a_failure_with_no_code_to_store() {
+        for status in [0, 99, 600, 700, 999] {
+            let outcome = SendOutcome::answered(status);
+            assert_eq!(outcome.status, None, "{status}");
+            assert!(!outcome.is_success(), "{status}");
+        }
+        assert_eq!(SendOutcome::answered(503).status, Some(503));
+        assert_eq!(SendOutcome::delivered(204).status, Some(204));
+    }
+
+    #[test]
     fn base64_is_the_standard_alphabet_with_padding() {
         assert_eq!(base64(b""), "");
         assert_eq!(base64(b"f"), "Zg==");
@@ -220,7 +231,7 @@ mod tests {
 
     #[test]
     fn the_signature_is_v1_and_the_base64_of_the_hmac_of_id_timestamp_and_body() {
-        // The vector of the Standard Webhooks specification's reference implementation, with the key as plain text.
+        // The key is the secret's own text; the layout of the header is Standard Webhooks', whose libraries expect a base64 key.
         let signature = webhook_signature("secret-key", "msg_1", 1_700_000_000, "{\"a\":1}");
         assert!(signature.starts_with("v1,"));
         let mut mac = Hmac::<Sha256>::new_from_slice(b"secret-key").unwrap();

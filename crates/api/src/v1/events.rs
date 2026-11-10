@@ -67,6 +67,26 @@ where
 {
     async fn tell(&self, event: DomainEvent) -> Result<(), String> {
         let now = self.clock.now();
+        // A company that has no subscription for this kind costs this one read and nothing else: no reference, no entry, no
+        // product (a sale of a hundred lines would otherwise read a hundred products).
+        let kind = match &event {
+            DomainEvent::Sale { kind, .. } => *kind,
+            DomainEvent::ChargePaid(_) => WebhookEventKind::ChargePaid,
+            DomainEvent::StockMoved { .. } => WebhookEventKind::StockBelowMinimum,
+        };
+        let company_id = match &event {
+            DomainEvent::Sale { sale, .. } => sale.company_id(),
+            DomainEvent::ChargePaid(charge) => charge.company_id(),
+            DomainEvent::StockMoved { company_id, .. } => *company_id,
+        };
+        if !self
+            .webhooks
+            .is_wanted(company_id, kind)
+            .await
+            .map_err(|error| error.to_string())?
+        {
+            return Ok(());
+        }
         match event {
             DomainEvent::Sale { kind, sale } => {
                 let reference = self

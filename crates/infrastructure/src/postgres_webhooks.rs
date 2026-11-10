@@ -366,7 +366,7 @@ impl WebhookRepository for PostgresWebhookRepository {
         let row = sqlx::query(
             "UPDATE webhook_deliveries SET status = 'pending', attempts = 0, last_status = NULL, last_error = NULL, \
                  delivered_at = NULL, updated_at = $4 \
-             WHERE id = $1 AND company_id = $2 AND subscription_id = $3 \
+             WHERE id = $1 AND company_id = $2 AND subscription_id = $3 AND status <> 'pending' \
              RETURNING id, company_id, subscription_id, event_id, kind, payload, status, attempts, last_status, \
                  last_error, created_at, updated_at, delivered_at",
         )
@@ -378,6 +378,22 @@ impl WebhookRepository for PostgresWebhookRepository {
         .await
         .map_err(storage_error)?;
         row.as_ref().map(delivery_from_row).transpose()
+    }
+
+    async fn stale_pending(
+        &self,
+        before: i64,
+        limit: usize,
+    ) -> Result<Vec<WebhookDelivery>, RepositoryError> {
+        let rows = sqlx::query(&format!(
+            "{SELECT_DELIVERIES} WHERE status = 'pending' AND updated_at < $1 ORDER BY updated_at, id LIMIT $2"
+        ))
+        .bind(before)
+        .bind(i64::try_from(limit).unwrap_or(i64::MAX))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        rows.iter().map(delivery_from_row).collect()
     }
 
     async fn list_deliveries(

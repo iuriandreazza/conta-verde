@@ -16,7 +16,7 @@ export function WebhookSecret({ secret, title }: { secret: string; title: string
       </p>
       <p className="muted">
         Cada entrega leva os cabeçalhos <code>Webhook-Id</code>, <code>Webhook-Timestamp</code> e <code>Webhook-Signature</code>
-        (<code>v1,</code> e o HMAC-SHA256 de <code>id.timestamp.corpo</code> em base64, com este texto como chave). Verifique a assinatura, recuse
+        (<code>v1,</code> e o HMAC-SHA256 de <code>id.timestamp.corpo</code> em base64, com o texto deste segredo como chave, tal qual está). Verifique a assinatura, recuse
         timestamps com mais de cinco minutos e guarde os ids já vistos.
       </p>
     </section>

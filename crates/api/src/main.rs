@@ -1107,10 +1107,13 @@ async fn run_webhook_worker<R, C, Q, S>(
             Err(error) => tracing::error!(%error, "sending webhooks failed"),
         }
         passes += 1;
-        if passes.is_multiple_of(1800)
-            && let Err(error) = service.prune(now.saturating_mul(1000)).await
-        {
-            tracing::error!(%error, "pruning the webhook log failed");
+        if passes.is_multiple_of(1800) {
+            if let Err(error) = service.prune(now.saturating_mul(1000)).await {
+                tracing::error!(%error, "pruning the webhook log failed");
+            }
+            if let Err(error) = service.requeue_stale(now.saturating_mul(1000)).await {
+                tracing::error!(%error, "queuing the webhook deliveries that had no job failed");
+            }
         }
     }
 }

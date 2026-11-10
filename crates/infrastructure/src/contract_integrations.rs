@@ -819,6 +819,51 @@ pub async fn runs_webhooks<R, C, Q, S>(
     assert_eq!(service.run_due(at, 50, &healthy).await.unwrap().done, 1);
     assert_eq!(healthy.sent()[0].event_id, dead);
 
+    // A delivery that is pending has a job of its own: it cannot be sent again by hand, and one that was stored without a job (a
+    // failure between making it and queuing it) is queued again once it is old enough, and only once.
+    let waiting = Uuid::new_v4();
+    service
+        .publish(
+            company,
+            waiting,
+            WebhookEventKind::SaleCompleted,
+            &body,
+            at * 1000,
+        )
+        .await
+        .unwrap();
+    let log = service
+        .deliveries(company, subscription.id(), None, None)
+        .await
+        .unwrap();
+    let pending_id = log.items.iter().find(|d| d.event_id == waiting).unwrap().id;
+    assert_eq!(
+        service
+            .redeliver(company, subscription.id(), pending_id, at * 1000)
+            .await
+            .unwrap_err(),
+        ApplicationError::WebhookDeliveryNotFound
+    );
+    // The job it has is the queue's to run; one the queue lost is made again by the pass that looks for old pending ones.
+    assert_eq!(service.requeue_stale(at * 1000 + 60_000).await.unwrap(), 0);
+    assert!(
+        service
+            .requeue_stale(at * 1000 + 3 * 3_600_000)
+            .await
+            .unwrap()
+            >= 1
+    );
+    assert_eq!(
+        service
+            .requeue_stale(at * 1000 + 3 * 3_600_000)
+            .await
+            .unwrap(),
+        0
+    );
+    let drained = InMemoryWebhookSender::default();
+    service.run_due(at + 3 * 3_600, 50, &drained).await.unwrap();
+    assert!(drained.sent().iter().any(|sent| sent.event_id == waiting));
+
     // The secret may be typed (and is never given back) or made again: the one it replaces signs for a day more.
     let typed = "my-own-secret-123";
     assert_eq!(

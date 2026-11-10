@@ -104,7 +104,8 @@ function DeliveryLog({ companyId, subscription, canWrite, refresh }: { companyId
                   <td>{delivery.last_error ?? (delivery.last_status ? `Resposta ${delivery.last_status}` : "—")}</td>
                   <td>{formatMoment(delivery.created_at)}</td>
                   <td>
-                    {canWrite && (
+                    {/* A pending one has a retry of its own: a second would send it twice. */}
+                    {canWrite && delivery.status !== "pending" && (
                       <Button
                         type="button"
                         variant="ghost"
@@ -177,7 +178,7 @@ function SecretPanel({ companyId, subscription, onMade }: { companyId: string; s
         className="form-actions"
         onSubmit={(event: FormEvent) => {
           event.preventDefault();
-          void replace(typed);
+          void replace(typed.trim());
         }}
       >
         <label>
@@ -316,7 +317,14 @@ export function WebhooksPage() {
           </Button>
         </div>
       )}
-      {made && <WebhookSecret secret={made} title="Novo segredo" />}
+      {made && (
+        <>
+          <WebhookSecret secret={made} title="Novo segredo" />
+          <Button type="button" variant="ghost" className="btn-small" onClick={() => setMade(null)}>
+            Já copiei o segredo
+          </Button>
+        </>
+      )}
       <section className="card list-card">
         <h2>Destinos</h2>
         <Notice message={error} />

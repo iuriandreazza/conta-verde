@@ -3,6 +3,10 @@ use std::future::Future;
 use conta_verde_domain::SecretText;
 use uuid::Uuid;
 
+fn valid_status(status: u16) -> Option<u16> {
+    (100..=599).contains(&status).then_some(status)
+}
+
 /// What a delivery says when it is sent: the adapter signs it with the secrets and posts it ([ADR 0088]).
 pub struct Outgoing<'a> {
     pub url: &'a str,
@@ -37,15 +41,19 @@ pub struct SendOutcome {
 impl SendOutcome {
     pub fn delivered(status: u16) -> Self {
         Self {
-            status: Some(status),
+            status: valid_status(status),
             error: None,
         }
     }
 
     pub fn answered(status: u16) -> Self {
-        Self {
-            status: Some(status),
-            error: Some(format!("the subscriber answered {status}")),
+        match valid_status(status) {
+            Some(status) => Self {
+                status: Some(status),
+                error: Some(format!("the subscriber answered {status}")),
+            },
+            // A code outside 100 to 599 is not HTTP: the log has no place for it, and the try still counts.
+            None => Self::failed("the subscriber answered with a status that is not HTTP"),
         }
     }
 

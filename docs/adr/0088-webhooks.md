@@ -64,9 +64,17 @@ by hand). The list only grows; a client ignores a type it does not know.
   never read or kept.** The log is paged newest first, shown in the web app and kept **30 days** (an hourly prune in each worker).
 - It is sent as a `POST` of the body with `Webhook-Id` (the event's id, the same on every try), `Webhook-Timestamp` (Unix seconds,
   new on every try) and `Webhook-Signature`: `v1,` and the base64 of the HMAC-SHA256 of `{id}.{timestamp}.{body}` under the secret's
-  own text, **the scheme of the Standard Webhooks specification** (several values separated by a space while a replaced secret still
-  counts). Replay protection is the receiver's, and the document says how: verify in constant time, refuse a timestamp more than
+  own text, **the headers and the layout of the Standard Webhooks specification, with one difference said plainly: the key is the
+  secret's own text** (the specification's libraries take a base64 key after `whsec_`, so with one of them the person passes the
+  base64 of the text, or computes the HMAC by hand: one line in any language). Several values are separated by a space while a
+  replaced secret still counts. Replay protection is the receiver's, and the document says how: verify in constant time, refuse a timestamp more than
   five minutes off, remember the ids. Success is a `2xx` within **10 seconds**.
+- **A delivery that was made but never queued** (a failure between the two writes) is queued again by the hourly pass of each worker:
+  a pending delivery nobody has written to for two hours has no job, since a retry waits an hour at most and every try writes it.
+  **A pending delivery cannot be sent again by hand** (it has a job of its own), and a job that was taken more than the kind allows
+  (a worker that died on it every time) is given up on, as e-mail's is.
+- **A company with no subscription for a kind** costs the write one small read (`is_wanted`) and nothing else: no reference, no
+  entry, no product is read for an event nobody wants.
 - **Retries go through the job queue** ([ADR 0059](0059-job-queue.md)): `JobKind::DeliverWebhook` carries only the **delivery id**.
   The attempts of a kind are now the kind's (`JobKind::max_attempts`: 5 for e-mail, **15 for webhooks, about nine hours** with the
   waits of 1, 2, 4, 8, 16, 32 and then 60 minutes), the runner's crash guard uses it, and the `jobs.kind` CHECK was widened by a
@@ -110,6 +118,8 @@ signatures, the log's pages and its prune), run on **both adapters**, and `claim
   additive change to `v1` for a later step.
 - Adding an event means a variant of `WebhookEventKind`, the `CHECK`s of two tables, a place in the adapter that raises it and its
   type in the document.
+- The body of a `sale.*` event is the sale as the write that raised it had it: the status is the news, and a concurrent edit of the
+  lines of an open order may not be in it (read the sale for the rest).
 - The charge and stock adapters share the sale's wrapper; the sale's events are asserted on both adapters
   (`sales_tell_what_happens_to_them`), the charge and stock ones through the API tests (`charge.paid` once for a notice the provider
   sends twice, `stock.below_minimum` only on a crossing).

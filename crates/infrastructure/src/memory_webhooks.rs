@@ -251,7 +251,10 @@ impl WebhookRepository for InMemoryWebhookRepository {
     ) -> Result<Option<WebhookDelivery>, RepositoryError> {
         let mut state = self.state.lock().expect("repository lock poisoned");
         let Some(delivery) = state.deliveries.iter_mut().find(|d| {
-            d.id == id && d.company_id == company_id && d.subscription_id == subscription_id
+            d.id == id
+                && d.company_id == company_id
+                && d.subscription_id == subscription_id
+                && d.status != DeliveryStatus::Pending
         }) else {
             return Ok(None);
         };
@@ -262,6 +265,23 @@ impl WebhookRepository for InMemoryWebhookRepository {
         delivery.delivered_at = None;
         delivery.updated_at = now;
         Ok(Some(delivery.clone()))
+    }
+
+    async fn stale_pending(
+        &self,
+        before: i64,
+        limit: usize,
+    ) -> Result<Vec<WebhookDelivery>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        let mut stale: Vec<WebhookDelivery> = state
+            .deliveries
+            .iter()
+            .filter(|d| d.status == DeliveryStatus::Pending && d.updated_at < before)
+            .cloned()
+            .collect();
+        stale.sort_by_key(|d| (d.updated_at, d.id.as_uuid()));
+        stale.truncate(limit);
+        Ok(stale)
     }
 
     async fn list_deliveries(
