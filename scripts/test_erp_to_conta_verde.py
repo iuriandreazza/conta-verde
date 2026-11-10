@@ -123,6 +123,21 @@ class EntriesTest(unittest.TestCase):
             self.assertEqual(rows, [])
             self.assertTrue(report.counts)
 
+    def test_a_payment_fee_is_carried_as_a_discount_so_the_cash_agrees(self):
+        shares = [{"id_categoria": "c1", "valor": 100, "rateio_centro_custo": []}]
+        payments = [{"data_pagamento": "2024-02-12", "conta_financeira": {"id": "acc"},
+                     "valor_composicao": {"valor_bruto": 100, "juros": 0, "multa": 0, "desconto": 1, "taxa": 2.5}}]
+        rows, _ = self.plan(installment("i5", 100, shares=shares, payments=payments))
+        self.assertEqual((rows[0]["applied"], rows[0]["discount"]), ("100.00", "3.50"))
+
+    def test_a_lost_installment_that_was_paid_is_imported_as_paid(self):
+        shares = [{"id_categoria": "c1", "valor": 50, "rateio_centro_custo": []}]
+        detail = installment("i6", 50, status="PERDIDO", shares=shares)
+        detail["valor_pago"], detail["nao_pago"] = 50, 0
+        rows, report = self.plan(detail)
+        self.assertEqual((len(rows), rows[0]["applied"]), (1, "50.00"))
+        self.assertEqual(report.counts["lost installment that was paid in part, imported as paid"], 1)
+
     def test_two_payments_are_joined_into_one_settlement_on_the_last_day(self):
         shares = [{"id_categoria": "c1", "valor": 100, "rateio_centro_custo": []}]
         pay = lambda day, value: {"data_pagamento": day, "conta_financeira": {"id": "acc"},
@@ -158,7 +173,18 @@ class RegistersTest(unittest.TestCase):
         self.assertEqual(tool.plan_transfers([transfer], accounts, report)[0],
                          {"from": "One", "to": "Two", "amount": "12.30", "occurred_on": "2024-01-05", "note": "move"})
         openings = [{"tipo": "DESPESA", "id_conta_financeira": "a", "data_competencia": "2021-01-01", "saldo_inicial": 5}]
-        self.assertEqual(tool.plan_openings(openings, accounts, report)[0]["balance"], "-5.00")
+        self.assertEqual(tool.plan_openings(openings, accounts, {}, report)[0]["balance"], "-5.00")
+
+    def test_an_opening_after_the_first_movement_is_brought_back_to_it(self):
+        report = tool.Report()
+        openings = [{"tipo": "RECEITA", "id_conta_financeira": "a", "data_competencia": "2022-04-29", "saldo_inicial": 0}]
+        moves = tool.first_movement_days(
+            [{"bank_account": "One", "settled_on": "2021-12-01"}, {"bank_account": "One", "settled_on": ""}],
+            [{"from": "One", "to": "Two", "occurred_on": "2022-01-01"}],
+        )
+        self.assertEqual(moves, {"One": "2021-12-01", "Two": "2022-01-01"})
+        self.assertEqual(tool.plan_openings(openings, {"a": "One"}, moves, report)[0]["on"], "2021-12-01")
+        self.assertEqual(report.counts["opening balance moved back to the account's first movement"], 1)
 
 
 if __name__ == "__main__":
