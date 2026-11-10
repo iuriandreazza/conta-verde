@@ -54,9 +54,9 @@ export async function syncOrders({ woo, api, config, cursor, pending = {}, log, 
         }
       }
     } catch (error) {
+      const known = order.id in pending;
       held();
-      if (error instanceof ApiError && error.status === 409) log(`order ${order.id}: changed in the store after it was imported: ${error.code}`);
-      else log(`order ${order.id}: ${error.message}`);
+      if (!known) log(error instanceof ApiError && error.status === 409 ? `order ${order.id}: changed in the store after it was imported: ${error.code}` : `order ${order.id}: ${error.message}`);
       // A failure of the API itself (not of this order) is tried again from the same cursor.
       if (!(error instanceof ApiError) || error.status >= 500 || error.status === 429) throw error;
     }
@@ -71,6 +71,7 @@ export function orderUpdateFor({ storeId, type, sale }) {
   const orderId = orderIdOf(storeId, sale?.external_reference);
   if (orderId === null) return null;
   if (type === "sale.completed") return { orderId, from: ["processing", "on-hold", "pending"], status: "completed" };
-  if (type === "sale.cancelled") return { orderId, from: ["processing", "on-hold", "pending", "completed"], status: "cancelled" };
+  // A shipped order (`completed` in the store) is never taken back by a cancellation here: that is the person's decision there.
+  if (type === "sale.cancelled") return { orderId, from: ["processing", "on-hold", "pending"], status: "cancelled" };
   return null;
 }

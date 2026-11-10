@@ -90,7 +90,7 @@ The store's keys are in its own environment.
   signature exactly as ADR 0088 says (the key is the secret's own text, several signatures separated by a space, constant time, on
   the raw body), a timestamp within five minutes, a `Webhook-Id` not seen (the last 1,000 kept). A sale whose reference is not this
   store's (a point of sale, another store) is **accepted and ignored**. A completed sale completes its order; a cancelled one cancels
-  it; **an order already in the state asked for is left alone**, which is what ends the loop when the cancellation began in the
+  it (unless the order is already `completed` in the store: a shipped order is not taken back from here); **an order already in the state asked for is left alone**, which is what ends the loop when the cancellation began in the
   store. When the store cannot be reached the answer is `502` and the delivery is **not** remembered, so conta-verde sends it again
   (ADR 0088's nine hours of retries).
 - A `429` is waited out as `Retry-After` says (at most a minute, four tries); a failure of the API itself fails the pass, which is

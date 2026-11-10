@@ -33,9 +33,11 @@ test("a completed sale of this store completes its order, once, however often it
 });
 
 test("a cancelled sale cancels its order, and an order already in that state is left alone: the loop ends", async () => {
-  store.state.orders.push(order({ id: 1001, status: "processing" }), order({ id: 1002, status: "cancelled" }));
+  store.state.orders.push(order({ id: 1001, status: "processing" }), order({ id: 1002, status: "cancelled" }), order({ id: 1003, status: "completed" }));
   await handle(delivery({ type: "sale.cancelled", id: "m1" }));
   await handle(delivery({ type: "sale.cancelled", reference: "woocommerce:centro:1002", id: "m2" }));
+  // An order already shipped in the store is not taken back by a cancellation here.
+  await handle(delivery({ type: "sale.cancelled", reference: "woocommerce:centro:1003", id: "m3" }));
   assert.deepEqual(store.state.updates, [{ id: 1001, status: "cancelled" }]);
 });
 
