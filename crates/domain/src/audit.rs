@@ -6,8 +6,8 @@ use crate::{
     CompanyId, Contract, CostCenter, DocumentCheck, DunningPlan, FinancialEntry, FiscalDocument,
     FiscalEvent, FiscalEventSubject, FiscalSettings, InventoryCount, LineMatch, PackageSchedule,
     Party, PaymentMethod, PaymentTerm, PeriodLock, PriceList, Product, PurchaseOrder,
-    PurchaseReceipt, Quote, Recurrence, Sale, SaleReturn, Settlement, StatementLine, StockMovement,
-    StockSettings, Tag, Transfer, UserId,
+    PurchaseReceipt, Quote, ReceivedInvoice, Recurrence, Sale, SaleReturn, Settlement,
+    StatementLine, StockMovement, StockSettings, Tag, Transfer, UserId,
 };
 
 /// Who made a change. The name is a snapshot: history must keep reading the same after the user is
@@ -60,6 +60,8 @@ pub enum AuditEntity {
     FiscalSettings,
     FiscalDocument,
     FiscalEvent,
+    /// A received invoice: only what the recipient declares about it is audited ([ADR 0083]).
+    ReceivedInvoice,
 }
 
 impl AuditEntity {
@@ -95,6 +97,7 @@ impl AuditEntity {
             Self::FiscalSettings => "fiscal_settings",
             Self::FiscalDocument => "fiscal_document",
             Self::FiscalEvent => "fiscal_event",
+            Self::ReceivedInvoice => "received_invoice",
             Self::Settlement => "settlement",
             Self::Transfer => "transfer",
             Self::AccountOpening => "account_opening",
@@ -505,6 +508,20 @@ impl Audited for FiscalSettings {
 impl Audited for FiscalDocument {
     fn audit_entity(&self) -> AuditEntity {
         AuditEntity::FiscalDocument
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.id().as_uuid()
+    }
+}
+
+impl Audited for ReceivedInvoice {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::ReceivedInvoice
     }
 
     fn audit_company(&self) -> CompanyId {
@@ -1505,6 +1522,36 @@ pub fn fiscal_document_changes(
     changes_between(
         fiscal_document_fields(before),
         fiscal_document_fields(after),
+    )
+}
+
+fn received_invoice_fields(invoice: &ReceivedInvoice) -> Fields {
+    vec![
+        ("access_key", Some(invoice.access_key().as_str().to_owned())),
+        ("issuer", Some(invoice.issuer_name().to_owned())),
+        ("total", Some(invoice.total().as_decimal().to_string())),
+        ("situation", Some(invoice.situation().key().to_owned())),
+        (
+            "manifestation",
+            Some(invoice.manifestation().key().to_owned()),
+        ),
+        ("justification", invoice.justification().map(str::to_owned)),
+    ]
+}
+
+/// What the first act on a received invoice records: the invoice as it stood and the word the recipient declared.
+pub fn received_invoice_creation_changes(invoice: &ReceivedInvoice) -> Vec<FieldChange> {
+    creation_from(received_invoice_fields(invoice))
+}
+
+/// What a declaration of the recipient records: the fields that changed.
+pub fn received_invoice_changes(
+    before: &ReceivedInvoice,
+    after: &ReceivedInvoice,
+) -> Vec<FieldChange> {
+    changes_between(
+        received_invoice_fields(before),
+        received_invoice_fields(after),
     )
 }
 

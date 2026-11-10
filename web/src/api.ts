@@ -754,6 +754,32 @@ export interface IssueServiceChoices {
   special_regime: SpecialTaxRegime;
 }
 
+export type Manifestation = "none" | "awareness" | "confirmation" | "unknown" | "not_performed";
+
+/** An invoice another company issued against this one, as the gateway lists it (ADR 0083). */
+export interface ReceivedInvoice {
+  id: string;
+  access_key: string;
+  issuer_name: string;
+  issuer_document: string;
+  total: string;
+  issued_on: string;
+  situation: "authorized" | "cancelled" | "denied";
+  /** What the recipient has declared to the authority. */
+  manifestation: Manifestation;
+  /** Why "operation not performed" was declared, when this system recorded it. */
+  justification: string | null;
+}
+
+export interface ReceivedInvoicePage {
+  items: ReceivedInvoice[];
+  next_cursor: string | null;
+}
+
+export interface ReceivedInvoiceFilters {
+  manifestation: "" | Manifestation;
+}
+
 /** What is paid with one form, as a decimal string. */
 export interface ConsumerPayment {
   form: PaymentForm;
@@ -2234,6 +2260,20 @@ export const api = {
     post<FiscalDocument>(`/companies/${companyId}/fiscal/documents`, choices),
   resendFiscalDocument: (companyId: string, id: string, choices: IssueChoices) =>
     post<FiscalDocument>(`/companies/${companyId}/fiscal/documents/${id}/resend`, choices),
+  listReceivedInvoices: (companyId: string, filters: ReceivedInvoiceFilters, after?: string) => {
+    const params = new URLSearchParams();
+    if (filters.manifestation) params.set("manifestation", filters.manifestation);
+    if (after) params.set("after", after);
+    const query = params.size > 0 ? `?${params}` : "";
+    return request<ReceivedInvoicePage>(`/companies/${companyId}/fiscal/received-invoices${query}`);
+  },
+  syncReceivedInvoices: (companyId: string) =>
+    post<{ added: number }>(`/companies/${companyId}/fiscal/received-invoices/sync`),
+  manifestReceivedInvoice: (companyId: string, id: string, word: Exclude<Manifestation, "none">, justification?: string) =>
+    post<ReceivedInvoice>(`/companies/${companyId}/fiscal/received-invoices/${id}/manifest`, {
+      word,
+      ...(justification ? { justification } : {}),
+    }),
   issueConsumerDocument: (companyId: string, choices: IssueConsumerChoices) =>
     post<FiscalDocument>(`/companies/${companyId}/fiscal/consumer-documents`, choices),
   resendConsumerDocument: (companyId: string, id: string, choices: IssueConsumerChoices) =>

@@ -52,6 +52,8 @@ pub enum DomainError {
     InvalidFiscalTransition,
     /// Names the field of a fiscal document that is not valid.
     InvalidFiscalDocument(&'static str),
+    /// Names the field of a received invoice that is not valid, or the rule of the recipient's manifestation it breaks.
+    InvalidReceivedInvoice(&'static str),
     ServiceNatureHasNoCfop,
     ServiceNatureHasNoRules,
     ProductNatureHasNoServiceTerms,
@@ -235,6 +237,16 @@ impl fmt::Display for DomainError {
                 f.write_str("the fiscal document cannot move from its status to that one")
             }
             Self::InvalidFiscalDocument(field) => write!(f, "{field} of the fiscal document is not valid"),
+            Self::InvalidReceivedInvoice("situation") => {
+                f.write_str("only an authorized invoice is answered by the recipient")
+            }
+            Self::InvalidReceivedInvoice("manifestation") => f.write_str(
+                "the recipient declares awareness first and then one final word (confirmation, unknown or operation not performed); nothing follows the final word",
+            ),
+            Self::InvalidReceivedInvoice("justification") => f.write_str(
+                "only \"operation not performed\" has a reason, of 15 to 255 characters on one line, and it needs one",
+            ),
+            Self::InvalidReceivedInvoice(field) => write!(f, "{field} of the received invoice is not valid"),
             Self::ProductionNeedsCertificate => f.write_str(
                 "the production environment needs the day the A1 certificate expires",
             ),

@@ -1,9 +1,10 @@
 use std::future::Future;
 
 use conta_verde_domain::{
-    AuditEntry, AuditRecord, CalendarDate, CompanyId, FiscalDocument, FiscalDocumentId,
+    AccessKey, AuditEntry, AuditRecord, CalendarDate, CompanyId, FiscalDocument, FiscalDocumentId,
     FiscalDocumentKind, FiscalDocumentStatus, FiscalEnvironment, FiscalEvent, FiscalEventId,
-    FiscalFile, FiscalFileKind, FiscalOrigin, SaleId,
+    FiscalFile, FiscalFileKind, FiscalOrigin, Manifestation, ReceivedInvoice, ReceivedInvoiceDraft,
+    ReceivedInvoiceId, SaleId,
 };
 
 use crate::RepositoryError;
@@ -37,6 +38,36 @@ impl FiscalDocumentQuery {
         let FiscalOrigin::Sale(sale) = document.origin();
         self.status.is_none_or(|status| status == document.status())
             && self.sale.is_none_or(|wanted| wanted == sale)
+    }
+}
+
+/// What a list of received invoices is narrowed by: what the recipient has declared. Newest first by the day of issue, then
+/// the id (so the keyset cursor stays valid), which is the only order ([ADR 0083]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ReceivedInvoiceQuery {
+    pub manifestation: Option<Manifestation>,
+}
+
+impl ReceivedInvoiceQuery {
+    pub fn matches(&self, invoice: &ReceivedInvoice) -> bool {
+        self.manifestation
+            .is_none_or(|wanted| wanted == invoice.manifestation())
+    }
+}
+
+/// Where the next page of received invoices starts: after the one issued on this day with this id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReceivedInvoiceCursor {
+    pub issued_on: CalendarDate,
+    pub id: ReceivedInvoiceId,
+}
+
+impl From<&ReceivedInvoice> for ReceivedInvoiceCursor {
+    fn from(invoice: &ReceivedInvoice) -> Self {
+        Self {
+            issued_on: invoice.issued_on(),
+            id: invoice.id(),
+        }
     }
 }
 
@@ -216,4 +247,56 @@ pub trait FiscalDocumentRepository: Send + Sync {
         environment: FiscalEnvironment,
         series: u16,
     ) -> impl Future<Output = Result<u64, RepositoryError>> + Send;
+
+    /// Mirrors what the gateway lists: a received invoice the company does not have yet is added, one it has is brought up to
+    /// what the gateway says (the situation, the manifestation, the version). **Not audited**: it is the gateway's list, the way a
+    /// payment notice is a log, and what the person declares is recorded by [`record_manifestation`](Self::record_manifestation).
+    /// Returns how many were new.
+    fn mirror_received(
+        &self,
+        company_id: CompanyId,
+        invoices: &[ReceivedInvoiceDraft],
+    ) -> impl Future<Output = Result<usize, RepositoryError>> + Send;
+
+    /// The biggest gateway version among the company's received invoices, 0 when it has none: what a listing asks "newer than".
+    fn max_received_version(
+        &self,
+        company_id: CompanyId,
+    ) -> impl Future<Output = Result<u64, RepositoryError>> + Send;
+
+    fn find_received(
+        &self,
+        company_id: CompanyId,
+        id: ReceivedInvoiceId,
+    ) -> impl Future<Output = Result<Option<ReceivedInvoice>, RepositoryError>> + Send;
+
+    fn find_received_by_key(
+        &self,
+        company_id: CompanyId,
+        key: &AccessKey,
+    ) -> impl Future<Output = Result<Option<ReceivedInvoice>, RepositoryError>> + Send;
+
+    fn list_received(
+        &self,
+        company_id: CompanyId,
+        query: &ReceivedInvoiceQuery,
+        after: Option<&ReceivedInvoiceCursor>,
+        limit: usize,
+    ) -> impl Future<Output = Result<Vec<ReceivedInvoice>, RepositoryError>> + Send;
+
+    /// Writes the recipient's declaration with its audit entry, only if the invoice still has the manifestation `expected`:
+    /// `NotFound` for another company's, `FiscalDocumentChanged` when the mirror moved meanwhile.
+    fn record_manifestation(
+        &self,
+        invoice: &ReceivedInvoice,
+        expected: Manifestation,
+        audit: &AuditEntry,
+    ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
+
+    /// What was declared about the invoice, oldest first. Empty for another company's.
+    fn received_history(
+        &self,
+        company_id: CompanyId,
+        id: ReceivedInvoiceId,
+    ) -> impl Future<Output = Result<Vec<AuditRecord>, RepositoryError>> + Send;
 }

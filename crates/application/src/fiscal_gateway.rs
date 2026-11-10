@@ -2,7 +2,8 @@ use std::fmt;
 use std::future::Future;
 
 use conta_verde_domain::{
-    AccessKey, Address, Amount, CalendarDate, Decimal, FiscalSettings, IssTaxation,
+    AccessKey, Address, Amount, CalendarDate, Decimal, FiscalSettings, IssTaxation, Manifestation,
+    ReceivedInvoiceDraft,
 };
 
 /// Where the goods of an operation go, as the NF-e's layout asks (`local_destino`).
@@ -595,5 +596,31 @@ pub trait FiscalGateway: Send + Sync {
         issuer: &FiscalSettings,
         reference: &str,
         reason: &str,
+    ) -> impl Future<Output = Result<EventOutcome, GatewayError>> + Send;
+
+    /// Whether the gateway lists the invoices issued against the company and takes the recipient's manifestation. One that
+    /// does not is refused before anything is asked ([ADR 0083]).
+    fn issues_manifestation(&self) -> bool {
+        true
+    }
+
+    /// The NF-e issued against the company that the gateway holds with a version **greater than** `since_version`, in the
+    /// order of their versions, as many as the gateway gives in one pass (the caller asks again from the biggest version it
+    /// got). The gateway reads them from the authority; this only asks.
+    fn list_received_nfe(
+        &self,
+        issuer: &FiscalSettings,
+        since_version: u64,
+    ) -> impl Future<Output = Result<Vec<ReceivedInvoiceDraft>, GatewayError>> + Send;
+
+    /// Declares the recipient's word on a received invoice. The authority's refusal (a word that does not follow, a
+    /// duplicate) is an answer, not an error; **it is not idempotent**: after an `Unavailable` the caller asks the list again
+    /// before declaring anything twice.
+    fn manifest_received_nfe(
+        &self,
+        issuer: &FiscalSettings,
+        access_key: &AccessKey,
+        word: Manifestation,
+        justification: Option<&str>,
     ) -> impl Future<Output = Result<EventOutcome, GatewayError>> + Send;
 }

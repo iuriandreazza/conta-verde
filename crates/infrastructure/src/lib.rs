@@ -174,4 +174,4 @@ pub use postgres_transfers::{PostgresOpeningRepository, PostgresTransferReposito
 pub use secrets::Argon2SecretService;
 pub use smtp_email_sender::SmtpEmailSender;
 pub use stripe::StripeProvider;
-pub use webhook_signature::{hmac_sha256_hex, is_valid_signature};
+pub use webhook_signature::{constant_time_eq, hmac_sha256_hex, is_valid_signature};
