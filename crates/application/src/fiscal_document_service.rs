@@ -17,10 +17,10 @@ use crate::list_query::{clamp_limit, split_page};
 use crate::{
     ApplicationError, AuthorizedDocument, AuthorizedNfse, BlobStore, BuyerPresence, Destination,
     DocumentOutcome, EntryReferences, EventOutcome, EventQuery, FiscalDocumentCursor,
-    FiscalDocumentQuery, FiscalDocumentRepository, FiscalGateway, FiscalSettingsRepository,
-    GatewayError, NfceConsumer, NfceRequest, NfeItem, NfeRecipient, NfeRequest, NfseRecipient,
-    NfseRequest, PartyRepository, PaymentForm, ProductRepository, ReceivedInvoiceCursor,
-    ReceivedInvoiceQuery, RepositoryError, SaleRepository, SpecialTaxRegime,
+    FiscalDocumentQuery, FiscalDocumentRepository, FiscalGateway, FiscalGatewayResolver,
+    FiscalSettingsRepository, GatewayError, NfceConsumer, NfceRequest, NfeItem, NfeRecipient,
+    NfeRequest, NfseRecipient, NfseRequest, PartyRepository, PaymentForm, ProductRepository,
+    ReceivedInvoiceCursor, ReceivedInvoiceQuery, RepositoryError, SaleRepository, SpecialTaxRegime,
 };
 
 const MIN_REASON_CHARS: usize = 15;
@@ -184,7 +184,7 @@ pub struct FiscalDocumentService<D, S, P, Y, F, G, B, R> {
     parties: P,
     products: Y,
     settings: F,
-    gateway: G,
+    gateways: G,
     blobs: B,
     references: R,
 }
@@ -196,7 +196,7 @@ where
     P: PartyRepository,
     Y: ProductRepository,
     F: FiscalSettingsRepository,
-    G: FiscalGateway,
+    G: FiscalGatewayResolver,
     B: BlobStore,
     R: EntryReferences,
 {
@@ -207,7 +207,7 @@ where
         parties: P,
         products: Y,
         settings: F,
-        gateway: G,
+        gateways: G,
         blobs: B,
         references: R,
     ) -> Self {
@@ -217,15 +217,15 @@ where
             parties,
             products,
             settings,
-            gateway,
+            gateways,
             blobs,
             references,
         }
     }
 
-    /// The gateway the service asks, for what it says about itself.
-    pub fn gateway(&self) -> &G {
-        &self.gateway
+    /// Where the service finds the gateway of a company, for what it says about itself.
+    pub fn gateways(&self) -> &G {
+        &self.gateways
     }
 
     /// Asks the gateway about every document that is still waiting and was issued at or after `since_unix`, at most
@@ -338,7 +338,7 @@ where
         request: IssueNfe,
         now_unix: i64,
     ) -> Result<FiscalDocument, ApplicationError> {
-        let settings = self.ready_settings(company_id).await?;
+        let (settings, gateway) = self.ready_settings(company_id).await?;
         let sale = self.completed_sale(company_id, request.sale_id).await?;
         let origin = FiscalOrigin::Sale(sale.id());
         let live = self
@@ -378,7 +378,9 @@ where
             )
             .await?
         {
-            Persisted::Fresh(document) => self.send(company_id, actor, document, &nfe).await,
+            Persisted::Fresh(document) => {
+                self.send(&gateway, company_id, actor, document, &nfe).await
+            }
             Persisted::Existing(document) => Ok(document),
         }
     }
@@ -456,8 +458,8 @@ where
         request: IssueNfse,
         now_unix: i64,
     ) -> Result<FiscalDocument, ApplicationError> {
-        let settings = self.ready_settings(company_id).await?;
-        self.ensure_issues_nfse()?;
+        let (settings, gateway) = self.ready_settings(company_id).await?;
+        ensure_issues_nfse(&gateway)?;
         let sale = self.completed_sale(company_id, request.sale_id).await?;
         let origin = FiscalOrigin::Sale(sale.id());
         let live = self
@@ -496,7 +498,7 @@ where
             .await?
         {
             Persisted::Fresh(document) => {
-                self.number_and_send(company_id, actor, document, nfse)
+                self.number_and_send(&gateway, company_id, actor, document, nfse)
                     .await
             }
             Persisted::Existing(document) => Ok(document),
@@ -513,8 +515,8 @@ where
         request: IssueNfce,
         now_unix: i64,
     ) -> Result<FiscalDocument, ApplicationError> {
-        let settings = self.ready_settings(company_id).await?;
-        self.ensure_issues_nfce()?;
+        let (settings, gateway) = self.ready_settings(company_id).await?;
+        ensure_issues_nfce(&gateway)?;
         let sale = self.completed_sale(company_id, request.sale_id).await?;
         let origin = FiscalOrigin::Sale(sale.id());
         let live = self
@@ -552,7 +554,10 @@ where
             )
             .await?
         {
-            Persisted::Fresh(document) => self.send_nfce(company_id, actor, document, &nfce).await,
+            Persisted::Fresh(document) => {
+                self.send_nfce(&gateway, company_id, actor, document, &nfce)
+                    .await
+            }
             Persisted::Existing(document) => Ok(document),
         }
     }
@@ -569,8 +574,8 @@ where
         let stored = self
             .rejected_of(company_id, id, FiscalDocumentKind::Nfce, request.sale_id)
             .await?;
-        let settings = self.ready_settings(company_id).await?;
-        self.ensure_issues_nfce()?;
+        let (settings, gateway) = self.ready_settings(company_id).await?;
+        ensure_issues_nfce(&gateway)?;
         let issued_on = issue_day(&settings, now_unix)?;
         ensure_certificate(&settings, issued_on)?;
         self.references.ensure_open(company_id, issued_on).await?;
@@ -590,28 +595,20 @@ where
         self.documents
             .replace(&rebuilt, FiscalDocumentStatus::Rejected, &audit)
             .await?;
-        self.send_nfce(company_id, actor, rebuilt, &nfce).await
-    }
-
-    /// A gateway that does not issue NFC-e is refused before anything is written.
-    fn ensure_issues_nfce(&self) -> Result<(), ApplicationError> {
-        if self.gateway.issues_nfce() {
-            Ok(())
-        } else {
-            Err(GatewayError::Unsupported("an NFC-e through this gateway: use another one").into())
-        }
+        self.send_nfce(&gateway, company_id, actor, rebuilt, &nfce)
+            .await
     }
 
     /// Asks the gateway for the invoices issued against the company that it has not told yet (newer than the biggest version
     /// the company holds), as many passes as it takes up to a limit, and mirrors them. Returns how many are new. **The
     /// webhook wakes this up and nothing it carries is believed** ([ADR 0083]).
     pub async fn sync_received(&self, company_id: CompanyId) -> Result<usize, ApplicationError> {
-        let settings = self.ready_settings(company_id).await?;
-        self.ensure_issues_manifestation()?;
+        let (settings, gateway) = self.ready_settings(company_id).await?;
+        ensure_issues_manifestation(&gateway)?;
         let mut added = 0;
         for _ in 0..MAX_SYNC_PASSES {
             let since = self.documents.max_received_version(company_id).await?;
-            let found = self.gateway.list_received_nfe(&settings, since).await?;
+            let found = gateway.list_received_nfe(&settings, since).await?;
             if found.is_empty() {
                 break;
             }
@@ -674,12 +671,11 @@ where
         word: Manifestation,
         justification: Option<&str>,
     ) -> Result<ReceivedInvoice, ApplicationError> {
-        let settings = self.ready_settings(company_id).await?;
-        self.ensure_issues_manifestation()?;
+        let (settings, gateway) = self.ready_settings(company_id).await?;
+        ensure_issues_manifestation(&gateway)?;
         let invoice = self.get_received(company_id, id).await?;
         let declared = invoice.manifested(word, justification)?;
-        match self
-            .gateway
+        match gateway
             .manifest_received_nfe(
                 &settings,
                 invoice.access_key(),
@@ -762,30 +758,11 @@ where
         }
     }
 
-    fn ensure_issues_manifestation(&self) -> Result<(), ApplicationError> {
-        if self.gateway.issues_manifestation() {
-            Ok(())
-        } else {
-            Err(GatewayError::Unsupported(
-                "received invoices through this gateway: use another one",
-            )
-            .into())
-        }
-    }
-
-    /// A gateway that does not issue NFS-e is refused before a DPS number is taken or a document is written.
-    fn ensure_issues_nfse(&self) -> Result<(), ApplicationError> {
-        if self.gateway.issues_nfse() {
-            Ok(())
-        } else {
-            Err(GatewayError::Unsupported("an NFS-e through this gateway: use another one").into())
-        }
-    }
-
     /// Takes the DPS number the document does not have yet and sends it. A number another writer took in the meantime is
     /// refused by the unique index and a new one is asked for.
     async fn number_and_send(
         &self,
+        gateway: &G::Gateway,
         company_id: CompanyId,
         actor: &Actor,
         document: FiscalDocument,
@@ -820,7 +797,8 @@ where
             .expect("a document that was just numbered has its DPS");
         nfse.dps_series = dps.series();
         nfse.dps_number = dps.number();
-        self.send_nfse(company_id, actor, document, &nfse).await
+        self.send_nfse(gateway, company_id, actor, document, &nfse)
+            .await
     }
 
     /// Sends a rejected document again under the same id, built again from the sale as it is now: the person fixed
@@ -836,7 +814,7 @@ where
         let stored = self
             .rejected_of(company_id, id, FiscalDocumentKind::Nfe, request.sale_id)
             .await?;
-        let settings = self.ready_settings(company_id).await?;
+        let (settings, gateway) = self.ready_settings(company_id).await?;
         let issued_on = issue_day(&settings, now_unix)?;
         ensure_certificate(&settings, issued_on)?;
         self.references.ensure_open(company_id, issued_on).await?;
@@ -856,7 +834,7 @@ where
         self.documents
             .replace(&rebuilt, FiscalDocumentStatus::Rejected, &audit)
             .await?;
-        self.send(company_id, actor, rebuilt, &nfe).await
+        self.send(&gateway, company_id, actor, rebuilt, &nfe).await
     }
 
     /// Sends a rejected NFS-e again under the same id and the **same DPS number**, built again from the sale as it is now.
@@ -871,8 +849,8 @@ where
         let stored = self
             .rejected_of(company_id, id, FiscalDocumentKind::Nfse, request.sale_id)
             .await?;
-        let settings = self.ready_settings(company_id).await?;
-        self.ensure_issues_nfse()?;
+        let (settings, gateway) = self.ready_settings(company_id).await?;
+        ensure_issues_nfse(&gateway)?;
         let issued_on = issue_day(&settings, now_unix)?;
         ensure_certificate(&settings, issued_on)?;
         self.references.ensure_open(company_id, issued_on).await?;
@@ -892,7 +870,8 @@ where
         self.documents
             .replace(&rebuilt, FiscalDocumentStatus::Rejected, &audit)
             .await?;
-        self.number_and_send(company_id, actor, rebuilt, nfse).await
+        self.number_and_send(&gateway, company_id, actor, rebuilt, nfse)
+            .await
     }
 
     /// A rejected document of this kind that was made from this sale: the one a person may send again.
@@ -927,32 +906,23 @@ where
         if !document.status().is_pending() {
             return Ok(document);
         }
-        let settings = self.settings_of(company_id, &document).await?;
+        let (settings, gateway) = self.settings_of(company_id, &document).await?;
         let actor = submitter(&document);
         // "No such document" is believed only once the submission has had time to arrive.
         let unknown_is_final = now_unix - document.issued_at_unix() >= UNKNOWN_GRACE_SECONDS;
         match document.kind() {
             FiscalDocumentKind::Nfe => {
-                let outcome = self
-                    .gateway
-                    .query_nfe(&settings, &reference(&document))
-                    .await?;
+                let outcome = gateway.query_nfe(&settings, &reference(&document)).await?;
                 self.apply(company_id, &actor, document, outcome, unknown_is_final)
                     .await
             }
             FiscalDocumentKind::Nfce => {
-                let outcome = self
-                    .gateway
-                    .query_nfce(&settings, &reference(&document))
-                    .await?;
+                let outcome = gateway.query_nfce(&settings, &reference(&document)).await?;
                 self.apply(company_id, &actor, document, outcome, unknown_is_final)
                     .await
             }
             FiscalDocumentKind::Nfse => {
-                let outcome = self
-                    .gateway
-                    .query_nfse(&settings, &reference(&document))
-                    .await?;
+                let outcome = gateway.query_nfse(&settings, &reference(&document)).await?;
                 self.apply(company_id, &actor, document, outcome, unknown_is_final)
                     .await
             }
@@ -985,14 +955,11 @@ where
         self.references
             .ensure_open(company_id, document.issued_on())
             .await?;
-        let settings = self.settings_of(company_id, &document).await?;
+        let (settings, gateway) = self.settings_of(company_id, &document).await?;
         // A document the gateway already cancelled is followed, not cancelled twice.
         match document.kind() {
             FiscalDocumentKind::Nfe => {
-                let state = self
-                    .gateway
-                    .query_nfe(&settings, &reference(&document))
-                    .await?;
+                let state = gateway.query_nfe(&settings, &reference(&document)).await?;
                 if let DocumentOutcome::Cancelled { .. } = state {
                     return self
                         .follow_cancellation(company_id, actor, document, state)
@@ -1000,10 +967,7 @@ where
                 }
             }
             FiscalDocumentKind::Nfce => {
-                let state = self
-                    .gateway
-                    .query_nfce(&settings, &reference(&document))
-                    .await?;
+                let state = gateway.query_nfce(&settings, &reference(&document)).await?;
                 if let DocumentOutcome::Cancelled { .. } = state {
                     return self
                         .follow_cancellation(company_id, actor, document, state)
@@ -1011,10 +975,7 @@ where
                 }
             }
             FiscalDocumentKind::Nfse => {
-                let state = self
-                    .gateway
-                    .query_nfse(&settings, &reference(&document))
-                    .await?;
+                let state = gateway.query_nfse(&settings, &reference(&document)).await?;
                 if let DocumentOutcome::Cancelled { .. } = state {
                     return self
                         .follow_cancellation(company_id, actor, document, state)
@@ -1040,17 +1001,17 @@ where
         let event = self.record_event(company_id, actor, subject).await?;
         let answer = match document.kind() {
             FiscalDocumentKind::Nfe => {
-                self.gateway
+                gateway
                     .cancel_nfe(&settings, &reference(&document), reason)
                     .await
             }
             FiscalDocumentKind::Nfce => {
-                self.gateway
+                gateway
                     .cancel_nfce(&settings, &reference(&document), reason)
                     .await
             }
             FiscalDocumentKind::Nfse => {
-                self.gateway
+                gateway
                     .cancel_nfse(&settings, &reference(&document), reason)
                     .await
             }
@@ -1096,7 +1057,7 @@ where
                     .to_owned(),
             ));
         }
-        let settings = self.settings_of(company_id, &document).await?;
+        let (settings, gateway) = self.settings_of(company_id, &document).await?;
         let letters = self.documents.corrections_of(company_id, id).await?;
         if letters
             .iter()
@@ -1131,8 +1092,7 @@ where
             )
         })?;
         let event = self.record_event(company_id, actor, subject).await?;
-        let answer = self
-            .gateway
+        let answer = gateway
             .correct_nfe(&settings, &reference(&document), event.subject().body())
             .await;
         self.settle_event(company_id, actor, event, answer, "correction letter")
@@ -1150,7 +1110,7 @@ where
         last: u32,
         reason: &str,
     ) -> Result<FiscalEvent, ApplicationError> {
-        let settings = self.ready_settings(company_id).await?;
+        let (settings, gateway) = self.ready_settings(company_id).await?;
         let subject =
             FiscalEventSubject::invalidation(series, first, last, settings.environment(), reason)
                 .map_err(|_| {
@@ -1169,8 +1129,7 @@ where
             ));
         }
         let event = self.record_event(company_id, actor, subject).await?;
-        let answer = self
-            .gateway
+        let answer = gateway
             .invalidate_nfe_numbers(&settings, series, first, last, reason.trim())
             .await;
         self.settle_event(company_id, actor, event, answer, "invalidation")
@@ -1530,15 +1489,14 @@ where
                 if document.kind() != FiscalDocumentKind::Nfe {
                     return Ok(false);
                 }
-                let settings = self.settings_of(company_id, &document).await?;
+                let (settings, gateway) = self.settings_of(company_id, &document).await?;
                 let actor = Actor::User {
                     id: event.requested_by(),
                     name: event.requested_by_name().to_owned(),
                 };
                 // Only an answer settles an event: a gateway that cannot be reached, or that does not answer events
                 // later (Focus NFe answers them at once), leaves it as it is, never refused for the lack of an answer.
-                let answer = match self
-                    .gateway
+                let answer = match gateway
                     .query_event(&settings, &reference(&document), query)
                     .await
                 {
@@ -1580,26 +1538,31 @@ where
         Ok(())
     }
 
+    /// The settings of the issuer and the gateway **resolved for them**, at the moment of the call: the company's own
+    /// gateway when it set one, the server's otherwise ([ADR 0085]). A gateway that is not configured refuses here, before
+    /// anything is written.
     async fn ready_settings(
         &self,
         company_id: CompanyId,
-    ) -> Result<FiscalSettings, ApplicationError> {
-        if !self.gateway.is_enabled() {
+    ) -> Result<(FiscalSettings, G::Gateway), ApplicationError> {
+        let settings = self.settings.find(company_id).await?.ok_or_else(|| {
+            ApplicationError::FiscalRule("set the fiscal settings before issuing".to_owned())
+        })?;
+        let gateway = self.gateways.resolve(&settings).await?;
+        if !gateway.is_enabled() {
             return Err(GatewayError::Disabled.into());
         }
-        self.settings.find(company_id).await?.ok_or_else(|| {
-            ApplicationError::FiscalRule("set the fiscal settings before issuing".to_owned())
-        })
+        Ok((settings, gateway))
     }
 
-    /// The settings the document was issued under: the gateway's token follows the environment and its CNPJ is the
-    /// issuer's, so a document is asked about only while the company still issues the way it was issued.
+    /// The settings the document was issued under, with its gateway: the gateway's token follows the environment and its
+    /// CNPJ is the issuer's, so a document is asked about only while the company still issues the way it was issued.
     async fn settings_of(
         &self,
         company_id: CompanyId,
         document: &FiscalDocument,
-    ) -> Result<FiscalSettings, ApplicationError> {
-        let settings = self.ready_settings(company_id).await?;
+    ) -> Result<(FiscalSettings, G::Gateway), ApplicationError> {
+        let (settings, gateway) = self.ready_settings(company_id).await?;
         if settings.cnpj() != document.issuer_cnpj()
             || settings.environment() != document.environment()
         {
@@ -1608,7 +1571,7 @@ where
                     .to_owned(),
             ));
         }
-        Ok(settings)
+        Ok((settings, gateway))
     }
 
     async fn completed_sale(
@@ -1648,6 +1611,7 @@ where
     /// submitted under another reference.
     async fn send(
         &self,
+        gateway: &G::Gateway,
         company_id: CompanyId,
         actor: &Actor,
         document: FiscalDocument,
@@ -1656,7 +1620,7 @@ where
         let processing = self
             .move_to(actor, document, |document| document.submitted())
             .await?;
-        match self.gateway.submit_nfe(nfe).await {
+        match gateway.submit_nfe(nfe).await {
             Ok(submission) => {
                 // A gateway that names its documents says the name now: kept before anything else is recorded, because
                 // every later call is about the document by that name.
@@ -1686,6 +1650,7 @@ where
     /// The same as [`send`](Self::send) for an NFC-e.
     async fn send_nfce(
         &self,
+        gateway: &G::Gateway,
         company_id: CompanyId,
         actor: &Actor,
         document: FiscalDocument,
@@ -1694,7 +1659,7 @@ where
         let processing = self
             .move_to(actor, document, |document| document.submitted())
             .await?;
-        match self.gateway.submit_nfce(nfce).await {
+        match gateway.submit_nfce(nfce).await {
             Ok(submission) => {
                 let processing = match submission.reference {
                     Some(name) => {
@@ -1721,6 +1686,7 @@ where
     /// The same as [`send`](Self::send) for an NFS-e.
     async fn send_nfse(
         &self,
+        gateway: &G::Gateway,
         company_id: CompanyId,
         actor: &Actor,
         document: FiscalDocument,
@@ -1729,7 +1695,7 @@ where
         let processing = self
             .move_to(actor, document, |document| document.submitted())
             .await?;
-        match self.gateway.submit_nfse(nfse).await {
+        match gateway.submit_nfse(nfse).await {
             Ok(submission) => {
                 let processing = match submission.reference {
                     Some(name) => {
@@ -2324,6 +2290,35 @@ fn issue_day(settings: &FiscalSettings, now_unix: i64) -> Result<CalendarDate, A
             "the moment of issue is not a date the SEFAZ accepts".to_owned(),
         )
     })
+}
+
+/// A gateway that does not issue NFC-e is refused before anything is written.
+fn ensure_issues_nfce(gateway: &impl FiscalGateway) -> Result<(), ApplicationError> {
+    if gateway.issues_nfce() {
+        Ok(())
+    } else {
+        Err(GatewayError::Unsupported("an NFC-e through this gateway: use another one").into())
+    }
+}
+
+fn ensure_issues_manifestation(gateway: &impl FiscalGateway) -> Result<(), ApplicationError> {
+    if gateway.issues_manifestation() {
+        Ok(())
+    } else {
+        Err(
+            GatewayError::Unsupported("received invoices through this gateway: use another one")
+                .into(),
+        )
+    }
+}
+
+/// A gateway that does not issue NFS-e is refused before a DPS number is taken or a document is written.
+fn ensure_issues_nfse(gateway: &impl FiscalGateway) -> Result<(), ApplicationError> {
+    if gateway.issues_nfse() {
+        Ok(())
+    } else {
+        Err(GatewayError::Unsupported("an NFS-e through this gateway: use another one").into())
+    }
 }
 
 /// The certificate's day is the person's, typed from the certificate; after it the documents would be refused at

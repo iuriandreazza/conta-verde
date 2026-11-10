@@ -2,6 +2,8 @@ mod asaas;
 mod brasil_api;
 mod brasil_api_postal_code;
 mod cached_registry;
+mod company_fiscal_gateways;
+mod configured_fiscal_gateway;
 #[cfg(test)]
 mod contract;
 mod document_references;
@@ -93,6 +95,8 @@ pub use asaas::AsaasProvider;
 pub use brasil_api::BrasilApiCnpjRegistry;
 pub use brasil_api_postal_code::BrasilApiPostalCodeDirectory;
 pub use cached_registry::CachedCnpjRegistry;
+pub use company_fiscal_gateways::{CompanyFiscalGateways, GatewayEndpoints};
+pub use configured_fiscal_gateway::ConfiguredFiscalGateway;
 pub use document_references::RegisterDocumentReferences;
 pub use entry_references::RegisterReferences;
 pub use fake_fiscal_gateway::{FakeFiscalGateway, NoFiscalGateway};

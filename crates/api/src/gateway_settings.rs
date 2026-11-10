@@ -1,7 +1,7 @@
 use axum::Json;
 use axum::extract::State;
 use conta_verde_application::{
-    ApplicationError, FiscalGateway, GatewaySettingsInput, SecretChange,
+    ApplicationError, FiscalGatewayResolver, GatewaySettingsInput, SecretChange,
 };
 use conta_verde_domain::{GatewayKind, GatewaySecret, GatewaySettings, SecretText};
 use serde::{Deserialize, Serialize};
@@ -99,7 +99,6 @@ async fn response_of<X: Ports>(
         .into_iter()
         .map(GatewaySecret::field)
         .collect();
-    let gateway = state.fiscal_documents.gateway();
     let set = |secret| settings.is_some_and(|settings| settings.secret(secret).is_some());
     Ok(GatewaySettingsResponse {
         kind: settings.map(|settings| settings.kind().key()),
@@ -113,7 +112,7 @@ async fn response_of<X: Ports>(
             .and_then(|settings| settings.nfeio_company_production().map(str::to_owned)),
         nfeio_search_confirmed: settings.is_some_and(GatewaySettings::nfeio_search_confirmed),
         encryption_available: state.gateway_settings.encryption_available(),
-        server_gateway: gateway.is_enabled().then(|| gateway.key().to_owned()),
+        server_gateway: state.fiscal_documents.gateways().server_key(),
         webhook_path: format!("/public/fiscal/{}/webhook", company_id.as_uuid()),
         unreadable,
     })

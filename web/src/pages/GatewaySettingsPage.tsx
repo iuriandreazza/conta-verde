@@ -182,7 +182,7 @@ export function GatewaySettingsPage() {
     <>
       <PageHeader
         title="Gateway fiscal"
-        description="Por qual gateway esta empresa emite os documentos fiscais e os segredos para usá-lo. Só o dono e o administrador chegam aqui. Um segredo é gravado cifrado e nunca é mostrado de novo: a tela só diz se ele está configurado, e o que você digita o substitui. Enquanto a empresa não configura nada, vale o que o servidor tem no ambiente."
+        description="Por qual gateway esta empresa emite os documentos fiscais e os segredos para usá-lo. Só o dono e o administrador chegam aqui. Um segredo é gravado cifrado e nunca é mostrado de novo: a tela só diz se ele está configurado, e o que você digita o substitui. Enquanto a empresa não configura nada, vale o que o servidor tem no ambiente. Se o que a empresa configura não basta para o ambiente em uso (falta o token ou a chave), a emissão é recusada dizendo o que falta: o gateway do servidor nunca entra no lugar."
       />
       <Notice message={error} />
       {saved && <p role="status">Salvo.</p>}

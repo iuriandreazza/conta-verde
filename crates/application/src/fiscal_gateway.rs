@@ -2,9 +2,11 @@ use std::fmt;
 use std::future::Future;
 
 use conta_verde_domain::{
-    AccessKey, Address, Amount, CalendarDate, Decimal, FiscalSettings, IssTaxation, Manifestation,
-    ReceivedInvoiceDraft,
+    AccessKey, Address, Amount, CalendarDate, CompanyId, Decimal, FiscalSettings, IssTaxation,
+    Manifestation, ReceivedInvoiceDraft,
 };
+
+use crate::ApplicationError;
 
 /// Where the goods of an operation go, as the NF-e's layout asks (`local_destino`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -623,4 +625,42 @@ pub trait FiscalGateway: Send + Sync {
         word: Manifestation,
         justification: Option<&str>,
     ) -> impl Future<Output = Result<EventOutcome, GatewayError>> + Send;
+}
+
+/// Finds the gateway to ask for a company's documents ([ADR 0085]): the company's own settings when it has set them, the
+/// server's otherwise. It is asked **per issuer, at the moment of a call**, never once for a pass over many companies, so
+/// one company's token can only ever go out in that company's calls.
+///
+/// A gateway that is already the one for every company (the server's, a fake in a test) is its own resolver.
+pub trait FiscalGatewayResolver: Send + Sync {
+    type Gateway: FiscalGateway;
+
+    /// The gateway for the issuer in these settings. Fails, naming what is missing, when the company has its own settings and they
+    /// are not enough for its environment: they are never half used, and the server's are never put in their place.
+    fn resolve(
+        &self,
+        issuer: &FiscalSettings,
+    ) -> impl Future<Output = Result<Self::Gateway, ApplicationError>> + Send;
+
+    /// The name of the gateway the server itself is set up for, when it is.
+    fn server_key(&self) -> Option<String>;
+
+    /// The name of the gateway that is in effect for the company: its own, or the server's.
+    fn key_for(&self, company_id: CompanyId) -> impl Future<Output = Option<String>> + Send;
+}
+
+impl<G: FiscalGateway + Clone> FiscalGatewayResolver for G {
+    type Gateway = G;
+
+    async fn resolve(&self, _issuer: &FiscalSettings) -> Result<G, ApplicationError> {
+        Ok(self.clone())
+    }
+
+    fn server_key(&self) -> Option<String> {
+        self.is_enabled().then(|| self.key().to_owned())
+    }
+
+    async fn key_for(&self, _company_id: CompanyId) -> Option<String> {
+        self.server_key()
+    }
 }
