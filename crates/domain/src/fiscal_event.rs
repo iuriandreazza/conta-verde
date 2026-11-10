@@ -6,8 +6,10 @@ use crate::{
 const MIN_TEXT_CHARS: usize = 15;
 const MAX_CORRECTION_CHARS: usize = 1000;
 const MAX_REASON_CHARS: usize = 255;
-/// The authority takes at most this many letters for one document.
+/// The authority takes at most this many accepted letters for one document.
 pub const MAX_CORRECTIONS: u8 = 20;
+/// How many attempts at a letter we record for one document, refused ones included: the place of an attempt is our own.
+pub const MAX_CORRECTION_ATTEMPTS: u8 = 99;
 const MAX_NUMBER: u32 = 999_999_999;
 
 /// What an event of the fiscal documents is about ([ADR 0076]).
@@ -35,7 +37,7 @@ impl FiscalEventSubject {
         sequence: u8,
         text: &str,
     ) -> Result<Self, DomainError> {
-        if sequence == 0 || sequence > MAX_CORRECTIONS {
+        if sequence == 0 || sequence > MAX_CORRECTION_ATTEMPTS {
             return Err(DomainError::InvalidFiscalDocument("sequence"));
         }
         Ok(Self::Correction {
@@ -272,9 +274,9 @@ mod tests {
         let document = FiscalDocumentId::generate();
         let text = "Corrige o endereço de entrega";
         assert!(FiscalEventSubject::correction(document, 1, text).is_ok());
-        assert!(FiscalEventSubject::correction(document, 20, text).is_ok());
+        assert!(FiscalEventSubject::correction(document, 99, text).is_ok());
         assert!(FiscalEventSubject::correction(document, 0, text).is_err());
-        assert!(FiscalEventSubject::correction(document, 21, text).is_err());
+        assert!(FiscalEventSubject::correction(document, 100, text).is_err());
         assert!(FiscalEventSubject::correction(document, 1, "curto").is_err());
         assert!(FiscalEventSubject::correction(document, 1, &"a".repeat(1001)).is_err());
         assert!(FiscalEventSubject::correction(document, 1, &format!("{text}\nlinha")).is_err());

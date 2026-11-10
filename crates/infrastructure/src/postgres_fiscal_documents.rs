@@ -432,6 +432,22 @@ impl FiscalDocumentRepository for PostgresFiscalDocumentRepository {
             ),
         };
         let mut tx = self.pool.begin().await.map_err(storage_error)?;
+        if let Some(document) = document {
+            // The document is read with its row held, so a cancellation cannot land between this look and the insert.
+            let status: Option<String> = sqlx::query_scalar(
+                "SELECT status FROM fiscal_documents WHERE id = $1 AND company_id = $2 FOR SHARE",
+            )
+            .bind(document)
+            .bind(event.company_id().as_uuid())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(storage_error)?;
+            match status.as_deref() {
+                None => return Err(RepositoryError::NotFound),
+                Some("authorized") => {}
+                Some(_) => return Err(RepositoryError::FiscalDocumentChanged),
+            }
+        }
         sqlx::query(
             "INSERT INTO fiscal_events (id, company_id, kind, document_id, sequence, body, series, \
              first_number, last_number, environment, status, requested_by_user_id, requested_by_name) \
@@ -561,7 +577,7 @@ impl FiscalDocumentRepository for PostgresFiscalDocumentRepository {
     ) -> Result<Vec<FiscalEvent>, RepositoryError> {
         let rows = sqlx::query(&format!(
             "SELECT {EVENT_COLUMNS} FROM fiscal_events WHERE company_id = $1 AND kind = 'invalidation' \
-             ORDER BY last_number DESC, id DESC LIMIT $2"
+             ORDER BY recorded DESC LIMIT $2"
         ))
         .bind(company_id.as_uuid())
         .bind(i64::try_from(limit).unwrap_or(i64::MAX))

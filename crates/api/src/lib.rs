@@ -711,6 +711,10 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
             get(fiscal::list_invalidations::<X>).post(fiscal::invalidate_numbers::<X>),
         )
         .route(
+            "/companies/{company_id}/fiscal/events/{id}/abandon",
+            post(fiscal::abandon_event::<X>),
+        )
+        .route(
             "/companies/{company_id}/fiscal/events/{id}/file",
             get(fiscal::download_event_file::<X>),
         )

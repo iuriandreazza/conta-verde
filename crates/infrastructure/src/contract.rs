@@ -18398,6 +18398,26 @@ pub async fn issues_an_nfe_from_a_sale<D, S, P, Y, F, B, R>(
             FiscalEventStatus::Sent
         ]
     );
+    // The person, having checked at the gateway, gives up on the letter that never got an answer; a new one may go.
+    let waiting = letters
+        .iter()
+        .find(|letter| letter.status() == FiscalEventStatus::Sent)
+        .unwrap();
+    let abandoned = service
+        .abandon_event(company, &user, waiting.id())
+        .await
+        .unwrap();
+    assert_eq!(abandoned.status(), FiscalEventStatus::Refused);
+    assert_eq!(abandoned.refusal().unwrap().code(), "abandoned");
+    assert!(matches!(
+        service.abandon_event(company, &user, waiting.id()).await,
+        Err(ApplicationError::Domain(_))
+    ));
+    let next = service
+        .correct(company, &user, polled.id(), text)
+        .await
+        .unwrap();
+    assert_eq!(next.status(), FiscalEventStatus::Accepted);
     assert!(matches!(
         service.correct(company, &user, issued.id(), text).await,
         Err(ApplicationError::Domain(_))

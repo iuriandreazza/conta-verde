@@ -8,6 +8,8 @@ CREATE TABLE fiscal_events (
     kind                  TEXT        NOT NULL,
     document_id           UUID,
     sequence              SMALLINT,
+    -- The order events were recorded in, for listings (a random id has none).
+    recorded              BIGINT GENERATED ALWAYS AS IDENTITY,
     body                  TEXT        NOT NULL,
     series                SMALLINT,
     first_number          BIGINT,
@@ -26,10 +28,10 @@ CREATE TABLE fiscal_events (
         REFERENCES fiscal_documents (company_id, id),
     CONSTRAINT fiscal_events_kind_valid CHECK (kind IN ('correction', 'invalidation')),
     CONSTRAINT fiscal_events_status_valid CHECK (status IN ('sent', 'accepted', 'refused')),
-    -- A correction names its document and its place among that document's letters (1 to 20) and has no range; an
+    -- A correction names its document and its place among our attempts at that document's letters (1 to 99; the authority takes at most 20 accepted) and has no range; an
     -- invalidation names a series, a range and the environment and has no document.
     CONSTRAINT fiscal_events_kind_follows_columns CHECK (
-        (kind = 'correction' AND document_id IS NOT NULL AND sequence BETWEEN 1 AND 20
+        (kind = 'correction' AND document_id IS NOT NULL AND sequence BETWEEN 1 AND 99
             AND char_length(body) BETWEEN 15 AND 1000
             AND series IS NULL AND first_number IS NULL AND last_number IS NULL AND environment IS NULL)
         OR (kind = 'invalidation' AND document_id IS NULL AND sequence IS NULL
@@ -62,7 +64,7 @@ CREATE TABLE fiscal_events (
 CREATE UNIQUE INDEX fiscal_events_sequence_key ON fiscal_events (company_id, document_id, sequence)
     WHERE kind = 'correction';
 
-CREATE INDEX fiscal_events_invalidations_idx ON fiscal_events (company_id, last_number) WHERE kind = 'invalidation';
+CREATE INDEX fiscal_events_invalidations_idx ON fiscal_events (company_id, recorded) WHERE kind = 'invalidation';
 
 CREATE FUNCTION fiscal_events_keep_the_record() RETURNS trigger
     LANGUAGE plpgsql AS

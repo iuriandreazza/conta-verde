@@ -673,3 +673,20 @@ pub(crate) async fn download_event_file<X: Ports>(
     );
     Ok(response)
 }
+
+/// Gives up on an event that was sent and never answered, after the person checked at the gateway that the authority did
+/// not take it.
+pub(crate) async fn abandon_event<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, actor): CompanyAccess,
+    Path((_, id)): Path<(Uuid, String)>,
+) -> Result<Json<FiscalEventResponse>, ApiError> {
+    let id = Uuid::parse_str(&id)
+        .map(FiscalEventId::from_uuid)
+        .map_err(|_| ApplicationError::FiscalDocumentNotFound)?;
+    let event = state
+        .fiscal_documents
+        .abandon_event(company_id, &actor, id)
+        .await?;
+    Ok(Json(FiscalEventResponse::from(&event)))
+}

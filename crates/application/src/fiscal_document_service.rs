@@ -2,10 +2,10 @@ use conta_verde_domain::{
     Actor, Amount, AuditAction, AuditRecord, BlobId, CalendarDate, CompanyId, FiscalAuthorization,
     FiscalDocument, FiscalDocumentDraft, FiscalDocumentId, FiscalDocumentKind,
     FiscalDocumentStatus, FiscalEvent, FiscalEventId, FiscalEventStatus, FiscalEventSubject,
-    FiscalFile, FiscalFileKind, FiscalOrigin, FiscalRefusal, FiscalSettings, MAX_CORRECTIONS,
-    NatureKind, Party, Product, ProductKind, Sale, SaleId, SaleStatus, TaxRegime, fiscal_day,
-    fiscal_document_changes, fiscal_document_creation_changes, fiscal_event_changes,
-    fiscal_event_creation_changes,
+    FiscalFile, FiscalFileKind, FiscalOrigin, FiscalRefusal, FiscalSettings,
+    MAX_CORRECTION_ATTEMPTS, MAX_CORRECTIONS, NatureKind, Party, Product, ProductKind, Sale,
+    SaleId, SaleStatus, TaxRegime, fiscal_day, fiscal_document_changes,
+    fiscal_document_creation_changes, fiscal_event_changes, fiscal_event_creation_changes,
 };
 
 use crate::audit::audit_entry;
@@ -402,13 +402,24 @@ where
                 "a correction letter of this document is still waiting for an answer".to_owned(),
             ));
         }
+        // The authority's limit is on the letters it accepted; our place is one more than the attempts so far.
+        let accepted = letters
+            .iter()
+            .filter(|letter| letter.status() == FiscalEventStatus::Accepted)
+            .count();
+        if accepted >= usize::from(MAX_CORRECTIONS) {
+            return Err(ApplicationError::FiscalRule(format!(
+                "a document takes at most {MAX_CORRECTIONS} correction letters"
+            )));
+        }
         let sequence = u8::try_from(letters.len() + 1)
             .ok()
-            .filter(|sequence| *sequence <= MAX_CORRECTIONS)
+            .filter(|sequence| *sequence <= MAX_CORRECTION_ATTEMPTS)
             .ok_or_else(|| {
-                ApplicationError::FiscalRule(format!(
-                    "a document takes at most {MAX_CORRECTIONS} correction letters"
-                ))
+                ApplicationError::FiscalRule(
+                    "too many attempts at a correction letter were recorded for this document"
+                        .to_owned(),
+                )
             })?;
         let subject = FiscalEventSubject::correction(id, sequence, text).map_err(|_| {
             ApplicationError::FiscalRule(
@@ -460,6 +471,31 @@ where
             .await;
         self.settle_event(company_id, actor, event, answer, "invalidation")
             .await
+    }
+
+    /// Gives up on an event that was sent and never answered: the person has checked at the gateway that the authority did
+    /// not take it, and says so. It is settled as refused with the words that say who decided, which frees a new letter.
+    /// **Never for an event the authority may have accepted**: the product cannot tell, and the answer is the gateway's.
+    pub async fn abandon_event(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        id: FiscalEventId,
+    ) -> Result<FiscalEvent, ApplicationError> {
+        let event = self
+            .documents
+            .find_event(company_id, id)
+            .await?
+            .ok_or(ApplicationError::FiscalDocumentNotFound)?;
+        if event.status() != FiscalEventStatus::Sent {
+            return Err(conta_verde_domain::DomainError::InvalidFiscalTransition.into());
+        }
+        let refused = event.refused(FiscalRefusal::new(
+            "abandoned",
+            "the answer never came and the person confirmed at the gateway that the authority did not take it",
+        ))?;
+        self.write_settlement(actor, &event, &refused).await?;
+        Ok(refused)
     }
 
     /// The correction letters of a document.

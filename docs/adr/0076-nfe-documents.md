@@ -131,12 +131,12 @@ already recorded does not write it again.
   `sent` is written, then the gateway is called, then the row is **settled once** to `accepted` (with the protocol and the
   authority's XML) or `refused` (with the authority's words). A settled event never changes, and no event is deleted (a trigger
   holds both). Its content (what was asked, by whom) is never written again by an adapter; only the answer is.
-  **An answer that never came leaves the event `sent` and the product never sends it again** (ADR 0075: events are not idempotent
-  at the authority); the person sees it and the gateway's own record is the truth. The XML of an event is kept in the `BlobStore`
+  **An answer that never came (or an accepted one the product could not finish recording, for instance a file that could not be downloaded) leaves the event `sent` and the product never sends it again** (ADR 0075: events are not idempotent
+  at the authority); the person sees it and the gateway's own record is the truth. Only the person can give up on such an event (`POST .../fiscal/events/{id}/abandon`, after checking at the gateway that the authority did not take it): it is settled as refused with the code `abandoned`, which frees a new letter. **Never for an event the authority may have accepted** (the product cannot tell). The XML of an event is kept in the `BlobStore`
   under the event's own `blob_id` (not in `fiscal_files`, whose rows are a document's), downloaded at
   `GET .../fiscal/events/{id}/file`.
 - **Correction letter** (`POST .../documents/{id}/corrections`): only for an `authorized` document; text of 15 to 1000
-  characters on one line; its place in the document's sequence is `1 + the letters so far`, **at most 20, refused ones counted**
+  characters on one line; its place is `1 + the attempts so far` (at most 99, ours alone), and the **authority's limit of 20 counts the accepted ones**
   (the unique index on `(company, document, sequence)` means two writers cannot both take number 3; the loser is told it
   changed); **a new letter waits while one is still `sent`**. The authority's deadline (720 hours) and rules are its own to
   enforce; a refusal is kept and told (`422` with the code and text). A letter changes no figure, so a closed month does not
@@ -147,7 +147,7 @@ already recorded does not write it again.
   that stands in for the period lock, since a range has no document of its own to judge by and an invalidation of a number that
   was used would be wrong at the authority too; a range none of whose numbers we hold changes no figure of any closed month.
   (**Verify with an accountant** whether a closed month should also refuse an invalidation of numbers the company never used.)
-  The company's invalidations are listed newest first (the latest 100).
+  The company's invalidations are listed newest first, by the order they were recorded in (the latest 100). **Limit:** a number held by a document still `processing`, in `contingency` or `denied` is not stored, so it is not seen as used; asking the authority is the check that holds.
 
 ### The package and the screens (4d)
 
