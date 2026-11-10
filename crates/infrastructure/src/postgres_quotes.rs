@@ -56,8 +56,9 @@ async fn insert_lines(connection: &mut PgConnection, quote: &Quote) -> Result<()
 }
 
 fn sent_by(quote: &Quote) -> (Option<Uuid>, Option<&str>) {
+    // The column holds a person's id and name; no key reaches it ([ADR 0087]).
     match quote.sent_by() {
-        Some(Actor::User { id, name }) => (Some(id.as_uuid()), Some(name)),
+        Some(by) => (Some(by.id()), Some(by.name())),
         None => (None, None),
     }
 }

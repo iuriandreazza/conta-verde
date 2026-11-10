@@ -1,5 +1,6 @@
 mod access;
 mod accounting;
+mod api_keys;
 mod attachments;
 mod auth;
 mod bank_accounts;
@@ -49,30 +50,31 @@ mod statements;
 mod stock;
 mod stock_reports;
 mod transfers;
+mod v1;
 
 use std::sync::Arc;
 
 use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
 use conta_verde_application::{
-    AccountingExportService, AttachmentRepository, AttachmentService, AuthService, BalanceService,
-    BankAccountRepository, BankAccountService, BlobStore, CategoryRepository, CategoryService,
-    ChargeRepository, ChargeService, CnpjRegistry, CommissionRuleRepository, CommissionService,
-    ContractRepository, ContractService, CostCenterRepository, CostCenterService,
-    DocumentMailRepository, DocumentMailService, DocumentReferences, DreService, EmailSender,
-    EntryLookups, EntryReferences, ExportLookups, FinancialEntryRepository, FinancialEntryService,
-    FiscalDocumentRepository, FiscalDocumentService, FiscalGatewayResolver,
-    FiscalSettingsRepository, FiscalSettingsService, GatewaySettingsRepository,
-    GatewaySettingsService, IdentityRepository, InventoryCountRepository, InventoryCountService,
-    InvitationRepository, MemberService, OpeningRepository, PackageScheduleRepository,
-    PackageScheduleService, PartyRepository, PartyService, PaymentMethodRepository,
-    PaymentMethodService, PaymentProvider, PaymentTermRepository, PaymentTermService,
-    PostalCodeDirectory, PostalCodeService, PriceListRepository, PriceListService,
-    ProductRepository, ProductService, PurchaseOrderRepository, PurchaseService, QuoteRepository,
-    QuoteService, ReconciliationService, RecurrenceRepository, RecurrenceService, SaleRepository,
-    SaleService, SalesReportService, SecretService, StatementLineRepository,
-    StockMovementRepository, StockService, StockSettingsRepository, TransferRepository,
-    TransferService,
+    AccountingExportService, ApiKeyRepository, ApiKeyService, AttachmentRepository,
+    AttachmentService, AuthService, BalanceService, BankAccountRepository, BankAccountService,
+    BlobStore, CategoryRepository, CategoryService, ChargeRepository, ChargeService, CnpjRegistry,
+    CommissionRuleRepository, CommissionService, ContractRepository, ContractService,
+    CostCenterRepository, CostCenterService, DocumentMailRepository, DocumentMailService,
+    DocumentReferences, DreService, EmailSender, EntryLookups, EntryReferences, ExportLookups,
+    FinancialEntryRepository, FinancialEntryService, FiscalDocumentRepository,
+    FiscalDocumentService, FiscalGatewayResolver, FiscalSettingsRepository, FiscalSettingsService,
+    GatewaySettingsRepository, GatewaySettingsService, IdentityRepository,
+    InventoryCountRepository, InventoryCountService, InvitationRepository, MemberService,
+    OpeningRepository, PackageScheduleRepository, PackageScheduleService, PartyRepository,
+    PartyService, PaymentMethodRepository, PaymentMethodService, PaymentProvider,
+    PaymentTermRepository, PaymentTermService, PostalCodeDirectory, PostalCodeService,
+    PriceListRepository, PriceListService, ProductRepository, ProductService,
+    PurchaseOrderRepository, PurchaseService, QuoteRepository, QuoteService, ReconciliationService,
+    RecurrenceRepository, RecurrenceService, SaleClaimRepository, SaleRepository, SaleService,
+    SalesReportService, SecretService, StatementLineRepository, StockMovementRepository,
+    StockService, StockSettingsRepository, TransferRepository, TransferService,
 };
 use conta_verde_application::{
     CollectionService, CollectionSettingsRepository, DunningPlanRepository, DunningService,
@@ -81,12 +83,16 @@ use conta_verde_application::{
 };
 use serde::Serialize;
 
+pub use v1::{V1Clock, V1Config};
+
 #[derive(Debug, Clone, Default)]
 pub struct ApiConfig {
     /// Adds the `Secure` flag to the session cookie. Turn it on whenever the API is served over HTTPS.
     pub cookie_secure: bool,
     /// How the fiscal gateway may knock to say something happened ([ADR 0083], [ADR 0085]).
     pub fiscal_webhook: FiscalWebhook,
+    /// The public `v1` API: how many requests a key may make and what time it is ([ADR 0087]).
+    pub v1: V1Config,
 }
 
 /// The secret the fiscal gateway sends in a header of its own choosing: the notice it wakes the server with is believed for
@@ -127,6 +133,8 @@ impl std::fmt::Debug for FiscalWebhook {
 pub use clock::{customer_today, now_millis, now_unix, today};
 
 pub trait Ports: 'static {
+    type ApiKeys: ApiKeyRepository + 'static;
+    type SaleClaims: SaleClaimRepository + 'static;
     type Parties: PartyRepository + 'static;
     type Registry: CnpjRegistry + 'static;
     type Identity: IdentityRepository + 'static;
@@ -318,6 +326,8 @@ type SalesReportsOf<X> = SalesReportService<<X as Ports>::Sales>;
 
 /// The use cases the API serves.
 pub struct Services<X: Ports> {
+    pub api_keys: ApiKeyService<X::ApiKeys, X::Secrets>,
+    pub sale_claims: X::SaleClaims,
     pub parties: PartyService<X::Parties, X::Registry>,
     pub products: ProductService<X::Products>,
     pub cost_centers: CostCenterService<X::CostCenters>,
@@ -360,6 +370,9 @@ pub struct Services<X: Ports> {
 }
 
 pub(crate) struct AppState<X: Ports> {
+    api_keys: ApiKeyService<X::ApiKeys, X::Secrets>,
+    sale_claims: X::SaleClaims,
+    limiter: v1::RateLimiter,
     parties: PartyService<X::Parties, X::Registry>,
     products: ProductService<X::Products>,
     cost_centers: CostCenterService<X::CostCenters>,
@@ -406,7 +419,11 @@ pub(crate) struct AppState<X: Ports> {
 pub(crate) type SharedState<X> = Arc<AppState<X>>;
 
 pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
+    let limiter = v1::RateLimiter::new(config.v1.rate_limit_per_minute);
     let state = Arc::new(AppState {
+        api_keys: services.api_keys,
+        sale_claims: services.sale_claims,
+        limiter,
         parties: services.parties,
         products: services.products,
         cost_centers: services.cost_centers,
@@ -468,6 +485,22 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         .route(
             "/auth/password-reset/confirm",
             post(auth::reset_password::<X>),
+        )
+        .route(
+            "/companies/{company_id}/api-keys",
+            get(api_keys::list_api_keys::<X>).post(api_keys::create_api_key::<X>),
+        )
+        .route(
+            "/companies/{company_id}/api-keys/{key_id}/rotate",
+            post(api_keys::rotate_api_key::<X>),
+        )
+        .route(
+            "/companies/{company_id}/api-keys/{key_id}/revoke",
+            post(api_keys::revoke_api_key::<X>),
+        )
+        .route(
+            "/companies/{company_id}/api-keys/{key_id}/history",
+            get(api_keys::api_key_history::<X>),
         )
         .route(
             "/companies/{company_id}/parties",
@@ -1143,6 +1176,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
                 )
                 .layer(axum::middleware::map_response(quotes::keep_private)),
         )
+        .merge(v1::routes(state.clone()))
         .with_state(state)
 }
 
@@ -1163,21 +1197,22 @@ mod tests {
     use axum::http::{Request, StatusCode, header};
     use conta_verde_application::PostalCodeEntry;
     use conta_verde_infrastructure::{
-        Argon2SecretService, FakeFiscalGateway, FakePaymentProvider, InMemoryAttachmentRepository,
-        InMemoryBankAccountRepository, InMemoryBlobStore, InMemoryCategoryRepository,
-        InMemoryChargeRepository, InMemoryCnpjRegistry, InMemoryCollectionSettingsRepository,
-        InMemoryCommissionRuleRepository, InMemoryContractRepository, InMemoryCostCenterRepository,
-        InMemoryDocumentMailRepository, InMemoryDunningPlanRepository, InMemoryEmailSender,
-        InMemoryFinancialEntryRepository, InMemoryFiscalDocumentRepository,
-        InMemoryFiscalSettingsRepository, InMemoryGatewaySettingsRepository,
-        InMemoryIdentityRepository, InMemoryInventoryCountRepository, InMemoryInvitationRepository,
-        InMemoryMessageSender, InMemoryNotificationRepository, InMemoryOpeningRepository,
+        Argon2SecretService, FakeFiscalGateway, FakePaymentProvider, InMemoryApiKeyRepository,
+        InMemoryAttachmentRepository, InMemoryBankAccountRepository, InMemoryBlobStore,
+        InMemoryCategoryRepository, InMemoryChargeRepository, InMemoryCnpjRegistry,
+        InMemoryCollectionSettingsRepository, InMemoryCommissionRuleRepository,
+        InMemoryContractRepository, InMemoryCostCenterRepository, InMemoryDocumentMailRepository,
+        InMemoryDunningPlanRepository, InMemoryEmailSender, InMemoryFinancialEntryRepository,
+        InMemoryFiscalDocumentRepository, InMemoryFiscalSettingsRepository,
+        InMemoryGatewaySettingsRepository, InMemoryIdentityRepository,
+        InMemoryInventoryCountRepository, InMemoryInvitationRepository, InMemoryMessageSender,
+        InMemoryNotificationRepository, InMemoryOpeningRepository,
         InMemoryPackageScheduleRepository, InMemoryPartyRepository, InMemoryPaymentEventRepository,
         InMemoryPaymentLinkRepository, InMemoryPaymentMethodRepository,
         InMemoryPaymentTermRepository, InMemoryPeriodLockRepository, InMemoryPostalCodeDirectory,
         InMemoryPriceListRepository, InMemoryProductRepository, InMemoryPurchaseOrderRepository,
-        InMemoryQuoteRepository, InMemoryRecurrenceRepository, InMemorySaleRepository,
-        InMemoryStatementLineRepository, InMemoryStockMovementRepository,
+        InMemoryQuoteRepository, InMemoryRecurrenceRepository, InMemorySaleClaimRepository,
+        InMemorySaleRepository, InMemoryStatementLineRepository, InMemoryStockMovementRepository,
         InMemoryStockSettingsRepository, InMemoryTransferRepository, RegisterDocumentReferences,
         RegisterReferences, RingSecretCipher,
     };
@@ -1248,6 +1283,8 @@ mod tests {
         type EntryReferences = TestReferences;
         type PeriodLocks = InMemoryPeriodLockRepository;
         type PackageSchedules = InMemoryPackageScheduleRepository;
+        type ApiKeys = InMemoryApiKeyRepository;
+        type SaleClaims = InMemorySaleClaimRepository;
         type FiscalSettings = InMemoryFiscalSettingsRepository;
         type GatewaySettings = InMemoryGatewaySettingsRepository;
         type Cipher = RingSecretCipher;
@@ -1301,6 +1338,8 @@ mod tests {
         type EntryReferences = TestReferences;
         type PeriodLocks = InMemoryPeriodLockRepository;
         type PackageSchedules = InMemoryPackageScheduleRepository;
+        type ApiKeys = InMemoryApiKeyRepository;
+        type SaleClaims = InMemorySaleClaimRepository;
         type FiscalSettings = InMemoryFiscalSettingsRepository;
         type GatewaySettings = InMemoryGatewaySettingsRepository;
         type Cipher = RingSecretCipher;
@@ -1546,6 +1585,13 @@ mod tests {
     }
 
     /// The schedule over stores that the app's own services do not share: for the tests that never use it.
+    fn standalone_api_keys() -> ApiKeyService<InMemoryApiKeyRepository, Argon2SecretService> {
+        ApiKeyService::new(
+            InMemoryApiKeyRepository::default(),
+            Argon2SecretService::new().unwrap(),
+        )
+    }
+
     fn standalone_packages() -> PackagesOf<MemoryPorts> {
         PackageScheduleService::new(
             InMemoryPackageScheduleRepository::default(),
@@ -2149,6 +2195,8 @@ mod tests {
     ) -> Router {
         router::<MemoryPorts>(
             Services {
+                api_keys: standalone_api_keys(),
+                sale_claims: InMemorySaleClaimRepository::default(),
                 parties,
                 products: ProductService::new(InMemoryProductRepository::default()),
                 cost_centers: CostCenterService::new(InMemoryCostCenterRepository::default()),
@@ -2814,6 +2862,8 @@ mod tests {
     async fn a_postal_code_lookup_switched_off_is_a_409() {
         let app = router::<NoLookupPorts>(
             Services {
+                api_keys: standalone_api_keys(),
+                sale_claims: InMemorySaleClaimRepository::default(),
                 parties: PartyService::new(InMemoryPartyRepository::default(), None),
                 products: ProductService::new(InMemoryProductRepository::default()),
                 cost_centers: CostCenterService::new(InMemoryCostCenterRepository::default()),
@@ -5043,6 +5093,8 @@ mod tests {
         let registry: Option<InMemoryCnpjRegistry> = None;
         let app = router::<NoLookupPorts>(
             Services {
+                api_keys: standalone_api_keys(),
+                sale_claims: InMemorySaleClaimRepository::default(),
                 parties: PartyService::new(InMemoryPartyRepository::default(), registry),
                 products: ProductService::new(InMemoryProductRepository::default()),
                 cost_centers: CostCenterService::new(InMemoryCostCenterRepository::default()),
@@ -6584,6 +6636,14 @@ mod tests {
     }
 
     fn entry_app_over(identities: InMemoryIdentityRepository) -> (Router, InMemoryEmailSender) {
+        entry_app_over_v1(identities, V1Config::default())
+    }
+
+    /// Like `entry_app_over`, with the limits and the clock of the public API a test chooses.
+    fn entry_app_over_v1(
+        identities: InMemoryIdentityRepository,
+        v1: V1Config,
+    ) -> (Router, InMemoryEmailSender) {
         // Each app starts with nothing closed, even on a thread an earlier test used (`--test-threads=1`).
         LOCKS.with(|locks| locks.replace(InMemoryPeriodLockRepository::default()));
         let mailbox = InMemoryEmailSender::default();
@@ -6624,6 +6684,8 @@ mod tests {
         };
         let app = router::<MemoryPorts>(
             Services {
+                api_keys: standalone_api_keys(),
+                sale_claims: InMemorySaleClaimRepository::default(),
                 parties: PartyService::new(parties.clone(), known_companies())
                     .with_recheck_interval(Duration::ZERO),
                 products: ProductService::new(products.clone()),
@@ -6795,6 +6857,7 @@ mod tests {
                     header: "x-fiscal-webhook-token".to_owned(),
                     secret: Some(FISCAL_HOOK_SECRET.to_owned()),
                 },
+                v1,
                 ..ApiConfig::default()
             },
         );
@@ -15239,4 +15302,6 @@ mod tests {
             }
         }
     }
+
+    include!("v1/tests.rs");
 }

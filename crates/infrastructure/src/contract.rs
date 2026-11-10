@@ -9640,7 +9640,7 @@ pub async fn runs_the_quote_lifecycle<Q, R, E, S>(
     );
 }
 
-fn sale_draft(entry_seed: &EntrySeed, seed: &SalesSeed) -> SaleDraft {
+pub(crate) fn sale_draft(entry_seed: &EntrySeed, seed: &SalesSeed) -> SaleDraft {
     SaleDraft {
         customer_id: seed.customer,
         seller_id: Some(seed.seller),

@@ -1,11 +1,11 @@
 use std::time::Duration;
 
-use conta_verde_api::{ApiConfig, Ports, Services, router};
+use conta_verde_api::{ApiConfig, Ports, Services, V1Config, router};
 use conta_verde_application::{
-    AccountingExportService, AttachmentService, AuthService, BalanceService, BankAccountService,
-    CategoryService, CommissionService, ContractService, CostCenterService, DocumentMailService,
-    DreService, FinancialEntryService, FiscalDocumentService, FiscalSettingsService,
-    GatewaySettingsService, InventoryCountService, JobRunner, MemberService,
+    AccountingExportService, ApiKeyService, AttachmentService, AuthService, BalanceService,
+    BankAccountService, CategoryService, CommissionService, ContractService, CostCenterService,
+    DocumentMailService, DreService, FinancialEntryService, FiscalDocumentService,
+    FiscalSettingsService, GatewaySettingsService, InventoryCountService, JobRunner, MemberService,
     PackageScheduleService, PartyService, PaymentMethodService, PaymentTermService,
     PeriodLockService, PostalCodeService, PriceListService, ProductService, PurchaseService,
     QuoteService, ReconciliationService, RecurrenceService, SaleService, SalesReportService,
@@ -21,19 +21,19 @@ use conta_verde_infrastructure::{
     Argon2SecretService, BrasilApiCityCodes, BrasilApiCnpjRegistry, BrasilApiPostalCodeDirectory,
     CachedCnpjRegistry, CompanyFiscalGateways, ConfiguredFiscalGateway, FakeFiscalGateway,
     FocusNfeGateway, GatewayEndpoints, LocalBlobStore, LogEmailSender, NfeIoGateway,
-    NoFiscalGateway, PostgresAttachmentRepository, PostgresBankAccountRepository,
-    PostgresCategoryRepository, PostgresCommissionRuleRepository, PostgresContractRepository,
-    PostgresCostCenterRepository, PostgresDocumentMailRepository, PostgresFinancialEntryRepository,
-    PostgresFiscalDocumentRepository, PostgresFiscalSettingsRepository,
-    PostgresGatewaySettingsRepository, PostgresIdentityRepository,
-    PostgresInventoryCountRepository, PostgresInvitationRepository, PostgresJobQueue,
-    PostgresOpeningRepository, PostgresPackageScheduleRepository, PostgresPartyRepository,
-    PostgresPaymentMethodRepository, PostgresPaymentTermRepository, PostgresPeriodLockRepository,
-    PostgresPriceListRepository, PostgresProductRepository, PostgresPurchaseOrderRepository,
-    PostgresQuoteRepository, PostgresRecurrenceRepository, PostgresSaleRepository,
-    PostgresStatementLineRepository, PostgresStockMovementRepository,
-    PostgresStockSettingsRepository, PostgresTransferRepository, RegisterDocumentReferences,
-    RegisterReferences, SmtpEmailSender, connect_and_migrate,
+    NoFiscalGateway, PostgresApiKeyRepository, PostgresAttachmentRepository,
+    PostgresBankAccountRepository, PostgresCategoryRepository, PostgresCommissionRuleRepository,
+    PostgresContractRepository, PostgresCostCenterRepository, PostgresDocumentMailRepository,
+    PostgresFinancialEntryRepository, PostgresFiscalDocumentRepository,
+    PostgresFiscalSettingsRepository, PostgresGatewaySettingsRepository,
+    PostgresIdentityRepository, PostgresInventoryCountRepository, PostgresInvitationRepository,
+    PostgresJobQueue, PostgresOpeningRepository, PostgresPackageScheduleRepository,
+    PostgresPartyRepository, PostgresPaymentMethodRepository, PostgresPaymentTermRepository,
+    PostgresPeriodLockRepository, PostgresPriceListRepository, PostgresProductRepository,
+    PostgresPurchaseOrderRepository, PostgresQuoteRepository, PostgresRecurrenceRepository,
+    PostgresSaleClaimRepository, PostgresSaleRepository, PostgresStatementLineRepository,
+    PostgresStockMovementRepository, PostgresStockSettingsRepository, PostgresTransferRepository,
+    RegisterDocumentReferences, RegisterReferences, SmtpEmailSender, connect_and_migrate,
 };
 use conta_verde_infrastructure::{
     AsaasProvider, NoMessageSender, PostgresDunningPlanRepository, PostgresNotificationRepository,
@@ -50,6 +50,8 @@ use tracing_subscriber::EnvFilter;
 struct PostgresPorts;
 
 impl Ports for PostgresPorts {
+    type ApiKeys = PostgresApiKeyRepository;
+    type SaleClaims = PostgresSaleClaimRepository;
     type Parties = PostgresPartyRepository;
     type Registry = Option<CachedCnpjRegistry<BrasilApiCnpjRegistry>>;
     type Identity = PostgresIdentityRepository;
@@ -130,6 +132,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let config = ApiConfig {
         cookie_secure: parse_flag("COOKIE_SECURE")?,
         fiscal_webhook: fiscal_webhook_from_env()?,
+        v1: v1_config_from_env()?,
     };
 
     let pool = connect_and_migrate(&database_url).await?;
@@ -405,6 +408,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
     tokio::spawn(poll_fiscal_documents(fiscal_documents()));
     let fiscal_documents = fiscal_documents();
+    let api_keys = ApiKeyService::new(
+        PostgresApiKeyRepository::new(pool.clone()),
+        Argon2SecretService::new()?,
+    );
+    let sale_claims = PostgresSaleClaimRepository::new(pool.clone());
     let auth = AuthService::new(
         PostgresIdentityRepository::new(pool),
         Argon2SecretService::new()?,
@@ -416,6 +424,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         listener,
         router::<PostgresPorts>(
             Services {
+                api_keys,
+                sale_claims,
                 parties,
                 products,
                 cost_centers,
@@ -1202,6 +1212,22 @@ fn fiscal_webhook_from_env()
         return Err("FISCAL_WEBHOOK_SECRET must have at least 32 characters".into());
     }
     Ok(conta_verde_api::FiscalWebhook { header, secret })
+}
+
+/// `API_RATE_LIMIT_PER_MINUTE`: how many requests a key may make a minute (300 by default). It is kept in the memory of
+/// each process, so with several instances a key's real limit is that many times this ([ADR 0087]).
+fn v1_config_from_env() -> Result<V1Config, Box<dyn std::error::Error + Send + Sync>> {
+    let mut config = V1Config::default();
+    if let Ok(raw) = std::env::var("API_RATE_LIMIT_PER_MINUTE") {
+        config.rate_limit_per_minute = raw
+            .parse::<u32>()
+            .ok()
+            .filter(|limit| *limit > 0)
+            .ok_or_else(|| {
+                format!("API_RATE_LIMIT_PER_MINUTE must be a number above 0, got `{raw}`")
+            })?;
+    }
+    Ok(config)
 }
 
 fn parse_flag(name: &str) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {

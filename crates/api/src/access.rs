@@ -61,6 +61,7 @@ pub(crate) const SEGMENT_AREAS: &[(&str, Area)] = &[
     ("accounting", Area::Accounting),
     ("fiscal", Area::Fiscal),
     ("members", Area::Members),
+    ("api-keys", Area::Members),
     ("invitations", Area::Members),
 ];
 

@@ -1,4 +1,6 @@
 mod accounting_export_service;
+mod api_key_repository;
+mod api_key_service;
 mod attachment_repository;
 mod attachment_service;
 mod audit;
@@ -80,6 +82,7 @@ mod quote_service;
 mod reconciliation_service;
 mod recurrence_repository;
 mod recurrence_service;
+mod sale_claim_repository;
 mod sale_reading;
 mod sale_repository;
 mod sale_service;
@@ -99,6 +102,8 @@ pub use accounting_export_service::{
     AccountingExportService, ExportCell, ExportFile, ExportLimits, ExportLookups, ExportNames,
     ExportPackage, ExportTable, fiscal_table,
 };
+pub use api_key_repository::ApiKeyRepository;
+pub use api_key_service::{ApiKeyService, IssuedKey};
 pub use attachment_repository::AttachmentRepository;
 pub use attachment_service::{AttachedFile, AttachmentService};
 pub use audit::ensure_audit_describes;
@@ -212,6 +217,7 @@ pub use recurrence_repository::{RecurrenceQuery, RecurrenceRepository};
 pub use recurrence_service::{
     GENERATION_HORIZON_DAYS, GenerationReport, RecurrencePage, RecurrenceService,
 };
+pub use sale_claim_repository::{SaleClaim, SaleClaimRepository};
 pub use sale_repository::{SaleQuery, SaleRepository};
 pub use sale_service::{Conversion, Refund, ReturnRecord, SalePage, SaleService};
 pub use sales_report_service::{SalesReport, SalesReportService};

@@ -131,6 +131,7 @@ const SETTINGS: NavArea = {
   items: [
     { path: "/members", label: "Membros", icon: UserPlusIcon },
     { path: "/gateway", label: "Gateway fiscal", icon: LayersIcon },
+    { path: "/api-keys", label: "Chaves de API", icon: SendIcon },
   ],
 };
 

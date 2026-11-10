@@ -11,6 +11,7 @@ import { CashFlowPage } from "./pages/CashFlowPage";
 import { CategoriesPage } from "./pages/CategoriesPage";
 import { CompaniesPage } from "./pages/CompaniesPage";
 import { AccountingPage } from "./pages/AccountingPage";
+import { ApiKeysPage } from "./pages/ApiKeysPage";
 import { GatewaySettingsPage } from "./pages/GatewaySettingsPage";
 import { PosPage } from "./pages/PosPage";
 import { ReceivedInvoicesPage } from "./pages/ReceivedInvoicesPage";
@@ -89,6 +90,7 @@ export function App() {
           <Route path="/companies/:companyId/payment-methods" element={<PaymentMethodsPage />} />
           <Route path="/companies/:companyId/payment-terms" element={<PaymentTermsPage />} />
           <Route path="/companies/:companyId/members" element={<MembersPage />} />
+          <Route path="/companies/:companyId/api-keys" element={<ApiKeysPage />} />
         </Route>
         <Route path="*" element={<NotFoundPage />} />
       </Route>

@@ -14,13 +14,14 @@ import { QuoteCreator } from "./QuoteCreator";
 import { ContractCreator } from "./ContractCreator";
 import { CategoryCreator } from "./CategoryCreator";
 import { RecurrenceCreator } from "./RecurrenceCreator";
+import { ApiKeyCreator } from "./ApiKeyCreator";
 import { InviteCreator } from "./InviteCreator";
 import { BankAccountCreator, CostCenterCreator, PaymentMethodCreator, PaymentTermCreator, PriceListCreator, CommissionRuleCreator } from "./registers";
 import { PartyCreator } from "./PartyCreator";
 import { ProductCreator } from "./ProductCreator";
 import { TransferCreator } from "./TransferCreator";
 
-export type CreateKind = "entry" | "party" | "product" | "transfer" | "costCenter" | "paymentMethod" | "paymentTerm" | "bankAccount" | "invite" | "recurrence" | "category" | "priceList" | "commissionRule" | "contract" | "quote" | "sale" | "purchase" | "stockMovement" | "inventoryCount" | "purchaseImport";
+export type CreateKind = "entry" | "party" | "product" | "transfer" | "costCenter" | "paymentMethod" | "paymentTerm" | "bankAccount" | "invite" | "apiKey" | "recurrence" | "category" | "priceList" | "commissionRule" | "contract" | "quote" | "sale" | "purchase" | "stockMovement" | "inventoryCount" | "purchaseImport";
 
 /** What a creator tells the host when the record exists: the words for the confirmation, and the new id. */
 export interface Created {
@@ -69,6 +70,7 @@ const CREATORS: Record<
   category: { title: "Nova categoria", Creator: CategoryCreator },
   recurrence: { title: "Nova recorrência", Creator: RecurrenceCreator },
   invite: { title: "Convidar alguém", Creator: InviteCreator },
+  apiKey: { title: "Nova chave de API", Creator: ApiKeyCreator },
   bankAccount: { title: "Nova conta bancária", Creator: BankAccountCreator },
   costCenter: { title: "Novo centro de custo", Creator: CostCenterCreator },
   paymentMethod: { title: "Nova forma de pagamento", Creator: PaymentMethodCreator },

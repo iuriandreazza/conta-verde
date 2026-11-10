@@ -5,8 +5,9 @@ use conta_verde_domain::{
     FiscalFile, FiscalFileKind, FiscalOrigin, FiscalRefusal, FiscalSettings,
     MAX_CORRECTION_ATTEMPTS, MAX_CORRECTIONS, Manifestation, NatureKind, NfseAuthorization, Party,
     Product, ProductKind, ReceivedInvoice, ReceivedInvoiceId, Sale, SaleId, SaleStatus, TaxRegime,
-    fiscal_day, fiscal_document_changes, fiscal_document_creation_changes, fiscal_event_changes,
-    fiscal_event_creation_changes, received_invoice_changes, received_invoice_creation_changes,
+    UserId, fiscal_day, fiscal_document_changes, fiscal_document_creation_changes,
+    fiscal_event_changes, fiscal_event_creation_changes, received_invoice_changes,
+    received_invoice_creation_changes,
 };
 
 use crate::accounting_export_service::{
@@ -15,8 +16,8 @@ use crate::accounting_export_service::{
 use crate::audit::audit_entry;
 use crate::list_query::{clamp_limit, split_page};
 use crate::{
-    ApplicationError, AuthorizedDocument, AuthorizedNfse, BlobStore, BuyerPresence, Destination,
-    DocumentOutcome, EntryReferences, EventOutcome, EventQuery, FiscalDocumentCursor,
+    ApplicationError, AuthError, AuthorizedDocument, AuthorizedNfse, BlobStore, BuyerPresence,
+    Destination, DocumentOutcome, EntryReferences, EventOutcome, EventQuery, FiscalDocumentCursor,
     FiscalDocumentQuery, FiscalDocumentRepository, FiscalGateway, FiscalGatewayResolver,
     FiscalSettingsRepository, GatewayError, NfceConsumer, NfceRequest, NfeItem, NfeRecipient,
     NfeRequest, NfseRecipient, NfseRequest, PartyRepository, PaymentForm, ProductRepository,
@@ -1407,8 +1408,15 @@ where
         actor: &Actor,
         subject: FiscalEventSubject,
     ) -> Result<FiscalEvent, ApplicationError> {
-        let Actor::User { id: user, name } = actor;
-        let event = FiscalEvent::new(FiscalEventId::generate(), company_id, subject, *user, name)?;
+        // The fiscal area is never given to a key ([ADR 0087]), so the one who asks is a person.
+        let user = actor.user_id().ok_or(AuthError::NotAllowed)?;
+        let event = FiscalEvent::new(
+            FiscalEventId::generate(),
+            company_id,
+            subject,
+            user,
+            actor.name(),
+        )?;
         let audit = audit_entry(
             &event,
             actor,
@@ -2319,7 +2327,9 @@ fn document_draft(
     issued_on: CalendarDate,
     now_unix: i64,
 ) -> FiscalDocumentDraft {
-    let Actor::User { id: user, name } = actor;
+    // Only a person reaches the fiscal area ([ADR 0087]), so the id is a user's.
+    let user = &UserId::from_uuid(actor.id());
+    let name = actor.name();
     FiscalDocumentDraft {
         origin: FiscalOrigin::Sale(sale),
         issuer_cnpj: settings.cnpj().to_owned(),
@@ -2333,7 +2343,7 @@ fn document_draft(
         issued_at_unix: now_unix,
         issued_on,
         submitted_by: *user,
-        submitted_by_name: name.clone(),
+        submitted_by_name: name.to_owned(),
     }
 }
 
