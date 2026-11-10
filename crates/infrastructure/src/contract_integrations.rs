@@ -6,14 +6,19 @@ use conta_verde_application::{
     SaleClaimRepository, SaleRepository, SaleService, SecretCipher, SecretService, SendOutcome,
     WebhookRepository, WebhookService, envelope,
 };
+use conta_verde_application::{
+    BankConnectionRepository, BankSyncService, ItemState, ReconciliationService, RepositoryError,
+    StatementLineQuery, StatementLineRepository, TransferRepository,
+};
 use conta_verde_domain::{
-    Access, Actor, ApiKeyDraft, ApiKeyId, Area, AuditAction, CalendarDate, CompanyId,
-    DeliveryStatus, DomainError, MAX_API_KEYS, MAX_WEBHOOK_SUBSCRIPTIONS, SECRET_GRACE_MILLIS,
-    SaleId, SaleStatus, WebhookEventKind, WebhookSubscriptionDraft,
+    Access, Actor, ApiKeyDraft, ApiKeyId, Area, AuditAction, BankAccountId, CalendarDate,
+    CompanyId, ConnectionStatus, DeliveryStatus, DomainError, MAX_API_KEYS,
+    MAX_WEBHOOK_SUBSCRIPTIONS, SECRET_GRACE_MILLIS, SaleId, SaleStatus, WebhookEventKind,
+    WebhookSubscriptionDraft,
 };
 use uuid::Uuid;
 
-use crate::{InMemoryWebhookSender, webhook_signature};
+use crate::{FakeBankAggregator, InMemoryWebhookSender, webhook_signature};
 
 use crate::contract::{EntrySeed, SalesSeed, actor, sale_draft};
 
@@ -1146,4 +1151,275 @@ pub fn sales_tell_what_happens_to_them(events: &[conta_verde_application::Domain
         } => sale.number() >= 1,
         _ => true,
     }));
+}
+
+/// A bank connection links a bank account of the company to an account at the aggregator and pulls its statement as statement
+/// lines, once however many times the same movement is pulled, in the name of whoever connected it; the bank needing the person
+/// stops the pull and says so; an aggregator that is down is tried again by the queue; and a connection that is ended is not pulled.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub async fn syncs_bank_connections<C, S, E, T, F, Q>(
+    sync: &BankSyncService<C, FakeBankAggregator, ReconciliationService<S, E, T, F>, Q>,
+    aggregator: &FakeBankAggregator,
+    lines: &ReconciliationService<S, E, T, F>,
+    company: CompanyId,
+    other_company: CompanyId,
+    main: BankAccountId,
+    reserve: BankAccountId,
+) where
+    C: BankConnectionRepository,
+    S: StatementLineRepository,
+    E: FinancialEntryRepository,
+    T: TransferRepository,
+    F: EntryReferences,
+    Q: JobQueue,
+{
+    let ana = actor();
+    let today = CalendarDate::parse("2026-11-10").unwrap();
+    let now = 1_794_000_000_000_i64;
+    let stored = || async {
+        lines
+            .list(company, &StatementLineQuery::default(), None, Some(100))
+            .await
+            .unwrap()
+            .items
+    };
+    aggregator.add_transaction("acc-1", "t1", "2026-11-05", "1250.50", "PIX RECEBIDO Maria");
+    aggregator.add_transaction("acc-1", "t2", "2026-11-06", "-30", "TARIFA");
+    aggregator.add_transaction("acc-1", "t3", "2026-11-07", "0", "ZERADO");
+    aggregator.add_transaction("acc-1", "t4", "2026-11-08", "-5.5", "CAFE");
+    // Before the first pull's window: never asked for.
+    aggregator.add_transaction("acc-1", "old", "2026-01-01", "-1", "ANTIGO");
+
+    // What is connected must exist: a bank account of the company, an account the connection holds, and an item that is the
+    // aggregator's.
+    assert_eq!(
+        sync.connect(
+            company,
+            &ana,
+            BankAccountId::generate(),
+            "item-1",
+            "acc-1",
+            now
+        )
+        .await
+        .unwrap_err(),
+        ApplicationError::UnusableReference("account")
+    );
+    assert_eq!(
+        sync.connect(company, &ana, main, "item-1", "acc-x", now)
+            .await
+            .unwrap_err(),
+        ApplicationError::UnusableReference("aggregator account")
+    );
+    assert_eq!(
+        sync.connect(company, &ana, main, "no-item", "acc-1", now)
+            .await
+            .unwrap_err(),
+        ApplicationError::AggregatorUnavailable
+    );
+    assert_eq!(
+        sync.connect(other_company, &ana, main, "item-1", "acc-1", now)
+            .await
+            .unwrap_err(),
+        ApplicationError::UnusableReference("account")
+    );
+    assert!(sync.list(company).await.unwrap().is_empty());
+
+    let connection = sync
+        .connect(company, &ana, main, "item-1", "acc-1", now)
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            connection.status(),
+            connection.provider(),
+            connection.last_synced_on()
+        ),
+        (ConnectionStatus::Connected, "fake", None)
+    );
+    let trail = sync.history(company, connection.id()).await.unwrap();
+    assert_eq!(
+        (trail.len(), trail[0].entry.actor.clone()),
+        (1, ana.clone())
+    );
+    assert_eq!(
+        sync.connect(company, &ana, main, "item-1", "acc-1", now)
+            .await
+            .unwrap_err(),
+        ApplicationError::Repository(RepositoryError::DuplicateBankConnection)
+    );
+    assert!(matches!(
+        sync.history(other_company, connection.id())
+            .await
+            .unwrap_err(),
+        ApplicationError::BankConnectionNotFound
+    ));
+    assert_eq!(
+        sync.sync(other_company, connection.id(), today)
+            .await
+            .unwrap_err(),
+        ApplicationError::BankConnectionNotFound
+    );
+
+    // The first pull goes three months back, stores what can be a line and counts what cannot.
+    let first = sync.sync(company, connection.id(), today).await.unwrap();
+    assert_eq!(
+        (
+            first.created,
+            first.skipped,
+            first.refused,
+            first.needs_attention
+        ),
+        (3, 0, 1, false)
+    );
+    let held = stored().await;
+    assert_eq!(held.len(), 3);
+    let mut refs: Vec<&str> = held.iter().filter_map(|line| line.bank_ref()).collect();
+    refs.sort_unstable();
+    assert_eq!(refs, ["t1", "t2", "t4"]);
+    assert_eq!(
+        aggregator.pulls().last().unwrap(),
+        &(
+            "acc-1".to_owned(),
+            CalendarDate::parse("2026-08-12").unwrap(),
+            today
+        )
+    );
+    let after = sync.list(company).await.unwrap();
+    assert_eq!(after[0].last_synced_on(), Some(today));
+    // The lines are the person's in the trail of reconciliation, made in the name of whoever connected it.
+    let line_trail = lines.history(company, held[0].id()).await.unwrap();
+    assert_eq!(line_trail[0].entry.actor, ana);
+
+    // Pulling again, a day later, overlaps the last pull: what was pulled adds nothing, what is new is added once.
+    aggregator.add_transaction("acc-1", "t5", "2026-11-10", "-12", "ONIBUS");
+    let tomorrow = CalendarDate::parse("2026-11-11").unwrap();
+    let second = sync.sync(company, connection.id(), tomorrow).await.unwrap();
+    assert_eq!((second.created, second.skipped), (1, 3));
+    assert_eq!(
+        aggregator.pulls().last().unwrap().1,
+        CalendarDate::parse("2026-11-03").unwrap()
+    );
+    let third = sync.sync(company, connection.id(), tomorrow).await.unwrap();
+    assert_eq!((third.created, third.skipped), (0, 4));
+    assert_eq!(stored().await.len(), 4);
+
+    // The bank needing the person stops the pull, says why, and the connection waits.
+    aggregator.set_state(
+        "item-1",
+        ItemState::NeedsAttention("the bank login failed".into()),
+    );
+    let needs = sync.sync(company, connection.id(), tomorrow).await.unwrap();
+    assert!(needs.needs_attention);
+    let waiting = sync.list(company).await.unwrap().remove(0);
+    assert_eq!(
+        (waiting.status(), waiting.last_error()),
+        (
+            ConnectionStatus::NeedsAttention,
+            Some("the bank login failed")
+        )
+    );
+    assert_eq!(waiting.last_synced_on(), Some(tomorrow));
+    let trail = sync.history(company, connection.id()).await.unwrap();
+    assert!(
+        trail
+            .last()
+            .unwrap()
+            .entry
+            .changes
+            .iter()
+            .any(|change| change.field == "status")
+    );
+    assert!(sync.sync(company, connection.id(), tomorrow).await.is_err());
+    assert_eq!(stored().await.len(), 4);
+
+    // Ending it frees the bank account for another connection, tells the aggregator, and is the same however often it is asked.
+    let ended = sync
+        .disconnect(company, &ana, connection.id())
+        .await
+        .unwrap();
+    assert_eq!(ended.status(), ConnectionStatus::Disconnected);
+    assert_eq!(aggregator.disconnected(), ["item-1"]);
+    sync.disconnect(company, &ana, connection.id())
+        .await
+        .unwrap();
+    assert_eq!(
+        sync.history(company, connection.id()).await.unwrap().len(),
+        3
+    );
+    assert_eq!(
+        sync.disconnect(other_company, &ana, connection.id())
+            .await
+            .unwrap_err(),
+        ApplicationError::BankConnectionNotFound
+    );
+
+    // A pull is done by the queue: every connection that has not pulled through the day is queued once, an aggregator that is down
+    // makes the job wait and says why on the connection, and when it is back the job pulls and nothing is queued again.
+    let _lock = QUEUE.lock().await;
+    aggregator.set_state("item-1", ItemState::Ready);
+    let again = sync
+        .connect(company, &ana, main, "item-1", "acc-1", now)
+        .await
+        .unwrap();
+    let other = sync
+        .connect(company, &ana, reserve, "item-1", "acc-1", now)
+        .await
+        .unwrap();
+    // Both were queued when they were made; the pass that finds what is due queues what has not pulled through the day.
+    assert!(sync.enqueue_due(today, now / 1000).await.unwrap() >= 2);
+    aggregator.set_down(true);
+    let report = sync.run_due(now / 1000, today, 50).await.unwrap();
+    assert!(report.retried >= 2, "{report:?}");
+    let noted = sync.list(company).await.unwrap();
+    assert!(
+        noted
+            .iter()
+            .any(|c| c.id() == again.id() && c.last_error().is_some())
+    );
+    assert!(
+        noted
+            .iter()
+            .filter(|c| c.id() == again.id() || c.id() == other.id())
+            .all(|c| c.status() == ConnectionStatus::Connected)
+    );
+    aggregator.set_down(false);
+    let report = sync
+        .run_due(now / 1000 + 3 * 3600, today, 50)
+        .await
+        .unwrap();
+    assert!(report.done >= 2, "{report:?}");
+    let done = sync.list(company).await.unwrap();
+    for id in [again.id(), other.id()] {
+        let connection = done.iter().find(|c| c.id() == id).unwrap();
+        assert_eq!(
+            (connection.last_synced_on(), connection.last_error()),
+            (Some(today), None),
+            "{id:?}"
+        );
+    }
+    assert_eq!(sync.enqueue_due(today, now / 1000).await.unwrap(), 0);
+    // A connection that was ended while its job waited pulls nothing.
+    sync.disconnect(company, &ana, other.id()).await.unwrap();
+    assert!(
+        sync.enqueue_due(CalendarDate::parse("2026-11-12").unwrap(), now / 1000)
+            .await
+            .unwrap()
+            >= 1
+    );
+    sync.run_due(
+        now / 1000 + 6 * 3600,
+        CalendarDate::parse("2026-11-12").unwrap(),
+        50,
+    )
+    .await
+    .unwrap();
+    let ended_one = sync
+        .list(company)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|c| c.id() == other.id())
+        .unwrap();
+    assert_eq!(ended_one.last_synced_on(), Some(today));
 }

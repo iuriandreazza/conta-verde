@@ -8,15 +8,22 @@ pub enum JobKind {
     SendEmail,
     /// Sends one webhook delivery: its `delivery_id`. The body and the address are in the delivery's own table ([ADR 0088]).
     DeliverWebhook,
+    /// Pulls the statement of one bank connection: its `connection_id` ([ADR 0089]).
+    SyncBankConnection,
 }
 
 impl JobKind {
-    pub const ALL: [JobKind; 2] = [Self::SendEmail, Self::DeliverWebhook];
+    pub const ALL: [JobKind; 3] = [
+        Self::SendEmail,
+        Self::DeliverWebhook,
+        Self::SyncBankConnection,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::SendEmail => "send_email",
             Self::DeliverWebhook => "deliver_webhook",
+            Self::SyncBankConnection => "sync_bank_connection",
         }
     }
 
@@ -24,6 +31,7 @@ impl JobKind {
         match raw {
             "send_email" => Some(Self::SendEmail),
             "deliver_webhook" => Some(Self::DeliverWebhook),
+            "sync_bank_connection" => Some(Self::SyncBankConnection),
             _ => None,
         }
     }
@@ -32,7 +40,7 @@ impl JobKind {
     fn arity(self) -> std::ops::RangeInclusive<usize> {
         match self {
             Self::SendEmail => 3..=4,
-            Self::DeliverWebhook => 1..=1,
+            Self::DeliverWebhook | Self::SyncBankConnection => 1..=1,
         }
     }
 
@@ -40,7 +48,7 @@ impl JobKind {
     /// tries than a mail server ([ADR 0088]): with the waits of 1, 2, 4, 8, 16, 32 and then 60 minutes, 15 tries are about nine hours.
     pub fn max_attempts(self) -> u32 {
         match self {
-            Self::SendEmail => MAX_ATTEMPTS,
+            Self::SendEmail | Self::SyncBankConnection => MAX_ATTEMPTS,
             Self::DeliverWebhook => 15,
         }
     }

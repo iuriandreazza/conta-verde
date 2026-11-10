@@ -5,6 +5,7 @@ mod api_key;
 mod attachment;
 mod audit;
 mod bank_account;
+mod bank_connection;
 mod calendar_date;
 mod category;
 mod charge;
@@ -69,29 +70,33 @@ pub use attachment::{Attachment, AttachmentDraft, MAX_ATTACHMENT_BYTES, MAX_ENTR
 pub use audit::{
     Actor, AuditAction, AuditEntity, AuditEntry, AuditRecord, Audited, FieldChange,
     api_key_changes, api_key_creation_changes, attachment_changes, attachment_creation_changes,
-    bank_account_changes, bank_account_creation_changes, category_changes,
-    category_creation_changes, charge_changes, charge_creation_changes,
-    collection_settings_changes, collection_settings_creation_changes, commission_rule_changes,
-    commission_rule_creation_changes, contract_changes, contract_creation_changes,
-    cost_center_changes, cost_center_creation_changes, creation_changes, document_check_changes,
-    dunning_plan_changes, dunning_plan_creation_changes, entry_changes, entry_creation_changes,
-    fiscal_document_changes, fiscal_document_creation_changes, fiscal_event_changes,
-    fiscal_event_creation_changes, fiscal_settings_changes, fiscal_settings_creation_changes,
-    inventory_count_changes, inventory_count_creation_changes, opening_changes,
-    opening_creation_changes, package_schedule_changes, package_schedule_creation_changes,
-    party_changes, payment_method_changes, payment_method_creation_changes, payment_term_changes,
-    payment_term_creation_changes, period_lock_changes, period_lock_creation_changes,
-    price_list_changes, price_list_creation_changes, product_changes, product_creation_changes,
-    purchase_order_changes, purchase_order_creation_changes, purchase_receipt_creation_changes,
-    quote_changes, quote_creation_changes, received_invoice_changes,
-    received_invoice_creation_changes, recurrence_changes, recurrence_creation_changes,
-    sale_changes, sale_creation_changes, sale_return_creation_changes, settlement_changes,
-    settlement_creation_changes, statement_line_changes, statement_line_creation_changes,
-    stock_movement_creation_changes, stock_settings_changes, stock_settings_creation_changes,
-    transfer_changes, transfer_creation_changes, webhook_secret_change,
-    webhook_subscription_changes, webhook_subscription_creation_changes,
+    bank_account_changes, bank_account_creation_changes, bank_connection_changes,
+    bank_connection_creation_changes, category_changes, category_creation_changes, charge_changes,
+    charge_creation_changes, collection_settings_changes, collection_settings_creation_changes,
+    commission_rule_changes, commission_rule_creation_changes, contract_changes,
+    contract_creation_changes, cost_center_changes, cost_center_creation_changes, creation_changes,
+    document_check_changes, dunning_plan_changes, dunning_plan_creation_changes, entry_changes,
+    entry_creation_changes, fiscal_document_changes, fiscal_document_creation_changes,
+    fiscal_event_changes, fiscal_event_creation_changes, fiscal_settings_changes,
+    fiscal_settings_creation_changes, inventory_count_changes, inventory_count_creation_changes,
+    opening_changes, opening_creation_changes, package_schedule_changes,
+    package_schedule_creation_changes, party_changes, payment_method_changes,
+    payment_method_creation_changes, payment_term_changes, payment_term_creation_changes,
+    period_lock_changes, period_lock_creation_changes, price_list_changes,
+    price_list_creation_changes, product_changes, product_creation_changes, purchase_order_changes,
+    purchase_order_creation_changes, purchase_receipt_creation_changes, quote_changes,
+    quote_creation_changes, received_invoice_changes, received_invoice_creation_changes,
+    recurrence_changes, recurrence_creation_changes, sale_changes, sale_creation_changes,
+    sale_return_creation_changes, settlement_changes, settlement_creation_changes,
+    statement_line_changes, statement_line_creation_changes, stock_movement_creation_changes,
+    stock_settings_changes, stock_settings_creation_changes, transfer_changes,
+    transfer_creation_changes, webhook_secret_change, webhook_subscription_changes,
+    webhook_subscription_creation_changes,
 };
 pub use bank_account::{BankAccount, BankAccountDraft, BankAccountKind};
+pub use bank_connection::{
+    BankConnection, ConnectionStatus, MAX_BANK_CONNECTIONS, MAX_SYNC_ERROR_CHARS, sync_error,
+};
 pub use calendar_date::CalendarDate;
 pub use category::{CashFlowGroup, Category, DreGroup, MAX_CATEGORY_LEVELS, default_template};
 pub use charge::{Charge, ChargeDraft, ChargeMethod, ChargePayment, ChargeReceipt, ChargeStatus};
@@ -137,12 +142,13 @@ pub use gateway_settings::{
     SealedSecret, SecretText,
 };
 pub use ids::{
-    ApiKeyId, AttachmentId, BankAccountId, BlobId, CategoryId, ChargeId, CommissionRuleId,
-    CompanyId, ContractId, CostCenterId, DocumentMailId, EntryId, FiscalDocumentId, FiscalEventId,
-    InventoryCountId, InvitationId, JobId, NotificationId, PartyId, PaymentEventId,
-    PaymentMethodId, PaymentTermId, PriceListId, ProductId, PurchaseOrderId, PurchaseReceiptId,
-    QuoteId, ReceivedInvoiceId, RecurrenceId, SaleId, SaleReturnId, SettlementId, StatementLineId,
-    StockMovementId, TransferId, UserId, WebhookDeliveryId, WebhookSubscriptionId,
+    ApiKeyId, AttachmentId, BankAccountId, BankConnectionId, BlobId, CategoryId, ChargeId,
+    CommissionRuleId, CompanyId, ContractId, CostCenterId, DocumentMailId, EntryId,
+    FiscalDocumentId, FiscalEventId, InventoryCountId, InvitationId, JobId, NotificationId,
+    PartyId, PaymentEventId, PaymentMethodId, PaymentTermId, PriceListId, ProductId,
+    PurchaseOrderId, PurchaseReceiptId, QuoteId, ReceivedInvoiceId, RecurrenceId, SaleId,
+    SaleReturnId, SettlementId, StatementLineId, StockMovementId, TransferId, UserId,
+    WebhookDeliveryId, WebhookSubscriptionId,
 };
 pub use inventory_count::{
     CountLine, CountLineDraft, CountStatus, InventoryCount, InventoryCountDraft, MAX_COUNT_LINES,

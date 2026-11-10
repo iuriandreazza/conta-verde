@@ -10,6 +10,7 @@ mod contract;
 mod contract_integrations;
 mod document_references;
 mod entry_references;
+mod fake_bank_aggregator;
 mod fake_fiscal_gateway;
 mod fake_payment_provider;
 mod focus_nfe;
@@ -22,6 +23,7 @@ mod memory_api_keys;
 mod memory_attachments;
 mod memory_audit;
 mod memory_bank_accounts;
+mod memory_bank_connections;
 mod memory_categories;
 mod memory_charges;
 mod memory_collection;
@@ -58,11 +60,13 @@ mod message_senders;
 mod nfe_io;
 mod nfe_xml;
 mod ofx;
+mod pluggy;
 mod postgres;
 mod postgres_api_keys;
 mod postgres_attachments;
 mod postgres_audit;
 mod postgres_bank_accounts;
+mod postgres_bank_connections;
 mod postgres_categories;
 mod postgres_charges;
 mod postgres_collection;
@@ -109,6 +113,7 @@ pub use company_fiscal_gateways::{CompanyFiscalGateways, GatewayEndpoints};
 pub use configured_fiscal_gateway::ConfiguredFiscalGateway;
 pub use document_references::RegisterDocumentReferences;
 pub use entry_references::RegisterReferences;
+pub use fake_bank_aggregator::{FakeBankAggregator, NoBankAggregator};
 pub use fake_fiscal_gateway::{FakeFiscalGateway, NoFiscalGateway};
 pub use fake_payment_provider::{
     FAKE_SIGNATURE_HEADER, FAKE_WEBHOOK_SECRET, FakePaymentProvider, NoPaymentProvider,
@@ -123,6 +128,7 @@ pub use memory::{InMemoryCnpjRegistry, InMemoryIdentityRepository, InMemoryParty
 pub use memory_api_keys::InMemoryApiKeyRepository;
 pub use memory_attachments::{InMemoryAttachmentRepository, InMemoryBlobStore};
 pub use memory_bank_accounts::InMemoryBankAccountRepository;
+pub use memory_bank_connections::InMemoryBankConnectionRepository;
 pub use memory_categories::InMemoryCategoryRepository;
 pub use memory_charges::InMemoryChargeRepository;
 pub use memory_collection::{
@@ -161,10 +167,12 @@ pub use message_senders::{InMemoryMessageSender, NoMessageSender, WhatsAppCloudS
 pub use nfe_io::{BrasilApiCityCodes, CityCodes, NfeIoGateway, StaticCityCodes};
 pub use nfe_xml::{MAX_NFE_BYTES, NfeError, parse_nfe};
 pub use ofx::{OfxError, decode as decode_statement, parse_ofx};
+pub use pluggy::PluggyAggregator;
 pub use postgres::{PostgresPartyRepository, connect_and_migrate};
 pub use postgres_api_keys::PostgresApiKeyRepository;
 pub use postgres_attachments::PostgresAttachmentRepository;
 pub use postgres_bank_accounts::PostgresBankAccountRepository;
+pub use postgres_bank_connections::PostgresBankConnectionRepository;
 pub use postgres_categories::PostgresCategoryRepository;
 pub use postgres_charges::PostgresChargeRepository;
 pub use postgres_collection::{

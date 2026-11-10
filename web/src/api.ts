@@ -115,6 +115,49 @@ export interface WebhookInput {
   active?: boolean;
 }
 
+/** A bank account of the company linked to an account at the aggregator, whose statement is pulled every day. */
+export interface BankConnection {
+  id: string;
+  bank_account_id: string;
+  provider: string;
+  item_id: string;
+  account_id: string;
+  status: "connected" | "needs_attention" | "disconnected";
+  /** `YYYY-MM-DD`: the last day a pull reached. */
+  last_synced_on: string | null;
+  last_error: string | null;
+  connected_by: string;
+  created_at: number;
+}
+
+export interface BankConnectionList {
+  items: BankConnection[];
+  /** Whether the server has an aggregator; without one, an OFX file is the way to bring a statement in. */
+  available: boolean;
+  provider: string;
+}
+
+/** An account the aggregator holds inside a connection with a bank. */
+export interface AggregatedBankAccount {
+  id: string;
+  name: string;
+  kind: string;
+  number: string | null;
+}
+
+export interface BankSyncReport {
+  created: number;
+  skipped: number;
+  refused: number;
+  needs_attention: boolean;
+}
+
+export interface BankConnectionInput {
+  bank_account_id: string;
+  item_id: string;
+  account_id: string;
+}
+
 /** What a link leads to, shown before the person accepts. */
 export interface InvitationPreview {
   company_name: string;
@@ -2133,6 +2176,20 @@ export const api = {
     request<InvitationPreview>(`/invitations/${encodeURIComponent(token)}`),
   acceptInvitation: (token: string) =>
     post<{ company_id: string }>(`/invitations/${encodeURIComponent(token)}/accept`),
+  listBankConnections: (companyId: string) =>
+    request<BankConnectionList>(`/companies/${companyId}/bank-connections`),
+  aggregatedBankAccounts: (companyId: string, itemId: string) =>
+    request<{ items: AggregatedBankAccount[] }>(
+      `/companies/${companyId}/bank-connections/accounts?item_id=${encodeURIComponent(itemId)}`,
+    ),
+  connectBankAccount: (companyId: string, input: BankConnectionInput) =>
+    post<BankConnection>(`/companies/${companyId}/bank-connections`, input),
+  syncBankConnection: (companyId: string, id: string) =>
+    post<BankSyncReport>(`/companies/${companyId}/bank-connections/${id}/sync`, {}),
+  disconnectBankConnection: (companyId: string, id: string) =>
+    post<BankConnection>(`/companies/${companyId}/bank-connections/${id}/disconnect`, {}),
+  bankConnectionHistory: (companyId: string, id: string) =>
+    request<HistoryEntry[]>(`/companies/${companyId}/bank-connections/${id}/history`),
   listWebhooks: (companyId: string) =>
     request<WebhookSubscriptionList>(`/companies/${companyId}/webhook-subscriptions`),
   createWebhook: (companyId: string, input: WebhookInput) =>

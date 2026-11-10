@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use conta_verde_api::{ApiConfig, Ports, Services, V1Config, V1Events, router};
+use conta_verde_application::BankSyncService;
 use conta_verde_application::{
     AccountingExportService, ApiKeyService, AttachmentService, AuthService, BalanceService,
     BankAccountService, CategoryService, CommissionService, ContractService, CostCenterService,
@@ -17,6 +18,7 @@ use conta_verde_application::{
     PaymentWebhookService, ProviderCharge, ProviderChargeRequest, ProviderError, ProviderEvent,
     QueuedEmailSender, TextMessage, WebhookError, WebhookHeaders,
 };
+use conta_verde_infrastructure::PostgresBankConnectionRepository;
 use conta_verde_infrastructure::{
     Argon2SecretService, BrasilApiCityCodes, BrasilApiCnpjRegistry, BrasilApiPostalCodeDirectory,
     CachedCnpjRegistry, CompanyFiscalGateways, ConfiguredFiscalGateway, FakeFiscalGateway,
@@ -51,6 +53,8 @@ use tracing_subscriber::EnvFilter;
 struct PostgresPorts;
 
 impl Ports for PostgresPorts {
+    type BankConnections = PostgresBankConnectionRepository;
+    type Aggregator = ConfiguredAggregator;
     type WebhookSubscriptions = PostgresWebhookRepository;
     type Jobs = PostgresJobQueue;
     type ApiKeys = PostgresApiKeyRepository;
@@ -123,6 +127,7 @@ const JOBS_POLL_INTERVAL: Duration = Duration::from_secs(5);
 const JOBS_PER_PASS: usize = 50;
 /// How many tasks send webhooks: a slow subscriber holds up one of them, not the rest ([ADR 0088]).
 const WEBHOOK_WORKERS: usize = 4;
+const BANK_SYNC_POLL_INTERVAL: Duration = Duration::from_secs(60);
 const WEBHOOK_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const WEBHOOK_PER_PASS: usize = 10;
 const CNPJ_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
@@ -259,15 +264,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
     let recurrences = recurrence_service();
     tokio::spawn(generate_recurring_entries(recurrence_service()));
-    let reconciliation = ReconciliationService::new(
-        PostgresStatementLineRepository::new(pool.clone()),
-        FinancialEntryService::new(
-            PostgresFinancialEntryRepository::new(pool.clone()),
+    let reconciliation_over_postgres = || {
+        ReconciliationService::new(
+            PostgresStatementLineRepository::new(pool.clone()),
+            FinancialEntryService::new(
+                PostgresFinancialEntryRepository::new(pool.clone()),
+                references(),
+            ),
+            TransferService::new(PostgresTransferRepository::new(pool.clone()), references()),
             references(),
-        ),
-        TransferService::new(PostgresTransferRepository::new(pool.clone()), references()),
-        references(),
-    );
+        )
+    };
+    let reconciliation = reconciliation_over_postgres();
+    // The bank aggregator pulls statements into the same lines ([ADR 0089]): its own reconciliation use case over the same stores,
+    // and a worker that pulls what is due.
+    let bank_sync = std::sync::Arc::new(BankSyncService::new(
+        PostgresBankConnectionRepository::new(pool.clone()),
+        bank_aggregator_from_env()?,
+        reconciliation_over_postgres(),
+        PostgresJobQueue::new(pool.clone()),
+    ));
+    tokio::spawn(run_bank_sync_worker(bank_sync.clone()));
     let balances = BalanceService::new(
         PostgresBankAccountRepository::new(pool.clone()),
         PostgresFinancialEntryRepository::new(pool.clone()),
@@ -461,6 +478,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         listener,
         router::<PostgresPorts>(
             Services {
+                bank_sync,
                 webhook_subscriptions,
                 api_keys,
                 sale_claims,
@@ -1114,6 +1132,157 @@ async fn run_webhook_worker<R, C, Q, S>(
             if let Err(error) = service.requeue_stale(now.saturating_mul(1000)).await {
                 tracing::error!(%error, "queuing the webhook deliveries that had no job failed");
             }
+        }
+    }
+}
+
+/// Pulls the bank statements that are due: every minute it does the pulls that are queued, and once an hour it queues one for every
+/// connection that has not pulled today ([ADR 0089]). The day is the server's UTC day, the one place besides the other hourly passes
+/// that reads the clock for this.
+async fn run_bank_sync_worker<C, A, K, Q>(service: std::sync::Arc<BankSyncService<C, A, K, Q>>)
+where
+    C: conta_verde_application::BankConnectionRepository,
+    A: conta_verde_application::BankAggregator,
+    K: conta_verde_application::StatementSink,
+    Q: conta_verde_application::JobQueue,
+{
+    let mut tick = tokio::time::interval(BANK_SYNC_POLL_INTERVAL);
+    let mut passes = 0_u64;
+    loop {
+        tick.tick().await;
+        if !service.is_available() {
+            continue;
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| {
+                i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX)
+            });
+        let today = conta_verde_api::today();
+        if passes.is_multiple_of(60) {
+            match service.enqueue_due(today, now).await {
+                Ok(queued) if queued > 0 => tracing::info!(queued, "bank pulls queued"),
+                Ok(_) => {}
+                Err(error) => tracing::error!(%error, "queuing the bank pulls failed"),
+            }
+        }
+        passes += 1;
+        match service.run_due(now, today, 10).await {
+            Ok(report) if report.done > 0 || report.retried > 0 || report.dead > 0 => {
+                tracing::info!(
+                    done = report.done,
+                    retried = report.retried,
+                    dead = report.dead,
+                    "bank pulls run"
+                );
+            }
+            Ok(_) => {}
+            Err(error) => tracing::error!(%error, "running the bank pulls failed"),
+        }
+    }
+}
+
+/// What the installation pulls bank statements through: `BANK_AGGREGATOR=pluggy` with `PLUGGY_CLIENT_ID` and `PLUGGY_CLIENT_SECRET`
+/// (optionally `PLUGGY_API_URL`), or nothing, and then OFX import is the way ([ADR 0089]). An unknown name, or Pluggy without its
+/// credentials, stops the server; the credentials are never in the message.
+#[derive(Clone)]
+enum ConfiguredAggregator {
+    Pluggy(std::sync::Arc<conta_verde_infrastructure::PluggyAggregator>),
+    Off(conta_verde_infrastructure::NoBankAggregator),
+}
+
+impl conta_verde_application::BankAggregator for ConfiguredAggregator {
+    fn provider(&self) -> &'static str {
+        match self {
+            Self::Pluggy(aggregator) => aggregator.provider(),
+            Self::Off(aggregator) => aggregator.provider(),
+        }
+    }
+
+    fn is_enabled(&self) -> bool {
+        matches!(self, Self::Pluggy(_))
+    }
+
+    async fn connect_token(
+        &self,
+        company_id: conta_verde_domain::CompanyId,
+        item: Option<&str>,
+    ) -> Result<String, conta_verde_application::AggregatorError> {
+        match self {
+            Self::Pluggy(aggregator) => aggregator.connect_token(company_id, item).await,
+            Self::Off(aggregator) => aggregator.connect_token(company_id, item).await,
+        }
+    }
+
+    async fn accounts(
+        &self,
+        item: &str,
+    ) -> Result<
+        Vec<conta_verde_application::AggregatedAccount>,
+        conta_verde_application::AggregatorError,
+    > {
+        match self {
+            Self::Pluggy(aggregator) => aggregator.accounts(item).await,
+            Self::Off(aggregator) => aggregator.accounts(item).await,
+        }
+    }
+
+    async fn item_state(
+        &self,
+        item: &str,
+    ) -> Result<conta_verde_application::ItemState, conta_verde_application::AggregatorError> {
+        match self {
+            Self::Pluggy(aggregator) => aggregator.item_state(item).await,
+            Self::Off(aggregator) => aggregator.item_state(item).await,
+        }
+    }
+
+    async fn transactions(
+        &self,
+        account: &str,
+        from: conta_verde_domain::CalendarDate,
+        to: conta_verde_domain::CalendarDate,
+    ) -> Result<
+        Vec<conta_verde_application::AggregatedTransaction>,
+        conta_verde_application::AggregatorError,
+    > {
+        match self {
+            Self::Pluggy(aggregator) => aggregator.transactions(account, from, to).await,
+            Self::Off(aggregator) => aggregator.transactions(account, from, to).await,
+        }
+    }
+
+    async fn disconnect(&self, item: &str) -> Result<(), conta_verde_application::AggregatorError> {
+        match self {
+            Self::Pluggy(aggregator) => aggregator.disconnect(item).await,
+            Self::Off(aggregator) => aggregator.disconnect(item).await,
+        }
+    }
+}
+
+fn bank_aggregator_from_env()
+-> Result<ConfiguredAggregator, Box<dyn std::error::Error + Send + Sync>> {
+    match std::env::var("BANK_AGGREGATOR").as_deref() {
+        Err(_) | Ok("off") => Ok(ConfiguredAggregator::Off(
+            conta_verde_infrastructure::NoBankAggregator,
+        )),
+        Ok("pluggy") => {
+            let id = std::env::var("PLUGGY_CLIENT_ID")
+                .map_err(|_| "BANK_AGGREGATOR=pluggy needs PLUGGY_CLIENT_ID")?;
+            let secret = std::env::var("PLUGGY_CLIENT_SECRET")
+                .map_err(|_| "BANK_AGGREGATOR=pluggy needs PLUGGY_CLIENT_SECRET")?;
+            let url = std::env::var("PLUGGY_API_URL").ok();
+            if let Some(url) = url.as_deref()
+                && !is_https_or_local(url)
+            {
+                return Err("PLUGGY_API_URL must be https (or http on this machine)".into());
+            }
+            Ok(ConfiguredAggregator::Pluggy(std::sync::Arc::new(
+                conta_verde_infrastructure::PluggyAggregator::new(&id, &secret, url.as_deref())?,
+            )))
+        }
+        Ok(other) => {
+            Err(format!("BANK_AGGREGATOR must be `off` or `pluggy`, got `{other}`").into())
         }
     }
 }

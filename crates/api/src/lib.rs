@@ -4,6 +4,7 @@ mod api_keys;
 mod attachments;
 mod auth;
 mod bank_accounts;
+mod bank_connections;
 mod cash_flow;
 mod categories;
 mod charges;
@@ -60,23 +61,23 @@ use axum::{Json, Router};
 use conta_verde_application::{
     AccountingExportService, ApiKeyRepository, ApiKeyService, AttachmentRepository,
     AttachmentService, AuthService, BalanceService, BankAccountRepository, BankAccountService,
-    BlobStore, CategoryRepository, CategoryService, ChargeRepository, ChargeService, CnpjRegistry,
-    CommissionRuleRepository, CommissionService, ContractRepository, ContractService,
-    CostCenterRepository, CostCenterService, DocumentMailRepository, DocumentMailService,
-    DocumentReferences, DreService, EmailSender, EntryLookups, EntryReferences, ExportLookups,
-    FinancialEntryRepository, FinancialEntryService, FiscalDocumentRepository,
-    FiscalDocumentService, FiscalGatewayResolver, FiscalSettingsRepository, FiscalSettingsService,
-    GatewaySettingsRepository, GatewaySettingsService, IdentityRepository,
-    InventoryCountRepository, InventoryCountService, InvitationRepository, JobQueue, MemberService,
-    OpeningRepository, PackageScheduleRepository, PackageScheduleService, PartyRepository,
-    PartyService, PaymentMethodRepository, PaymentMethodService, PaymentProvider,
-    PaymentTermRepository, PaymentTermService, PostalCodeDirectory, PostalCodeService,
-    PriceListRepository, PriceListService, ProductRepository, ProductService,
-    PurchaseOrderRepository, PurchaseService, QuoteRepository, QuoteService, ReconciliationService,
-    RecurrenceRepository, RecurrenceService, SaleClaimRepository, SaleRepository, SaleService,
-    SalesReportService, SecretService, StatementLineRepository, StockMovementRepository,
-    StockService, StockSettingsRepository, TransferRepository, TransferService, WebhookRepository,
-    WebhookService,
+    BankAggregator, BankConnectionRepository, BankSyncService, BlobStore, CategoryRepository,
+    CategoryService, ChargeRepository, ChargeService, CnpjRegistry, CommissionRuleRepository,
+    CommissionService, ContractRepository, ContractService, CostCenterRepository,
+    CostCenterService, DocumentMailRepository, DocumentMailService, DocumentReferences, DreService,
+    EmailSender, EntryLookups, EntryReferences, ExportLookups, FinancialEntryRepository,
+    FinancialEntryService, FiscalDocumentRepository, FiscalDocumentService, FiscalGatewayResolver,
+    FiscalSettingsRepository, FiscalSettingsService, GatewaySettingsRepository,
+    GatewaySettingsService, IdentityRepository, InventoryCountRepository, InventoryCountService,
+    InvitationRepository, JobQueue, MemberService, OpeningRepository, PackageScheduleRepository,
+    PackageScheduleService, PartyRepository, PartyService, PaymentMethodRepository,
+    PaymentMethodService, PaymentProvider, PaymentTermRepository, PaymentTermService,
+    PostalCodeDirectory, PostalCodeService, PriceListRepository, PriceListService,
+    ProductRepository, ProductService, PurchaseOrderRepository, PurchaseService, QuoteRepository,
+    QuoteService, ReconciliationService, RecurrenceRepository, RecurrenceService,
+    SaleClaimRepository, SaleRepository, SaleService, SalesReportService, SecretService,
+    StatementLineRepository, StockMovementRepository, StockService, StockSettingsRepository,
+    TransferRepository, TransferService, WebhookRepository, WebhookService,
 };
 use conta_verde_application::{
     CollectionService, CollectionSettingsRepository, DunningPlanRepository, DunningService,
@@ -136,6 +137,8 @@ pub use clock::{customer_today, now_millis, now_unix, today};
 
 pub trait Ports: 'static {
     type ApiKeys: ApiKeyRepository + 'static;
+    type BankConnections: BankConnectionRepository + 'static;
+    type Aggregator: BankAggregator + 'static;
     type WebhookSubscriptions: WebhookRepository + 'static;
     type Jobs: JobQueue + 'static;
     type SaleClaims: SaleClaimRepository + 'static;
@@ -338,8 +341,24 @@ pub type OutgoingHooksOf<X> = Arc<
     >,
 >;
 
+/// The bank connections and the pull of their statements ([ADR 0089]), shared with the worker that pulls.
+pub type BankSyncOf<X> = Arc<
+    BankSyncService<
+        <X as Ports>::BankConnections,
+        <X as Ports>::Aggregator,
+        ReconciliationService<
+            <X as Ports>::Statements,
+            <X as Ports>::Entries,
+            <X as Ports>::Transfers,
+            <X as Ports>::EntryReferences,
+        >,
+        <X as Ports>::Jobs,
+    >,
+>;
+
 /// The use cases the API serves.
 pub struct Services<X: Ports> {
+    pub bank_sync: BankSyncOf<X>,
     pub webhook_subscriptions: OutgoingHooksOf<X>,
     pub api_keys: ApiKeyService<X::ApiKeys, X::Secrets>,
     pub sale_claims: X::SaleClaims,
@@ -385,6 +404,7 @@ pub struct Services<X: Ports> {
 }
 
 pub(crate) struct AppState<X: Ports> {
+    bank_sync: BankSyncOf<X>,
     webhook_subscriptions: OutgoingHooksOf<X>,
     api_keys: ApiKeyService<X::ApiKeys, X::Secrets>,
     sale_claims: X::SaleClaims,
@@ -437,6 +457,7 @@ pub(crate) type SharedState<X> = Arc<AppState<X>>;
 pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
     let limiter = v1::RateLimiter::new(config.v1.rate_limit_per_minute);
     let state = Arc::new(AppState {
+        bank_sync: services.bank_sync,
         webhook_subscriptions: services.webhook_subscriptions,
         api_keys: services.api_keys,
         sale_claims: services.sale_claims,
@@ -502,6 +523,30 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         .route(
             "/auth/password-reset/confirm",
             post(auth::reset_password::<X>),
+        )
+        .route(
+            "/companies/{company_id}/bank-connections",
+            get(bank_connections::list_connections::<X>).post(bank_connections::connect::<X>),
+        )
+        .route(
+            "/companies/{company_id}/bank-connections/connect-token",
+            post(bank_connections::connect_token::<X>),
+        )
+        .route(
+            "/companies/{company_id}/bank-connections/accounts",
+            get(bank_connections::aggregator_accounts::<X>),
+        )
+        .route(
+            "/companies/{company_id}/bank-connections/{connection_id}/sync",
+            post(bank_connections::sync_now::<X>),
+        )
+        .route(
+            "/companies/{company_id}/bank-connections/{connection_id}/disconnect",
+            post(bank_connections::disconnect::<X>),
+        )
+        .route(
+            "/companies/{company_id}/bank-connections/{connection_id}/history",
+            get(bank_connections::connection_history::<X>),
         )
         .route(
             "/companies/{company_id}/webhook-subscriptions",
@@ -1240,7 +1285,7 @@ mod tests {
 
     use axum::body::Body;
     use axum::http::{Request, StatusCode, header};
-    use conta_verde_application::PostalCodeEntry;
+    use conta_verde_application::{BankSyncService, PostalCodeEntry};
     use conta_verde_infrastructure::{
         Argon2SecretService, FakeFiscalGateway, FakePaymentProvider, InMemoryApiKeyRepository,
         InMemoryAttachmentRepository, InMemoryBankAccountRepository, InMemoryBlobStore,
@@ -1261,6 +1306,7 @@ mod tests {
         InMemoryStockSettingsRepository, InMemoryTransferRepository, InMemoryWebhookRepository,
         RegisterDocumentReferences, RegisterReferences, RingSecretCipher,
     };
+    use conta_verde_infrastructure::{FakeBankAggregator, InMemoryBankConnectionRepository};
     use http_body_util::BodyExt;
     use serde_json::{Value, json};
     use tower::ServiceExt;
@@ -1329,6 +1375,8 @@ mod tests {
         type PeriodLocks = InMemoryPeriodLockRepository;
         type PackageSchedules = InMemoryPackageScheduleRepository;
         type ApiKeys = InMemoryApiKeyRepository;
+        type BankConnections = InMemoryBankConnectionRepository;
+        type Aggregator = FakeBankAggregator;
         type WebhookSubscriptions = InMemoryWebhookRepository;
         type Jobs = InMemoryJobQueue;
         type SaleClaims = InMemorySaleClaimRepository;
@@ -1386,6 +1434,8 @@ mod tests {
         type PeriodLocks = InMemoryPeriodLockRepository;
         type PackageSchedules = InMemoryPackageScheduleRepository;
         type ApiKeys = InMemoryApiKeyRepository;
+        type BankConnections = InMemoryBankConnectionRepository;
+        type Aggregator = FakeBankAggregator;
         type WebhookSubscriptions = InMemoryWebhookRepository;
         type Jobs = InMemoryJobQueue;
         type SaleClaims = InMemorySaleClaimRepository;
@@ -1657,6 +1707,24 @@ mod tests {
         static HOOKS: std::cell::RefCell<Option<Arc<TestHooks>>> = const { std::cell::RefCell::new(None) };
     }
 
+    type TestBankSync = BankSyncOf<MemoryPorts>;
+
+    /// Bank connections over an aggregator and statements of their own.
+    fn standalone_bank_sync() -> TestBankSync {
+        Arc::new(BankSyncService::new(
+            InMemoryBankConnectionRepository::default(),
+            FakeBankAggregator::default(),
+            standalone_reconciliation(),
+            InMemoryJobQueue::default(),
+        ))
+    }
+
+    thread_local! {
+        /// The bank aggregator of the app of this test, so a test can tell it what the bank holds.
+        static AGGREGATOR: std::cell::RefCell<FakeBankAggregator> =
+            std::cell::RefCell::new(FakeBankAggregator::default());
+    }
+
     fn standalone_api_keys() -> ApiKeyService<InMemoryApiKeyRepository, Argon2SecretService> {
         ApiKeyService::new(
             InMemoryApiKeyRepository::default(),
@@ -1831,6 +1899,29 @@ mod tests {
         bank_accounts: &InMemoryBankAccountRepository,
         payment_methods: &InMemoryPaymentMethodRepository,
     ) -> TestReconciliation {
+        reconciliation_with(
+            InMemoryStatementLineRepository::default(),
+            entries,
+            transfers,
+            categories,
+            cost_centers,
+            parties,
+            bank_accounts,
+            payment_methods,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn reconciliation_with(
+        statements: InMemoryStatementLineRepository,
+        entries: InMemoryFinancialEntryRepository,
+        transfers: InMemoryTransferRepository,
+        categories: &InMemoryCategoryRepository,
+        cost_centers: &InMemoryCostCenterRepository,
+        parties: &InMemoryPartyRepository,
+        bank_accounts: &InMemoryBankAccountRepository,
+        payment_methods: &InMemoryPaymentMethodRepository,
+    ) -> TestReconciliation {
         let references = || {
             references_over(
                 categories,
@@ -1841,7 +1932,7 @@ mod tests {
             )
         };
         ReconciliationService::new(
-            InMemoryStatementLineRepository::default(),
+            statements,
             FinancialEntryService::new(entries, references()),
             TransferService::new(transfers, references()),
             references(),
@@ -2267,6 +2358,7 @@ mod tests {
     ) -> Router {
         router::<MemoryPorts>(
             Services {
+                bank_sync: standalone_bank_sync(),
                 webhook_subscriptions: standalone_hooks(),
                 api_keys: standalone_api_keys(),
                 sale_claims: InMemorySaleClaimRepository::default(),
@@ -2935,6 +3027,7 @@ mod tests {
     async fn a_postal_code_lookup_switched_off_is_a_409() {
         let app = router::<NoLookupPorts>(
             Services {
+                bank_sync: standalone_bank_sync(),
                 webhook_subscriptions: standalone_hooks(),
                 api_keys: standalone_api_keys(),
                 sale_claims: InMemorySaleClaimRepository::default(),
@@ -5167,6 +5260,7 @@ mod tests {
         let registry: Option<InMemoryCnpjRegistry> = None;
         let app = router::<NoLookupPorts>(
             Services {
+                bank_sync: standalone_bank_sync(),
                 webhook_subscriptions: standalone_hooks(),
                 api_keys: standalone_api_keys(),
                 sale_claims: InMemorySaleClaimRepository::default(),
@@ -6768,8 +6862,30 @@ mod tests {
                 stock_settings.clone(),
             )
         };
+        // The statements the web app lists are the ones the bank sync stores.
+        let statement_store = InMemoryStatementLineRepository::default();
+        let aggregator = FakeBankAggregator::default();
+        AGGREGATOR.with(|held| held.replace(aggregator.clone()));
+        let reconciliation = || {
+            reconciliation_with(
+                statement_store.clone(),
+                entry_store.clone(),
+                transfer_store.clone(),
+                &categories,
+                &cost_centers,
+                &parties,
+                &bank_accounts,
+                &payment_methods,
+            )
+        };
         let app = router::<MemoryPorts>(
             Services {
+                bank_sync: Arc::new(BankSyncService::new(
+                    InMemoryBankConnectionRepository::default(),
+                    aggregator,
+                    reconciliation(),
+                    InMemoryJobQueue::default(),
+                )),
                 webhook_subscriptions: hooks.clone(),
                 api_keys: standalone_api_keys(),
                 sale_claims: claims.clone(),
@@ -6836,15 +6952,7 @@ mod tests {
                         &payment_methods,
                     ),
                 ),
-                reconciliation: reconciliation_over(
-                    entry_store.clone(),
-                    transfer_store.clone(),
-                    &categories,
-                    &cost_centers,
-                    &parties,
-                    &bank_accounts,
-                    &payment_methods,
-                ),
+                reconciliation: reconciliation(),
                 recurrences: recurrences_over(
                     entry_store.clone(),
                     &categories,
@@ -15392,4 +15500,5 @@ mod tests {
 
     include!("v1/tests.rs");
     include!("v1/webhook_tests.rs");
+    include!("bank_connection_tests.rs");
 }

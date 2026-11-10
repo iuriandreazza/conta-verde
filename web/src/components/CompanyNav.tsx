@@ -86,6 +86,7 @@ const AREAS: NavArea[] = [
       { path: "/cash-flow", label: "Fluxo de caixa", icon: WavesIcon },
       { path: "/transfers", label: "Transferências", icon: SendIcon },
       { path: "/reconciliation", label: "Conciliação", icon: CheckIcon },
+      { path: "/bank-connections", label: "Conexões bancárias", icon: WalletIcon },
       { path: "/recurrences", label: "Recorrências", icon: RotateCCWIcon },
       { path: "/collection", label: "Cobrança", icon: CreditCardIcon },
       { path: "/delinquency", label: "Inadimplência", icon: BadgeAlertIcon },

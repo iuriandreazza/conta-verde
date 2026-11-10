@@ -192,4 +192,44 @@ mod tests {
         )
         .await;
     }
+
+    #[tokio::test]
+    async fn syncs_bank_connections() {
+        use conta_verde_application::BankSyncService;
+
+        let registers = Registers::new();
+        let (company, other_company) = (CompanyId::generate(), CompanyId::generate());
+        let seed = registers.seed(company).await;
+        let store = InMemoryStatementLineRepository::default();
+        let (entry_store, transfer_store) = (
+            InMemoryFinancialEntryRepository::default(),
+            InMemoryTransferRepository::default(),
+        );
+        let reconciliation = || {
+            ReconciliationService::new(
+                store.clone(),
+                FinancialEntryService::new(entry_store.clone(), registers.references()),
+                TransferService::new(transfer_store.clone(), registers.references()),
+                registers.references(),
+            )
+        };
+        let aggregator =
+            crate::FakeBankAggregator::default().with_account("item-1", "acc-1", "Conta");
+        let sync = BankSyncService::new(
+            crate::InMemoryBankConnectionRepository::default(),
+            aggregator.clone(),
+            reconciliation(),
+            crate::InMemoryJobQueue::default(),
+        );
+        crate::contract_integrations::syncs_bank_connections(
+            &sync,
+            &aggregator,
+            &reconciliation(),
+            company,
+            other_company,
+            seed.bank_account,
+            seed.other_bank_account,
+        )
+        .await;
+    }
 }

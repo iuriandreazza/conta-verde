@@ -75,9 +75,9 @@ where
 
     async fn execute(&self, job: &Job) -> Outcome {
         match job.kind {
-            // Webhook deliveries are done by the webhook workers, which claim only their kind.
-            JobKind::DeliverWebhook => {
-                Outcome::Unrunnable("a webhook delivery is not done by this worker")
+            // Webhook deliveries and bank pulls are done by workers of their own, which claim only their kind.
+            JobKind::DeliverWebhook | JobKind::SyncBankConnection => {
+                Outcome::Unrunnable("this job is done by a worker of its own")
             }
             JobKind::SendEmail => {
                 let (to, subject, body, html) = match job.args.as_slice() {
