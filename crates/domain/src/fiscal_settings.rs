@@ -242,7 +242,7 @@ pub struct TaxRule {
 }
 
 impl TaxRule {
-    fn new(draft: &TaxRuleDraft) -> Result<Self, DomainError> {
+    pub(crate) fn new(draft: &TaxRuleDraft) -> Result<Self, DomainError> {
         let ncm_prefix = optional_line(
             draft.ncm_prefix.as_deref(),
             MAX_NCM_PREFIX_DIGITS,

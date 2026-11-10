@@ -19830,6 +19830,114 @@ pub async fn syncs_and_manifests_received_invoices<D, S, P, Y, F, B, R>(
     gateway.without_manifestation(false);
 }
 
+/// A company under a regime the product does not calculate for (the Lucro Presumido) issues **no** invoice of any kind, however the
+/// calculation of the taxes is built ([ADR 0084]): the refusal names the regime, nothing is sent, and no document is written.
+#[allow(clippy::too_many_arguments)]
+pub async fn the_regular_regimes_issue_nothing_until_their_calculation_is_signed<
+    D,
+    S,
+    P,
+    Y,
+    F,
+    B,
+    R,
+>(
+    service: &conta_verde_application::FiscalDocumentService<
+        D,
+        S,
+        P,
+        Y,
+        F,
+        crate::FakeFiscalGateway,
+        B,
+        R,
+    >,
+    gateway: &crate::FakeFiscalGateway,
+    settings: &F,
+    sales: &S,
+    company: CompanyId,
+    entry_seed: &EntrySeed,
+    seed: &SalesSeed,
+    fiscal: &FiscalSeed,
+) where
+    D: conta_verde_application::FiscalDocumentRepository,
+    S: conta_verde_application::SaleRepository,
+    P: PartyRepository,
+    Y: conta_verde_application::ProductRepository,
+    F: conta_verde_application::FiscalSettingsRepository,
+    B: BlobStore,
+    R: conta_verde_application::EntryReferences,
+{
+    use conta_verde_application::ApplicationError;
+
+    let user = actor();
+    let mut draft = fiscal_settings_draft(
+        "11222333000181",
+        conta_verde_domain::FiscalEnvironment::Homologation,
+    );
+    draft.regime = conta_verde_domain::TaxRegime::LucroPresumido;
+    draft.natures.push(service_nature_draft());
+    settings
+        .save(
+            &conta_verde_domain::FiscalSettings::new(company, draft).unwrap(),
+            &AuditEntry {
+                company_id: company,
+                actor: actor(),
+                entity: AuditEntity::FiscalSettings,
+                entity_id: company.as_uuid(),
+                action: AuditAction::Created,
+                changes: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    let sale = save_a_mixed_sale(sales, company, entry_seed, seed, fiscal).await;
+    let refused = |error: ApplicationError| match error {
+        ApplicationError::FiscalRule(text) => assert!(text.contains("Simples Nacional"), "{text}"),
+        other => panic!("a fiscal rule was expected, got {other:?}"),
+    };
+    refused(
+        service
+            .issue(company, &user, issue_request(sale), FISCAL_NOW)
+            .await
+            .unwrap_err(),
+    );
+    refused(
+        service
+            .issue_nfce(
+                company,
+                &user,
+                issue_nfce_request(sale, "30.00", false),
+                FISCAL_NOW,
+            )
+            .await
+            .unwrap_err(),
+    );
+    refused(
+        service
+            .issue_nfse(company, &user, issue_nfse_request(sale), FISCAL_NOW)
+            .await
+            .unwrap_err(),
+    );
+    assert!(gateway.submitted().is_empty());
+    assert!(gateway.submitted_nfce().is_empty());
+    assert!(gateway.submitted_nfse().is_empty());
+    assert!(
+        service
+            .list(
+                company,
+                &conta_verde_application::FiscalDocumentQuery::default(),
+                None,
+                Some(10),
+            )
+            .await
+            .unwrap()
+            .items
+            .is_empty(),
+        "no document was written"
+    );
+}
+
 /// An NFS-e is issued from the **service lines** of a completed sale under a service nature that carries the company's
 /// ISSQN terms; the DPS is numbered once and never reused (not by a cancelled document, not by a resend, not after a
 /// gateway that was down); the NF-e of the same sale covers only the products; and nothing is sent until every choice is

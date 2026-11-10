@@ -99,6 +99,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0081](0081-nfse-documents.md) | NFS-e documents, the DPS numbering and the port's NFS-e calls | accepted | 7 |
 | [0082](0082-nfce-and-point-of-sale.md) | NFC-e at the counter and the minimal point of sale | accepted | 7 |
 | [0083](0083-received-invoices-and-the-fiscal-webhook.md) | Received invoices, the recipient's manifestation and the fiscal webhook | accepted | 7 |
+| [0084](0084-tax-calculation-behind-a-port.md) | The tax calculation behind a port, and the accountant's checklist | accepted | 7 |
 
 ## Template
 

@@ -87,6 +87,7 @@ mod statement_line_repository;
 mod stock_repository;
 mod stock_service;
 mod stock_settings_repository;
+mod tax_calculator;
 mod text;
 mod transfer_repository;
 mod transfer_service;
@@ -219,6 +220,7 @@ pub use stock_service::{
     StockPosition, StockPositionPage, StockService, StockValuation, ValuationRow,
 };
 pub use stock_settings_repository::StockSettingsRepository;
+pub use tax_calculator::{RuleRateCalculator, TaxCalculator};
 pub use transfer_repository::{
     AccountMovement, DayMovement, OpeningRepository, TransferQuery, TransferRepository,
 };
