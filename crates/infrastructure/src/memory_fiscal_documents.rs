@@ -70,6 +70,16 @@ impl FiscalDocumentRepository for InMemoryFiscalDocumentRepository {
                     && stored.kind() == document.kind()
                     && stored.status().is_live()
             });
+        // The index of the migration: an access key names one document of a company.
+        let key_taken = document.authorization().is_some_and(|authorization| {
+            state.documents.iter().any(|stored| {
+                stored.company_id() == document.company_id()
+                    && stored.id() != document.id()
+                    && stored
+                        .authorization()
+                        .is_some_and(|other| other.access_key() == authorization.access_key())
+            })
+        });
         let stored = state
             .documents
             .iter_mut()
@@ -89,8 +99,23 @@ impl FiscalDocumentRepository for InMemoryFiscalDocumentRepository {
                 "the content of an authorized fiscal document never changes".to_owned(),
             ));
         }
+        // What the migration's trigger holds: a cancelled or denied document never moves again.
+        if matches!(
+            stored.status(),
+            FiscalDocumentStatus::Cancelled | FiscalDocumentStatus::Denied
+        ) && stored.status() != document.status()
+        {
+            return Err(RepositoryError::Storage(
+                "a cancelled or denied fiscal document never moves again".to_owned(),
+            ));
+        }
         if others_live {
             return Err(RepositoryError::FiscalDocumentAlreadyLive);
+        }
+        if key_taken {
+            return Err(RepositoryError::Storage(
+                "an access key names one fiscal document".to_owned(),
+            ));
         }
         *stored = document.clone();
         state.audit.record(audit);
@@ -210,5 +235,16 @@ mod tests {
             SaleId::generate(),
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn an_access_key_names_one_document() {
+        let repository = InMemoryFiscalDocumentRepository::default();
+        let company = CompanyId::generate();
+        contract::fiscal_document_ready_to_authorize(&repository, company, SaleId::generate())
+            .await;
+        let error =
+            contract::authorize_with_the_same_key(&repository, company, SaleId::generate()).await;
+        assert!(matches!(error, RepositoryError::Storage(_)), "{error:?}");
     }
 }

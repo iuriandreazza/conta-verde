@@ -249,7 +249,6 @@ impl FiscalDocument {
         }
         Ok(Self {
             content: validated(draft)?,
-            refusal: None,
             ..self.clone()
         })
     }
@@ -419,9 +418,12 @@ impl FiscalDocument {
         self.note.as_deref()
     }
 
-    /// Whether the content differs from another's: what an adapter refuses to write once authorized.
+    /// Whether the content or what the authority gave differs from another's: what an adapter refuses to write once
+    /// authorized.
     pub fn content_differs_from(&self, other: &Self) -> bool {
-        self.content != other.content || self.kind != other.kind
+        self.content != other.content
+            || self.kind != other.kind
+            || self.authorization != other.authorization
     }
 }
 
@@ -697,6 +699,19 @@ mod tests {
             authorized.rebuilt_with(changed),
             Err(DomainError::InvalidFiscalTransition)
         );
+    }
+
+    #[test]
+    fn a_rejected_document_built_again_keeps_its_refusal_until_it_is_sent() {
+        let rejected = document()
+            .submitted()
+            .unwrap()
+            .rejected(FiscalRefusal::new("225", "Falha"))
+            .unwrap();
+        let rebuilt = rejected.rebuilt_with(draft()).unwrap();
+        assert_eq!(rebuilt.status(), FiscalDocumentStatus::Rejected);
+        assert!(rebuilt.refusal().is_some());
+        assert!(rebuilt.submitted().unwrap().refusal().is_none());
     }
 
     #[test]

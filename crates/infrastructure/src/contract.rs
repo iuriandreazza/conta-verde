@@ -17670,6 +17670,26 @@ pub async fn fiscal_documents_are_kept<R: conta_verde_application::FiscalDocumen
         conta_verde_domain::Amount::parse("100.50").unwrap()
     );
 
+    let reauthorized = authorized.clone().restored(
+        FiscalDocumentStatus::Authorized,
+        None,
+        Some(fiscal_authorization(8)),
+        None,
+    );
+    assert!(
+        matches!(
+            repository
+                .replace(
+                    &reauthorized,
+                    FiscalDocumentStatus::Authorized,
+                    &fiscal_document_audit(&reauthorized, AuditAction::Updated, Vec::new()),
+                )
+                .await,
+            Err(RepositoryError::Storage(_))
+        ),
+        "what the authority gave is fixed too"
+    );
+
     // Files: one per kind, never replaced, the company's own.
     let blob = BlobId::generate();
     let xml = FiscalFile::new(blob, company, draft.id(), FiscalFileKind::Xml, 120).unwrap();
@@ -17807,6 +17827,17 @@ pub async fn fiscal_documents_are_kept<R: conta_verde_application::FiscalDocumen
         )
         .await
         .unwrap();
+    // A cancelled document never moves again.
+    assert!(matches!(
+        repository
+            .replace(
+                &authorized,
+                FiscalDocumentStatus::Cancelled,
+                &fiscal_document_audit(&authorized, AuditAction::Updated, Vec::new()),
+            )
+            .await,
+        Err(RepositoryError::Storage(_))
+    ));
     // A rejected document may be built again, with new content, and sent again under the same id.
     let rebuilt = rejected
         .rebuilt_with(fiscal_document_draft(sale, "250"))

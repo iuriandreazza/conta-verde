@@ -46,10 +46,13 @@ or `Authorized`, `Contingency` to the same three, `Authorized` to `Cancelled`. N
 bug in a use case or a hand-written statement cannot rewrite a fiscal document. Only a `draft` or `rejected` document has its
 content replaced (when it is sent again).
 
-**One live document per sale and kind**: a partial unique index on `(company_id, origin, kind)` where the status is `draft`,
+**One live document per sale and kind**: a partial unique index on `(company_id, sale_id, kind)` where the status is `draft`,
 `processing`, `authorized` or `contingency`, and the in-memory adapter refuses the same case (`FiscalDocumentAlreadyLive`), proved
-by one contract test on both. A `rejected`, `denied` or `cancelled` document frees the sale for a new one with a new id and a new
-reference.
+by one contract test on both. A `rejected`, `denied` or `cancelled` document no longer holds the sale. A rejected one is sent again **under the same id and
+reference** (once the person fixed the sale); if the sale has meanwhile been given another live document the write is refused
+(`FiscalDocumentAlreadyLive`). A denied or cancelled one is final and a new document gets a new id. **A cancelled or denied
+document never moves again**, held by the domain, both adapters and the trigger. An access key names one document of a
+company, also held by both adapters.
 
 ### Files (4a)
 
@@ -58,8 +61,10 @@ a **`BlobId`** (a UUID) now, and an `AttachmentId` converts into it, so an attac
 before (`<root>/<company>/<id>`; a test writes with the attachment's id and reads with the blob's). A `fiscal_files` record
 (company, document, kind, blob, size, SHA-256) says whose a file is and what it holds. **The file is written before the record that
 names it**; a file is **never deleted**, not even when its document is cancelled (the XML of the cancellation is another file).
-Kinds: `xml`, `pdf`, `cancellation_xml`, `correction_xml` (numbered). A file is stored once per document and kind (a repeat of the
-same bytes is a no-op, a different content for the same kind is refused: an authorized document's XML does not change).
+Kinds in 4a: `xml`, `pdf`, `cancellation_xml`; 4b adds the correction letters' XML with a migration that widens the `CHECK` and the
+key (one file per document and kind becomes one per document, kind and number). A file is stored once per document and kind: a
+second one is refused (`DuplicateFiscalFile`), so an authorized document's XML never changes; the use case that finds a file
+already recorded does not write it again.
 
 ### Issuing (4b)
 
