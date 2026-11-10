@@ -21,8 +21,8 @@ What the product kept so far does not give an NFS-e what it needs:
   city's name and the state, which cannot tell two cities of the same name apart nor spell one the same way twice.
 - **What the service is.** A service nature had no tax data at all (ADR 0074 left it to the NFS-e): no code from the national list of
   services, no way the ISSQN is charged, no rate.
-- **What the gateway needs of a service.** Focus NFe's national endpoint and NFE.io's service-invoice API both ask for the national code
-  of the service; a gateway whose layout is municipal also asks for the municipality's own code.
+- **What the gateway needs of a service.** As far as their published documentation shows (not exercised), Focus NFe's national endpoint and NFE.io's
+  service-invoice API ask for the national code of the service; a gateway whose layout is municipal also asks for the municipality's own code.
 
 ## Decision
 
@@ -43,7 +43,7 @@ buyer is not ours to ask; the issuer is.)
 ### Service: the ISSQN terms of a nature
 
 A service nature may carry `ServiceTerms`: the **national tax code** of the service (six digits: item, sub-item and detail of the national
-list), the municipality's **own code** (up to 20 characters, for a gateway whose layout is municipal), how the ISSQN is charged
+list), the municipality's **own code** (up to 20 characters of one line, without `:`, `|` or `;`, which the trail's text uses to separate its parts; for a gateway whose layout is municipal), how the ISSQN is charged
 (`taxable`, `immune`, `export` or `not_incident`, the four values of the national standard's `tribISSQN` that a service of the company's own can
 have) and, when the company sets it, the **rate** (0 to 100, two decimals, an exact decimal). A product nature carries none, and none is
 required to save the settings: a nature without them is a service the company has not yet described, and an NFS-e under it is refused.

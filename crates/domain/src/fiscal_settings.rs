@@ -143,10 +143,8 @@ impl ServiceTerms {
     fn new(draft: &ServiceTermsDraft) -> Result<Self, DomainError> {
         Ok(Self {
             national_tax_code: digits_of(&draft.national_tax_code, 6, "national_tax_code")?,
-            municipal_service_code: optional_line(
+            municipal_service_code: municipal_service_code_of(
                 draft.municipal_service_code.as_deref(),
-                MAX_MUNICIPAL_SERVICE_CODE_CHARS,
-                DomainError::InvalidFiscalField("municipal_service_code"),
             )?,
             iss_taxation: draft.iss_taxation,
             iss_rate: rate_of(draft.iss_rate.as_deref(), "iss_rate")?,
@@ -179,6 +177,17 @@ impl ServiceTerms {
                 .map(|rate| rate.to_string())
                 .unwrap_or_default()
         )
+    }
+}
+
+/// The municipality's own code for a service: free text of one line, without the characters the trail's text separates its
+/// parts with, so what it records can always be read back.
+fn municipal_service_code_of(raw: Option<&str>) -> Result<Option<String>, DomainError> {
+    let invalid = DomainError::InvalidFiscalField("municipal_service_code");
+    let code = optional_line(raw, MAX_MUNICIPAL_SERVICE_CODE_CHARS, invalid.clone())?;
+    match code {
+        Some(code) if code.contains([':', '|', ';']) => Err(invalid),
+        code => Ok(code),
     }
 }
 
@@ -350,6 +359,9 @@ impl OperationNature {
             return Err(DomainError::InvalidFiscalField("code"));
         }
         let name = required_line(&draft.name, MAX_NATURE_NAME_CHARS, "name")?;
+        if draft.kind == NatureKind::Product && draft.service.is_some() {
+            return Err(DomainError::ProductNatureHasNoServiceTerms);
+        }
         let blank = |raw: &Option<String>| raw.as_deref().is_none_or(|raw| raw.trim().is_empty());
         let (cfop_in_state, cfop_interstate, rules, service) = match draft.kind {
             NatureKind::Product => (
@@ -364,14 +376,9 @@ impl OperationNature {
                     "cfop_interstate",
                 )?),
                 rules_of(&draft.rules)?,
-                {
-                    if draft.service.is_some() {
-                        return Err(DomainError::ProductNatureHasNoServiceTerms);
-                    }
-                    None
-                },
+                None,
             ),
-            // A service has no CFOP, and the municipal tax of one is decided with the NFS-e (ADR 0073).
+            // A service has no CFOP and no tax rules; what it says about the ISSQN is its terms (ADR 0080).
             NatureKind::Service => {
                 if !blank(&draft.cfop_in_state) || !blank(&draft.cfop_interstate) {
                     return Err(DomainError::ServiceNatureHasNoCfop);
@@ -1031,6 +1038,58 @@ mod tests {
             product.unwrap_err(),
             DomainError::ProductNatureHasNoServiceTerms
         );
+    }
+
+    #[test]
+    fn the_trail_text_of_a_nature_grows_a_part_only_for_a_service_with_terms() {
+        let nature = |service: Option<ServiceTermsDraft>| {
+            settings(|d| {
+                d.natures = vec![OperationNatureDraft {
+                    code: "service".into(),
+                    name: "Serviço".into(),
+                    kind: NatureKind::Service,
+                    cfop_in_state: None,
+                    cfop_interstate: None,
+                    active: true,
+                    rules: vec![],
+                    service,
+                }];
+            })
+            .unwrap()
+            .natures_text()
+        };
+        let terms = |municipal: Option<&str>| ServiceTermsDraft {
+            national_tax_code: "010701".into(),
+            municipal_service_code: municipal.map(Into::into),
+            iss_taxation: IssTaxation::Export,
+            iss_rate: Some("2.5".into()),
+        };
+        assert_eq!(nature(None), "service|Serviço|service|||true|");
+        assert_eq!(
+            nature(Some(terms(Some("1.07")))),
+            "service|Serviço|service|||true||010701:1.07:export:2.5"
+        );
+        // The separators of that text are never part of a municipal code, so it reads back whole.
+        for bad in ["1:07", "1|07", "1;07"] {
+            assert_eq!(
+                field(
+                    settings(|d| {
+                        d.natures[0] = OperationNatureDraft {
+                            code: "service".into(),
+                            name: "Serviço".into(),
+                            kind: NatureKind::Service,
+                            cfop_in_state: None,
+                            cfop_interstate: None,
+                            active: true,
+                            rules: vec![],
+                            service: Some(terms(Some(bad))),
+                        }
+                    })
+                    .unwrap_err()
+                ),
+                "municipal_service_code"
+            );
+        }
     }
 
     #[test]

@@ -437,6 +437,10 @@ mod tests {
             "fiscal_natures_service_terms_valid",
         );
         refused(
+            run(terms(2, "service", "'010701', 'taxable', '1:07', NULL")).await,
+            "fiscal_natures_service_terms_valid",
+        );
+        refused(
             run(terms(2, "service", "NULL, 'taxable', NULL, NULL")).await,
             "fiscal_natures_service_terms_valid",
         );

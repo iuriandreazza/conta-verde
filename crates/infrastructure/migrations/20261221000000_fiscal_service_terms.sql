@@ -20,6 +20,6 @@ ALTER TABLE fiscal_natures ADD CONSTRAINT fiscal_natures_service_terms_valid CHE
         AND iss_taxation IS NOT NULL AND iss_taxation IN ('taxable', 'immune', 'export', 'not_incident')
         AND (municipal_service_code IS NULL
             OR (char_length(municipal_service_code) BETWEEN 1 AND 20 AND municipal_service_code !~ '^\s|\s$'
-                AND municipal_service_code !~ '[[:cntrl:]]'))
+                AND municipal_service_code !~ '[[:cntrl:]]' AND municipal_service_code !~ '[:|;]'))
         AND (iss_rate IS NULL OR (iss_rate BETWEEN 0 AND 100 AND iss_rate = round(iss_rate, 2))))
 );
