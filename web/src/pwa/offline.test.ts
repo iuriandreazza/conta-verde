@@ -12,6 +12,7 @@ import {
   createOfflineHandler,
   dataCacheName,
   isExpired,
+  sweepExpired,
   type CacheLike,
   type CacheStorageLike,
   type Identity,
@@ -150,7 +151,6 @@ describe("what the worker may keep: an allowlist, not a blocklist", () => {
 
   it("keeps the application's own files apart from data, and a page is the shell", () => {
     expect(route("/assets/index-3f9a.js")).toEqual({ kind: "asset" });
-    expect(route("/favicon.svg")).toEqual({ kind: "asset" });
     expect(route("/companies/x/parties", "GET", "navigate")).toEqual({ kind: "navigation" });
     expect(route("/random.json", "GET", "cors")).toEqual({ kind: "none" });
   });
@@ -286,5 +286,111 @@ describe("the application's own files", () => {
     await (await caches.open(dataCacheName("u1", COMPANY))).put("x", json({}));
     await clearData(caches);
     expect([...caches.stores.keys()]).toEqual([ASSET_CACHE]);
+  });
+});
+
+describe("what goes wrong around the cache must not reach the person", () => {
+  it("a clearing that comes while a request is away is not undone by its answer", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const handler = createOfflineHandler({
+      caches,
+      identity,
+      now: () => clock,
+      fetch: async () => {
+        await gate;
+        return json({ owner: "u1" });
+      },
+    });
+    const pending = handler.handle(route(`/api/companies/${COMPANY}/parties`), api("parties"));
+    // The person signs out (the page clears the caches and the identity) while the answer is on its way.
+    await clearData(caches);
+    await identity.set(null);
+    release();
+    expect((await pending).status).toBe(200);
+    expect(caches.stores.size).toBe(0);
+  });
+
+  it("a different person who signed in meanwhile is not given what the first person asked for", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const handler = createOfflineHandler({ caches, identity, now: () => clock, fetch: async () => (await gate, json({ owner: "u1" })) });
+    const pending = handler.handle(route(`/api/companies/${COMPANY}/parties`), api("parties"));
+    await identity.set({ userId: "u2", enabled: true });
+    release();
+    await pending;
+    expect([...caches.stores.keys()].filter((name) => name.startsWith("data:u1:"))).toEqual([]);
+  });
+
+  it("the profile is kept only if it is the profile of the person the page named", async () => {
+    network.answers.set(`${ORIGIN}/api/auth/me`, () => json({ user: { id: "u2" } }));
+    await build().handle(route("/api/auth/me"), `${ORIGIN}/api/auth/me`);
+    expect(caches.stores.size).toBe(0);
+    network.answers.set(`${ORIGIN}/api/auth/me`, () => json({ user: { id: "u1" } }));
+    await build().handle(route("/api/auth/me"), `${ORIGIN}/api/auth/me`);
+    expect([...caches.stores.keys()]).toEqual([dataCacheName("u1", "session")]);
+  });
+
+  it("a storage that fails never keeps the network's answer from the page, off or on", async () => {
+    network.answers.set(api("parties"), () => json({ v: 1 }));
+    const broken = (): CacheStorageLike => ({ open: async () => Promise.reject(new Error("quota")), keys: async () => Promise.reject(new Error("denied")), delete: async () => false });
+    const handler = createOfflineHandler({ caches: broken(), identity, now: () => clock, fetch: async (url) => (network.asked.push(url), json({ v: 1 })) });
+    expect(await (await handler.handle(route(`/api/companies/${COMPANY}/parties`), api("parties"))).json()).toEqual({ v: 1 });
+    const noIdentity: IdentityStore = { get: async () => Promise.reject(new Error("blocked")), set: async () => undefined };
+    const blocked = createOfflineHandler({ caches, identity: noIdentity, now: () => clock, fetch: async () => json({ v: 2 }) });
+    expect(await (await blocked.handle(route(`/api/companies/${COMPANY}/parties`), api("parties"))).json()).toEqual({ v: 2 });
+    // And a lost session reaches the page even when the clearing fails.
+    const lost = createOfflineHandler({ caches: broken(), identity, now: () => clock, fetch: async () => json({}, 401) });
+    expect((await lost.handle(route(`/api/companies/${COMPANY}/parties`), api("parties"))).status).toBe(401);
+  });
+
+  it("a server that is there but cannot answer (502, 503, 504) is answered from the copy, and a 500 of the application is not", async () => {
+    const handler = build();
+    network.answers.set(api("parties"), () => json({ v: 1 }));
+    await handler.handle(route(`/api/companies/${COMPANY}/parties`), api("parties"));
+    for (const status of [502, 503, 504]) {
+      network.answers.set(api("parties"), () => new Response("bad gateway", { status }));
+      expect((await handler.handle(route(`/api/companies/${COMPANY}/parties`), api("parties"))).headers.get(FROM_CACHE)).toBe("1");
+    }
+    network.answers.set(api("parties"), () => json({ error: "internal error" }, 500));
+    expect((await handler.handle(route(`/api/companies/${COMPANY}/parties`), api("parties"))).status).toBe(500);
+    // With no copy, the 502 is what the page gets.
+    network.answers.set(api("products"), () => new Response("bad gateway", { status: 502 }));
+    expect((await handler.handle(route(`/api/companies/${COMPANY}/products`), api("products"))).status).toBe(502);
+  });
+
+  it("entries older than seven days are swept even if nobody asks for them again", async () => {
+    const handler = build();
+    network.answers.set(api("parties?q=maria"), () => json({ v: 1 }));
+    await handler.handle(route(`/api/companies/${COMPANY}/parties?q=maria`), api("parties?q=maria"));
+    clock += MAX_AGE_MS + 1;
+    await sweepExpired(caches, clock);
+    expect(caches.stores.size).toBe(0);
+    // The worker also sweeps on its own, once in a while, when it keeps something new.
+    network.answers.set(api("parties?q=ana"), () => json({ v: 1 }));
+    await handler.handle(route(`/api/companies/${COMPANY}/parties?q=ana`), api("parties?q=ana"));
+    clock += MAX_AGE_MS + 2 * 3_600_000;
+    network.answers.set(api("products"), () => json({ v: 2 }));
+    await handler.handle(route(`/api/companies/${COMPANY}/products`), api("products"));
+    const names = await (await caches.open(dataCacheName("u1", COMPANY))).keys();
+    expect(names.map((key) => key.url)).toEqual([api("products")]);
+  });
+
+  it("what is not a hashed file is not kept for good, a missing file answered with the page is not kept, and the worker's own address is the network's", async () => {
+    expect(route("/favicon.svg")).toEqual({ kind: "none" });
+    expect(route("/site.webmanifest")).toEqual({ kind: "none" });
+    expect(route("/sw.js", "GET", "navigate")).toEqual({ kind: "none" });
+    network.answers.set(`${ORIGIN}/assets/gone.js`, () => new Response("<html>", { status: 200, headers: { "content-type": "text/html" } }));
+    await build().handle(route("/assets/gone.js"), `${ORIGIN}/assets/gone.js`);
+    expect(await (await caches.open(ASSET_CACHE)).match(`${ORIGIN}/assets/gone.js`)).toBeUndefined();
+  });
+
+  it("paths that are not what they look like are the network's", () => {
+    for (const path of [`/api/companies/${COMPANY}/entries/`, `/api/companies/${COMPANY}/PARTIES`, `/api//companies/${COMPANY}/parties`, `//api/companies/${COMPANY}/parties`, `/api/companies/${COMPANY}/parties%2fx`, `/api/companies/${COMPANY}/parties/../members`]) {
+      const result = route(path);
+      // A trailing slash is the same list; anything else that is not exactly an allowlisted path is the network's.
+      if (path.endsWith("/entries/")) expect(result).toEqual({ kind: "data", companyId: COMPANY });
+      else expect(result.kind, path).not.toBe("data");
+    }
   });
 });

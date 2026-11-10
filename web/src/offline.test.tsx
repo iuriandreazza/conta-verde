@@ -26,13 +26,22 @@ afterEach(() => {
 const answer = (headers: Record<string, string> = {}) => new Response("{}", { status: 200, headers });
 
 describe("saying that what is shown may be old", () => {
-  it("shows when and that nothing can be saved once an answer came from the device's copy, and lifts it when a live one comes", () => {
+  it("says it is a copy, from when, once the network is back too, and lifts only when the same thing is read live", () => {
     render(<OfflineBanner />);
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
-    act(() => noteAnswer(`/companies/${COMPANY}/parties?limit=50`, answer({ [FROM_CACHE]: "1", [CACHED_AT]: String(Date.UTC(2027, 0, 15, 12, 0)) })));
-    expect(screen.getByRole("status")).toHaveTextContent(/Você vê dados guardados neste aparelho, de .*2027|Você vê dados guardados neste aparelho, de 15\/01\/2027/);
-    expect(screen.getByRole("status")).toHaveTextContent("Não dá para salvar alterações enquanto estiver offline.");
-    act(() => noteAnswer(`/companies/${COMPANY}/parties`, answer()));
+    const at = String(Date.UTC(2027, 0, 15, 12, 0));
+    act(() => noteAnswer(`/companies/${COMPANY}/parties?limit=50`, answer({ [FROM_CACHE]: "1", [CACHED_AT]: at })));
+    act(() => noteAnswer(`/companies/${COMPANY}/balances?on=2027-01-15`, answer({ [FROM_CACHE]: "1", [CACHED_AT]: at })));
+    expect(screen.getByRole("status")).toHaveTextContent(/uma cópia guardada neste aparelho, de 15\/01\/2027/);
+    expect(screen.getByRole("status")).toHaveTextContent("A conexão voltou.");
+    expect(screen.getByRole("button", { name: "Atualizar" })).toBeInTheDocument();
+    // One card read live does not hide that another is still the copy.
+    act(() => noteAnswer(`/companies/${COMPANY}/parties?limit=50`, answer()));
+    expect(screen.getByRole("status")).toBeInTheDocument();
+    // A server error is not a current answer.
+    act(() => noteAnswer(`/companies/${COMPANY}/balances?on=2027-01-15`, new Response("{}", { status: 500 })));
+    expect(screen.getByRole("status")).toBeInTheDocument();
+    act(() => noteAnswer(`/companies/${COMPANY}/balances?on=2027-01-15`, answer()));
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
@@ -40,14 +49,18 @@ describe("saying that what is shown may be old", () => {
     render(<OfflineBanner />);
     act(() => noteAnswer("/auth/login", answer({ [FROM_CACHE]: "1", [CACHED_AT]: "1" })));
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
-    act(() => resetOfflineStatus({ offline: true, cachedAt: null }));
+    act(() => resetOfflineStatus({ offline: true }));
     expect(screen.getByRole("status")).toHaveTextContent("Sem conexão.");
+    expect(screen.getByRole("status")).toHaveTextContent("Não dá para salvar alterações enquanto estiver offline.");
   });
 
-  it("a form that cannot reach the server says so in plain words, not 'something went wrong'", async () => {
+  it("a form that cannot reach the server says so in plain words, and a bug does not pretend to be a lost network", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => Promise.reject(new TypeError("Failed to fetch"))));
     const failure = await api.listConnectors("c1").catch((error: unknown) => error);
     expect(errorMessage(failure)).toMatch(/Sem conexão com o servidor.*não dá para salvar offline/);
+    expect(errorMessage(new TypeError("Cannot read properties of undefined (reading 'map')"))).toBe("Algo deu errado, tente novamente.");
+    expect(errorMessage(new TypeError("NetworkError when attempting to fetch resource."))).toMatch(/Sem conexão/);
+    expect(errorMessage(new TypeError("Load failed"))).toMatch(/Sem conexão/);
   });
 });
 

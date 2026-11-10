@@ -63,9 +63,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signOut = useCallback(async () => {
     // Clearing first and calling the network second: signing out offline still clears the device.
     await clearOfflineData();
-    await api.logout();
+    try {
+      await api.logout();
+    } catch (failure) {
+      // Still signed in (offline, say): the worker is told again who it is, or the mode would be dead until a reload.
+      if (userId) await syncIdentity(userId);
+      throw failure;
+    }
     setSession({ status: "anonymous" });
-  }, []);
+  }, [userId]);
 
   const refresh = useCallback(async () => {
     const profile = await api.me();

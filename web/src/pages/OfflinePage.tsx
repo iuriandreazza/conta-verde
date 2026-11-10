@@ -32,7 +32,7 @@ export function OfflinePage() {
     <>
       <PageHeader
         title="Uso offline"
-        description="O aplicativo pode ser instalado no aparelho e abrir sem internet. Ligando o modo offline, as telas que você abriu (clientes, produtos, lançamentos, vendas, orçamentos, estoque, saldos e o painel) ficam guardadas aqui para consulta quando a conexão cair."
+        description="O aplicativo pode ser instalado no aparelho e abrir sem internet. Ligando o modo offline, as telas que você abriu (clientes, produtos, lançamentos, vendas, orçamentos, estoque, saldos, o extrato bancário a conciliar e o painel) ficam guardadas aqui para consulta quando a conexão cair."
       />
       <section className="card narrow">
         <h2>Neste aparelho</h2>
@@ -45,6 +45,7 @@ export function OfflinePage() {
             Ligado, uma cópia do que você consulta fica guardada <strong>neste aparelho</strong>, inclusive dados pessoais de clientes (documento, endereço, contatos), por no
             máximo <strong>7 dias</strong> ou até você <strong>sair</strong>, o que vier primeiro. Use só em aparelho seu.
           </li>
+          <li>Também ficam guardados os termos que você digitou nas buscas dessas telas, junto com o resultado.</li>
           <li>Offline você só <strong>consulta</strong>: nada é salvo sem conexão, e uma tela que não alcança o servidor avisa.</li>
           <li>Nunca ficam guardados: membros, chaves de API, webhooks, contador, fiscal, anexos, exportações e históricos.</li>
           <li>Desligar apaga a cópia na hora.</li>

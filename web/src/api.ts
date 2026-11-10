@@ -2058,8 +2058,9 @@ export class ApiError extends Error {
 }
 
 export function errorMessage(failure: unknown): string {
-  // `fetch` rejects with a TypeError when the network is gone: it is not "something went wrong", and nothing is saved offline.
-  if (failure instanceof TypeError) return "Sem conexão com o servidor. Confira a internet e tente de novo: não dá para salvar offline.";
+  // `fetch` rejects with a TypeError when the network is gone (Chrome says "Failed to fetch", Firefox "NetworkError…", Safari "Load
+  // failed"): it is not "something went wrong", and nothing is saved offline. A TypeError that is a bug stays "something went wrong".
+  if (failure instanceof TypeError && /fetch|network|load failed/i.test(failure.message)) return "Sem conexão com o servidor. Confira a internet e tente de novo: não dá para salvar offline.";
   return failure instanceof ApiError ? failure.message : "Algo deu errado, tente novamente.";
 }
 

@@ -33,7 +33,7 @@ what is never kept. The choice is **the person's, not the browser's** (kept per 
 application's own files are still kept, so the app opens offline either way (and then asks for what it cannot read: nothing).
 **No offline writes**: a form that cannot reach the server says so (`Sem conexão com o servidor… não dá para salvar offline`, instead
 of the generic failure), and a banner says, on every screen, that the connection is gone or that what is shown is the device's copy
-**from a given time**.
+**from a given time** (rule 7).
 
 ### The cache rules (`web/src/pwa/offline.ts`, the one module the worker, the page and the tests all run)
 
@@ -55,16 +55,28 @@ of the generic failure), and a banner says, on every screen, that the connection
    and nothing is read or written while nobody is known or the mode is off.
 4. **Cleared at sign-out and on any `401`, clearing first and calling the network second** (so signing out offline still clears):
    the page deletes the data caches and the identity record **itself** (Cache Storage and IndexedDB are the page's to reach, so it
-   never depends on the worker being awake) **before** it calls `/auth/logout`, a test checks the order, and the worker does the same
-   when a data request answers `401`. An entry **expires after 7 days** even when nothing cleared it (a session that ended while the
-   device was off), and an entry stamped in the future is treated as expired too.
-5. **Bounded:** a body over **1 MB** is not kept, only **JSON** with status `200` is, and at most **40 answers per person and company**
-   (the oldest goes first). The network is asked **first**: when it answers, that answer is the one (a `5xx` is never cached); only a
-   failed request falls back to the copy, marked `x-offline-from-cache` with the time it was stored (`x-offline-cached-at`), which the
-   page reads to say "dados de …".
-6. **The application's own files** are not data: files under `/assets/` (named by their content), the icons and the manifest are
-   kept cache-first; a page navigation is answered by the network, falling back to the last `index.html` (the shell, no data). A new
-   worker deletes the caches of any other version.
+   never depends on the worker being awake; each part is tried even if the other fails) **before** it calls `/auth/logout`, a test
+   checks the order, and if the logout then fails the page tells the worker who is signed in again; the worker does the same
+   clearing when a data request answers `401`. **A request that was away when the clearing came does not undo it**: before it writes,
+   the worker reads the identity again and writes nothing for someone who signed out, turned the mode off or was replaced by another
+   person meanwhile (the profile is also kept only if it is the profile of the person the page named). An entry **expires after 7
+   days**: a copy older than that is never served, **and a sweep deletes expired entries nobody asks for again** (when the page
+   loads, and once an hour in the worker when it keeps something new); an entry stamped in the future is treated as expired too.
+5. **Bounded and harmless:** a body over **1 MB** is not kept, only **JSON** with status `200` is, and at most **40 answers per person
+   and company** (the oldest goes first; the search terms in an address are therefore on the device too, and the page says so). The
+   network is asked **first**: when it answers, that answer is the one; only a failed request, or a server that is there but cannot
+   answer (**502, 503, 504**), falls back to the copy, marked `x-offline-from-cache` with the time it was stored
+   (`x-offline-cached-at`). A `500` of the application is its answer, never replaced. **Whatever goes wrong with the storage (a full
+   or refused IndexedDB or Cache Storage), the network's answer still reaches the page**: the offline mode is a convenience and never
+   what stands between a person and the server.
+6. **The application's own files** are not data: only files under `/assets/` (named by their content, at most 120 kept) are cached
+   cache-first, and a missing file that the server answers with the page is not kept; the icons and the manifest, which have no
+   hash, are the network's. A page navigation is answered by the network, falling back to the last `index.html` (the shell, no data);
+   the worker's own address is never answered with it. A new worker deletes the caches of any other version.
+7. **What the screen says.** A banner says the connection is gone, and that what is shown is the device's copy **from a given time**,
+   **keeping that label when the network comes back until what was shown from the copy is read live again** (by address: one card read
+   live does not hide another that is still the copy) with a button to refresh. Offline, a form that cannot reach the server says so
+   (a `TypeError` of `fetch`; a `TypeError` that is a bug keeps the generic message).
 
 **Known limit:** while offline the application trusts the profile it kept: a session that the server ended meanwhile is only found
 out when the network is back (then any `401` clears the device). That is the 7-day window above, which the page says.
