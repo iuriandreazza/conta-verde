@@ -1,6 +1,6 @@
 use conta_verde_domain::{
-    AccessKey, Actor, Amount, AuditAction, AuditRecord, BlobId, CalendarDate, CompanyId,
-    FiscalAuthorization, FiscalDocument, FiscalDocumentDraft, FiscalDocumentId, FiscalDocumentKind,
+    Actor, Amount, AuditAction, AuditRecord, BlobId, CalendarDate, CompanyId, FiscalAuthorization,
+    FiscalDocument, FiscalDocumentDraft, FiscalDocumentId, FiscalDocumentKind,
     FiscalDocumentStatus, FiscalFile, FiscalFileKind, FiscalOrigin, FiscalRefusal, FiscalSettings,
     NatureKind, Party, Product, ProductKind, Sale, SaleId, SaleStatus, TaxRegime, fiscal_day,
     fiscal_document_changes, fiscal_document_creation_changes,
@@ -514,7 +514,7 @@ where
                 .await?;
         }
         let authorization = FiscalAuthorization::new(
-            AccessKey::parse(authorized.access_key.as_str())?,
+            authorized.access_key.clone(),
             authorized.number,
             authorized.series,
             authorized.protocol.as_deref(),
