@@ -50,6 +50,7 @@ pub struct ReceivedInvoicePage {
 }
 
 /// How many times a sync asks the gateway for more before it stops: the gateway gives a page at a time.
+const MAX_REFRESH_ATTEMPTS: u32 = 3;
 const MAX_SYNC_PASSES: usize = 20;
 
 /// What one pass of the poll did.
@@ -238,8 +239,35 @@ where
         limit: usize,
         now_unix: i64,
     ) -> Result<PollReport, ApplicationError> {
+        let mut report = self.poll(None, since_unix, limit, now_unix).await?;
+        let (asked, settled) = self.settle_queued_events(limit).await?;
+        report.asked += asked;
+        report.settled += settled;
+        Ok(report)
+    }
+
+    /// The same for the documents of one company, which is what a knock of its own is about: it never makes the server ask
+    /// the gateways of the others. The events a gateway answered "queued" to are left to the pass over every company.
+    pub async fn poll_company(
+        &self,
+        company_id: CompanyId,
+        since_unix: i64,
+        limit: usize,
+        now_unix: i64,
+    ) -> Result<PollReport, ApplicationError> {
+        self.poll(Some(company_id), since_unix, limit, now_unix)
+            .await
+    }
+
+    async fn poll(
+        &self,
+        company: Option<CompanyId>,
+        since_unix: i64,
+        limit: usize,
+        now_unix: i64,
+    ) -> Result<PollReport, ApplicationError> {
         let mut report = PollReport::default();
-        for document in self.documents.pending(since_unix, limit).await? {
+        for document in self.documents.pending(company, since_unix, limit).await? {
             report.asked += 1;
             match self
                 .refresh(document.company_id(), document.id(), now_unix)
@@ -253,10 +281,29 @@ where
                 }
             }
         }
-        let (asked, settled) = self.settle_queued_events(limit).await?;
-        report.asked += asked;
-        report.settled += settled;
         Ok(report)
+    }
+
+    /// Refused while the company has a document waiting for the authority: one sent through a gateway and then asked about
+    /// through another gets "no such document", is rejected after the grace period and, sent again, could be issued twice
+    /// ([ADR 0085]). The person waits, or asks again until the authority answers.
+    pub async fn ensure_gateway_may_change(
+        &self,
+        company_id: CompanyId,
+    ) -> Result<(), ApplicationError> {
+        if self
+            .documents
+            .pending(Some(company_id), 0, 1)
+            .await?
+            .is_empty()
+        {
+            Ok(())
+        } else {
+            Err(ApplicationError::FiscalRule(
+                "the gateway cannot be changed while a fiscal document is waiting for the authority: wait for the answer, or ask about it again"
+                    .to_owned(),
+            ))
+        }
     }
 
     /// The company's documents, newest first, a page at a time.
@@ -897,6 +944,27 @@ where
     /// Asks the gateway about a document that is still waiting and records the answer. What the poll does too, in the
     /// name of whoever submitted the document. A document that is not waiting is returned as it is.
     pub async fn refresh(
+        &self,
+        company_id: CompanyId,
+        id: FiscalDocumentId,
+        now_unix: i64,
+    ) -> Result<FiscalDocument, ApplicationError> {
+        // Another writer (the minute pass, a knock, the person pressing Consultar) may move the document between the read and
+        // the write: the answer is then read again, which is either what the other one recorded or still waiting.
+        let mut attempts = 0;
+        loop {
+            match self.refresh_once(company_id, id, now_unix).await {
+                Err(ApplicationError::Repository(RepositoryError::FiscalDocumentChanged))
+                    if attempts < MAX_REFRESH_ATTEMPTS =>
+                {
+                    attempts += 1;
+                }
+                other => return other,
+            }
+        }
+    }
+
+    async fn refresh_once(
         &self,
         company_id: CompanyId,
         id: FiscalDocumentId,
