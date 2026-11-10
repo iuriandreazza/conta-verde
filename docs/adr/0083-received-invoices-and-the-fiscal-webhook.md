@@ -36,7 +36,9 @@ operation not performed) from nothing or from awareness; nothing after a final w
 asked. A word is declared through the gateway (`POST /v2/nfes_recebidas/{key}/manifesto`, answered at once); **only when the authority took
 it** is it recorded, in the name of the person (`AuditEntity::ReceivedInvoice`, with the word it replaced, and the written-to row updated
 under a lock only from the word the person saw: `FiscalDocumentChanged`). The authority's refusal is told with its words and records
-nothing. **A word is not idempotent**: an answer that never came is not sent again on its own; the person fetches the list and sees what
+nothing. If the authority took the word and the mirror moved before it was written (a sync brought the same word, or a later one), **the
+act is recorded all the same** (or found already past) and never fails after the authority accepted: the domain would refuse the word
+again. A write of a declaration changes only the word and its reason. **A word is not idempotent**: an answer that never came is not sent again on its own; the person fetches the list and sees what
 the authority holds (a duplicate would be refused by the authority anyway). A gateway listing says its word again, and the mirror takes
 it, dropping a reason that belonged to another word.
 
@@ -57,10 +59,10 @@ documentation), the values of `pendente`, whether `versao` pages as the product 
 the server refuses a shorter one) and optionally `FISCAL_WEBHOOK_HEADER` (a header name, `x-fiscal-webhook-token` by default): what is
 registered at the gateway as the hook's `authorization_header` and `authorization`. The secret is compared in constant time and never
 logged. `404` when no secret is set, `401` for a wrong or missing one, `404` for a company with no fiscal settings (and for an id that is
-no company), body over 64 KiB refused, and then **the body is read for nothing**: the server asks the gateway for what is new
-(`sync_received`) and runs the poll of the waiting documents, exactly what it does anyway, answering `202` whatever the asking finds (a
-failure is the poll's to retry). The poll reaches every company (it is the same one the minute pass runs); the knock only makes it run
-now. There is no throttle on valid knocks: the secret is the gate.
+no company), and then **the body is never read** (no extractor: nothing is buffered for a caller). It answers `202` **at once** and does the
+work in the background: the server asks the gateway for what is new (`sync_received`) and runs the poll of the waiting documents of the
+minute pass's window (7 days), once per burst: a knock that comes while the work of its company runs makes it run once more, never many
+at once (a failure is the poll's to retry). The poll reaches every company; the knock only makes it run now.
 
 ### Screens
 

@@ -1,5 +1,4 @@
 use axum::Json;
-use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -1199,19 +1198,56 @@ pub(crate) async fn manifest_received<X: Ports>(
     Ok(Json(ReceivedInvoiceResponse::from(&invoice)))
 }
 
-/// The most a notice of the gateway may weigh: it is read for nothing, only counted.
-const MAX_NOTICE_BYTES: usize = 64 * 1024;
+/// How far back a knock polls the waiting documents: the minute pass's window; older ones are the person's refresh.
+const WEBHOOK_POLL_WINDOW_SECONDS: i64 = 7 * 86_400;
+const WEBHOOK_POLL_BATCH: usize = 100;
+
+/// The companies a knock is being worked for, and whether another knock came meanwhile: a burst of knocks (the gateway sends one
+/// per document) is worked as one run and one more, never as many at once.
+static WAKING: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<Uuid, bool>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// `true` when this knock starts the work; `false` when a run is going and will go once more because of it.
+fn knock_starts_the_work(company: Uuid) -> bool {
+    let mut waking = WAKING
+        .lock()
+        .expect("the waking lock is never held across a panic");
+    match waking.get_mut(&company) {
+        Some(again) => {
+            *again = true;
+            false
+        }
+        None => {
+            waking.insert(company, false);
+            true
+        }
+    }
+}
+
+/// `true` when another knock came while the work ran and it must run once more.
+fn work_is_finished(company: Uuid) -> bool {
+    let mut waking = WAKING
+        .lock()
+        .expect("the waking lock is never held across a panic");
+    if waking.get(&company) == Some(&true) {
+        waking.insert(company, false);
+        true
+    } else {
+        waking.remove(&company);
+        false
+    }
+}
 
 /// Where the fiscal gateway knocks to say a document or a received invoice changed ([ADR 0083]). **It carries nothing that is
-/// believed**: it only wakes the server up, which asks the gateway what is waiting and what is new, the way the poll does every
-/// minute. It needs no session, and it is authenticated by a secret in a header the operator chose when registering the hook at
-/// the gateway: `404` when no secret is configured, `401` for a wrong one, `404` for a company that issues nothing, and `202`
-/// whatever the asking turns out to find (a failure of the gateway is the poll's to retry, not the notice's).
+/// believed and its body is never read**: it only wakes the server up, which asks the gateway what is new
+/// (`sync_received`) and runs the poll of the waiting documents, as the minute pass does. It needs no session, and it is
+/// authenticated by a secret in a header the operator chose when registering the hook at the gateway: `404` when no secret is
+/// configured, `401` for a wrong one, `404` for a company with no fiscal settings, and `202` at once: the work is done in the
+/// background, a burst of knocks is worked as one run and one more, and a failure is the poll's to retry, not the notice's.
 pub(crate) async fn receive_fiscal_webhook<X: Ports>(
     State(state): State<SharedState<X>>,
     Path(company_id): Path<String>,
     headers: HeaderMap,
-    body: Bytes,
 ) -> Result<StatusCode, ApiError> {
     let not_found = || ApiError::from(ApplicationError::FiscalDocumentNotFound);
     let Some(hook) = state.config.fiscal_webhook.as_ref() else {
@@ -1229,24 +1265,30 @@ pub(crate) async fn receive_fiscal_webhook<X: Ports>(
         )
         .into());
     }
-    if body.len() > MAX_NOTICE_BYTES {
-        return Err(ApiError::FileTooLarge("the notice is too large"));
-    }
-    let company_id = Uuid::parse_str(&company_id)
-        .map(conta_verde_domain::CompanyId::from_uuid)
-        .map_err(|_| not_found())?;
+    let company = Uuid::parse_str(&company_id).map_err(|_| not_found())?;
+    let company_id = conta_verde_domain::CompanyId::from_uuid(company);
     if state.fiscal_settings.get(company_id).await?.is_none() {
         return Err(not_found());
     }
-    if let Err(error) = state.fiscal_documents.sync_received(company_id).await {
-        tracing::warn!(%error, "a fiscal webhook could not sync the received invoices");
-    }
-    if let Err(error) = state
-        .fiscal_documents
-        .poll_pending(0, 200, crate::now_unix())
-        .await
-    {
-        tracing::warn!(%error, "a fiscal webhook could not poll the documents");
+    if knock_starts_the_work(company) {
+        tokio::spawn(async move {
+            loop {
+                if let Err(error) = state.fiscal_documents.sync_received(company_id).await {
+                    tracing::warn!(%error, "a fiscal webhook could not sync the received invoices");
+                }
+                let now = crate::now_unix();
+                if let Err(error) = state
+                    .fiscal_documents
+                    .poll_pending(now - WEBHOOK_POLL_WINDOW_SECONDS, WEBHOOK_POLL_BATCH, now)
+                    .await
+                {
+                    tracing::warn!(%error, "a fiscal webhook could not poll the documents");
+                }
+                if !work_is_finished(company) {
+                    break;
+                }
+            }
+        });
     }
     Ok(StatusCode::ACCEPTED)
 }

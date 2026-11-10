@@ -502,13 +502,26 @@ impl FiscalDocumentRepository for InMemoryFiscalDocumentRepository {
             });
             match held {
                 Some(held) => {
-                    // What the gateway says now: the reason the company gave stays with the word it gave.
-                    let kept = held.justification().map(str::to_owned);
-                    let word_changed = held.manifestation() != draft.manifestation;
+                    // What the gateway says now, **unless it is behind what the company holds**: a word is never taken back by
+                    // a list that has not caught up. The reason stays only with the word it was given for.
+                    let behind = draft.manifestation.rank() < held.manifestation().rank();
+                    let word = if behind {
+                        held.manifestation()
+                    } else {
+                        draft.manifestation
+                    };
+                    let reason = if word == held.manifestation() {
+                        held.justification().map(str::to_owned)
+                    } else {
+                        None
+                    };
+                    let mut incoming = draft.clone();
+                    incoming.manifestation = word;
+                    incoming.version = incoming.version.max(held.version());
                     let mirrored = held
-                        .mirrored(draft.clone())
+                        .mirrored(incoming)
                         .map_err(|error| RepositoryError::Storage(error.to_string()))?;
-                    *held = mirrored.restored(if word_changed { None } else { kept });
+                    *held = mirrored.restored(reason);
                 }
                 None => {
                     let invoice = ReceivedInvoice::new(
@@ -604,7 +617,11 @@ impl FiscalDocumentRepository for InMemoryFiscalDocumentRepository {
         if held.manifestation() != expected {
             return Err(RepositoryError::FiscalDocumentChanged);
         }
-        *held = invoice.clone();
+        // Only the word and its reason: what else the row says is the gateway's and may have moved since it was read.
+        *held = held.with_manifestation(
+            invoice.manifestation(),
+            invoice.justification().map(str::to_owned),
+        );
         state.audit.record(audit);
         Ok(())
     }

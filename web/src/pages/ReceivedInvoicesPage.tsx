@@ -63,6 +63,8 @@ export function ReceivedInvoicesPage() {
       await list.reload();
     } catch (failure) {
       setError(errorMessage(failure));
+      // The passes before the one that failed already brought invoices in.
+      await list.reload();
     } finally {
       setSyncing(false);
     }
@@ -150,10 +152,13 @@ export function ReceivedInvoicesPage() {
         {answering && (
           <ManifestForm
             invoice={answering}
-            onDeclared={async (declared) => {
+            // The list is read again, not patched: a filter keeps only what it names, and a refusal or a conflict means the
+            // words offered came from a row that moved.
+            onDeclared={async () => {
               setAnswering(null);
-              list.setItems((items) => items.map((item) => (item.id === declared.id ? declared : item)));
+              await list.reload();
             }}
+            onFailed={() => void list.reload()}
             companyId={companyId}
           />
         )}
@@ -166,10 +171,12 @@ function ManifestForm({
   companyId,
   invoice,
   onDeclared,
+  onFailed,
 }: {
   companyId: string;
   invoice: ReceivedInvoice;
   onDeclared: (invoice: ReceivedInvoice) => Promise<void>;
+  onFailed: () => void;
 }) {
   const [word, setWord] = useState("");
   const [reason, setReason] = useState("");
@@ -186,6 +193,7 @@ function ManifestForm({
       );
     } catch (failure) {
       setError(errorMessage(failure));
+      onFailed();
     } finally {
       setPending(false);
     }

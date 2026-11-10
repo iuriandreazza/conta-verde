@@ -61,11 +61,13 @@ it("fetches from the gateway on request and says how many are new", async () => 
 });
 
 it("declares awareness, then offers only the final words, and asks for a reason only for an operation not performed", async () => {
-  const fetchMock = serve([invoice()], {
-    "/fiscal/received-invoices/r1/manifest": (body) => ({
-      status: 200,
-      body: invoice({ manifestation: (body as { word: ReceivedInvoice["manifestation"] }).word }),
-    }),
+  // The server keeps what was declared: the list read again after a declaration says so.
+  const held = [invoice()];
+  const fetchMock = serve(held, {
+    "/fiscal/received-invoices/r1/manifest": (body) => {
+      held[0] = invoice({ manifestation: (body as { word: ReceivedInvoice["manifestation"] }).word });
+      return { status: 200, body: held[0] };
+    },
   });
   renderAt("/companies/c1/fiscal/received");
   await userEvent.click(await screen.findByRole("button", { name: "Manifestar Fornecedor 1 Ltda" }));

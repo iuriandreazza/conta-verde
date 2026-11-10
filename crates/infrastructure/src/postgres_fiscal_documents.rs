@@ -840,9 +840,16 @@ impl FiscalDocumentRepository for PostgresFiscalDocumentRepository {
                  ON CONFLICT (company_id, access_key) DO UPDATE SET issuer_name = EXCLUDED.issuer_name, \
                  issuer_document = EXCLUDED.issuer_document, total = EXCLUDED.total, issued_on = EXCLUDED.issued_on, \
                  situation = EXCLUDED.situation, \
-                 manifestation_reason = CASE WHEN received_invoices.manifestation = EXCLUDED.manifestation \
+                 manifestation_reason = CASE \
+                     WHEN EXCLUDED.manifestation = received_invoices.manifestation \
+                          OR (CASE EXCLUDED.manifestation WHEN 'none' THEN 0 WHEN 'awareness' THEN 1 ELSE 2 END) \
+                           < (CASE received_invoices.manifestation WHEN 'none' THEN 0 WHEN 'awareness' THEN 1 ELSE 2 END) \
                      THEN received_invoices.manifestation_reason END, \
-                 manifestation = EXCLUDED.manifestation, gateway_version = EXCLUDED.gateway_version \
+                 manifestation = CASE \
+                     WHEN (CASE EXCLUDED.manifestation WHEN 'none' THEN 0 WHEN 'awareness' THEN 1 ELSE 2 END) \
+                        < (CASE received_invoices.manifestation WHEN 'none' THEN 0 WHEN 'awareness' THEN 1 ELSE 2 END) \
+                     THEN received_invoices.manifestation ELSE EXCLUDED.manifestation END, \
+                 gateway_version = GREATEST(received_invoices.gateway_version, EXCLUDED.gateway_version) \
                  RETURNING (xmax = 0)",
             )
             .bind(ReceivedInvoiceId::generate().as_uuid())

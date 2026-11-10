@@ -544,22 +544,29 @@ fn received_of(item: &Value) -> Result<ReceivedInvoiceDraft, GatewayError> {
         _ => return Err(unreadable()),
     };
     let manifestation = match item["manifestacao_destinatario"].as_str() {
-        Some("nulo") | None => Manifestation::None,
         Some("ciencia") => Manifestation::Awareness,
         Some("confirmacao") => Manifestation::Confirmation,
         Some("desconhecimento") => Manifestation::Unknown,
         Some("nao_realizada") => Manifestation::NotPerformed,
-        _ => return Err(unreadable()),
+        // "nulo", nothing, or a word this adapter does not know: nothing declared as far as it can tell. The authority refuses
+        // a word that does not follow, which is milder than a listing that never arrives.
+        _ => Manifestation::None,
     };
     // The date comes with a time and an offset: the day is its first ten characters.
     let issued = text(item, "data_emissao").ok_or_else(unreadable)?;
     Ok(ReceivedInvoiceDraft {
         access_key,
-        issuer_name: text(item, "nome_emitente").ok_or_else(unreadable)?,
-        issuer_document: text(item, "documento_emitente").ok_or_else(unreadable)?,
-        total: text(item, "valor_total")
-            .and_then(|total| Amount::parse(&total))
+        issuer_name: text(item, "nome_emitente")
+            .or_else(|| text(item, "documento_emitente"))
             .ok_or_else(unreadable)?,
+        issuer_document: text(item, "documento_emitente").ok_or_else(unreadable)?,
+        // The total comes as text in the documentation, but a number is read as the exact decimal it is written as.
+        total: match &item["valor_total"] {
+            Value::String(total) => Amount::parse(total.trim()),
+            Value::Number(total) => Amount::parse(&total.to_string()),
+            _ => None,
+        }
+        .ok_or_else(unreadable)?,
         issued_on: issued
             .get(..10)
             .and_then(CalendarDate::parse)
@@ -1146,6 +1153,18 @@ impl FiscalGateway for FocusNfeGateway {
                 Some(body.to_string()),
             )
             .await?;
+        // A success that is neither the authority taking the word nor its refusal is not an answer this adapter understands: it is
+        // not told as a refusal while the word may already be held (the person asks the list).
+        if answer.status.is_success()
+            && !matches!(
+                answer.body["status"].as_str(),
+                Some("evento_registrado" | "erro")
+            )
+        {
+            return Err(GatewayError::Unavailable(
+                "a manifestation answer this adapter does not know".to_owned(),
+            ));
+        }
         self.event_of(&base, token, &answer, "evento_registrado", &[], refusal_of)
             .await
     }

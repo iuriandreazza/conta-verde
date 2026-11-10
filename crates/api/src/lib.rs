@@ -10578,12 +10578,17 @@ mod tests {
                 .status,
             StatusCode::ACCEPTED
         );
-        let after = send(&app, get_request(&received, Some(&owner))).await;
-        assert_eq!(
-            after.body["items"].as_array().unwrap().len(),
-            4,
-            "the knock made the server ask"
-        );
+        // The answer is at once and the work is done meanwhile: the knock made the server ask.
+        let mut found = 0;
+        for _ in 0..50 {
+            let after = send(&app, get_request(&received, Some(&owner))).await;
+            found = after.body["items"].as_array().unwrap().len();
+            if found == 4 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(found, 4, "the knock made the server ask");
     }
 
     /// An NFC-e through the API ([ADR 0082]): the product lines of a completed sale at the counter, what is paid adding up to the

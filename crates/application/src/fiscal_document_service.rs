@@ -709,10 +709,57 @@ where
                 received_invoice_changes(&invoice, &declared)
             },
         );
-        self.documents
+        match self
+            .documents
             .record_manifestation(&declared, invoice.manifestation(), &audit)
-            .await?;
-        Ok(declared)
+            .await
+        {
+            Ok(()) => Ok(declared),
+            // The authority took the word, and the mirror moved while it was asked (a sync that brought the same word, or a
+            // later one): the word is the person's act all the same, and an error here would lose it for good (the domain
+            // refuses a word after a final one). The row is written from what it holds now, never failed after the authority.
+            Err(RepositoryError::FiscalDocumentChanged) => {
+                self.record_after_the_mirror_moved(company_id, actor, id, declared)
+                    .await
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// What is done when the authority accepted a word and the mirror moved before it was written: if the row holds the same
+    /// word it is recorded (with the reason) in the name of the person; if it holds a later one the authority had it already and
+    /// there is nothing to write. Neither is an error.
+    async fn record_after_the_mirror_moved(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        id: ReceivedInvoiceId,
+        declared: ReceivedInvoice,
+    ) -> Result<ReceivedInvoice, ApplicationError> {
+        let held = self.get_received(company_id, id).await?;
+        if held.manifestation() != declared.manifestation() {
+            tracing::warn!("a declared word was already past when it was recorded");
+            return Ok(held);
+        }
+        let recorded = held.with_manifestation(
+            declared.manifestation(),
+            declared.justification().map(str::to_owned),
+        );
+        let audit = audit_entry(
+            &recorded,
+            actor,
+            AuditAction::Updated,
+            // The word as it stands, whole: that is what the person declared, whatever the mirror already said.
+            received_invoice_creation_changes(&recorded),
+        );
+        match self
+            .documents
+            .record_manifestation(&recorded, held.manifestation(), &audit)
+            .await
+        {
+            Ok(()) | Err(RepositoryError::FiscalDocumentChanged) => Ok(recorded),
+            Err(error) => Err(error.into()),
+        }
     }
 
     fn ensure_issues_manifestation(&self) -> Result<(), ApplicationError> {

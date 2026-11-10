@@ -16,7 +16,7 @@ CREATE TABLE received_invoices (
     CONSTRAINT received_invoices_company_id_id_key UNIQUE (company_id, id),
     -- An invoice is the company's once: the gateway listing it again changes nothing but what it says now.
     CONSTRAINT received_invoices_key_key UNIQUE (company_id, access_key),
-    CONSTRAINT received_invoices_access_key_valid CHECK (access_key ~ '^[0-9]{44}$'),
+    CONSTRAINT received_invoices_access_key_valid CHECK (access_key ~ '^[0-9]{6}[0-9A-Z]{14}[0-9]{24}$'),
     CONSTRAINT received_invoices_issuer_valid CHECK (
         char_length(issuer_name) BETWEEN 1 AND 150 AND issuer_name !~ '^\s|\s$' AND issuer_name !~ '[[:cntrl:]]'
         AND issuer_document ~ '^([0-9A-Z]{11}|[0-9A-Z]{14})$'

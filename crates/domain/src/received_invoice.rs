@@ -67,6 +67,16 @@ impl Manifestation {
         Self::ALL.into_iter().find(|kind| kind.key() == raw)
     }
 
+    /// How far along the declarations this word is: nothing, awareness, a final word. What the gateway lists is never taken
+    /// to be behind what the company already holds ([ADR 0083]).
+    pub fn rank(self) -> u8 {
+        match self {
+            Self::None => 0,
+            Self::Awareness => 1,
+            _ => 2,
+        }
+    }
+
     /// Whether this is the last word: nothing is declared after it.
     pub fn is_final(self) -> bool {
         matches!(
@@ -179,6 +189,18 @@ impl ReceivedInvoice {
             justification,
             ..self.clone()
         })
+    }
+
+    /// The invoice with the word and the reason an adapter holds for it, **without the rules of the words**: what is stored is
+    /// what the authority took, and the rules were applied when it was declared.
+    pub fn with_manifestation(&self, word: Manifestation, justification: Option<String>) -> Self {
+        let mut content = self.content.clone();
+        content.manifestation = word;
+        Self {
+            content,
+            justification,
+            ..self.clone()
+        }
     }
 
     pub fn id(&self) -> ReceivedInvoiceId {
@@ -355,6 +377,18 @@ mod tests {
                 .manifested(Manifestation::Confirmation, Some("  "))
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn the_words_are_ranked_and_an_adapter_can_hold_a_word_without_the_rules() {
+        assert!(Manifestation::None.rank() < Manifestation::Awareness.rank());
+        assert!(Manifestation::Awareness.rank() < Manifestation::Confirmation.rank());
+        assert_eq!(
+            Manifestation::Unknown.rank(),
+            Manifestation::NotPerformed.rank()
+        );
+        let held = invoice().with_manifestation(Manifestation::Confirmation, None);
+        assert_eq!(held.manifestation(), Manifestation::Confirmation);
     }
 
     #[test]

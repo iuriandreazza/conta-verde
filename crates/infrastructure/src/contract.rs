@@ -19378,6 +19378,94 @@ pub async fn received_invoices_are_kept<R: conta_verde_application::FiscalDocume
     );
     assert_eq!(after.version(), 9);
     assert_eq!(repository.max_received_version(company).await.unwrap(), 9);
+
+    // A list that has not caught up never takes a word back: the gateway saying "nothing" or "awareness" after the company
+    // holds a final word changes the version and nothing else, and the reason stays with its word.
+    let reason = "A mercadoria nunca chegou ao estabelecimento";
+    let held = repository
+        .find_received(company, second_id(repository, company, &second).await)
+        .await
+        .unwrap()
+        .unwrap();
+    let declared = held
+        .manifested(Manifestation::NotPerformed, Some(reason))
+        .unwrap();
+    repository
+        .record_manifestation(
+            &declared,
+            Manifestation::None,
+            &audit(&declared, received_invoice_creation_changes(&declared)),
+        )
+        .await
+        .unwrap();
+    for behind in [Manifestation::None, Manifestation::Awareness] {
+        let mut lagging = second.clone();
+        lagging.manifestation = behind;
+        lagging.version = 20;
+        repository
+            .mirror_received(company, &[lagging])
+            .await
+            .unwrap();
+        let still = repository
+            .find_received(company, held.id())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(still.manifestation(), Manifestation::NotPerformed);
+        assert_eq!(still.justification(), Some(reason));
+        assert_eq!(still.version(), 20);
+    }
+    // A declaration writes only the word and the reason: what the row says of the gateway (its version) is not rewritten from
+    // the copy that was read before the gateway was asked.
+    let mut fresh = third.clone();
+    fresh.version = 30;
+    repository.mirror_received(company, &[fresh]).await.unwrap();
+    let before = repository
+        .find_received_by_key(company, &third.access_key)
+        .await
+        .unwrap()
+        .unwrap();
+    let stale = before
+        .mirrored({
+            let mut older = third.clone();
+            older.version = 1;
+            older
+        })
+        .unwrap()
+        .manifested(Manifestation::Awareness, None)
+        .unwrap();
+    repository
+        .record_manifestation(
+            &stale,
+            Manifestation::None,
+            &audit(&stale, received_invoice_creation_changes(&stale)),
+        )
+        .await
+        .unwrap();
+    let after = repository
+        .find_received(company, before.id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.manifestation(), Manifestation::Awareness);
+    assert_eq!(
+        after.version(),
+        30,
+        "the gateway's version is not written back from a stale copy"
+    );
+}
+
+async fn second_id<R: conta_verde_application::FiscalDocumentRepository>(
+    repository: &R,
+    company: CompanyId,
+    draft: &conta_verde_domain::ReceivedInvoiceDraft,
+) -> conta_verde_domain::ReceivedInvoiceId {
+    repository
+        .find_received_by_key(company, &draft.access_key)
+        .await
+        .unwrap()
+        .unwrap()
+        .id()
 }
 
 /// What every gateway does with the invoices issued against the company: lists them in pages of versions (asking again from the
