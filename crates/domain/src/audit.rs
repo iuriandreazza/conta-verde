@@ -4,9 +4,10 @@ use crate::line::lines_text;
 use crate::{
     AccountOpening, Attachment, BankAccount, Category, Charge, CollectionSettings, CommissionRule,
     CompanyId, Contract, CostCenter, DocumentCheck, DunningPlan, FinancialEntry, FiscalDocument,
-    FiscalSettings, InventoryCount, LineMatch, PackageSchedule, Party, PaymentMethod, PaymentTerm,
-    PeriodLock, PriceList, Product, PurchaseOrder, PurchaseReceipt, Quote, Recurrence, Sale,
-    SaleReturn, Settlement, StatementLine, StockMovement, StockSettings, Tag, Transfer, UserId,
+    FiscalEvent, FiscalEventSubject, FiscalSettings, InventoryCount, LineMatch, PackageSchedule,
+    Party, PaymentMethod, PaymentTerm, PeriodLock, PriceList, Product, PurchaseOrder,
+    PurchaseReceipt, Quote, Recurrence, Sale, SaleReturn, Settlement, StatementLine, StockMovement,
+    StockSettings, Tag, Transfer, UserId,
 };
 
 /// Who made a change. The name is a snapshot: history must keep reading the same after the user is
@@ -58,6 +59,7 @@ pub enum AuditEntity {
     /// One per company: the audit id is the company's.
     FiscalSettings,
     FiscalDocument,
+    FiscalEvent,
 }
 
 impl AuditEntity {
@@ -92,6 +94,7 @@ impl AuditEntity {
             Self::PackageSchedule => "package_schedule",
             Self::FiscalSettings => "fiscal_settings",
             Self::FiscalDocument => "fiscal_document",
+            Self::FiscalEvent => "fiscal_event",
             Self::Settlement => "settlement",
             Self::Transfer => "transfer",
             Self::AccountOpening => "account_opening",
@@ -502,6 +505,20 @@ impl Audited for FiscalSettings {
 impl Audited for FiscalDocument {
     fn audit_entity(&self) -> AuditEntity {
         AuditEntity::FiscalDocument
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.id().as_uuid()
+    }
+}
+
+impl Audited for FiscalEvent {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::FiscalEvent
     }
 
     fn audit_company(&self) -> CompanyId {
@@ -1450,6 +1467,52 @@ pub fn fiscal_document_changes(
         fiscal_document_fields(before),
         fiscal_document_fields(after),
     )
+}
+
+fn fiscal_event_fields(event: &FiscalEvent) -> Fields {
+    let mut fields: Fields = vec![
+        ("kind", Some(event.subject().key().to_owned())),
+        ("status", Some(event.status().key().to_owned())),
+        ("text", Some(event.subject().body().to_owned())),
+    ];
+    match event.subject() {
+        FiscalEventSubject::Correction {
+            document, sequence, ..
+        } => {
+            fields.push(("document", Some(document.as_uuid().to_string())));
+            fields.push(("sequence", Some(sequence.to_string())));
+        }
+        FiscalEventSubject::Invalidation {
+            series,
+            first,
+            last,
+            environment,
+            ..
+        } => {
+            fields.push(("series", Some(series.to_string())));
+            fields.push(("first", Some(first.to_string())));
+            fields.push(("last", Some(last.to_string())));
+            fields.push(("environment", Some(environment.key().to_owned())));
+        }
+    }
+    fields.push(("protocol", event.protocol().map(str::to_owned)));
+    fields.push((
+        "refusal",
+        event
+            .refusal()
+            .map(|refusal| format!("{}: {}", refusal.code(), refusal.message())),
+    ));
+    fields
+}
+
+/// What recording a fiscal event records.
+pub fn fiscal_event_creation_changes(event: &FiscalEvent) -> Vec<FieldChange> {
+    creation_from(fiscal_event_fields(event))
+}
+
+/// What the answer to a fiscal event records: the fields that changed.
+pub fn fiscal_event_changes(before: &FiscalEvent, after: &FiscalEvent) -> Vec<FieldChange> {
+    changes_between(fiscal_event_fields(before), fiscal_event_fields(after))
 }
 
 fn package_schedule_fields(schedule: &PackageSchedule) -> Fields {

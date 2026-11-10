@@ -33,6 +33,7 @@ uuid_id!(CostCenterId);
 uuid_id!(DocumentMailId);
 uuid_id!(EntryId);
 uuid_id!(FiscalDocumentId);
+uuid_id!(FiscalEventId);
 uuid_id!(InventoryCountId);
 uuid_id!(InvitationId);
 uuid_id!(JobId);

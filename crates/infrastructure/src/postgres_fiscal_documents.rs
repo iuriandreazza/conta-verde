@@ -2,8 +2,9 @@ use conta_verde_application::{FiscalDocumentRepository, RepositoryError, ensure_
 use conta_verde_domain::{
     AccessKey, Amount, AuditEntity, AuditEntry, AuditRecord, BlobId, CalendarDate, CompanyId,
     FiscalAuthorization, FiscalDocument, FiscalDocumentDraft, FiscalDocumentId, FiscalDocumentKind,
-    FiscalDocumentStatus, FiscalEnvironment, FiscalFile, FiscalFileKind, FiscalOrigin,
-    FiscalRefusal, SaleId, TaxRegime, UserId,
+    FiscalDocumentStatus, FiscalEnvironment, FiscalEvent, FiscalEventId, FiscalEventStatus,
+    FiscalEventSubject, FiscalFile, FiscalFileKind, FiscalOrigin, FiscalRefusal, SaleId, TaxRegime,
+    UserId,
 };
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row};
@@ -13,6 +14,11 @@ use crate::postgres_audit;
 
 const ONE_LIVE_PER_SALE: &str = "fiscal_documents_one_live_per_sale_key";
 const ONE_FILE_PER_KIND: &str = "fiscal_files_one_per_kind_key";
+const ONE_LETTER_PER_PLACE: &str = "fiscal_events_sequence_key";
+
+const EVENT_COLUMNS: &str = "id, company_id, kind, document_id, sequence, body, series, first_number, last_number, \
+     environment, status, protocol, refusal_code, refusal_message, blob_id, xml_size, requested_by_user_id, \
+     requested_by_name";
 
 #[derive(Clone)]
 pub struct PostgresFiscalDocumentRepository {
@@ -109,6 +115,82 @@ fn document_from_row(row: &PgRow) -> Result<FiscalDocument, RepositoryError> {
     )
     .map_err(|error| RepositoryError::Storage(error.to_string()))?
     .restored(status, refusal, authorization, note))
+}
+
+fn event_from_row(row: &PgRow) -> Result<FiscalEvent, RepositoryError> {
+    let text = |name: &str| -> Result<String, RepositoryError> {
+        row.try_get(name).map_err(storage_error)
+    };
+    let storage =
+        |error: conta_verde_domain::DomainError| RepositoryError::Storage(error.to_string());
+    let subject = match text("kind")?.as_str() {
+        "correction" => {
+            let sequence: i16 = row.try_get("sequence").map_err(storage_error)?;
+            FiscalEventSubject::correction(
+                FiscalDocumentId::from_uuid(row.try_get("document_id").map_err(storage_error)?),
+                u8::try_from(sequence)
+                    .map_err(|_| RepositoryError::Storage("sequence".to_owned()))?,
+                &text("body")?,
+            )
+            .map_err(storage)?
+        }
+        "invalidation" => {
+            let series: i16 = row.try_get("series").map_err(storage_error)?;
+            let first: i64 = row.try_get("first_number").map_err(storage_error)?;
+            let last: i64 = row.try_get("last_number").map_err(storage_error)?;
+            FiscalEventSubject::invalidation(
+                u16::try_from(series).map_err(|_| RepositoryError::Storage("series".to_owned()))?,
+                u32::try_from(first).map_err(|_| RepositoryError::Storage("first".to_owned()))?,
+                u32::try_from(last).map_err(|_| RepositoryError::Storage("last".to_owned()))?,
+                stored(
+                    FiscalEnvironment::parse(&text("environment")?),
+                    "environment",
+                )?,
+                &text("body")?,
+            )
+            .map_err(storage)?
+        }
+        _ => {
+            return Err(RepositoryError::Storage(
+                "stored event kind is not known".to_owned(),
+            ));
+        }
+    };
+    let refusal = match (
+        row.try_get::<Option<String>, _>("refusal_code")
+            .map_err(storage_error)?,
+        row.try_get::<Option<String>, _>("refusal_message")
+            .map_err(storage_error)?,
+    ) {
+        (Some(code), Some(message)) => Some(FiscalRefusal::new(&code, &message)),
+        _ => None,
+    };
+    let xml = match (
+        row.try_get::<Option<uuid::Uuid>, _>("blob_id")
+            .map_err(storage_error)?,
+        row.try_get::<Option<i64>, _>("xml_size")
+            .map_err(storage_error)?,
+    ) {
+        (Some(blob), Some(size)) => Some((
+            BlobId::from_uuid(blob),
+            u64::try_from(size).map_err(|_| RepositoryError::Storage("xml size".to_owned()))?,
+        )),
+        _ => None,
+    };
+    Ok(FiscalEvent::new(
+        FiscalEventId::from_uuid(row.try_get("id").map_err(storage_error)?),
+        CompanyId::from_uuid(row.try_get("company_id").map_err(storage_error)?),
+        subject,
+        UserId::from_uuid(row.try_get("requested_by_user_id").map_err(storage_error)?),
+        &text("requested_by_name")?,
+    )
+    .map_err(storage)?
+    .restored(
+        stored(FiscalEventStatus::parse(&text("status")?), "event status")?,
+        row.try_get("protocol").map_err(storage_error)?,
+        refusal,
+        xml,
+    ))
 }
 
 fn file_from_row(row: &PgRow) -> Result<FiscalFile, RepositoryError> {
@@ -310,6 +392,221 @@ impl FiscalDocumentRepository for PostgresFiscalDocumentRepository {
             id.as_uuid(),
         )
         .await
+    }
+
+    async fn record_event(
+        &self,
+        event: &FiscalEvent,
+        audit: &AuditEntry,
+    ) -> Result<(), RepositoryError> {
+        ensure_audit_describes(audit, event)?;
+        let (kind, document, sequence, series, first, last, environment) = match event.subject() {
+            FiscalEventSubject::Correction {
+                document, sequence, ..
+            } => (
+                "correction",
+                Some(document.as_uuid()),
+                Some(i16::from(*sequence)),
+                None,
+                None,
+                None,
+                None,
+            ),
+            FiscalEventSubject::Invalidation {
+                series,
+                first,
+                last,
+                environment,
+                ..
+            } => (
+                "invalidation",
+                None,
+                None,
+                Some(
+                    i16::try_from(*series)
+                        .map_err(|_| RepositoryError::Storage("series".to_owned()))?,
+                ),
+                Some(i64::from(*first)),
+                Some(i64::from(*last)),
+                Some(environment.key()),
+            ),
+        };
+        let mut tx = self.pool.begin().await.map_err(storage_error)?;
+        if let Some(document) = document {
+            // The document is read with its row held, so a cancellation cannot land between this look and the insert.
+            let status: Option<String> = sqlx::query_scalar(
+                "SELECT status FROM fiscal_documents WHERE id = $1 AND company_id = $2 FOR SHARE",
+            )
+            .bind(document)
+            .bind(event.company_id().as_uuid())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(storage_error)?;
+            match status.as_deref() {
+                None => return Err(RepositoryError::NotFound),
+                Some("authorized") => {}
+                Some(_) => return Err(RepositoryError::FiscalDocumentChanged),
+            }
+        }
+        sqlx::query(
+            "INSERT INTO fiscal_events (id, company_id, kind, document_id, sequence, body, series, \
+             first_number, last_number, environment, status, requested_by_user_id, requested_by_name) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'sent', $11, $12)",
+        )
+        .bind(event.id().as_uuid())
+        .bind(event.company_id().as_uuid())
+        .bind(kind)
+        .bind(document)
+        .bind(sequence)
+        .bind(event.subject().body())
+        .bind(series)
+        .bind(first)
+        .bind(last)
+        .bind(environment)
+        .bind(event.requested_by().as_uuid())
+        .bind(event.requested_by_name())
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| match &error {
+            sqlx::Error::Database(db) if db.constraint() == Some(ONE_LETTER_PER_PLACE) => {
+                RepositoryError::FiscalDocumentChanged
+            }
+            sqlx::Error::Database(db) if db.constraint() == Some("fiscal_events_document_fk") => {
+                RepositoryError::NotFound
+            }
+            _ => storage_error(error),
+        })?;
+        postgres_audit::insert(&mut tx, audit).await?;
+        tx.commit().await.map_err(storage_error)
+    }
+
+    async fn settle_event(
+        &self,
+        event: &FiscalEvent,
+        audit: &AuditEntry,
+    ) -> Result<(), RepositoryError> {
+        ensure_audit_describes(audit, event)?;
+        let mut tx = self.pool.begin().await.map_err(storage_error)?;
+        let current: Option<String> = sqlx::query_scalar(
+            "SELECT status FROM fiscal_events WHERE id = $1 AND company_id = $2 FOR UPDATE",
+        )
+        .bind(event.id().as_uuid())
+        .bind(event.company_id().as_uuid())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(storage_error)?;
+        match current.as_deref() {
+            None => return Err(RepositoryError::NotFound),
+            Some("sent") => {}
+            Some(_) => return Err(RepositoryError::FiscalDocumentChanged),
+        }
+        let xml = event.xml();
+        sqlx::query(
+            "UPDATE fiscal_events SET status = $2, protocol = $3, refusal_code = $4, refusal_message = $5, \
+             blob_id = $6, xml_size = $7 WHERE id = $1",
+        )
+        .bind(event.id().as_uuid())
+        .bind(event.status().key())
+        .bind(event.protocol())
+        .bind(event.refusal().map(|refusal| refusal.code().to_owned()))
+        .bind(event.refusal().map(|refusal| refusal.message().to_owned()))
+        .bind(xml.map(|(blob, _)| blob.as_uuid()))
+        .bind(
+            xml.map(|(_, size)| i64::try_from(size))
+                .transpose()
+                .map_err(|_| RepositoryError::Storage("xml size".to_owned()))?,
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(storage_error)?;
+        postgres_audit::insert(&mut tx, audit).await?;
+        tx.commit().await.map_err(storage_error)
+    }
+
+    async fn event_history(
+        &self,
+        company_id: CompanyId,
+        id: FiscalEventId,
+    ) -> Result<Vec<AuditRecord>, RepositoryError> {
+        postgres_audit::history(
+            &self.pool,
+            company_id,
+            AuditEntity::FiscalEvent,
+            id.as_uuid(),
+        )
+        .await
+    }
+
+    async fn find_event(
+        &self,
+        company_id: CompanyId,
+        id: FiscalEventId,
+    ) -> Result<Option<FiscalEvent>, RepositoryError> {
+        let row = sqlx::query(&format!(
+            "SELECT {EVENT_COLUMNS} FROM fiscal_events WHERE company_id = $1 AND id = $2"
+        ))
+        .bind(company_id.as_uuid())
+        .bind(id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        row.as_ref().map(event_from_row).transpose()
+    }
+
+    async fn corrections_of(
+        &self,
+        company_id: CompanyId,
+        id: FiscalDocumentId,
+    ) -> Result<Vec<FiscalEvent>, RepositoryError> {
+        let rows = sqlx::query(&format!(
+            "SELECT {EVENT_COLUMNS} FROM fiscal_events WHERE company_id = $1 AND document_id = $2 \
+             AND kind = 'correction' ORDER BY sequence"
+        ))
+        .bind(company_id.as_uuid())
+        .bind(id.as_uuid())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        rows.iter().map(event_from_row).collect()
+    }
+
+    async fn invalidations(
+        &self,
+        company_id: CompanyId,
+        limit: usize,
+    ) -> Result<Vec<FiscalEvent>, RepositoryError> {
+        let rows = sqlx::query(&format!(
+            "SELECT {EVENT_COLUMNS} FROM fiscal_events WHERE company_id = $1 AND kind = 'invalidation' \
+             ORDER BY recorded DESC LIMIT $2"
+        ))
+        .bind(company_id.as_uuid())
+        .bind(i64::try_from(limit).unwrap_or(i64::MAX))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        rows.iter().map(event_from_row).collect()
+    }
+
+    async fn number_is_used(
+        &self,
+        company_id: CompanyId,
+        environment: FiscalEnvironment,
+        series: u16,
+        first: u32,
+        last: u32,
+    ) -> Result<bool, RepositoryError> {
+        sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM fiscal_documents WHERE company_id = $1 AND environment = $2 \
+             AND series = $3 AND number BETWEEN $4 AND $5)",
+        )
+        .bind(company_id.as_uuid())
+        .bind(environment.key())
+        .bind(i16::try_from(series).map_err(|_| RepositoryError::Storage("series".to_owned()))?)
+        .bind(i64::from(first))
+        .bind(i64::from(last))
+        .fetch_one(&self.pool)
+        .await
+        .map_err(storage_error)
     }
 
     async fn save_file(&self, file: &FiscalFile) -> Result<(), RepositoryError> {
@@ -528,6 +825,81 @@ mod tests {
                 .execute(&pool)
                 .await,
             "kind_valid",
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn keeps_fiscal_events() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let other_company = contract::create_company(&pool).await;
+        let sale = a_sale(&pool, company).await;
+        contract::fiscal_events_are_kept(
+            &PostgresFiscalDocumentRepository::new(pool.clone()),
+            company,
+            other_company,
+            sale,
+        )
+        .await;
+    }
+
+    /// What the migration refuses of an event, whatever the application does.
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn the_database_keeps_the_record_of_an_event() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let sale = a_sale(&pool, company).await;
+        let refused = |result: Result<_, sqlx::Error>, text: &str| match result {
+            Err(sqlx::Error::Database(error)) => assert!(
+                error.message().contains(text)
+                    || error.constraint().is_some_and(|name| name.contains(text)),
+                "{text} was expected, got {}",
+                error.message()
+            ),
+            other => panic!("{text} was expected, got {other:?}"),
+        };
+        let _ = sale;
+        refused(
+            sqlx::query("INSERT INTO fiscal_events (id, company_id, kind, body, series, first_number, last_number, environment, status, requested_by_user_id, requested_by_name) VALUES ($1, $2, 'invalidation', 'Numeração pulada por falha', 1, 5, 4, 'homologation', 'sent', gen_random_uuid(), 'Maria')")
+                .bind(uuid::Uuid::new_v4())
+                .bind(company.as_uuid())
+                .execute(&pool)
+                .await,
+            "kind_follows_columns",
+        );
+        sqlx::query("INSERT INTO fiscal_events (id, company_id, kind, body, series, first_number, last_number, environment, status, requested_by_user_id, requested_by_name) VALUES ($1, $2, 'invalidation', 'Numeração pulada por falha', 1, 5, 6, 'homologation', 'sent', gen_random_uuid(), 'Maria')")
+            .bind(uuid::Uuid::new_v4())
+            .bind(company.as_uuid())
+            .execute(&pool)
+            .await
+            .unwrap();
+        refused(
+            sqlx::query("UPDATE fiscal_events SET last_number = 9 WHERE company_id = $1")
+                .bind(company.as_uuid())
+                .execute(&pool)
+                .await,
+            "never changes",
+        );
+        refused(
+            sqlx::query("DELETE FROM fiscal_events WHERE company_id = $1")
+                .bind(company.as_uuid())
+                .execute(&pool)
+                .await,
+            "never deleted",
+        );
+        sqlx::query("UPDATE fiscal_events SET status = 'accepted' WHERE company_id = $1")
+            .bind(company.as_uuid())
+            .execute(&pool)
+            .await
+            .unwrap();
+        refused(
+            sqlx::query("UPDATE fiscal_events SET status = 'refused', refusal_code = '1', refusal_message = 'x' WHERE company_id = $1")
+                .bind(company.as_uuid())
+                .execute(&pool)
+                .await,
+            "never changes",
         );
     }
 

@@ -703,6 +703,22 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
             post(fiscal::cancel_document::<X>),
         )
         .route(
+            "/companies/{company_id}/fiscal/documents/{id}/corrections",
+            get(fiscal::list_corrections::<X>).post(fiscal::send_correction::<X>),
+        )
+        .route(
+            "/companies/{company_id}/fiscal/invalidations",
+            get(fiscal::list_invalidations::<X>).post(fiscal::invalidate_numbers::<X>),
+        )
+        .route(
+            "/companies/{company_id}/fiscal/events/{id}/abandon",
+            post(fiscal::abandon_event::<X>),
+        )
+        .route(
+            "/companies/{company_id}/fiscal/events/{id}/file",
+            get(fiscal::download_event_file::<X>),
+        )
+        .route(
             "/companies/{company_id}/fiscal/documents/{id}/files/{kind}",
             get(fiscal::download_document_file::<X>),
         )
@@ -10319,6 +10335,90 @@ mod tests {
                 "{uri}"
             );
         }
+
+        // A correction letter is recorded and answered, its XML is a download; an invalidation never takes a number in use.
+        let letters = format!("{one}/corrections");
+        let short = send(
+            &app,
+            json_request("POST", &letters, Some(&owner), json!({ "text": "curta" })),
+        )
+        .await;
+        assert_eq!(short.status, StatusCode::UNPROCESSABLE_ENTITY);
+        let letter = send(
+            &app,
+            json_request(
+                "POST",
+                &letters,
+                Some(&owner),
+                json!({ "text": "Corrige o endereço de entrega do destinatário" }),
+            ),
+        )
+        .await;
+        assert_eq!(letter.status, StatusCode::OK, "{}", letter.body);
+        assert_eq!(letter.body["status"], "accepted");
+        assert_eq!(letter.body["sequence"], 1);
+        assert_eq!(letter.body["has_file"], true);
+        let (status, headers, bytes) = raw(
+            &app,
+            get_request(
+                &format!(
+                    "/companies/{company_id}/fiscal/events/{}/file",
+                    letter.body["id"].as_str().unwrap()
+                ),
+                Some(&accountant),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+        assert!(!bytes.is_empty());
+        let listed = send(&app, get_request(&letters, Some(&seller))).await;
+        assert_eq!(listed.body.as_array().unwrap().len(), 1);
+        assert_eq!(
+            send(
+                &app,
+                json_request(
+                    "POST",
+                    &letters,
+                    Some(&seller),
+                    json!({ "text": "Corrige o endereço de entrega" })
+                ),
+            )
+            .await
+            .status,
+            StatusCode::FORBIDDEN
+        );
+        let invalidations = format!("/companies/{company_id}/fiscal/invalidations");
+        let used = send(
+            &app,
+            json_request(
+                "POST",
+                &invalidations,
+                Some(&owner),
+                json!({ "series": 1, "first": 1, "last": 1_000_000, "reason": "Numeração pulada por falha do sistema" }),
+            ),
+        )
+        .await;
+        assert_eq!(
+            used.status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{}",
+            used.body
+        );
+        let free = send(
+            &app,
+            json_request(
+                "POST",
+                &invalidations,
+                Some(&owner),
+                json!({ "series": 1, "first": 9000, "last": 9001, "reason": "Numeração pulada por falha do sistema" }),
+            ),
+        )
+        .await;
+        assert_eq!(free.status, StatusCode::OK, "{}", free.body);
+        assert_eq!(free.body["first"], 9000);
+        let all = send(&app, get_request(&invalidations, Some(&accountant))).await;
+        assert_eq!(all.body.as_array().unwrap().len(), 1);
 
         // A cancellation needs a real reason; it keeps the files and frees the sale for a new document.
         assert_eq!(

@@ -6,9 +6,9 @@ use conta_verde_application::{
     ApplicationError, BuyerPresence, FiscalGateway, IssueNfe, PaymentForm,
 };
 use conta_verde_domain::{
-    AddressDraft, FiscalDocument, FiscalDocumentId, FiscalEnvironment, FiscalFileKind,
-    FiscalSettings, FiscalSettingsDraft, NatureKind, OperationNature, OperationNatureDraft, SaleId,
-    TaxRegime, TaxRule, TaxRuleDraft,
+    AddressDraft, FiscalDocument, FiscalDocumentId, FiscalEnvironment, FiscalEvent, FiscalEventId,
+    FiscalEventSubject, FiscalFileKind, FiscalSettings, FiscalSettingsDraft, NatureKind,
+    OperationNature, OperationNatureDraft, SaleId, TaxRegime, TaxRule, TaxRuleDraft,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -514,4 +514,179 @@ pub(crate) async fn download_document_file<X: Ports>(
         HeaderValue::from_static("private, no-store"),
     );
     Ok(response)
+}
+
+#[derive(Serialize)]
+pub(crate) struct FiscalEventResponse {
+    id: Uuid,
+    kind: &'static str,
+    status: &'static str,
+    /// The letter's text, or the reason of the invalidation.
+    text: String,
+    /// The letter's place among its document's letters.
+    sequence: Option<u8>,
+    series: Option<u16>,
+    first: Option<u32>,
+    last: Option<u32>,
+    protocol: Option<String>,
+    refusal: Option<RefusalResponse>,
+    requested_by: String,
+    /// Whether the authority's XML of the event can be downloaded.
+    has_file: bool,
+}
+
+impl From<&FiscalEvent> for FiscalEventResponse {
+    fn from(event: &FiscalEvent) -> Self {
+        let (sequence, series, first, last) = match event.subject() {
+            FiscalEventSubject::Correction { sequence, .. } => (Some(*sequence), None, None, None),
+            FiscalEventSubject::Invalidation {
+                series,
+                first,
+                last,
+                ..
+            } => (None, Some(*series), Some(*first), Some(*last)),
+        };
+        Self {
+            id: event.id().as_uuid(),
+            kind: event.subject().key(),
+            status: event.status().key(),
+            text: event.subject().body().to_owned(),
+            sequence,
+            series,
+            first,
+            last,
+            protocol: event.protocol().map(str::to_owned),
+            refusal: event.refusal().map(|refusal| RefusalResponse {
+                code: refusal.code().to_owned(),
+                message: refusal.message().to_owned(),
+            }),
+            requested_by: event.requested_by_name().to_owned(),
+            has_file: event.xml().is_some(),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CorrectionRequest {
+    text: String,
+}
+
+pub(crate) async fn send_correction<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, actor): CompanyAccess,
+    Path((_, id)): Path<(Uuid, String)>,
+    ApiJson(request): ApiJson<CorrectionRequest>,
+) -> Result<Json<FiscalEventResponse>, ApiError> {
+    let event = state
+        .fiscal_documents
+        .correct(company_id, &actor, parse_document(&id)?, &request.text)
+        .await?;
+    Ok(Json(FiscalEventResponse::from(&event)))
+}
+
+pub(crate) async fn list_corrections<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, _): CompanyAccess,
+    Path((_, id)): Path<(Uuid, String)>,
+) -> Result<Json<Vec<FiscalEventResponse>>, ApiError> {
+    let letters = state
+        .fiscal_documents
+        .corrections(company_id, parse_document(&id)?)
+        .await?;
+    Ok(Json(
+        letters.iter().map(FiscalEventResponse::from).collect(),
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct InvalidationRequest {
+    series: u16,
+    first: u32,
+    last: u32,
+    reason: String,
+}
+
+pub(crate) async fn invalidate_numbers<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, actor): CompanyAccess,
+    ApiJson(request): ApiJson<InvalidationRequest>,
+) -> Result<Json<FiscalEventResponse>, ApiError> {
+    let event = state
+        .fiscal_documents
+        .invalidate(
+            company_id,
+            &actor,
+            request.series,
+            request.first,
+            request.last,
+            &request.reason,
+        )
+        .await?;
+    Ok(Json(FiscalEventResponse::from(&event)))
+}
+
+/// The company's invalidations, newest first (the latest 100).
+pub(crate) async fn list_invalidations<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, _): CompanyAccess,
+) -> Result<Json<Vec<FiscalEventResponse>>, ApiError> {
+    let found = state
+        .fiscal_documents
+        .invalidations(company_id, 100)
+        .await?;
+    Ok(Json(found.iter().map(FiscalEventResponse::from).collect()))
+}
+
+/// The authority's XML of an event it accepted, as a download that is never shown as a page.
+pub(crate) async fn download_event_file<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, _): CompanyAccess,
+    Path((_, id)): Path<(Uuid, String)>,
+) -> Result<Response, ApiError> {
+    let id = Uuid::parse_str(&id)
+        .map(FiscalEventId::from_uuid)
+        .map_err(|_| ApplicationError::FiscalDocumentNotFound)?;
+    let bytes = state.fiscal_documents.event_file(company_id, id).await?;
+    let mut response = bytes.into_response();
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/xml"),
+    );
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_str(&format!(
+            "attachment; filename=\"event-{}.xml\"",
+            id.as_uuid()
+        ))
+        .expect("a file name made of an id is a header value"),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+    Ok(response)
+}
+
+/// Gives up on an event that was sent and never answered, after the person checked at the gateway that the authority did
+/// not take it.
+pub(crate) async fn abandon_event<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, actor): CompanyAccess,
+    Path((_, id)): Path<(Uuid, String)>,
+) -> Result<Json<FiscalEventResponse>, ApiError> {
+    let id = Uuid::parse_str(&id)
+        .map(FiscalEventId::from_uuid)
+        .map_err(|_| ApplicationError::FiscalDocumentNotFound)?;
+    let event = state
+        .fiscal_documents
+        .abandon_event(company_id, &actor, id)
+        .await?;
+    Ok(Json(FiscalEventResponse::from(&event)))
 }

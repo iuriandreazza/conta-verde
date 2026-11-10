@@ -1,9 +1,11 @@
 use conta_verde_domain::{
     Actor, Amount, AuditAction, AuditRecord, BlobId, CalendarDate, CompanyId, FiscalAuthorization,
     FiscalDocument, FiscalDocumentDraft, FiscalDocumentId, FiscalDocumentKind,
-    FiscalDocumentStatus, FiscalFile, FiscalFileKind, FiscalOrigin, FiscalRefusal, FiscalSettings,
-    NatureKind, Party, Product, ProductKind, Sale, SaleId, SaleStatus, TaxRegime, fiscal_day,
-    fiscal_document_changes, fiscal_document_creation_changes,
+    FiscalDocumentStatus, FiscalEvent, FiscalEventId, FiscalEventStatus, FiscalEventSubject,
+    FiscalFile, FiscalFileKind, FiscalOrigin, FiscalRefusal, FiscalSettings,
+    MAX_CORRECTION_ATTEMPTS, MAX_CORRECTIONS, NatureKind, Party, Product, ProductKind, Sale,
+    SaleId, SaleStatus, TaxRegime, fiscal_day, fiscal_document_changes,
+    fiscal_document_creation_changes, fiscal_event_changes, fiscal_event_creation_changes,
 };
 
 use crate::audit::audit_entry;
@@ -373,6 +375,242 @@ where
                 refusal.code, refusal.message
             ))),
         }
+    }
+
+    /// Sends a correction letter (CC-e) for an authorized document. The letter is **recorded as sent before the gateway
+    /// is asked**, so an answer that was lost leaves it visible and it is never sent again by the product; a new one
+    /// waits until it is settled. The authority's deadline (720 hours) and rules are its own to enforce, and a refusal
+    /// is kept and told. A letter changes no figure, so a closed month does not refuse it ([ADR 0073]).
+    pub async fn correct(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        id: FiscalDocumentId,
+        text: &str,
+    ) -> Result<FiscalEvent, ApplicationError> {
+        let document = self.get(company_id, id).await?;
+        if document.status() != FiscalDocumentStatus::Authorized {
+            return Err(conta_verde_domain::DomainError::InvalidFiscalTransition.into());
+        }
+        let settings = self.settings_of(company_id, &document).await?;
+        let letters = self.documents.corrections_of(company_id, id).await?;
+        if letters
+            .iter()
+            .any(|letter| letter.status() == FiscalEventStatus::Sent)
+        {
+            return Err(ApplicationError::FiscalRule(
+                "a correction letter of this document is still waiting for an answer".to_owned(),
+            ));
+        }
+        // The authority's limit is on the letters it accepted; our place is one more than the attempts so far.
+        let accepted = letters
+            .iter()
+            .filter(|letter| letter.status() == FiscalEventStatus::Accepted)
+            .count();
+        if accepted >= usize::from(MAX_CORRECTIONS) {
+            return Err(ApplicationError::FiscalRule(format!(
+                "a document takes at most {MAX_CORRECTIONS} correction letters"
+            )));
+        }
+        let sequence = u8::try_from(letters.len() + 1)
+            .ok()
+            .filter(|sequence| *sequence <= MAX_CORRECTION_ATTEMPTS)
+            .ok_or_else(|| {
+                ApplicationError::FiscalRule(
+                    "too many attempts at a correction letter were recorded for this document"
+                        .to_owned(),
+                )
+            })?;
+        let subject = FiscalEventSubject::correction(id, sequence, text).map_err(|_| {
+            ApplicationError::FiscalRule(
+                "the correction has 15 to 1000 characters, on one line".to_owned(),
+            )
+        })?;
+        let event = self.record_event(company_id, actor, subject).await?;
+        let answer = self
+            .gateway
+            .correct_nfe(&settings, &reference(&document), event.subject().body())
+            .await;
+        self.settle_event(company_id, actor, event, answer, "correction letter")
+            .await
+    }
+
+    /// Declares a range of numbers of a series unused (inutilização), in the environment the company issues in now.
+    /// Recorded as sent before the gateway is asked. A number a document of the company holds is never invalidated.
+    pub async fn invalidate(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        series: u16,
+        first: u32,
+        last: u32,
+        reason: &str,
+    ) -> Result<FiscalEvent, ApplicationError> {
+        let settings = self.ready_settings(company_id).await?;
+        let subject =
+            FiscalEventSubject::invalidation(series, first, last, settings.environment(), reason)
+                .map_err(|_| {
+                    ApplicationError::FiscalRule(
+                        "an invalidation has a series from 1 to 999, a range of numbers and a reason of 15 to 255 characters, on one line"
+                            .to_owned(),
+                    )
+                })?;
+        if self
+            .documents
+            .number_is_used(company_id, settings.environment(), series, first, last)
+            .await?
+        {
+            return Err(ApplicationError::FiscalRule(
+                "a document of this company holds a number of the range: a number in use is not invalidated".to_owned(),
+            ));
+        }
+        let event = self.record_event(company_id, actor, subject).await?;
+        let answer = self
+            .gateway
+            .invalidate_nfe_numbers(&settings, series, first, last, reason.trim())
+            .await;
+        self.settle_event(company_id, actor, event, answer, "invalidation")
+            .await
+    }
+
+    /// Gives up on an event that was sent and never answered: the person has checked at the gateway that the authority did
+    /// not take it, and says so. It is settled as refused with the words that say who decided, which frees a new letter.
+    /// **Never for an event the authority may have accepted**: the product cannot tell, and the answer is the gateway's.
+    pub async fn abandon_event(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        id: FiscalEventId,
+    ) -> Result<FiscalEvent, ApplicationError> {
+        let event = self
+            .documents
+            .find_event(company_id, id)
+            .await?
+            .ok_or(ApplicationError::FiscalDocumentNotFound)?;
+        if event.status() != FiscalEventStatus::Sent {
+            return Err(conta_verde_domain::DomainError::InvalidFiscalTransition.into());
+        }
+        let refused = event.refused(FiscalRefusal::new(
+            "abandoned",
+            "the answer never came and the person confirmed at the gateway that the authority did not take it",
+        ))?;
+        self.write_settlement(actor, &event, &refused).await?;
+        Ok(refused)
+    }
+
+    /// The correction letters of a document.
+    pub async fn corrections(
+        &self,
+        company_id: CompanyId,
+        id: FiscalDocumentId,
+    ) -> Result<Vec<FiscalEvent>, ApplicationError> {
+        self.get(company_id, id).await?;
+        Ok(self.documents.corrections_of(company_id, id).await?)
+    }
+
+    /// The invalidations of the company, newest first.
+    pub async fn invalidations(
+        &self,
+        company_id: CompanyId,
+        limit: usize,
+    ) -> Result<Vec<FiscalEvent>, ApplicationError> {
+        Ok(self.documents.invalidations(company_id, limit).await?)
+    }
+
+    /// The XML of an event the authority accepted, when the gateway gave one.
+    pub async fn event_file(
+        &self,
+        company_id: CompanyId,
+        id: FiscalEventId,
+    ) -> Result<Vec<u8>, ApplicationError> {
+        let event = self
+            .documents
+            .find_event(company_id, id)
+            .await?
+            .ok_or(ApplicationError::FiscalDocumentNotFound)?;
+        let (blob, _) = event
+            .xml()
+            .ok_or(ApplicationError::FiscalDocumentNotFound)?;
+        self.blobs.get(company_id, blob).await?.ok_or_else(|| {
+            ApplicationError::Repository(RepositoryError::Storage(
+                "a fiscal file's bytes are missing".to_owned(),
+            ))
+        })
+    }
+
+    async fn record_event(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        subject: FiscalEventSubject,
+    ) -> Result<FiscalEvent, ApplicationError> {
+        let Actor::User { id: user, name } = actor;
+        let event = FiscalEvent::new(FiscalEventId::generate(), company_id, subject, *user, name)?;
+        let audit = audit_entry(
+            &event,
+            actor,
+            AuditAction::Created,
+            fiscal_event_creation_changes(&event),
+        );
+        self.documents.record_event(&event, &audit).await?;
+        Ok(event)
+    }
+
+    /// Settles a recorded event with what the gateway said. An answer that never came leaves it `sent`.
+    async fn settle_event(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        event: FiscalEvent,
+        answer: Result<EventOutcome, GatewayError>,
+        what: &str,
+    ) -> Result<FiscalEvent, ApplicationError> {
+        let settled = match answer {
+            Ok(EventOutcome::Accepted(accepted)) => {
+                let xml = match accepted.xml {
+                    Some(bytes) if !bytes.is_empty() => {
+                        let blob = BlobId::generate();
+                        self.blobs.put(company_id, blob, &bytes).await?;
+                        Some((blob, bytes.len() as u64))
+                    }
+                    _ => None,
+                };
+                event.accepted(accepted.protocol.as_deref(), xml)?
+            }
+            Ok(EventOutcome::Refused(refusal)) => {
+                let refused = event.refused(FiscalRefusal::new(&refusal.code, &refusal.message))?;
+                self.write_settlement(actor, &event, &refused).await?;
+                return Err(ApplicationError::FiscalRule(format!(
+                    "the authority refused the {what} ({}): {}",
+                    refusal.code, refusal.message
+                )));
+            }
+            // The call may have reached the authority: the event stays `sent` and is never sent again.
+            Err(error @ GatewayError::Unavailable(_)) => return Err(error.into()),
+            Err(error) => {
+                let refused = event.refused(FiscalRefusal::new("gateway", &error.to_string()))?;
+                self.write_settlement(actor, &event, &refused).await?;
+                return Err(error.into());
+            }
+        };
+        self.write_settlement(actor, &event, &settled).await?;
+        Ok(settled)
+    }
+
+    async fn write_settlement(
+        &self,
+        actor: &Actor,
+        before: &FiscalEvent,
+        after: &FiscalEvent,
+    ) -> Result<(), ApplicationError> {
+        let audit = audit_entry(
+            after,
+            actor,
+            AuditAction::Updated,
+            fiscal_event_changes(before, after),
+        );
+        self.documents.settle_event(after, &audit).await?;
+        Ok(())
     }
 
     async fn ready_settings(
