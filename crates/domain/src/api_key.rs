@@ -110,6 +110,11 @@ impl ApiKey {
         now_millis: i64,
         rotated_from: Option<ApiKeyId>,
     ) -> Result<Self, DomainError> {
+        let name = clean_name(&draft.name)?;
+        // The table refuses control characters in a name, so the domain does too (and says why, instead of a 500).
+        if name.chars().any(char::is_control) {
+            return Err(DomainError::InvalidName);
+        }
         let scopes = clean_scopes(&draft.scopes)?;
         let expires_at = match draft.expires_in_hours {
             None => None,
@@ -121,7 +126,7 @@ impl ApiKey {
         Ok(Self {
             id,
             company_id,
-            name: clean_name(&draft.name)?,
+            name,
             label,
             scopes,
             expires_at,
@@ -360,6 +365,26 @@ mod tests {
         assert_eq!(key.expiring_by(5_000).expires_at(), Some(5_000));
         let forever = make(&["parties:read"], None).unwrap();
         assert_eq!(forever.expiring_by(7_000).expires_at(), Some(7_000));
+    }
+
+    #[test]
+    fn a_name_with_a_control_character_is_refused() {
+        for name in ["a\nb", "a\tb"] {
+            let made = ApiKey::new(
+                ApiKeyId::generate(),
+                CompanyId::generate(),
+                "cvk_AbCd".into(),
+                ApiKeyDraft {
+                    name: name.into(),
+                    scopes: vec!["parties:read".into()],
+                    expires_in_hours: None,
+                },
+                actor(),
+                0,
+                None,
+            );
+            assert_eq!(made, Err(DomainError::InvalidName), "{name:?}");
+        }
     }
 
     #[test]

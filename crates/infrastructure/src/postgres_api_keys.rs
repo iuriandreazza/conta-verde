@@ -54,7 +54,12 @@ async fn insert(
 /// Writes the life of the key: nothing else of a stored key changes.
 async fn write_life(connection: &mut PgConnection, key: &ApiKey) -> Result<(), RepositoryError> {
     let result = sqlx::query(
-        "UPDATE api_keys SET expires_at = $3, revoked = $4 WHERE id = $1 AND company_id = $2",
+        // Only ever towards less life: a rotation that read the key before another admin revoked it must not bring it back.
+        "UPDATE api_keys SET \
+             expires_at = CASE WHEN $3::bigint IS NULL THEN expires_at \
+                               WHEN expires_at IS NULL THEN $3 ELSE LEAST(expires_at, $3) END, \
+             revoked = revoked OR $4 \
+         WHERE id = $1 AND company_id = $2",
     )
     .bind(key.id().as_uuid())
     .bind(key.company_id().as_uuid())

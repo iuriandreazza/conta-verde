@@ -47,7 +47,16 @@ impl ApiKeyState {
         let position = self
             .position(key.company_id(), key.id())
             .ok_or(RepositoryError::NotFound)?;
-        self.keys[position].0 = key.clone();
+        // Only ever towards less life, like the SQL adapter: a stale copy never brings a revoked key back.
+        let stored = &self.keys[position].0;
+        let mut merged = key.clone();
+        if stored.is_revoked() && !merged.is_revoked() {
+            merged = merged.revoked_now();
+        }
+        if let Some(at) = stored.expires_at() {
+            merged = merged.expiring_by(at);
+        }
+        self.keys[position].0 = merged;
         Ok(())
     }
 }

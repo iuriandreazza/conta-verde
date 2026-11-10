@@ -158,7 +158,10 @@ fn v1_only_grows(frozen: &Value, current: &Value, at: &str, problems: &mut Vec<S
     match (frozen, current) {
         (Value::Object(old), Value::Object(new)) => {
             for (key, inner) in old {
-                if matches!(key.as_str(), "description" | "summary" | "title" | "version") {
+                // Prose may change, unless it is the name of a property (a field called `description` is a field).
+                if !at.ends_with(".properties")
+                    && matches!(key.as_str(), "description" | "summary" | "title" | "version")
+                {
                     continue;
                 }
                 match new.get(key) {
@@ -302,6 +305,30 @@ fn the_document_and_the_router_have_the_same_routes_and_every_route_has_an_area(
     }
 }
 
+#[tokio::test]
+async fn every_route_of_v1_but_the_document_refuses_a_request_without_a_key() {
+    let (app, _) = entry_app_with_identities();
+    for (path, methods) in v1_routes() {
+        if path == "/v1/openapi.json" {
+            continue;
+        }
+        let uri = path
+            .replace("{party_id}", "00000000-0000-0000-0000-000000000000")
+            .replace("{product_id}", "00000000-0000-0000-0000-000000000000")
+            .replace("{sale_id}", "00000000-0000-0000-0000-000000000000");
+        for method in methods {
+            let request = Request::builder()
+                .method(method.to_uppercase().as_str())
+                .uri(&uri)
+                .body(Body::empty())
+                .unwrap();
+            let (status, headers, _) = raw(&app, request).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}");
+            assert_eq!(headers[header::CONTENT_TYPE], "application/problem+json", "{method} {path}");
+        }
+    }
+}
+
 #[test]
 fn the_document_only_grows() {
     let frozen: Value = serde_json::from_str(V1_FROZEN).unwrap();
@@ -337,6 +364,15 @@ fn the_checker_of_shapes_refuses_what_the_document_does_not_say() {
     let mut problems = Vec::new();
     v1_only_grows(&frozen, &changed, "", &mut problems);
     assert!(problems.iter().any(|problem| problem.contains("tags was removed")));
+    // A property that is called `description` is a property, not prose.
+    let mut renamed = frozen.clone();
+    renamed["components"]["schemas"]["Line"]["properties"]
+        .as_object_mut()
+        .unwrap()
+        .remove("description");
+    let mut lost = Vec::new();
+    v1_only_grows(&frozen, &renamed, "", &mut lost);
+    assert!(lost.iter().any(|problem| problem.contains("description was removed")), "{lost:?}");
     assert!(problems.iter().any(|problem| problem.contains("changed whether it is required")));
 }
 

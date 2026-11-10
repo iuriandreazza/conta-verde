@@ -237,7 +237,7 @@ async fn admit<X: Ports>(
         .and_then(|pattern| area_of(pattern.as_str()));
     let access = if matches!(
         *request.method(),
-        axum::http::Method::GET | axum::http::Method::HEAD
+        axum::http::Method::GET | axum::http::Method::HEAD | axum::http::Method::OPTIONS
     ) {
         Access::Read
     } else {

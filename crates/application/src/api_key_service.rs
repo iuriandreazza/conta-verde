@@ -73,7 +73,10 @@ impl<R: ApiKeyRepository, S: SecretService> ApiKeyService<R, S> {
         let draft = ApiKeyDraft {
             name: old.name().to_owned(),
             scopes: old.scope_keys(),
-            expires_in_hours: None,
+            // A key that was made to expire gives a new one the same life, so a rotation never makes a permanent key.
+            expires_in_hours: old.expires_at().map(|at| {
+                u32::try_from(((at - old.created_at()) / HOUR_MILLIS).max(1)).unwrap_or(u32::MAX)
+            }),
         };
         let new = ApiKey::new(
             ApiKeyId::generate(),
@@ -210,7 +213,15 @@ impl<R: ApiKeyRepository, S: SecretService> ApiKeyService<R, S> {
     }
 
     async fn ensure_room(&self, company_id: CompanyId) -> Result<(), ApplicationError> {
-        if self.keys.list(company_id).await?.len() >= MAX_API_KEYS {
+        // A revoked key is kept for its history but is no credential: only the ones that can still be used count.
+        let live = self
+            .keys
+            .list(company_id)
+            .await?
+            .iter()
+            .filter(|key| !key.is_revoked())
+            .count();
+        if live >= MAX_API_KEYS {
             return Err(DomainError::TooManyApiKeys.into());
         }
         Ok(())

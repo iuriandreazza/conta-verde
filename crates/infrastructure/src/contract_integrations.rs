@@ -131,6 +131,17 @@ pub async fn keeps_api_keys_by_the_digest_of_their_secret<R, S>(
         refused()
     );
 
+    // A rotation of a key that was made to expire gives the new one the same life, never a permanent one.
+    let rotated = service
+        .rotate(company, &ana, short.key.id(), 0, NOW)
+        .await
+        .unwrap();
+    assert_eq!(rotated.key.expires_at(), Some(NOW + HOUR));
+    service
+        .revoke(company, &ana, rotated.key.id())
+        .await
+        .unwrap();
+
     // A scope a key may not have, and a key with none, are refused and leave nothing.
     for scopes in [vec!["fiscal:read"], vec!["members:write"], vec![]] {
         assert!(
@@ -141,7 +152,7 @@ pub async fn keeps_api_keys_by_the_digest_of_their_secret<R, S>(
             "{scopes:?}"
         );
     }
-    assert_eq!(service.list(company).await.unwrap().len(), 2);
+    assert_eq!(service.list(company).await.unwrap().len(), 3);
 
     // A company keeps a bounded number of keys, revoked ones included.
     for number in 1..MAX_API_KEYS {
@@ -176,6 +187,21 @@ pub async fn keeps_api_keys_by_the_digest_of_their_secret<R, S>(
             .unwrap_err(),
         DomainError::TooManyApiKeys.into()
     );
+    // A revoked key is no credential: it stays listed but no longer takes a place.
+    let listed = service.list(other_company).await.unwrap();
+    service
+        .revoke(other_company, &ana, listed[0].id())
+        .await
+        .unwrap();
+    service
+        .create(
+            other_company,
+            &ana,
+            draft("De novo", &["parties:read"], None),
+            NOW,
+        )
+        .await
+        .unwrap();
 }
 
 /// A rotation makes a new key and lets the old one go on for a while; a revocation is at once; both are in the trail of the
@@ -230,6 +256,7 @@ pub async fn rotates_and_revokes_api_keys<R, S>(
     assert_eq!(new.key.name(), "Loja");
     assert_eq!(new.key.scope_keys(), old.key.scope_keys());
     assert_eq!(new.key.rotated_from(), Some(old.key.id()));
+    assert_eq!(new.key.expires_at(), None);
     // Both work during the grace; only the new one afterwards.
     assert!(
         service

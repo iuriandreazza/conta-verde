@@ -19,8 +19,8 @@ building it changed the plan (each is marked **Changed from ADR 0086**).
 
 - A **key** (`ApiKey` in `domain`, `ApiKeyService` in `application`, table `api_keys`) belongs to one company, has a name, 1 to
   10 **scopes**, an expiry that is an **instant** (Unix milliseconds) or none, a `revoked` flag, who made it and when, the key it
-  replaced (`rotated_from`) and the **day** of its last use. At most **50 per company**, revoked ones included (they stay so that
-  their history can be reached).
+  replaced (`rotated_from`) and the **day** of its last use. At most **50 live keys per company**: a revoked key stays listed so that its
+  history can be reached, but takes no place.
 - The **secret** is `cvk_` and a fresh token of `SecretService::new_token` (256 bits, 64 hexadecimal characters). It is shown
   **once**, in the answer that makes the key (`IssuedKey` hides it from `Debug`); the database keeps its **SHA-256 digest**
   (unique, `CHECK` of 64 hex characters) and a **label**, `cvk_` and the first six characters, to tell keys apart. No port gives a
@@ -28,9 +28,11 @@ building it changed the plan (each is marked **Changed from ADR 0086**).
 - **Scopes** are `{area}:{read|write}` over `parties`, `products`, `finance`, `sales` and `purchases` (`API_KEY_AREAS`);
   `write` includes `read` and is stored without the `read` of its area. `members`, `accounting` and `fiscal` are **refused by
   the domain and by a `CHECK`** (`scopes <@ ARRAY[...]`), so not even a direct insert makes such a key.
-- **Rotation** makes a new key with the same name and scopes and no expiry, and gives the old one an expiry of the earlier of its
+- **Rotation** makes a new key with the same name and scopes and **the same life** as the old one had (a key made to expire never gives a
+  permanent one), and gives the old one an expiry of the earlier of its
   own and now plus 0 to 168 hours (24 by default), **in one transaction with both audit entries** (`ApiKeyRepository::rotate`).
-  A revoked or expired key is not rotated (`409`). **Revocation** is at once and idempotent (asking again writes nothing). A key
+  A revoked or expired key is not rotated (`409`); a write of a key's life only ever goes towards less (`revoked OR`, `LEAST` of the expiries), so a
+  rotation that read the key before another admin revoked it cannot bring it back. **Revocation** is at once and idempotent (asking again writes nothing). A key
   is never edited and never deleted.
 - **Who may manage keys**: `/companies/{id}/api-keys` (list, create, `rotate`, `revoke`, `history`) is in the SPA's API, in the
   `members` area, so only owners and admins reach it, and is covered by the existing walk of every company route.
@@ -86,11 +88,11 @@ the same way:
 - `sale_claims (company_id, reference, sale_id, request)` with the primary key `(company_id, reference)`, a unique `(company_id,
   sale_id)`, and no foreign key (the sale is written after its claim). `SaleClaimRepository::claim` inserts `ON CONFLICT DO NOTHING`
   and **gives back the claim that holds**: a new one for the first caller, the first one for every later caller.
-- `SaleService::register_external` claims with a **fresh sale id**, then: another `request` text under the same reference is
+- `SaleService::register_external` **checks the order first** when the reference is new (a request a rule refuses never takes the
+  reference, so a client that fixes its request may send it again under it), then claims with a **fresh sale id**, then: another `request` text under the same reference is
   `IdempotencyMismatch` (`409`); a sale with the claim's id means "done before" (`200`); otherwise it **writes the sale with the
   claim's id**. So a crash between the claim and the sale is finished by the retry (the sale the claim promised), two requests at
-  once end in one sale (the loser finds the winner's sale, or its duplicate id write fails and it reads it), and nothing but a
-  storage error can leave a claim with no sale, which the next try makes.
+  once end in one sale (the loser finds the winner's sale, or its duplicate id write fails and it reads it), and only a storage error after the claim can leave a claim with no sale, which the next try makes.
 - `request` is the canonical JSON of the request (the typed body re-serialized, so whitespace and key order do not matter): the
   comparison is exact, with no hash to collide. A decimal written another way (`10.5` and `10.50`) is another request.
 - `GET /v1/sales?external_reference=` finds the sale, and every sale of a company that has a reference says it
@@ -117,6 +119,8 @@ buttons.
 
 ## Consequences
 
+- `sales:write` reaches more than the sale: completing and cancelling one writes its receivable and its stock exits, through the same use cases as the
+  web app. That is what completing a sale is; a key that must not bill is given `sales:read`.
 - A key reaches only what its scopes name, only its company, never `members`, `accounting` or `fiscal`, and leaves its name in the
   trail of what it wrote; a leaked key is revoked at once and a leaked database holds no usable secret.
 - The SPA's DTOs and the `v1` types are two sets for the same resources; the tests hold the second to its document, not to the first.
