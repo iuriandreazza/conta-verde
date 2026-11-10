@@ -1,5 +1,5 @@
 -- ADR 0078: a gateway may name the documents itself (NFE.io), and may answer a cancellation later. So a document keeps the
--- gateway's own reference (set once, while it waits for the authority, never changed), and a cancellation is an event
+-- gateway's own reference (set once while it waits for the authority, changed only by a new attempt after a rejection), and a cancellation is an event
 -- like the correction letter: recorded as `sent` before the gateway is asked and settled once.
 ALTER TABLE fiscal_documents ADD COLUMN gateway_reference TEXT;
 
@@ -20,7 +20,9 @@ BEGIN
     IF OLD.status IN ('cancelled', 'denied') AND NEW.status <> OLD.status THEN
         RAISE EXCEPTION 'a cancelled or denied fiscal document never moves again';
     END IF;
-    IF OLD.gateway_reference IS NOT NULL AND NEW.gateway_reference IS DISTINCT FROM OLD.gateway_reference THEN
+    -- Let go only when a rejected document is sent again: a new attempt, which a gateway may name anew.
+    IF OLD.gateway_reference IS NOT NULL AND OLD.status <> 'rejected'
+       AND NEW.gateway_reference IS DISTINCT FROM OLD.gateway_reference THEN
         RAISE EXCEPTION 'the gateway reference of a fiscal document never changes';
     END IF;
     IF OLD.status IN ('authorized', 'cancelled') AND (

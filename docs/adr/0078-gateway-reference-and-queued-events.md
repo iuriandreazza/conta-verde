@@ -22,7 +22,8 @@ Focus NFe is unaffected (it keeps our reference and answers events at once).
 - `submit_nfe` returns a **`Submission { reference: Option<String>, outcome }`**. A gateway that keeps our reference (Focus NFe)
   answers `None`. A gateway that names its documents answers the name it gave.
 - The **document stores it** (`fiscal_documents.gateway_reference`, `FiscalDocument::referenced`): set **once**, only while the
-  document waits, **never changed** (domain, both adapters and a trigger), and part of what is frozen once it is authorized. It is
+  document waits, **never changed** except by a new attempt (a rejected document sent again lets go of the old name, since the
+  gateway may name a new invoice; domain, both adapters and a trigger), and part of what is frozen once it is authorized. It is
   written **before** the outcome is applied, in its own audited step, because every later call is about the document by that name.
 - Every later call (`query_nfe`, `cancel_nfe`, `correct_nfe`, `query_event`) takes **the gateway's reference when there is one,
   ours otherwise**.
@@ -40,7 +41,11 @@ Focus NFe is unaffected (it keeps our reference and answers events at once).
   synchronous never queues one and its `query_event` is `Unsupported`.
 - **The cancellation becomes an event**, like the correction letter and the invalidation ([ADR 0076](0076-nfe-documents.md)): it
   is **recorded as `sent` before the gateway is asked** (`fiscal_events`, kind `cancellation`, the reason as its text) and settled
-  once. When the gateway answers at once (`Accepted`), the event is settled, the cancellation's XML is stored with the document
+  once. **Only an answer settles an event**: a gateway that cannot be reached, or whose events are synchronous (Focus), leaves a
+  `sent` event as it is: it is never refused for the lack of an answer. The document is moved **before** the event is marked
+  accepted, so a failure between the two is finished by the next pass. A cancellation the gateway reports as already done
+  (the query before cancelling) settles the open one. A queued **invalidation** is not polled (the range endpoint is synchronous);
+  the person gives up on it. When the gateway answers at once (`Accepted`), the event is settled, the cancellation's XML is stored with the document
   and the **document becomes `cancelled`**, as before; a refusal settles the event as refused (`422` with the authority's words)
   and the document stays authorized. When it answers `Queued`, **the event stays `sent` and the document stays `authorized`**.
 - **At most one cancellation is open per document**: waiting or accepted (a unique partial index and the use case); a refused one

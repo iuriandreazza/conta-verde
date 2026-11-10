@@ -19035,6 +19035,22 @@ pub async fn follows_a_gateway_that_names_and_queues<D, S, P, Y, F, B, R>(
         .cancel(company, &user, second.id(), reason)
         .await
         .unwrap();
+    // A gateway that cannot be reached leaves the event waiting: only an answer settles it.
+    gateway.set_unavailable(true);
+    service
+        .poll_pending(named_at, 1_000, named_at + 3_600)
+        .await
+        .unwrap();
+    gateway.set_unavailable(false);
+    assert_eq!(
+        service
+            .open_cancellation(company, second.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .status(),
+        FiscalEventStatus::Sent
+    );
     gateway.refuse_events_with("501", "Prazo de cancelamento excedido");
     service
         .poll_pending(named_at, 1_000, named_at + 3_600)
@@ -19053,4 +19069,23 @@ pub async fn follows_a_gateway_that_names_and_queues<D, S, P, Y, F, B, R>(
             .is_none(),
         "a refused cancellation does not count"
     );
+
+    // A rejected document sent again gets the gateway's new name, not the old one.
+    let sale = save_a_completed_sale(sales, company, entry_seed, seed, fiscal).await;
+    gateway.reject_with("225", "Falha no Schema XML");
+    let rejected = service
+        .issue(company, &user, issue_request(sale), named_at)
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), FiscalDocumentStatus::Rejected);
+    let old_name = rejected.gateway_reference().map(str::to_owned);
+    assert!(old_name.is_some());
+    gateway.accept_again();
+    let resent = service
+        .resend(company, &user, rejected.id(), issue_request(sale), named_at)
+        .await
+        .unwrap();
+    assert_eq!(resent.id(), rejected.id());
+    assert_ne!(resent.status(), FiscalDocumentStatus::Rejected);
+    assert_ne!(resent.gateway_reference().map(str::to_owned), old_name);
 }

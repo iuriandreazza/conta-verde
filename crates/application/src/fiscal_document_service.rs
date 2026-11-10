@@ -387,7 +387,9 @@ where
             .query_nfe(&settings, &reference(&document))
             .await?;
         if let DocumentOutcome::Cancelled { .. } = state {
-            return self.apply(company_id, actor, document, state, true).await;
+            let cancelled = self.apply(company_id, actor, document, state, true).await?;
+            self.accept_open_cancellation(company_id, id).await?;
+            return Ok(cancelled);
         }
         // One cancellation at a time: a refused one does not count, so the person may ask again.
         if self
@@ -739,11 +741,13 @@ where
                     _ => None,
                 };
                 let settled = event.accepted(accepted.protocol.as_deref(), xml)?;
-                self.write_settlement(actor, &event, &settled).await?;
+                // The document first: if this fails the event is still `sent` and the poll finishes it; the other way
+                // round would leave an accepted cancellation over a document nothing would ever move.
                 if let FiscalEventSubject::Cancellation { document, .. } = event.subject() {
                     self.finish_cancellation(company_id, actor, *document)
                         .await?;
                 }
+                self.write_settlement(actor, &event, &settled).await?;
                 Ok(settled)
             }
             Ok(EventOutcome::Refused(refusal)) => {
@@ -764,6 +768,25 @@ where
                 Err(error.into())
             }
         }
+    }
+
+    /// The gateway says the document is cancelled: a cancellation of ours that was still waiting is the one that was done.
+    async fn accept_open_cancellation(
+        &self,
+        company_id: CompanyId,
+        id: FiscalDocumentId,
+    ) -> Result<(), ApplicationError> {
+        if let Some(open) = self.documents.open_cancellation(company_id, id).await?
+            && open.status() == FiscalEventStatus::Sent
+        {
+            let actor = Actor::User {
+                id: open.requested_by(),
+                name: open.requested_by_name().to_owned(),
+            };
+            let accepted = open.accepted(None, None)?;
+            self.write_settlement(&actor, &open, &accepted).await?;
+        }
+        Ok(())
     }
 
     /// The authority accepted the cancellation: the document is cancelled, in the name of whoever asked. A document that
@@ -822,20 +845,23 @@ where
                     id: event.requested_by(),
                     name: event.requested_by_name().to_owned(),
                 };
-                let answer = self
+                // Only an answer settles an event: a gateway that cannot be reached, or that does not answer events
+                // later (Focus NFe answers them at once), leaves it as it is, never refused for the lack of an answer.
+                let answer = match self
                     .gateway
                     .query_event(&settings, &reference(&document), query)
-                    .await;
-                match answer {
-                    Ok(EventOutcome::Queued) => Ok(false),
-                    answer => match self
-                        .settle_event(company_id, &actor, event.clone(), answer, "event")
-                        .await
-                    {
-                        // The authority's refusal is an answer: the event is settled.
-                        Ok(_) | Err(ApplicationError::FiscalRule(_)) => Ok(true),
-                        Err(error) => Err(error),
-                    },
+                    .await
+                {
+                    Ok(answer @ (EventOutcome::Accepted(_) | EventOutcome::Refused(_))) => answer,
+                    Ok(EventOutcome::Queued) | Err(_) => return Ok(false),
+                };
+                match self
+                    .settle_event(company_id, &actor, event.clone(), Ok(answer), "event")
+                    .await
+                {
+                    // The authority's refusal is an answer: the event is settled.
+                    Ok(_) | Err(ApplicationError::FiscalRule(_)) => Ok(true),
+                    Err(error) => Err(error),
                 }
             }
             .await;
