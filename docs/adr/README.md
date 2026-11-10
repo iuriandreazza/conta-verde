@@ -100,6 +100,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0082](0082-nfce-and-point-of-sale.md) | NFC-e at the counter and the minimal point of sale | accepted | 7 |
 | [0083](0083-received-invoices-and-the-fiscal-webhook.md) | Received invoices, the recipient's manifestation and the fiscal webhook | accepted | 7 |
 | [0084](0084-tax-calculation-behind-a-port.md) | The tax calculation behind a port, and the accountant's checklist | accepted | 7 |
+| [0085](0085-gateway-settings-per-company.md) | The gateway's settings, per company, with the secrets sealed | accepted | 7 |
 
 ## Template
 
