@@ -106,6 +106,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0088](0088-webhooks.md) | Webhooks: subscriptions, signed deliveries, retries and a log | accepted | 8 |
 | [0089](0089-bank-statement-sync.md) | Automatic bank statement sync through an aggregator | accepted | 8 |
 | [0090](0090-ecommerce-connectors.md) | E-commerce connectors: the settings page and the WooCommerce package | accepted | 8 |
+| [0091](0091-pwa-and-offline-reading.md) | The PWA: installable, with offline reading under written cache rules | accepted | 8 |
 
 ## Template
 

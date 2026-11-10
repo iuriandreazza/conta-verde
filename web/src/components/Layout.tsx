@@ -4,6 +4,7 @@ import { Link, Outlet, useLocation, useMatch } from "react-router-dom";
 import { useAuth } from "../auth";
 import { AppTopbar } from "./AppTopbar";
 import { EmailConfirmationBanner } from "./EmailConfirmationBanner";
+import { OfflineBanner } from "./OfflineBanner";
 import { CreationProvider } from "../creation/CreationProvider";
 import { CompanyNav } from "./CompanyNav";
 import { Footer } from "./Footer";
@@ -207,6 +208,7 @@ export function Layout() {
           onToggleNav={() => (navOpen ? closeNav() : setNavOpen(true))}
           onSignOut={handleSignOut}
         />
+        <OfflineBanner />
         {!session.profile.email_verified && <EmailConfirmationBanner email={session.profile.user.email} />}
         {page}
         <Footer />

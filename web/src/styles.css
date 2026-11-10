@@ -2767,3 +2767,10 @@ tr.subtotal + tr.below-the-line td {
   font-size: 0.85rem;
   overflow-wrap: anywhere;
 }
+
+/* A plain link among the actions of the top bar. */
+.topbar-link {
+  font-size: 0.85rem;
+  color: var(--muted, inherit);
+  white-space: nowrap;
+}

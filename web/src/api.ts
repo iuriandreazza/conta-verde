@@ -1,3 +1,4 @@
+import { noteAnswer } from "./pwa/status";
 import { contentTypeOf } from "./lib/attachments";
 
 export interface User {
@@ -2057,6 +2058,8 @@ export class ApiError extends Error {
 }
 
 export function errorMessage(failure: unknown): string {
+  // `fetch` rejects with a TypeError when the network is gone: it is not "something went wrong", and nothing is saved offline.
+  if (failure instanceof TypeError) return "Sem conexão com o servidor. Confira a internet e tente de novo: não dá para salvar offline.";
   return failure instanceof ApiError ? failure.message : "Algo deu errado, tente novamente.";
 }
 
@@ -2073,6 +2076,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     headers.set("Content-Type", "application/json");
   }
   const response = await fetch(`/api${path}`, { ...init, headers });
+  if (init.method === undefined || init.method === "GET") noteAnswer(path, response);
   if (response.status === 204) {
     return undefined as T;
   }
