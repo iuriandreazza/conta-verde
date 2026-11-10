@@ -231,6 +231,7 @@ impl FiscalDocumentRepository for InMemoryFiscalDocumentRepository {
 
     async fn pending(
         &self,
+        company: Option<CompanyId>,
         since_unix: i64,
         limit: usize,
     ) -> Result<Vec<FiscalDocument>, RepositoryError> {
@@ -238,7 +239,11 @@ impl FiscalDocumentRepository for InMemoryFiscalDocumentRepository {
         let mut waiting: Vec<FiscalDocument> = state
             .documents
             .iter()
-            .filter(|stored| stored.status().is_pending() && stored.issued_at_unix() >= since_unix)
+            .filter(|stored| {
+                stored.status().is_pending()
+                    && stored.issued_at_unix() >= since_unix
+                    && company.is_none_or(|company| stored.company_id() == company)
+            })
             .cloned()
             .collect();
         waiting.sort_by_key(|stored| (stored.issued_at_unix(), stored.id().as_uuid()));
