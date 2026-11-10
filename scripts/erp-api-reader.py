@@ -89,6 +89,8 @@ def token_request(form: dict, token_url: str = TOKEN_URL) -> dict:
 def save_tokens(tokens: dict, path: Path = TOKEN_FILE) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # The mode above only counts when the file is made; a file that was already there is tightened too.
+    os.fchmod(descriptor, 0o600)
     with os.fdopen(descriptor, "w") as handle:
         json.dump(tokens, handle)
 
@@ -235,7 +237,9 @@ class Client:
             answer = self.get(path, {**(params or {}), "pagina": page, "tamanho_pagina": page_size})
             batch = (answer.get("itens") or answer.get("items") or []) if isinstance(answer, dict) else answer
             items.extend(batch)
-            if len(batch) < page_size:
+            # The answer's total, when it has one, is trusted over the page size: an endpoint may cap its pages lower.
+            total = answer.get("itens_totais", answer.get("totalItems")) if isinstance(answer, dict) else None
+            if not batch or (total is not None and len(items) >= total) or (total is None and len(batch) < page_size):
                 return items
             page += 1
 
@@ -320,7 +324,10 @@ def fetch_installment_details(client: Client, ids: list[str], directory: Path) -
     for number, installment_id in enumerate(ids, 1):
         target = directory / f"{installment_id}.json"
         if not target.exists():
-            target.write_text(json.dumps(client.get(f"/v1/financeiro/eventos-financeiros/parcelas/{installment_id}", {}), ensure_ascii=False))
+            partial = target.with_suffix(".part")
+            partial.write_text(json.dumps(client.get(f"/v1/financeiro/eventos-financeiros/parcelas/{installment_id}", {}), ensure_ascii=False))
+            # Renamed only when whole, so a file that exists is a file that was finished.
+            partial.replace(target)
         if number % 100 == 0:
             print(f"installment-details: {number}/{len(ids)}", file=sys.stderr)
     return len(ids)

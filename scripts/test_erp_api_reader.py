@@ -121,6 +121,11 @@ class ErpApiReaderTest(unittest.TestCase):
         self.assertEqual(client.pages("/v1/x", page_size=2), [{"id": 1}, {"id": 2}])
         self.assertIn("pagina=2&tamanho_pagina=2", api.seen[1][1])
 
+    def test_the_answers_total_wins_over_a_page_shorter_than_asked(self):
+        self.tokens()
+        api = self.standin({"/v1/x": [(200, {"itens": [{"id": 1}], "itens_totais": 2}), (200, {"itens": [{"id": 2}], "itens_totais": 2})]})
+        self.assertEqual(self.client(api).pages("/v1/x", page_size=100), [{"id": 1}, {"id": 2}])
+
     def test_a_401_renews_the_token_once_and_tries_again(self):
         self.tokens()
         auth = self.standin({"/token": [(200, {"access_token": "a2", "expires_in": 60})]})

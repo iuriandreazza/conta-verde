@@ -68,6 +68,17 @@ class CategoriesTest(unittest.TestCase):
         self.assertEqual([r["parent"] for r in registers], [None, "4.05 Administrative", "4.05 Administrative > Office"])
         self.assertEqual(paths["g"], "4.05 Administrative > Office > Paper")
 
+    def test_an_income_root_and_an_expense_root_never_share_a_name(self):
+        report = tool.Report()
+        registers, paths = tool.plan_categories([category("i", "Fees")], [category("e", "Fees")], report)
+        self.assertEqual(len({r["name"].casefold() for r in registers}), 2)
+        self.assertEqual(report.counts["root category with a repeated name, renamed"], 1)
+
+    def test_a_groups_name_that_matches_nothing_is_said(self):
+        report = tool.Report()
+        tool.plan_categories([category("i", "Fees")], [], report, {"Fess": ["gross_revenue", "operating"]})
+        self.assertEqual(report.counts["--groups name that is no root category"], 1)
+
     def test_a_root_the_old_system_leaves_ungrouped_goes_outside_the_result_unless_told(self):
         income = [category("a", "Cashback")]
         report = tool.Report()

@@ -149,6 +149,9 @@ def unique_names(items: list[dict], report: Report, what: str) -> dict[str, str]
 def plan_categories(income: list[dict], expense: list[dict], report: Report, chosen_groups: dict | None = None):
     """The tree conta-verde needs: a root chooses the groups, so a root takes the group most of its descendants have."""
     registers, paths = [], {}
+    # One set for both kinds: conta-verde has a single tree of roots, so an income root and an expense root cannot share a name.
+    taken_roots: set[str] = set()
+    matched_groups: set[str] = set()
     for kind, items in (("RECEITA", income), ("DESPESA", expense)):
         by_id = {item["id"]: item for item in items}
         children = defaultdict(list)
@@ -171,7 +174,6 @@ def plan_categories(income: list[dict], expense: list[dict], report: Report, cho
             paths[item["id"]] = path
             return name, path
 
-        taken_roots: set[str] = set()
         for root in sorted((i for i in items if i.get("categoria_pai") not in by_id), key=lambda r: r["nome"].casefold()):
             name, path = add(root, None, taken_roots)
             votes = Counter(d.get("entrada_dre") for d in descendants(root) if d.get("entrada_dre"))
@@ -179,6 +181,7 @@ def plan_categories(income: list[dict], expense: list[dict], report: Report, cho
             groups = DRE_GROUPS.get(chosen, OUTSIDE_THE_STATEMENT)
             if name in (chosen_groups or {}):
                 groups = tuple(chosen_groups[name])
+                matched_groups.add(name)
             elif chosen is None:
                 report.note("root category without a group, put outside the result", repr(name))
             for key in votes:
@@ -194,6 +197,9 @@ def plan_categories(income: list[dict], expense: list[dict], report: Report, cho
                     walk(kid, kid_path)
 
             walk(root, path)
+    for unknown in sorted(set(chosen_groups or {}) - matched_groups):
+        # A typo here would leave a root outside the result, and groups cannot change once the category exists.
+        report.note("--groups name that is no root category", repr(unknown))
     return registers, paths
 
 
@@ -231,6 +237,8 @@ def plan_parties(people: list[dict], report: Report):
         if email and not EMAIL.match(email):
             report.note("party e-mail dropped (not an address)", repr(person["nome"]))
             email = ""
+        if not person.get("ativo", True):
+            report.note("party inactive in the old system, imported active", repr(person["nome"]))
         profiles = {PROFILES[p] for p in person.get("perfis", []) if p in PROFILES}
         row = {column: "" for column in PARTY_COLUMNS}
         row.update({"name": " ".join(person["nome"].split()), "document": document, "email": email})

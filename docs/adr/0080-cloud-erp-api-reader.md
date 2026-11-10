@@ -12,7 +12,7 @@ tags: [adr, import, migration]
 [ADR 0064](0064-entry-import-from-a-file.md) imports entries from a CSV that a script converts from the spreadsheets the
 old system exports. Spreadsheets lose information (one row per category and cost center piece, no stable ids, no payment
 detail) and an import made from them had to be redone. The old system has a public REST API (OAuth 2.0,
-`api-v2.contaazul.com`, described by the vendor's published OpenAPI files) that returns the same registers with their own
+an `api-v2` host, described by the vendor's published OpenAPI files) that returns the same registers with their own
 ids and, per installment, its split and its payments.
 
 ## Decision
