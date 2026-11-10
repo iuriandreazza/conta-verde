@@ -1,11 +1,11 @@
 ---
-title: "ADR 0077: Choosing a fiscal gateway: Focus NFe or NFE.io"
+title: "ADR 0077: Two fiscal gateways, chosen by each installation"
 status: accepted
 date: 2026-11-10
 tags: [adr, fiscal, phase-7]
 ---
 
-# ADR 0077: Choosing a fiscal gateway: Focus NFe or NFE.io
+# ADR 0077: Two fiscal gateways, chosen by each installation
 
 ## Context
 
@@ -82,23 +82,26 @@ documents needed (NF-e only, or NFS-e and NFC-e too), and weigh:
 
 ## Decision
 
-- **Focus NFe stays the one real adapter** and `FISCAL_GATEWAY=focus` the way to use it. Everything above the port (documents,
-  events, the package, the screens) is independent of the gateway.
-- **NFE.io is not built (as of this ADR; see the update above).** It becomes a second adapter **only after the port gains the two things above** (a gateway reference and
-  an asynchronous event answer), which is its own change with its own ADR and a migration, and after the operator has chosen it:
-  building it first on guesses risks double issuing.
-- **An installation uses exactly one gateway**, named by `FISCAL_GATEWAY` (`off`, `fake`, `focus`; `nfeio` when it exists). The
-  settings page tells which one is configured. A company that moves from one gateway to the other **finishes or cancels what is
-  waiting first**: a document's reference means something only to the gateway that made it.
-- The roadmap carries an explicit item, "choose the fiscal gateway", which a person ticks after comparing the quotations.
+- **The product supports both gateways, and each installation chooses its own** with `FISCAL_GATEWAY` (`off`, `fake`, `focus`,
+  `nfeio`). There is **no project-wide choice to make**: whoever installs the software picks the gateway they have an account with,
+  and a different installation may pick the other. What decides it for them (price per document, several CNPJs, the cities'
+  NFS-e coverage, support) is theirs to weigh; the lists above are there to help.
+- **Every fiscal call is built for both.** A new call (NFS-e, NFC-e, manifestation) is a method on the `FiscalGateway` port with the
+  fake, the Focus adapter and the NFE.io adapter written and tested together, and the shared contract extended. A gateway that does
+  not offer something answers `Unsupported` with the reason, and the page says what that installation cannot issue.
+- **The port serves both shapes** ([ADR 0078](0078-gateway-reference-and-queued-events.md)): a reference the gateway keeps (ours) or
+  assigns (its own), and events answered at once or later. The NFE.io adapter is [ADR 0079](0079-nfeio-adapter.md).
+- **An installation uses exactly one gateway at a time.** Changing it **finishes or cancels what is waiting first**: a document's
+  reference means something only to the gateway that made it.
+- Neither adapter has been exercised against its real service; each has a local stand-in test and an ignored sandbox test the
+  installer runs with their own account.
 
 ## Consequences
 
-- Nobody is told that NFE.io works: it is documented as researched and not integrated.
-- The choice between the two is a business decision the project cannot take, and it is written down so it is not forgotten.
-- If NFE.io is chosen, the port change comes first; Focus is unaffected by it (it returns no reference and answers events at once).
+- Both gateways work through the same port; an installer is never asked to wait for a project decision.
+- Each new fiscal feature costs two adapters, and both must pass the shared contract before it is merged.
 
 ## Revisit when
 
-A quotation settles the choice; NFE.io confirms an idempotency mechanism for issuing; or an installation must issue for several
-CNPJs.
+NFE.io confirms an idempotency mechanism for issuing; an installation must issue for several CNPJs; or a third gateway is wanted
+(it is one more adapter on the same port).
