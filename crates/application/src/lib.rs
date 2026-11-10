@@ -1,4 +1,6 @@
 mod accounting_export_service;
+mod api_key_repository;
+mod api_key_service;
 mod attachment_repository;
 mod attachment_service;
 mod audit;
@@ -37,6 +39,8 @@ mod fiscal_document_service;
 mod fiscal_gateway;
 mod fiscal_settings_repository;
 mod fiscal_settings_service;
+mod gateway_settings_repository;
+mod gateway_settings_service;
 mod identity_repository;
 mod import;
 mod inventory_count_repository;
@@ -78,10 +82,12 @@ mod quote_service;
 mod reconciliation_service;
 mod recurrence_repository;
 mod recurrence_service;
+mod sale_claim_repository;
 mod sale_reading;
 mod sale_repository;
 mod sale_service;
 mod sales_report_service;
+mod secret_cipher;
 mod secret_service;
 mod statement_line_repository;
 mod stock_repository;
@@ -96,6 +102,8 @@ pub use accounting_export_service::{
     AccountingExportService, ExportCell, ExportFile, ExportLimits, ExportLookups, ExportNames,
     ExportPackage, ExportTable, fiscal_table,
 };
+pub use api_key_repository::ApiKeyRepository;
+pub use api_key_service::{ApiKeyService, IssuedKey};
 pub use attachment_repository::AttachmentRepository;
 pub use attachment_service::{AttachedFile, AttachmentService};
 pub use audit::ensure_audit_describes;
@@ -147,12 +155,14 @@ pub use fiscal_document_service::{
 };
 pub use fiscal_gateway::{
     AcceptedEvent, AuthorizedDocument, AuthorizedNfse, BuyerPresence, Destination, DocumentOutcome,
-    EventOutcome, EventQuery, FiscalGateway, GatewayError, NfceConsumer, NfceRequest, NfeItem,
-    NfeRecipient, NfeRequest, NfseRecipient, NfseRequest, PaymentForm, Refusal, SpecialTaxRegime,
-    Submission,
+    EventOutcome, EventQuery, FiscalGateway, FiscalGatewayResolver, GatewayError, NfceConsumer,
+    NfceRequest, NfeItem, NfeRecipient, NfeRequest, NfseRecipient, NfseRequest, PaymentForm,
+    Refusal, SpecialTaxRegime, Submission,
 };
 pub use fiscal_settings_repository::FiscalSettingsRepository;
 pub use fiscal_settings_service::FiscalSettingsService;
+pub use gateway_settings_repository::GatewaySettingsRepository;
+pub use gateway_settings_service::{GatewaySettingsInput, GatewaySettingsService, SecretChange};
 pub use identity_repository::{
     CompanyMembership, IdentityRepository, NewAccount, NewUser, StoredCredentials,
 };
@@ -207,9 +217,11 @@ pub use recurrence_repository::{RecurrenceQuery, RecurrenceRepository};
 pub use recurrence_service::{
     GENERATION_HORIZON_DAYS, GenerationReport, RecurrencePage, RecurrenceService,
 };
+pub use sale_claim_repository::{SaleClaim, SaleClaimRepository};
 pub use sale_repository::{SaleQuery, SaleRepository};
 pub use sale_service::{Conversion, Refund, ReturnRecord, SalePage, SaleService};
 pub use sales_report_service::{SalesReport, SalesReportService};
+pub use secret_cipher::SecretCipher;
 pub use secret_service::{SecretError, SecretService};
 pub use statement_line_repository::{MatchedTargets, StatementLineQuery, StatementLineRepository};
 pub use stock_repository::{

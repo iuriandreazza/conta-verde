@@ -318,10 +318,9 @@ where
         email: &str,
         role: Role,
     ) -> Result<Invited, ApplicationError> {
-        let Actor::User {
-            id: inviter_id,
-            name: inviter_name,
-        } = inviter;
+        // An invitation is sent by a person; the members area is never given to a key ([ADR 0087]).
+        let inviter_id = &inviter.user_id().ok_or(AuthError::NotAllowed)?;
+        let inviter_name = inviter.name();
         let now = now_millis();
         let invitation = Invitation::new(
             InvitationId::generate(),

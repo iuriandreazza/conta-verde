@@ -45,6 +45,32 @@ export interface Invited extends Invitation {
   emailed: boolean;
 }
 
+/** A key a program uses to speak to the company's public API. Times are milliseconds since the epoch. */
+export interface ApiKey {
+  id: string;
+  name: string;
+  /** The start of the secret, to tell keys apart. */
+  label: string;
+  /** `area:read` or `area:write`. */
+  scopes: string[];
+  status: "active" | "expired" | "revoked";
+  expires_at: number | null;
+  created_at: number;
+  created_by: string;
+  rotated_from: string | null;
+  /** `YYYY-MM-DD`. */
+  last_used_on: string | null;
+}
+
+/** A key just made: its secret exists only in this answer. */
+export interface IssuedApiKey {
+  key: ApiKey;
+  secret: string;
+}
+
+/** What a person may be given in an API key: the same areas the roles speak of, never members, accounting or fiscal. */
+export const API_KEY_AREAS = ["parties", "products", "finance", "sales", "purchases"] as const;
+
 /** What a link leads to, shown before the person accepts. */
 export interface InvitationPreview {
   company_name: string;
@@ -752,6 +778,39 @@ export interface IssueServiceChoices {
   /** The IBGE code of the municipality where the service was rendered: seven digits. */
   service_city_code: string;
   special_regime: SpecialTaxRegime;
+}
+
+/** The company's gateway settings: **no secret ever comes back**, only whether each is set (ADR 0085). */
+export interface GatewaySettings {
+  /** `null` while the company has set none: the server's own settings, if any, are used. */
+  kind: "focus" | "nfeio" | null;
+  focus_token_homologation_set: boolean;
+  focus_token_production_set: boolean;
+  nfeio_api_key_set: boolean;
+  webhook_secret_set: boolean;
+  nfeio_company_homologation: string | null;
+  nfeio_company_production: string | null;
+  nfeio_search_confirmed: boolean;
+  /** Whether the server can seal secrets (it has `FISCAL_SECRETS_KEY`). */
+  encryption_available: boolean;
+  server_gateway: string | null;
+  webhook_path: string;
+  /** The secrets that are stored and cannot be read now (the server's key changed or was lost): type them again. */
+  unreadable: string[];
+}
+
+/** What to do with one secret: keep the stored one, set a new one, or clear it. */
+export type SecretChange = { action: "keep" } | { action: "clear" } | { action: "set"; value: string };
+
+export interface GatewaySettingsInput {
+  kind: "focus" | "nfeio";
+  focus_token_homologation: SecretChange;
+  focus_token_production: SecretChange;
+  nfeio_api_key: SecretChange;
+  webhook_secret: SecretChange;
+  nfeio_company_homologation: string | null;
+  nfeio_company_production: string | null;
+  nfeio_search_confirmed: boolean;
 }
 
 export type Manifestation = "none" | "awareness" | "confirmation" | "unknown" | "not_performed";
@@ -2030,6 +2089,16 @@ export const api = {
     request<InvitationPreview>(`/invitations/${encodeURIComponent(token)}`),
   acceptInvitation: (token: string) =>
     post<{ company_id: string }>(`/invitations/${encodeURIComponent(token)}/accept`),
+  listApiKeys: (companyId: string) =>
+    request<{ items: ApiKey[] }>(`/companies/${companyId}/api-keys`).then((reply) => reply.items),
+  createApiKey: (companyId: string, input: { name: string; scopes: string[]; expires_in_hours?: number }) =>
+    post<IssuedApiKey>(`/companies/${companyId}/api-keys`, input),
+  rotateApiKey: (companyId: string, keyId: string, graceHours: number) =>
+    post<IssuedApiKey>(`/companies/${companyId}/api-keys/${keyId}/rotate`, { grace_hours: graceHours }),
+  revokeApiKey: (companyId: string, keyId: string) =>
+    post<ApiKey>(`/companies/${companyId}/api-keys/${keyId}/revoke`, {}),
+  apiKeyHistory: (companyId: string, keyId: string) =>
+    request<HistoryEntry[]>(`/companies/${companyId}/api-keys/${keyId}/history`),
   partyHistory: (companyId: string, partyId: string) =>
     request<HistoryEntry[]>(`/companies/${companyId}/parties/${partyId}/history`),
   /** Asks the registry again about the party's CNPJ; resolves with the party and its new answer. */
@@ -2260,6 +2329,17 @@ export const api = {
     post<FiscalDocument>(`/companies/${companyId}/fiscal/documents`, choices),
   resendFiscalDocument: (companyId: string, id: string, choices: IssueChoices) =>
     post<FiscalDocument>(`/companies/${companyId}/fiscal/documents/${id}/resend`, choices),
+  getGatewaySettings: (companyId: string) =>
+    request<GatewaySettings>(`/companies/${companyId}/gateway-settings`),
+  saveGatewaySettings: (companyId: string, input: GatewaySettingsInput) =>
+    request<GatewaySettings>(`/companies/${companyId}/gateway-settings`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  resetGatewaySettings: (companyId: string) =>
+    request<GatewaySettings>(`/companies/${companyId}/gateway-settings`, { method: "DELETE" }),
+  gatewaySettingsHistory: (companyId: string) =>
+    request<HistoryEntry[]>(`/companies/${companyId}/gateway-settings/history`),
   listReceivedInvoices: (companyId: string, filters: ReceivedInvoiceFilters, after?: string) => {
     const params = new URLSearchParams();
     if (filters.manifestation) params.set("manifestation", filters.manifestation);

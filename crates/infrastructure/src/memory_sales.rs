@@ -29,6 +29,11 @@ impl SaleRepository for InMemorySaleRepository {
     async fn save(&self, sale: &Sale, audit: &AuditEntry) -> Result<i64, RepositoryError> {
         ensure_audit_describes(audit, sale)?;
         let mut state = self.state.lock().expect("repository lock poisoned");
+        if state.sales.iter().any(|stored| stored.id() == sale.id()) {
+            return Err(RepositoryError::Storage(
+                "a sale with this id exists".to_owned(),
+            ));
+        }
         if sale.quote_id().is_some_and(|quote| {
             state
                 .sales
@@ -339,6 +344,15 @@ mod tests {
             &store,
             &quotes,
             &entries,
+            company,
+            other_company,
+            &entry_seed,
+            &seed,
+        )
+        .await;
+        crate::contract_integrations::registers_an_order_once_by_its_reference(
+            &sales,
+            &crate::InMemorySaleClaimRepository::default(),
             company,
             other_company,
             &entry_seed,

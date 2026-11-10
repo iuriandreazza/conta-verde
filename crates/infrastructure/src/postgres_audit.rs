@@ -1,6 +1,7 @@
 use conta_verde_application::RepositoryError;
 use conta_verde_domain::{
-    Actor, AuditAction, AuditEntity, AuditEntry, AuditRecord, CompanyId, FieldChange, UserId,
+    Actor, ApiKeyId, AuditAction, AuditEntity, AuditEntry, AuditRecord, CompanyId, FieldChange,
+    UserId,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgRow;
@@ -23,7 +24,6 @@ pub(crate) async fn insert(
     connection: &mut PgConnection,
     audit: &AuditEntry,
 ) -> Result<(), RepositoryError> {
-    let Actor::User { id, name } = &audit.actor;
     let changes: Vec<StoredChange> = audit
         .changes
         .iter()
@@ -40,15 +40,16 @@ pub(crate) async fn insert(
     // Bound as text and cast, which avoids enabling sqlx's `json` feature for one column.
     sqlx::query(
         "INSERT INTO audit_log (company_id, actor_kind, actor_id, actor_name, entity, entity_id, action, changes) \
-         VALUES ($1, 'user', $2, $3, $4, $5, $6, CAST($7 AS jsonb))",
+         VALUES ($1, $8, $2, $3, $4, $5, $6, CAST($7 AS jsonb))",
     )
     .bind(audit.company_id.as_uuid())
-    .bind(id.as_uuid())
-    .bind(name)
+    .bind(audit.actor.id())
+    .bind(audit.actor.name())
     .bind(audit.entity.as_str())
     .bind(audit.entity_id)
     .bind(audit.action.as_str())
     .bind(changes)
+    .bind(audit.actor.kind())
     .execute(connection)
     .await
     .map_err(storage_error)?;
@@ -65,7 +66,7 @@ pub(crate) async fn history(
 ) -> Result<Vec<AuditRecord>, RepositoryError> {
     let rows = sqlx::query(
         "SELECT sequence, (EXTRACT(EPOCH FROM created_at) * 1000)::bigint AS at_millis, \
-                actor_id, actor_name, action, changes::text AS changes \
+                actor_kind, actor_id, actor_name, action, changes::text AS changes \
          FROM audit_log \
          WHERE company_id = $1 AND entity = $2 AND entity_id = $3 \
          ORDER BY sequence",
@@ -100,10 +101,7 @@ fn record_from_row(
         at_millis: row.try_get("at_millis").map_err(storage_error)?,
         entry: AuditEntry {
             company_id,
-            actor: Actor::User {
-                id: UserId::from_uuid(row.try_get("actor_id").map_err(storage_error)?),
-                name: row.try_get("actor_name").map_err(storage_error)?,
-            },
+            actor: actor_from_row(row)?,
             entity,
             entity_id,
             action,
@@ -117,4 +115,23 @@ fn record_from_row(
                 .collect(),
         },
     })
+}
+
+fn actor_from_row(row: &PgRow) -> Result<Actor, RepositoryError> {
+    let id: Uuid = row.try_get("actor_id").map_err(storage_error)?;
+    let name: String = row.try_get("actor_name").map_err(storage_error)?;
+    let kind: String = row.try_get("actor_kind").map_err(storage_error)?;
+    match kind.as_str() {
+        "user" => Ok(Actor::User {
+            id: UserId::from_uuid(id),
+            name,
+        }),
+        "api_key" => Ok(Actor::ApiKey {
+            id: ApiKeyId::from_uuid(id),
+            name,
+        }),
+        other => Err(RepositoryError::Storage(format!(
+            "unknown audit actor kind `{other}`"
+        ))),
+    }
 }

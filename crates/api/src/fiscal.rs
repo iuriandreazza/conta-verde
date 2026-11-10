@@ -3,9 +3,9 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use conta_verde_application::{
-    ApplicationError, BuyerPresence, FiscalDocumentCursor, FiscalDocumentQuery, FiscalGateway,
-    IssueNfce, IssueNfe, IssueNfse, PaymentForm, ReceivedInvoiceCursor, ReceivedInvoiceQuery,
-    SpecialTaxRegime,
+    ApplicationError, BuyerPresence, FiscalDocumentCursor, FiscalDocumentQuery,
+    FiscalGatewayResolver, IssueNfce, IssueNfe, IssueNfse, PaymentForm, ReceivedInvoiceCursor,
+    ReceivedInvoiceQuery, SpecialTaxRegime,
 };
 use conta_verde_domain::{
     AddressDraft, Amount, CalendarDate, FiscalDocument, FiscalDocumentId, FiscalEnvironment,
@@ -312,18 +312,17 @@ pub(crate) async fn settings_history<X: Ports>(
 
 #[derive(Serialize)]
 pub(crate) struct GatewayResponse {
-    /// The gateway this installation issues through (`focus`, `fake`), or `null` when the operator configured none
-    /// (`FISCAL_GATEWAY`): and then no document can be issued.
+    /// The gateway the company issues through (`focus`, `nfeio`, `fake`): its own settings' when it has set them, the
+    /// server's (`FISCAL_GATEWAY`) otherwise, or `null` when there is none: and then no document can be issued.
     gateway: Option<String>,
 }
 
 pub(crate) async fn get_gateway<X: Ports>(
     State(state): State<SharedState<X>>,
-    CompanyAccess(_, _): CompanyAccess,
+    CompanyAccess(company_id, _): CompanyAccess,
 ) -> Json<GatewayResponse> {
-    let gateway = state.fiscal_documents.gateway();
     Json(GatewayResponse {
-        gateway: gateway.is_enabled().then(|| gateway.key().to_owned()),
+        gateway: state.fiscal_documents.gateways().key_for(company_id).await,
     })
 }
 
@@ -1241,32 +1240,62 @@ fn work_is_finished(company: Uuid) -> bool {
 /// Where the fiscal gateway knocks to say a document or a received invoice changed ([ADR 0083]). **It carries nothing that is
 /// believed and its body is never read**: it only wakes the server up, which asks the gateway what is new
 /// (`sync_received`) and runs the poll of the waiting documents, as the minute pass does. It needs no session, and it is
-/// authenticated by a secret in a header the operator chose when registering the hook at the gateway: `404` when no secret is
-/// configured, `401` for a wrong one, `404` for a company with no fiscal settings, and `202` at once: the work is done in the
-/// background, a burst of knocks is worked as one run and one more, and a failure is the poll's to retry, not the notice's.
+/// authenticated by a secret in a header the operator chose when registering the hook at the gateway: the **company's own**
+/// secret when it set one ([ADR 0085]) and only that one, the operator's otherwise.
+///
+/// The company is looked up **before** the secret is compared, and a company that does not exist, a secret that is wrong and a
+/// secret that cannot be read, and no secret to compare with at all (the door is shut), all answer the same `401`: the route is no
+/// oracle for which companies exist or have a secret. `404` only for a knock that is believed, for a company with no fiscal
+/// settings. `202` at once: the work is done in the background, a burst of knocks is worked as one run and one more, and a failure
+/// is the poll's to retry, not the notice's.
 pub(crate) async fn receive_fiscal_webhook<X: Ports>(
     State(state): State<SharedState<X>>,
     Path(company_id): Path<String>,
     headers: HeaderMap,
 ) -> Result<StatusCode, ApiError> {
     let not_found = || ApiError::from(ApplicationError::FiscalDocumentNotFound);
-    let Some(hook) = state.config.fiscal_webhook.as_ref() else {
-        return Err(not_found());
+    let unauthorized = || {
+        ApiError::from(ApplicationError::Webhook(
+            conta_verde_application::WebhookError::InvalidSignature,
+        ))
+    };
+    let hook = &state.config.fiscal_webhook;
+    let company = Uuid::parse_str(&company_id).ok();
+    let company_id = company.map(conta_verde_domain::CompanyId::from_uuid);
+    // The company's own secret wins, and a company that has one never accepts the operator's.
+    let own = match company_id {
+        Some(id) => match state
+            .gateway_settings
+            .open(id, conta_verde_domain::GatewaySecret::WebhookSecret)
+            .await
+        {
+            Ok(own) => own.map(|secret| secret.expose().to_owned()),
+            // A secret that does not open is a knock that cannot be believed; a storage failure is the server's, and the gateway
+            // must not read it as "wrong secret" and give up.
+            Err(ApplicationError::SecretUnreadable(field)) => {
+                tracing::warn!(field, "the webhook secret of a company cannot be read");
+                return Err(unauthorized());
+            }
+            Err(error) => return Err(error.into()),
+        },
+        None => None,
+    };
+    // With no secret at all the door is shut, and shut like a wrong secret: which companies set one is not for a stranger to tell.
+    let Some(expected) = own.as_ref().or(hook.secret.as_ref()) else {
+        return Err(unauthorized());
     };
     let sent = HeaderName::from_bytes(hook.header.as_bytes())
         .ok()
         .and_then(|name| headers.get(name))
         .map(HeaderValue::as_bytes);
-    if !sent.is_some_and(|sent| {
-        conta_verde_infrastructure::constant_time_eq(sent, hook.secret.as_bytes())
-    }) {
-        return Err(ApplicationError::Webhook(
-            conta_verde_application::WebhookError::InvalidSignature,
-        )
-        .into());
+    if !sent
+        .is_some_and(|sent| conta_verde_infrastructure::constant_time_eq(sent, expected.as_bytes()))
+    {
+        return Err(unauthorized());
     }
-    let company = Uuid::parse_str(&company_id).map_err(|_| not_found())?;
-    let company_id = conta_verde_domain::CompanyId::from_uuid(company);
+    let (Some(company), Some(company_id)) = (company, company_id) else {
+        return Err(unauthorized());
+    };
     if state.fiscal_settings.get(company_id).await?.is_none() {
         return Err(not_found());
     }
@@ -1279,7 +1308,12 @@ pub(crate) async fn receive_fiscal_webhook<X: Ports>(
                 let now = crate::now_unix();
                 if let Err(error) = state
                     .fiscal_documents
-                    .poll_pending(now - WEBHOOK_POLL_WINDOW_SECONDS, WEBHOOK_POLL_BATCH, now)
+                    .poll_company(
+                        company_id,
+                        now - WEBHOOK_POLL_WINDOW_SECONDS,
+                        WEBHOOK_POLL_BATCH,
+                        now,
+                    )
                     .await
                 {
                     tracing::warn!(%error, "a fiscal webhook could not poll the documents");

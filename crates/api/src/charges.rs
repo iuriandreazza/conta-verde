@@ -4,8 +4,8 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use conta_verde_application::{ApplicationError, PageState, WebhookHeaders};
 use conta_verde_domain::{
-    Actor, BankAccountId, CalendarDate, CategoryId, Charge, ChargeId, ChargeMethod,
-    CollectionSettings, CompanyId, EntryId, MAX_EVENT_BYTES,
+    BankAccountId, CalendarDate, CategoryId, Charge, ChargeId, ChargeMethod, CollectionSettings,
+    CompanyId, EntryId, MAX_EVENT_BYTES,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -46,7 +46,7 @@ pub(crate) struct ChargeResponse {
 
 impl From<&Charge> for ChargeResponse {
     fn from(charge: &Charge) -> Self {
-        let Actor::User { name, .. } = charge.issued_by();
+        let name = charge.issued_by().name();
         Self {
             id: charge.id().as_uuid(),
             entry_id: charge.entry_id().as_uuid(),
@@ -59,7 +59,7 @@ impl From<&Charge> for ChargeResponse {
             digitable_line: charge.payment().digitable_line.clone(),
             pix_payload: charge.payment().pix_payload.clone(),
             payment_url: charge.payment().payment_url.clone(),
-            issued_by: name.clone(),
+            issued_by: name.to_owned(),
             paid_on: charge.receipt().map(|receipt| receipt.paid_on.to_string()),
             paid_amount: charge
                 .receipt()

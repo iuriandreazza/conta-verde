@@ -75,8 +75,9 @@ fn charge_from_row(row: &PgRow) -> Result<Charge, RepositoryError> {
 }
 
 fn issued_by(charge: &Charge) -> (Uuid, &str) {
-    let Actor::User { id, name } = charge.issued_by();
-    (id.as_uuid(), name)
+    // The column holds a person's id and name; no key reaches it ([ADR 0087]).
+    let by = charge.issued_by();
+    (by.id(), by.name())
 }
 
 impl ChargeRepository for PostgresChargeRepository {

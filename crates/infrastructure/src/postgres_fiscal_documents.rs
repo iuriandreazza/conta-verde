@@ -511,15 +511,17 @@ impl FiscalDocumentRepository for PostgresFiscalDocumentRepository {
 
     async fn pending(
         &self,
+        company: Option<CompanyId>,
         since_unix: i64,
         limit: usize,
     ) -> Result<Vec<FiscalDocument>, RepositoryError> {
         let rows = sqlx::query(&format!(
             "SELECT {COLUMNS} FROM fiscal_documents WHERE status IN ('processing', 'contingency') \
-             AND issued_at >= $1 ORDER BY issued_at, id LIMIT $2"
+             AND issued_at >= $1 AND ($3::uuid IS NULL OR company_id = $3) ORDER BY issued_at, id LIMIT $2"
         ))
         .bind(since_unix)
         .bind(i64::try_from(limit).unwrap_or(i64::MAX))
+        .bind(company.map(|company| company.as_uuid()))
         .fetch_all(&self.pool)
         .await
         .map_err(storage_error)?;
@@ -1397,6 +1399,64 @@ mod tests {
             &entry_seed,
             &seed,
             &fiscal,
+        )
+        .await;
+        std::fs::remove_dir_all(root).expect("the test's own directory is removed");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn a_pass_over_many_companies_asks_each_through_its_own_gateway() {
+        use crate::{
+            LocalBlobStore, PostgresFiscalSettingsRepository, PostgresPeriodLockRepository,
+            RegisterReferences,
+        };
+        use conta_verde_application::FiscalDocumentService;
+
+        let pool = contract::test_pool().await;
+        let parties = PostgresPartyRepository::new(pool.clone());
+        let mut companies = Vec::new();
+        for _ in 0..2 {
+            let company = contract::create_company(&pool).await;
+            let (entry_seed, seed) = seeds(&pool, company).await;
+            let fiscal = contract::seed_fiscal_customer(&parties, company).await;
+            companies.push((company, entry_seed, seed, fiscal));
+        }
+        let gateways = contract::GatewaysByCompany::default();
+        let settings = PostgresFiscalSettingsRepository::new(pool.clone());
+        let sales = PostgresSaleRepository::new(pool.clone());
+        let root =
+            std::env::temp_dir().join(format!("conta-verde-fiscal-{}", uuid::Uuid::new_v4()));
+        let service = FiscalDocumentService::new(
+            PostgresFiscalDocumentRepository::new(pool.clone()),
+            sales.clone(),
+            parties,
+            PostgresProductRepository::new(pool.clone()),
+            settings.clone(),
+            gateways.clone(),
+            LocalBlobStore::new(&root),
+            RegisterReferences::new(
+                PostgresCategoryRepository::new(pool.clone()),
+                PostgresCostCenterRepository::new(pool.clone()),
+                PostgresPartyRepository::new(pool.clone()),
+                PostgresBankAccountRepository::new(pool.clone()),
+                PostgresPaymentMethodRepository::new(pool.clone()),
+                PostgresPeriodLockRepository::new(pool.clone()),
+            ),
+        );
+        let issuing = |index: usize| contract::IssuingCompany {
+            id: companies[index].0,
+            entry_seed: &companies[index].1,
+            seed: &companies[index].2,
+            fiscal: &companies[index].3,
+        };
+        contract::a_pass_over_many_companies_asks_each_through_its_own_gateway(
+            &service,
+            &gateways,
+            &settings,
+            &sales,
+            issuing(0),
+            issuing(1),
         )
         .await;
         std::fs::remove_dir_all(root).expect("the test's own directory is removed");

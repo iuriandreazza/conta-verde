@@ -25,6 +25,9 @@ pub(crate) struct CompanyAccess(pub CompanyId, pub Actor);
 /// The route segment after `{company_id}` of every family of company routes, and the area it belongs
 /// to. A single table, so that a test can walk every family and a new one has to be placed in an area.
 pub(crate) const SEGMENT_AREAS: &[(&str, Area)] = &[
+    // The gateway's settings hold secrets: only the owner and the admin reach the `members` area, and not even the role that writes the
+    // fiscal area does (ADR 0085).
+    ("gateway-settings", Area::Members),
     ("parties", Area::Parties),
     ("postal-codes", Area::Parties),
     ("products", Area::Products),
@@ -58,6 +61,7 @@ pub(crate) const SEGMENT_AREAS: &[(&str, Area)] = &[
     ("accounting", Area::Accounting),
     ("fiscal", Area::Fiscal),
     ("members", Area::Members),
+    ("api-keys", Area::Members),
     ("invitations", Area::Members),
 ];
 

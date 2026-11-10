@@ -1,5 +1,6 @@
 mod access;
 mod accounting;
+mod api_keys;
 mod attachments;
 mod auth;
 mod bank_accounts;
@@ -22,6 +23,7 @@ mod error;
 mod export_files;
 mod exports;
 mod fiscal;
+mod gateway_settings;
 mod history;
 mod inventory_counts;
 mod json;
@@ -48,29 +50,31 @@ mod statements;
 mod stock;
 mod stock_reports;
 mod transfers;
+mod v1;
 
 use std::sync::Arc;
 
 use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
 use conta_verde_application::{
-    AccountingExportService, AttachmentRepository, AttachmentService, AuthService, BalanceService,
-    BankAccountRepository, BankAccountService, BlobStore, CategoryRepository, CategoryService,
-    ChargeRepository, ChargeService, CnpjRegistry, CommissionRuleRepository, CommissionService,
-    ContractRepository, ContractService, CostCenterRepository, CostCenterService,
-    DocumentMailRepository, DocumentMailService, DocumentReferences, DreService, EmailSender,
-    EntryLookups, EntryReferences, ExportLookups, FinancialEntryRepository, FinancialEntryService,
-    FiscalDocumentRepository, FiscalDocumentService, FiscalGateway, FiscalSettingsRepository,
-    FiscalSettingsService, IdentityRepository, InventoryCountRepository, InventoryCountService,
-    InvitationRepository, MemberService, OpeningRepository, PackageScheduleRepository,
-    PackageScheduleService, PartyRepository, PartyService, PaymentMethodRepository,
-    PaymentMethodService, PaymentProvider, PaymentTermRepository, PaymentTermService,
-    PostalCodeDirectory, PostalCodeService, PriceListRepository, PriceListService,
-    ProductRepository, ProductService, PurchaseOrderRepository, PurchaseService, QuoteRepository,
-    QuoteService, ReconciliationService, RecurrenceRepository, RecurrenceService, SaleRepository,
-    SaleService, SalesReportService, SecretService, StatementLineRepository,
-    StockMovementRepository, StockService, StockSettingsRepository, TransferRepository,
-    TransferService,
+    AccountingExportService, ApiKeyRepository, ApiKeyService, AttachmentRepository,
+    AttachmentService, AuthService, BalanceService, BankAccountRepository, BankAccountService,
+    BlobStore, CategoryRepository, CategoryService, ChargeRepository, ChargeService, CnpjRegistry,
+    CommissionRuleRepository, CommissionService, ContractRepository, ContractService,
+    CostCenterRepository, CostCenterService, DocumentMailRepository, DocumentMailService,
+    DocumentReferences, DreService, EmailSender, EntryLookups, EntryReferences, ExportLookups,
+    FinancialEntryRepository, FinancialEntryService, FiscalDocumentRepository,
+    FiscalDocumentService, FiscalGatewayResolver, FiscalSettingsRepository, FiscalSettingsService,
+    GatewaySettingsRepository, GatewaySettingsService, IdentityRepository,
+    InventoryCountRepository, InventoryCountService, InvitationRepository, MemberService,
+    OpeningRepository, PackageScheduleRepository, PackageScheduleService, PartyRepository,
+    PartyService, PaymentMethodRepository, PaymentMethodService, PaymentProvider,
+    PaymentTermRepository, PaymentTermService, PostalCodeDirectory, PostalCodeService,
+    PriceListRepository, PriceListService, ProductRepository, ProductService,
+    PurchaseOrderRepository, PurchaseService, QuoteRepository, QuoteService, ReconciliationService,
+    RecurrenceRepository, RecurrenceService, SaleClaimRepository, SaleRepository, SaleService,
+    SalesReportService, SecretService, StatementLineRepository, StockMovementRepository,
+    StockService, StockSettingsRepository, TransferRepository, TransferService,
 };
 use conta_verde_application::{
     CollectionService, CollectionSettingsRepository, DunningPlanRepository, DunningService,
@@ -79,28 +83,47 @@ use conta_verde_application::{
 };
 use serde::Serialize;
 
+pub use v1::{V1Clock, V1Config};
+
 #[derive(Debug, Clone, Default)]
 pub struct ApiConfig {
     /// Adds the `Secure` flag to the session cookie. Turn it on whenever the API is served over HTTPS.
     pub cookie_secure: bool,
-    /// Where the fiscal gateway may knock to say something happened ([ADR 0083]); without it the door is shut.
-    pub fiscal_webhook: Option<FiscalWebhook>,
+    /// How the fiscal gateway may knock to say something happened ([ADR 0083], [ADR 0085]).
+    pub fiscal_webhook: FiscalWebhook,
+    /// The public `v1` API: how many requests a key may make and what time it is ([ADR 0087]).
+    pub v1: V1Config,
 }
 
 /// The secret the fiscal gateway sends in a header of its own choosing: the notice it wakes the server with is believed for
-/// nothing (the server asks the gateway), so this only keeps strangers from making the server ask.
+/// nothing (the server asks the gateway), so this only keeps strangers from making the server ask. The header's name is the
+/// operator's; the secret is the company's own when it set one, and this one (the operator's) otherwise. **Without either, the
+/// door is shut.**
 #[derive(Clone)]
 pub struct FiscalWebhook {
     /// The name of the HTTP header the gateway puts the secret in.
     pub header: String,
-    pub secret: String,
+    /// The operator's secret, for the companies that have set none of their own.
+    pub secret: Option<String>,
 }
+
+impl Default for FiscalWebhook {
+    fn default() -> Self {
+        Self {
+            header: DEFAULT_FISCAL_WEBHOOK_HEADER.to_owned(),
+            secret: None,
+        }
+    }
+}
+
+/// The header the gateway puts the webhook secret in unless the operator chose another name.
+pub const DEFAULT_FISCAL_WEBHOOK_HEADER: &str = "x-fiscal-webhook-token";
 
 impl std::fmt::Debug for FiscalWebhook {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FiscalWebhook")
             .field("header", &self.header)
-            .field("secret", &"<hidden>")
+            .field("secret", &self.secret.as_ref().map(|_| "<hidden>"))
             .finish()
     }
 }
@@ -110,6 +133,8 @@ impl std::fmt::Debug for FiscalWebhook {
 pub use clock::{customer_today, now_millis, now_unix, today};
 
 pub trait Ports: 'static {
+    type ApiKeys: ApiKeyRepository + 'static;
+    type SaleClaims: SaleClaimRepository + 'static;
     type Parties: PartyRepository + 'static;
     type Registry: CnpjRegistry + 'static;
     type Identity: IdentityRepository + 'static;
@@ -126,7 +151,10 @@ pub trait Ports: 'static {
     type PeriodLocks: PeriodLockRepository + 'static;
     type PackageSchedules: PackageScheduleRepository + 'static;
     type FiscalSettings: FiscalSettingsRepository + 'static;
-    type Gateway: FiscalGateway + 'static;
+    type GatewaySettings: GatewaySettingsRepository + 'static;
+    /// What seals the gateway settings' secrets ([ADR 0085]).
+    type Cipher: conta_verde_application::SecretCipher + 'static;
+    type Gateway: FiscalGatewayResolver + 'static;
     type FiscalDocuments: FiscalDocumentRepository + 'static;
     type Attachments: AttachmentRepository + 'static;
     type Blobs: BlobStore + 'static;
@@ -298,6 +326,8 @@ type SalesReportsOf<X> = SalesReportService<<X as Ports>::Sales>;
 
 /// The use cases the API serves.
 pub struct Services<X: Ports> {
+    pub api_keys: ApiKeyService<X::ApiKeys, X::Secrets>,
+    pub sale_claims: X::SaleClaims,
     pub parties: PartyService<X::Parties, X::Registry>,
     pub products: ProductService<X::Products>,
     pub cost_centers: CostCenterService<X::CostCenters>,
@@ -331,6 +361,7 @@ pub struct Services<X: Ports> {
     pub exports: ExportsOf<X>,
     pub packages: PackagesOf<X>,
     pub fiscal_settings: FiscalSettingsService<X::FiscalSettings>,
+    pub gateway_settings: GatewaySettingsService<X::GatewaySettings, X::Cipher>,
     pub fiscal_documents: FiscalDocumentsOf<X>,
     pub postal_codes: PostalCodeService<X::PostalCodes>,
     pub members: MemberService<X::Invitations, X::Identity, X::Emails, X::Secrets>,
@@ -339,6 +370,9 @@ pub struct Services<X: Ports> {
 }
 
 pub(crate) struct AppState<X: Ports> {
+    api_keys: ApiKeyService<X::ApiKeys, X::Secrets>,
+    sale_claims: X::SaleClaims,
+    limiter: v1::RateLimiter,
     parties: PartyService<X::Parties, X::Registry>,
     products: ProductService<X::Products>,
     cost_centers: CostCenterService<X::CostCenters>,
@@ -372,6 +406,7 @@ pub(crate) struct AppState<X: Ports> {
     exports: ExportsOf<X>,
     packages: PackagesOf<X>,
     fiscal_settings: FiscalSettingsService<X::FiscalSettings>,
+    gateway_settings: GatewaySettingsService<X::GatewaySettings, X::Cipher>,
     fiscal_documents: FiscalDocumentsOf<X>,
     postal_codes: PostalCodeService<X::PostalCodes>,
     members: MemberService<X::Invitations, X::Identity, X::Emails, X::Secrets>,
@@ -384,7 +419,11 @@ pub(crate) struct AppState<X: Ports> {
 pub(crate) type SharedState<X> = Arc<AppState<X>>;
 
 pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
+    let limiter = v1::RateLimiter::new(config.v1.rate_limit_per_minute);
     let state = Arc::new(AppState {
+        api_keys: services.api_keys,
+        sale_claims: services.sale_claims,
+        limiter,
         parties: services.parties,
         products: services.products,
         cost_centers: services.cost_centers,
@@ -417,6 +456,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         exports: services.exports,
         packages: services.packages,
         fiscal_settings: services.fiscal_settings,
+        gateway_settings: services.gateway_settings,
         fiscal_documents: services.fiscal_documents,
         postal_codes: services.postal_codes,
         members: services.members,
@@ -445,6 +485,22 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         .route(
             "/auth/password-reset/confirm",
             post(auth::reset_password::<X>),
+        )
+        .route(
+            "/companies/{company_id}/api-keys",
+            get(api_keys::list_api_keys::<X>).post(api_keys::create_api_key::<X>),
+        )
+        .route(
+            "/companies/{company_id}/api-keys/{key_id}/rotate",
+            post(api_keys::rotate_api_key::<X>),
+        )
+        .route(
+            "/companies/{company_id}/api-keys/{key_id}/revoke",
+            post(api_keys::revoke_api_key::<X>),
+        )
+        .route(
+            "/companies/{company_id}/api-keys/{key_id}/history",
+            get(api_keys::api_key_history::<X>),
         )
         .route(
             "/companies/{company_id}/parties",
@@ -685,6 +741,16 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         .route(
             "/companies/{company_id}/accounting/package-schedule/history",
             get(accounting::package_schedule_history::<X>),
+        )
+        .route(
+            "/companies/{company_id}/gateway-settings",
+            get(gateway_settings::get_gateway_settings::<X>)
+                .put(gateway_settings::replace_gateway_settings::<X>)
+                .delete(gateway_settings::reset_gateway_settings::<X>),
+        )
+        .route(
+            "/companies/{company_id}/gateway-settings/history",
+            get(gateway_settings::gateway_settings_history::<X>),
         )
         .route(
             "/companies/{company_id}/fiscal/gateway",
@@ -1110,6 +1176,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
                 )
                 .layer(axum::middleware::map_response(quotes::keep_private)),
         )
+        .merge(v1::routes(state.clone()))
         .with_state(state)
 }
 
@@ -1130,23 +1197,24 @@ mod tests {
     use axum::http::{Request, StatusCode, header};
     use conta_verde_application::PostalCodeEntry;
     use conta_verde_infrastructure::{
-        Argon2SecretService, FakeFiscalGateway, FakePaymentProvider, InMemoryAttachmentRepository,
-        InMemoryBankAccountRepository, InMemoryBlobStore, InMemoryCategoryRepository,
-        InMemoryChargeRepository, InMemoryCnpjRegistry, InMemoryCollectionSettingsRepository,
-        InMemoryCommissionRuleRepository, InMemoryContractRepository, InMemoryCostCenterRepository,
-        InMemoryDocumentMailRepository, InMemoryDunningPlanRepository, InMemoryEmailSender,
-        InMemoryFinancialEntryRepository, InMemoryFiscalDocumentRepository,
-        InMemoryFiscalSettingsRepository, InMemoryIdentityRepository,
+        Argon2SecretService, FakeFiscalGateway, FakePaymentProvider, InMemoryApiKeyRepository,
+        InMemoryAttachmentRepository, InMemoryBankAccountRepository, InMemoryBlobStore,
+        InMemoryCategoryRepository, InMemoryChargeRepository, InMemoryCnpjRegistry,
+        InMemoryCollectionSettingsRepository, InMemoryCommissionRuleRepository,
+        InMemoryContractRepository, InMemoryCostCenterRepository, InMemoryDocumentMailRepository,
+        InMemoryDunningPlanRepository, InMemoryEmailSender, InMemoryFinancialEntryRepository,
+        InMemoryFiscalDocumentRepository, InMemoryFiscalSettingsRepository,
+        InMemoryGatewaySettingsRepository, InMemoryIdentityRepository,
         InMemoryInventoryCountRepository, InMemoryInvitationRepository, InMemoryMessageSender,
         InMemoryNotificationRepository, InMemoryOpeningRepository,
         InMemoryPackageScheduleRepository, InMemoryPartyRepository, InMemoryPaymentEventRepository,
         InMemoryPaymentLinkRepository, InMemoryPaymentMethodRepository,
         InMemoryPaymentTermRepository, InMemoryPeriodLockRepository, InMemoryPostalCodeDirectory,
         InMemoryPriceListRepository, InMemoryProductRepository, InMemoryPurchaseOrderRepository,
-        InMemoryQuoteRepository, InMemoryRecurrenceRepository, InMemorySaleRepository,
-        InMemoryStatementLineRepository, InMemoryStockMovementRepository,
+        InMemoryQuoteRepository, InMemoryRecurrenceRepository, InMemorySaleClaimRepository,
+        InMemorySaleRepository, InMemoryStatementLineRepository, InMemoryStockMovementRepository,
         InMemoryStockSettingsRepository, InMemoryTransferRepository, RegisterDocumentReferences,
-        RegisterReferences,
+        RegisterReferences, RingSecretCipher,
     };
     use http_body_util::BodyExt;
     use serde_json::{Value, json};
@@ -1215,7 +1283,11 @@ mod tests {
         type EntryReferences = TestReferences;
         type PeriodLocks = InMemoryPeriodLockRepository;
         type PackageSchedules = InMemoryPackageScheduleRepository;
+        type ApiKeys = InMemoryApiKeyRepository;
+        type SaleClaims = InMemorySaleClaimRepository;
         type FiscalSettings = InMemoryFiscalSettingsRepository;
+        type GatewaySettings = InMemoryGatewaySettingsRepository;
+        type Cipher = RingSecretCipher;
         type Gateway = FakeFiscalGateway;
         type FiscalDocuments = InMemoryFiscalDocumentRepository;
         type Attachments = InMemoryAttachmentRepository;
@@ -1266,7 +1338,11 @@ mod tests {
         type EntryReferences = TestReferences;
         type PeriodLocks = InMemoryPeriodLockRepository;
         type PackageSchedules = InMemoryPackageScheduleRepository;
+        type ApiKeys = InMemoryApiKeyRepository;
+        type SaleClaims = InMemorySaleClaimRepository;
         type FiscalSettings = InMemoryFiscalSettingsRepository;
+        type GatewaySettings = InMemoryGatewaySettingsRepository;
+        type Cipher = RingSecretCipher;
         type Gateway = FakeFiscalGateway;
         type FiscalDocuments = InMemoryFiscalDocumentRepository;
         type Attachments = InMemoryAttachmentRepository;
@@ -1319,6 +1395,18 @@ mod tests {
         /// The fiscal gateway the app of this test asks, so a test can have an invoice issued against the company.
         static GATEWAY: std::cell::RefCell<FakeFiscalGateway> =
             std::cell::RefCell::new(FakeFiscalGateway::default());
+    }
+
+    type TestGatewaySettings =
+        GatewaySettingsService<InMemoryGatewaySettingsRepository, RingSecretCipher>;
+
+    const SECRETS_KEY: &str = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+
+    fn test_gateway_settings() -> TestGatewaySettings {
+        GatewaySettingsService::new(
+            InMemoryGatewaySettingsRepository::default(),
+            RingSecretCipher::from_hex(SECRETS_KEY).unwrap(),
+        )
     }
 
     fn gateway() -> FakeFiscalGateway {
@@ -1497,6 +1585,13 @@ mod tests {
     }
 
     /// The schedule over stores that the app's own services do not share: for the tests that never use it.
+    fn standalone_api_keys() -> ApiKeyService<InMemoryApiKeyRepository, Argon2SecretService> {
+        ApiKeyService::new(
+            InMemoryApiKeyRepository::default(),
+            Argon2SecretService::new().unwrap(),
+        )
+    }
+
     fn standalone_packages() -> PackagesOf<MemoryPorts> {
         PackageScheduleService::new(
             InMemoryPackageScheduleRepository::default(),
@@ -2100,6 +2195,8 @@ mod tests {
     ) -> Router {
         router::<MemoryPorts>(
             Services {
+                api_keys: standalone_api_keys(),
+                sale_claims: InMemorySaleClaimRepository::default(),
                 parties,
                 products: ProductService::new(InMemoryProductRepository::default()),
                 cost_centers: CostCenterService::new(InMemoryCostCenterRepository::default()),
@@ -2137,6 +2234,7 @@ mod tests {
                 packages: standalone_packages(),
                 fiscal_documents,
                 fiscal_settings: FiscalSettingsService::new(fiscal_settings),
+                gateway_settings: test_gateway_settings(),
                 dre: DreService::new(
                     InMemoryFinancialEntryRepository::default(),
                     InMemoryCategoryRepository::default(),
@@ -2764,6 +2862,8 @@ mod tests {
     async fn a_postal_code_lookup_switched_off_is_a_409() {
         let app = router::<NoLookupPorts>(
             Services {
+                api_keys: standalone_api_keys(),
+                sale_claims: InMemorySaleClaimRepository::default(),
                 parties: PartyService::new(InMemoryPartyRepository::default(), None),
                 products: ProductService::new(InMemoryProductRepository::default()),
                 cost_centers: CostCenterService::new(InMemoryCostCenterRepository::default()),
@@ -2803,6 +2903,7 @@ mod tests {
                 fiscal_settings: FiscalSettingsService::new(
                     InMemoryFiscalSettingsRepository::default(),
                 ),
+                gateway_settings: test_gateway_settings(),
                 dre: DreService::new(
                     InMemoryFinancialEntryRepository::default(),
                     InMemoryCategoryRepository::default(),
@@ -4992,6 +5093,8 @@ mod tests {
         let registry: Option<InMemoryCnpjRegistry> = None;
         let app = router::<NoLookupPorts>(
             Services {
+                api_keys: standalone_api_keys(),
+                sale_claims: InMemorySaleClaimRepository::default(),
                 parties: PartyService::new(InMemoryPartyRepository::default(), registry),
                 products: ProductService::new(InMemoryProductRepository::default()),
                 cost_centers: CostCenterService::new(InMemoryCostCenterRepository::default()),
@@ -5031,6 +5134,7 @@ mod tests {
                 fiscal_settings: FiscalSettingsService::new(
                     InMemoryFiscalSettingsRepository::default(),
                 ),
+                gateway_settings: test_gateway_settings(),
                 dre: DreService::new(
                     InMemoryFinancialEntryRepository::default(),
                     InMemoryCategoryRepository::default(),
@@ -6532,6 +6636,14 @@ mod tests {
     }
 
     fn entry_app_over(identities: InMemoryIdentityRepository) -> (Router, InMemoryEmailSender) {
+        entry_app_over_v1(identities, V1Config::default())
+    }
+
+    /// Like `entry_app_over`, with the limits and the clock of the public API a test chooses.
+    fn entry_app_over_v1(
+        identities: InMemoryIdentityRepository,
+        v1: V1Config,
+    ) -> (Router, InMemoryEmailSender) {
         // Each app starts with nothing closed, even on a thread an earlier test used (`--test-threads=1`).
         LOCKS.with(|locks| locks.replace(InMemoryPeriodLockRepository::default()));
         let mailbox = InMemoryEmailSender::default();
@@ -6572,6 +6684,8 @@ mod tests {
         };
         let app = router::<MemoryPorts>(
             Services {
+                api_keys: standalone_api_keys(),
+                sale_claims: InMemorySaleClaimRepository::default(),
                 parties: PartyService::new(parties.clone(), known_companies())
                     .with_recheck_interval(Duration::ZERO),
                 products: ProductService::new(products.clone()),
@@ -6708,6 +6822,7 @@ mod tests {
                     )
                 },
                 fiscal_settings: FiscalSettingsService::new(fiscal_settings_store.clone()),
+                gateway_settings: test_gateway_settings(),
                 exports: AccountingExportService::new(
                     entry_store.clone(),
                     transfer_store.clone(),
@@ -6738,10 +6853,11 @@ mod tests {
                 ),
             },
             ApiConfig {
-                fiscal_webhook: Some(FiscalWebhook {
+                fiscal_webhook: FiscalWebhook {
                     header: "x-fiscal-webhook-token".to_owned(),
-                    secret: FISCAL_HOOK_SECRET.to_owned(),
-                }),
+                    secret: Some(FISCAL_HOOK_SECRET.to_owned()),
+                },
+                v1,
                 ..ApiConfig::default()
             },
         );
@@ -10307,6 +10423,193 @@ mod tests {
         }
     }
 
+    /// A company's own gateway settings ([ADR 0085]): reached only by the owner and the admin (the `members` area: not even the role
+    /// that writes the fiscal area), sealed by the server, and **no response, no trail and no error ever holds a secret**.
+    #[tokio::test]
+    async fn the_gateway_settings_are_for_the_owner_and_the_admin_and_never_show_a_secret() {
+        use conta_verde_domain::Role;
+
+        let (app, identities) = entry_app_with_identities();
+        let (owner, company_id) = sign_up(&app, "dona@example.com").await;
+        let admin = member_with_role(&app, &identities, company_id, Role::Admin).await;
+        let (stranger, _) = sign_up(&app, "outra@example.com").await;
+        let uri = format!("/companies/{company_id}/gateway-settings");
+        let secret = |action: &str, value: Option<&str>| match value {
+            Some(value) => json!({ "action": action, "value": value }),
+            None => json!({ "action": action }),
+        };
+        let body = |token: Value| {
+            json!({
+                "kind": "focus",
+                "focus_token_homologation": token,
+                "focus_token_production": secret("keep", None),
+                "nfeio_api_key": secret("keep", None),
+                "webhook_secret": secret("set", Some("hook_1234567890abcdef")),
+                "nfeio_company_homologation": null,
+                "nfeio_company_production": null,
+                "nfeio_search_confirmed": false
+            })
+        };
+        let typed = [
+            "tok_homol_1234567890",
+            "hook_1234567890abcdef",
+            "tok_new_1234567890",
+        ];
+        let leaks = |text: &str| typed.iter().any(|value| text.contains(value));
+
+        // Nothing set yet.
+        let none = send(&app, get_request(&uri, Some(&owner))).await;
+        assert_eq!(none.status, StatusCode::OK);
+        assert_eq!(none.body["kind"], Value::Null);
+        assert_eq!(none.body["encryption_available"], true);
+        assert_eq!(
+            none.body["webhook_path"],
+            format!("/public/fiscal/{company_id}/webhook")
+        );
+
+        // Only the owner and the admin reach it: no other role reads it, none writes it, a stranger finds nothing.
+        for role in [
+            Role::Financial,
+            Role::Sales,
+            Role::Stock,
+            Role::Accountant,
+            Role::Viewer,
+        ] {
+            let cookie = member_with_role(&app, &identities, company_id, role).await;
+            assert_eq!(
+                send(&app, get_request(&uri, Some(&cookie))).await.status,
+                StatusCode::FORBIDDEN,
+                "{role:?} reads"
+            );
+            assert_eq!(
+                send(
+                    &app,
+                    json_request(
+                        "PUT",
+                        &uri,
+                        Some(&cookie),
+                        body(secret("set", Some("tok_homol_1234567890")))
+                    )
+                )
+                .await
+                .status,
+                StatusCode::FORBIDDEN,
+                "{role:?} writes"
+            );
+        }
+        assert_eq!(
+            send(&app, get_request(&uri, Some(&stranger))).await.status,
+            StatusCode::NOT_FOUND
+        );
+
+        // Written, it answers with what is set and never a value.
+        let saved = send(
+            &app,
+            json_request(
+                "PUT",
+                &uri,
+                Some(&owner),
+                body(secret("set", Some("tok_homol_1234567890"))),
+            ),
+        )
+        .await;
+        assert_eq!(saved.status, StatusCode::OK, "{}", saved.body);
+        assert_eq!(saved.body["kind"], "focus");
+        assert_eq!(saved.body["focus_token_homologation_set"], true);
+        assert_eq!(saved.body["focus_token_production_set"], false);
+        assert_eq!(saved.body["webhook_secret_set"], true);
+        assert!(!leaks(&saved.body.to_string()));
+        let read = send(&app, get_request(&uri, Some(&admin))).await;
+        assert_eq!(read.status, StatusCode::OK);
+        assert_eq!(read.body, saved.body);
+        assert!(!leaks(&read.body.to_string()));
+
+        // The admin changes it; the trail says a secret was set and changed, never what it was.
+        let changed = send(
+            &app,
+            json_request(
+                "PUT",
+                &uri,
+                Some(&admin),
+                body(secret("set", Some("tok_new_1234567890"))),
+            ),
+        )
+        .await;
+        assert_eq!(changed.status, StatusCode::OK);
+        let history = send(&app, get_request(&format!("{uri}/history"), Some(&owner))).await;
+        assert_eq!(history.status, StatusCode::OK);
+        assert_eq!(history.body.as_array().unwrap().len(), 2);
+        assert!(!leaks(&history.body.to_string()), "{}", history.body);
+        assert!(history.body.to_string().contains("changed"));
+
+        // What is not a secret write, or is not a token, is refused with no value in the answer.
+        for bad in [
+            body(secret("set", Some("short"))),
+            body(secret("set", None)),
+            body(secret("keep", Some("tok_homol_1234567890"))),
+            body(secret("erase", None)),
+            {
+                let mut b = body(secret("keep", None));
+                b["kind"] = json!("fake");
+                b
+            },
+            {
+                let mut b = body(secret("keep", None));
+                b["extra"] = json!(1);
+                b
+            },
+            {
+                let mut b = body(secret("keep", None));
+                b["nfeio_company_production"] = json!("has space");
+                b
+            },
+        ] {
+            let refused = send(&app, json_request("PUT", &uri, Some(&owner), bad.clone())).await;
+            assert!(
+                matches!(
+                    refused.status,
+                    StatusCode::UNPROCESSABLE_ENTITY | StatusCode::BAD_REQUEST
+                ),
+                "{bad} -> {}",
+                refused.status
+            );
+            assert!(!leaks(&refused.body.to_string()), "{}", refused.body);
+        }
+        assert_eq!(
+            send(&app, get_request(&format!("{uri}/history"), Some(&owner)))
+                .await
+                .body
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+
+        // Reset: only the owner and the admin, the server's settings come back, the trail says what was cleared and never a value.
+        let reader = member_with_role(&app, &identities, company_id, Role::Financial).await;
+        assert_eq!(
+            send(
+                &app,
+                json_request("DELETE", &uri, Some(&reader), Value::Null)
+            )
+            .await
+            .status,
+            StatusCode::FORBIDDEN
+        );
+        let reset = send(
+            &app,
+            json_request("DELETE", &uri, Some(&admin), Value::Null),
+        )
+        .await;
+        assert_eq!(reset.status, StatusCode::OK, "{}", reset.body);
+        assert_eq!(reset.body["kind"], Value::Null);
+        assert_eq!(reset.body["webhook_secret_set"], false);
+        assert_eq!(reset.body["unreadable"], json!([]));
+        let history = send(&app, get_request(&format!("{uri}/history"), Some(&owner))).await;
+        assert_eq!(history.body.as_array().unwrap().len(), 3);
+        assert!(!leaks(&history.body.to_string()));
+    }
+
     /// The invoices issued against the company ([ADR 0083]): fetched from the gateway on request, declared to the authority in the
     /// name of the person with the rules of the words, each role keeping to its area; and the webhook only wakes the server up:
     /// a secret in the header the gateway was told to use, nothing in its body believed.
@@ -10569,7 +10872,8 @@ mod tests {
             )
             .await
             .status,
-            StatusCode::NOT_FOUND
+            StatusCode::UNAUTHORIZED,
+            "an id that is no company's is a knock that is not believed, like a wrong secret"
         );
         fake.receive(received_invoice(9, "2026-11-04"));
         assert_eq!(
@@ -10589,6 +10893,68 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         assert_eq!(found, 4, "the knock made the server ask");
+
+        // A company that set a webhook secret of its own is knocked at with that one **only**: the operator's no longer opens it,
+        // and another company's does not either (ADR 0085).
+        let own_secret = "own_hook_1234567890abcdef";
+        let settings = send(
+            &app,
+            json_request(
+                "PUT",
+                &format!("/companies/{company_id}/gateway-settings"),
+                Some(&owner),
+                json!({
+                    "kind": "focus",
+                    "focus_token_homologation": { "action": "keep" },
+                    "focus_token_production": { "action": "keep" },
+                    "nfeio_api_key": { "action": "keep" },
+                    "webhook_secret": { "action": "set", "value": own_secret },
+                    "nfeio_company_homologation": null,
+                    "nfeio_company_production": null,
+                    "nfeio_search_confirmed": false
+                }),
+            ),
+        )
+        .await;
+        assert_eq!(settings.status, StatusCode::OK, "{:?}", settings.body);
+        assert_eq!(
+            send(&app, knock(Some(FISCAL_HOOK_SECRET), &hook))
+                .await
+                .status,
+            StatusCode::UNAUTHORIZED,
+            "the operator's secret no longer opens a company that has its own"
+        );
+        assert_eq!(
+            send(&app, knock(Some(own_secret), &hook)).await.status,
+            StatusCode::ACCEPTED
+        );
+        let (_, other_company) = sign_up(&app, "vizinha@example.com").await;
+        assert_eq!(
+            send(
+                &app,
+                knock(
+                    Some(own_secret),
+                    &format!("/public/fiscal/{other_company}/webhook")
+                )
+            )
+            .await
+            .status,
+            StatusCode::UNAUTHORIZED,
+            "a company's secret opens no other company"
+        );
+        assert_eq!(
+            send(
+                &app,
+                knock(
+                    Some(own_secret),
+                    &format!("/public/fiscal/{}/webhook", Uuid::new_v4())
+                )
+            )
+            .await
+            .status,
+            StatusCode::UNAUTHORIZED,
+            "and a company that does not exist answers like a wrong secret"
+        );
     }
 
     /// An NFC-e through the API ([ADR 0082]): the product lines of a completed sale at the counter, what is paid adding up to the
@@ -14936,4 +15302,6 @@ mod tests {
             }
         }
     }
+
+    include!("v1/tests.rs");
 }

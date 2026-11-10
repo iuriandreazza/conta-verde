@@ -1,39 +1,39 @@
 use std::time::Duration;
 
-use conta_verde_api::{ApiConfig, Ports, Services, router};
+use conta_verde_api::{ApiConfig, Ports, Services, V1Config, router};
 use conta_verde_application::{
-    AccountingExportService, AttachmentService, AuthService, BalanceService, BankAccountService,
-    CategoryService, CommissionService, ContractService, CostCenterService, DocumentMailService,
-    DreService, FinancialEntryService, FiscalDocumentService, FiscalSettingsService,
-    InventoryCountService, JobRunner, MemberService, PackageScheduleService, PartyService,
-    PaymentMethodService, PaymentTermService, PeriodLockService, PostalCodeService,
-    PriceListService, ProductService, PurchaseService, QuoteService, ReconciliationService,
-    RecurrenceService, SaleService, SalesReportService, StockService, TransferService,
+    AccountingExportService, ApiKeyService, AttachmentService, AuthService, BalanceService,
+    BankAccountService, CategoryService, CommissionService, ContractService, CostCenterService,
+    DocumentMailService, DreService, FinancialEntryService, FiscalDocumentService,
+    FiscalSettingsService, GatewaySettingsService, InventoryCountService, JobRunner, MemberService,
+    PackageScheduleService, PartyService, PaymentMethodService, PaymentTermService,
+    PeriodLockService, PostalCodeService, PriceListService, ProductService, PurchaseService,
+    QuoteService, ReconciliationService, RecurrenceService, SaleService, SalesReportService,
+    StockService, TransferService,
 };
 use conta_verde_application::{
-    AuthorizedNfse, BrandedEmailSender, ChargeService, CollectionService, DocumentOutcome,
-    DunningService, EmailError, EmailMessage, EmailSender, EventOutcome, EventQuery, FiscalGateway,
-    GatewayError, MessageError, MessageSender, NfceRequest, NfeRequest, NfseRequest,
-    PaymentPageService, PaymentProvider, PaymentWebhookService, ProviderCharge,
-    ProviderChargeRequest, ProviderError, ProviderEvent, QueuedEmailSender, Submission,
-    TextMessage, WebhookError, WebhookHeaders,
+    BrandedEmailSender, ChargeService, CollectionService, DunningService, EmailError, EmailMessage,
+    EmailSender, MessageError, MessageSender, PaymentPageService, PaymentProvider,
+    PaymentWebhookService, ProviderCharge, ProviderChargeRequest, ProviderError, ProviderEvent,
+    QueuedEmailSender, TextMessage, WebhookError, WebhookHeaders,
 };
-use conta_verde_domain::FiscalSettings;
 use conta_verde_infrastructure::{
     Argon2SecretService, BrasilApiCityCodes, BrasilApiCnpjRegistry, BrasilApiPostalCodeDirectory,
-    CachedCnpjRegistry, FakeFiscalGateway, FocusNfeGateway, LocalBlobStore, LogEmailSender,
-    NfeIoGateway, NoFiscalGateway, PostgresAttachmentRepository, PostgresBankAccountRepository,
-    PostgresCategoryRepository, PostgresCommissionRuleRepository, PostgresContractRepository,
-    PostgresCostCenterRepository, PostgresDocumentMailRepository, PostgresFinancialEntryRepository,
-    PostgresFiscalDocumentRepository, PostgresFiscalSettingsRepository, PostgresIdentityRepository,
-    PostgresInventoryCountRepository, PostgresInvitationRepository, PostgresJobQueue,
-    PostgresOpeningRepository, PostgresPackageScheduleRepository, PostgresPartyRepository,
-    PostgresPaymentMethodRepository, PostgresPaymentTermRepository, PostgresPeriodLockRepository,
-    PostgresPriceListRepository, PostgresProductRepository, PostgresPurchaseOrderRepository,
-    PostgresQuoteRepository, PostgresRecurrenceRepository, PostgresSaleRepository,
-    PostgresStatementLineRepository, PostgresStockMovementRepository,
-    PostgresStockSettingsRepository, PostgresTransferRepository, RegisterDocumentReferences,
-    RegisterReferences, SmtpEmailSender, connect_and_migrate,
+    CachedCnpjRegistry, CompanyFiscalGateways, ConfiguredFiscalGateway, FakeFiscalGateway,
+    FocusNfeGateway, GatewayEndpoints, LocalBlobStore, LogEmailSender, NfeIoGateway,
+    NoFiscalGateway, PostgresApiKeyRepository, PostgresAttachmentRepository,
+    PostgresBankAccountRepository, PostgresCategoryRepository, PostgresCommissionRuleRepository,
+    PostgresContractRepository, PostgresCostCenterRepository, PostgresDocumentMailRepository,
+    PostgresFinancialEntryRepository, PostgresFiscalDocumentRepository,
+    PostgresFiscalSettingsRepository, PostgresGatewaySettingsRepository,
+    PostgresIdentityRepository, PostgresInventoryCountRepository, PostgresInvitationRepository,
+    PostgresJobQueue, PostgresOpeningRepository, PostgresPackageScheduleRepository,
+    PostgresPartyRepository, PostgresPaymentMethodRepository, PostgresPaymentTermRepository,
+    PostgresPeriodLockRepository, PostgresPriceListRepository, PostgresProductRepository,
+    PostgresPurchaseOrderRepository, PostgresQuoteRepository, PostgresRecurrenceRepository,
+    PostgresSaleClaimRepository, PostgresSaleRepository, PostgresStatementLineRepository,
+    PostgresStockMovementRepository, PostgresStockSettingsRepository, PostgresTransferRepository,
+    RegisterDocumentReferences, RegisterReferences, SmtpEmailSender, connect_and_migrate,
 };
 use conta_verde_infrastructure::{
     AsaasProvider, NoMessageSender, PostgresDunningPlanRepository, PostgresNotificationRepository,
@@ -50,6 +50,8 @@ use tracing_subscriber::EnvFilter;
 struct PostgresPorts;
 
 impl Ports for PostgresPorts {
+    type ApiKeys = PostgresApiKeyRepository;
+    type SaleClaims = PostgresSaleClaimRepository;
     type Parties = PostgresPartyRepository;
     type Registry = Option<CachedCnpjRegistry<BrasilApiCnpjRegistry>>;
     type Identity = PostgresIdentityRepository;
@@ -73,7 +75,9 @@ impl Ports for PostgresPorts {
     type PeriodLocks = PostgresPeriodLockRepository;
     type PackageSchedules = PostgresPackageScheduleRepository;
     type FiscalSettings = PostgresFiscalSettingsRepository;
-    type Gateway = ConfiguredFiscalGateway;
+    type GatewaySettings = PostgresGatewaySettingsRepository;
+    type Cipher = ConfiguredCipher;
+    type Gateway = CompanyFiscalGateways<PostgresGatewaySettingsRepository, ConfiguredCipher>;
     type FiscalDocuments = PostgresFiscalDocumentRepository;
     type Attachments = PostgresAttachmentRepository;
     type Blobs = LocalBlobStore;
@@ -128,6 +132,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let config = ApiConfig {
         cookie_secure: parse_flag("COOKIE_SECURE")?,
         fiscal_webhook: fiscal_webhook_from_env()?,
+        v1: v1_config_from_env()?,
     };
 
     let pool = connect_and_migrate(&database_url).await?;
@@ -372,27 +377,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     );
     let fiscal_settings =
         FiscalSettingsService::new(PostgresFiscalSettingsRepository::new(pool.clone()));
-    // The poll that finishes what the gateway answered "processing" to has a service of its own over its own gateway
-    // client: the one the app serves from is owned by its state.
-    let fiscal_gateway = fiscal_gateway_from_env()?;
-    let fiscal_documents = |gateway: ConfiguredFiscalGateway| {
+    let cipher = secrets_cipher_from_env()?;
+    let gateway_settings = GatewaySettingsService::new(
+        PostgresGatewaySettingsRepository::new(pool.clone()),
+        cipher.clone(),
+    );
+    // The gateway of a company is found at each call: its own settings when it has set them, the server's otherwise (ADR 0085).
+    // The poll that finishes what the gateway answered "processing" to has a service of its own, and so does the app: the one
+    // the app serves from is owned by its state.
+    let endpoints = gateway_endpoints_from_env()?;
+    let server_gateway = fiscal_gateway_from_env(&endpoints)?;
+    let fiscal_documents = || {
         FiscalDocumentService::new(
             PostgresFiscalDocumentRepository::new(pool.clone()),
             PostgresSaleRepository::new(pool.clone()),
             PostgresPartyRepository::new(pool.clone()),
             PostgresProductRepository::new(pool.clone()),
             PostgresFiscalSettingsRepository::new(pool.clone()),
-            gateway,
+            CompanyFiscalGateways::new(
+                server_gateway.clone(),
+                GatewaySettingsService::new(
+                    PostgresGatewaySettingsRepository::new(pool.clone()),
+                    cipher.clone(),
+                ),
+                endpoints.clone(),
+            ),
             LocalBlobStore::new(attachments_dir_from_env()),
             references(),
         )
     };
-    // The poll shares the gateway of the app (one client, and with `FISCAL_GATEWAY=fake` one memory), in a service of
-    // its own because the app's is owned by its state.
-    tokio::spawn(poll_fiscal_documents(fiscal_documents(
-        fiscal_gateway.clone(),
-    )));
-    let fiscal_documents = fiscal_documents(fiscal_gateway);
+    tokio::spawn(poll_fiscal_documents(fiscal_documents()));
+    let fiscal_documents = fiscal_documents();
+    let api_keys = ApiKeyService::new(
+        PostgresApiKeyRepository::new(pool.clone()),
+        Argon2SecretService::new()?,
+    );
+    let sale_claims = PostgresSaleClaimRepository::new(pool.clone());
     let auth = AuthService::new(
         PostgresIdentityRepository::new(pool),
         Argon2SecretService::new()?,
@@ -404,6 +424,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         listener,
         router::<PostgresPorts>(
             Services {
+                api_keys,
+                sale_claims,
                 parties,
                 products,
                 cost_centers,
@@ -436,6 +458,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 exports,
                 packages,
                 fiscal_settings,
+                gateway_settings,
                 fiscal_documents,
                 postal_codes,
                 members,
@@ -497,7 +520,7 @@ async fn poll_fiscal_documents<D, S, P, Y, F, G, B, R>(
     P: conta_verde_application::PartyRepository,
     Y: conta_verde_application::ProductRepository,
     F: conta_verde_application::FiscalSettingsRepository,
-    G: FiscalGateway,
+    G: conta_verde_application::FiscalGatewayResolver,
     B: conta_verde_application::BlobStore,
     R: conta_verde_application::EntryReferences,
 {
@@ -614,167 +637,6 @@ where
     }
 }
 
-/// The fiscal gateway the operator chose with `FISCAL_GATEWAY` (ADR 0073, ADR 0075): `fake` for development, `focus`
-/// for Focus NFe, and off when it is not set.
-#[derive(Clone)]
-enum ConfiguredFiscalGateway {
-    Off(NoFiscalGateway),
-    Fake(FakeFiscalGateway),
-    Focus(Box<FocusNfeGateway>),
-    NfeIo(Box<NfeIoGateway>),
-}
-
-/// Calls the same method of whichever gateway is configured.
-macro_rules! on_gateway {
-    ($self:expr, $gateway:ident => $call:expr) => {
-        match $self {
-            ConfiguredFiscalGateway::Off($gateway) => $call,
-            ConfiguredFiscalGateway::Fake($gateway) => $call,
-            ConfiguredFiscalGateway::Focus($gateway) => $call,
-            ConfiguredFiscalGateway::NfeIo($gateway) => $call,
-        }
-    };
-}
-
-impl FiscalGateway for ConfiguredFiscalGateway {
-    fn key(&self) -> &str {
-        on_gateway!(self, gateway => gateway.key())
-    }
-
-    fn is_enabled(&self) -> bool {
-        on_gateway!(self, gateway => gateway.is_enabled())
-    }
-
-    async fn submit_nfe(&self, request: &NfeRequest) -> Result<Submission, GatewayError> {
-        on_gateway!(self, gateway => gateway.submit_nfe(request).await)
-    }
-
-    async fn query_nfe(
-        &self,
-        issuer: &FiscalSettings,
-        reference: &str,
-    ) -> Result<DocumentOutcome, GatewayError> {
-        on_gateway!(self, gateway => gateway.query_nfe(issuer, reference).await)
-    }
-
-    async fn cancel_nfe(
-        &self,
-        issuer: &FiscalSettings,
-        reference: &str,
-        reason: &str,
-    ) -> Result<EventOutcome, GatewayError> {
-        on_gateway!(self, gateway => gateway.cancel_nfe(issuer, reference, reason).await)
-    }
-
-    async fn correct_nfe(
-        &self,
-        issuer: &FiscalSettings,
-        reference: &str,
-        text: &str,
-    ) -> Result<EventOutcome, GatewayError> {
-        on_gateway!(self, gateway => gateway.correct_nfe(issuer, reference, text).await)
-    }
-
-    async fn query_event(
-        &self,
-        issuer: &FiscalSettings,
-        reference: &str,
-        event: EventQuery,
-    ) -> Result<EventOutcome, GatewayError> {
-        on_gateway!(self, gateway => gateway.query_event(issuer, reference, event).await)
-    }
-
-    async fn invalidate_nfe_numbers(
-        &self,
-        issuer: &FiscalSettings,
-        series: u16,
-        first: u32,
-        last: u32,
-        reason: &str,
-    ) -> Result<EventOutcome, GatewayError> {
-        on_gateway!(self, gateway => gateway
-            .invalidate_nfe_numbers(issuer, series, first, last, reason)
-            .await)
-    }
-
-    fn issues_nfse(&self) -> bool {
-        on_gateway!(self, gateway => gateway.issues_nfse())
-    }
-
-    fn issues_nfce(&self) -> bool {
-        on_gateway!(self, gateway => gateway.issues_nfce())
-    }
-
-    fn issues_manifestation(&self) -> bool {
-        on_gateway!(self, gateway => gateway.issues_manifestation())
-    }
-
-    async fn list_received_nfe(
-        &self,
-        issuer: &FiscalSettings,
-        since_version: u64,
-    ) -> Result<Vec<conta_verde_domain::ReceivedInvoiceDraft>, GatewayError> {
-        on_gateway!(self, gateway => gateway.list_received_nfe(issuer, since_version).await)
-    }
-
-    async fn manifest_received_nfe(
-        &self,
-        issuer: &FiscalSettings,
-        access_key: &conta_verde_domain::AccessKey,
-        word: conta_verde_domain::Manifestation,
-        justification: Option<&str>,
-    ) -> Result<EventOutcome, GatewayError> {
-        on_gateway!(self, gateway => gateway
-            .manifest_received_nfe(issuer, access_key, word, justification)
-            .await)
-    }
-
-    async fn submit_nfce(&self, request: &NfceRequest) -> Result<Submission, GatewayError> {
-        on_gateway!(self, gateway => gateway.submit_nfce(request).await)
-    }
-
-    async fn query_nfce(
-        &self,
-        issuer: &FiscalSettings,
-        reference: &str,
-    ) -> Result<DocumentOutcome, GatewayError> {
-        on_gateway!(self, gateway => gateway.query_nfce(issuer, reference).await)
-    }
-
-    async fn cancel_nfce(
-        &self,
-        issuer: &FiscalSettings,
-        reference: &str,
-        reason: &str,
-    ) -> Result<EventOutcome, GatewayError> {
-        on_gateway!(self, gateway => gateway.cancel_nfce(issuer, reference, reason).await)
-    }
-
-    async fn submit_nfse(
-        &self,
-        request: &NfseRequest,
-    ) -> Result<Submission<AuthorizedNfse>, GatewayError> {
-        on_gateway!(self, gateway => gateway.submit_nfse(request).await)
-    }
-
-    async fn query_nfse(
-        &self,
-        issuer: &FiscalSettings,
-        reference: &str,
-    ) -> Result<DocumentOutcome<AuthorizedNfse>, GatewayError> {
-        on_gateway!(self, gateway => gateway.query_nfse(issuer, reference).await)
-    }
-
-    async fn cancel_nfse(
-        &self,
-        issuer: &FiscalSettings,
-        reference: &str,
-        reason: &str,
-    ) -> Result<EventOutcome, GatewayError> {
-        on_gateway!(self, gateway => gateway.cancel_nfse(issuer, reference, reason).await)
-    }
-}
-
 /// An address the gateway's credentials may be sent to: over TLS, or on this machine (a stand-in). The host is compared
 /// whole, so `http://localhost.example.com` is not local.
 fn is_https_or_local(url: &str) -> bool {
@@ -789,13 +651,45 @@ fn is_https_or_local(url: &str) -> bool {
         })
 }
 
-fn fiscal_gateway_from_env()
--> Result<ConfiguredFiscalGateway, Box<dyn std::error::Error + Send + Sync>> {
-    let setting = |name: &str| {
-        std::env::var(name)
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-    };
+/// What only the operator decides about reaching a gateway, for the server's own and for every company's (ADR 0085): the
+/// addresses the tokens go to (over TLS, or a stand-in on this machine), the hosts a file may come from and the confirmation
+/// of the NFE.io search. Read whichever gateway the server itself uses, because a company's settings use them too.
+fn gateway_endpoints_from_env() -> Result<GatewayEndpoints, Box<dyn std::error::Error + Send + Sync>>
+{
+    let focus_url = setting("FOCUS_NFE_API_URL");
+    if let Some(url) = &focus_url
+        && !is_https_or_local(url)
+    {
+        return Err("FOCUS_NFE_API_URL must be an https:// address (or a local one)".into());
+    }
+    let nfeio_url = setting("NFEIO_API_URL");
+    if let Some(url) = &nfeio_url
+        && !is_https_or_local(url)
+    {
+        return Err("NFEIO_API_URL must be an https:// address (or a local one)".into());
+    }
+    Ok(GatewayEndpoints {
+        focus_url,
+        nfeio_url,
+        nfeio_file_hosts: setting("NFEIO_FILE_HOSTS")
+            .map(|hosts| hosts.split(',').map(str::to_owned).collect())
+            .unwrap_or_default(),
+        nfeio_search_confirmed: setting("NFEIO_SEARCH_CONFIRMED").as_deref() == Some("true"),
+        cities: std::sync::Arc::new(BrasilApiCityCodes::new(None)?),
+    })
+}
+
+fn setting(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+}
+
+/// The fiscal gateway the operator chose with `FISCAL_GATEWAY` (ADR 0073, ADR 0075): `fake` for development, `focus`
+/// for Focus NFe, `nfeio` for NFE.io, and off when it is not set. It is the one used by every company that has not set its own.
+fn fiscal_gateway_from_env(
+    endpoints: &GatewayEndpoints,
+) -> Result<ConfiguredFiscalGateway, Box<dyn std::error::Error + Send + Sync>> {
     match setting("FISCAL_GATEWAY").as_deref().map(str::trim) {
         None | Some("off") => {
             tracing::warn!("FISCAL_GATEWAY is not set: fiscal documents are switched off");
@@ -812,15 +706,6 @@ fn fiscal_gateway_from_env()
                 setting("FOCUS_NFE_TOKEN_HOMOLOGATION").map(|token| token.trim().to_owned()),
                 setting("FOCUS_NFE_TOKEN_PRODUCTION").map(|token| token.trim().to_owned()),
             );
-            // The tokens go to this address in every call: it is the gateway's over TLS, or a stand-in on this machine.
-            let api_url = setting("FOCUS_NFE_API_URL");
-            if let Some(url) = &api_url
-                && !is_https_or_local(url)
-            {
-                return Err(
-                    "FOCUS_NFE_API_URL must be an https:// address (or a local one)".into(),
-                );
-            }
             if homologation.is_none() && production.is_none() {
                 return Err(
                     "FISCAL_GATEWAY=focus needs FOCUS_NFE_TOKEN_HOMOLOGATION or FOCUS_NFE_TOKEN_PRODUCTION"
@@ -839,7 +724,7 @@ fn fiscal_gateway_from_env()
             tracing::info!("fiscal documents are issued through Focus NFe");
             Ok(ConfiguredFiscalGateway::Focus(Box::new(
                 FocusNfeGateway::new(
-                    setting("FOCUS_NFE_API_URL").as_deref(),
+                    endpoints.focus_url.as_deref(),
                     homologation.as_deref(),
                     production.as_deref(),
                     &cnpj,
@@ -847,13 +732,6 @@ fn fiscal_gateway_from_env()
             )))
         }
         Some("nfeio") => {
-            // The key goes to this address in every call: it is the gateway's over TLS, or a stand-in on this machine.
-            let api_url = setting("NFEIO_API_URL");
-            if let Some(url) = &api_url
-                && !is_https_or_local(url)
-            {
-                return Err("NFEIO_API_URL must be an https:// address (or a local one)".into());
-            }
             let Some(key) = setting("NFEIO_API_KEY") else {
                 return Err("FISCAL_GATEWAY=nfeio needs NFEIO_API_KEY".into());
             };
@@ -876,27 +754,23 @@ fn fiscal_gateway_from_env()
                 Ok(conta_verde_domain::Document::Cnpj(cnpj)) => cnpj,
                 _ => return Err("NFEIO_ISSUER_CNPJ is not a valid CNPJ".into()),
             };
-            let search_confirmed = setting("NFEIO_SEARCH_CONFIRMED").as_deref() == Some("true");
-            if !search_confirmed {
+            if !endpoints.nfeio_search_confirmed {
                 tracing::warn!(
                     "NFEIO_SEARCH_CONFIRMED is not true: issuing in production is refused until the search for a document by our reference is confirmed in the sandbox (ADR 0079)"
                 );
             }
-            let file_hosts: Vec<String> = setting("NFEIO_FILE_HOSTS")
-                .map(|hosts| hosts.split(',').map(str::to_owned).collect())
-                .unwrap_or_default();
             tracing::info!("fiscal documents are issued through NFE.io");
             Ok(ConfiguredFiscalGateway::NfeIo(Box::new(
                 NfeIoGateway::new(
-                    api_url.as_deref(),
+                    endpoints.nfeio_url.as_deref(),
                     &key,
                     homologation.as_deref(),
                     production.as_deref(),
                     &cnpj,
-                    std::sync::Arc::new(BrasilApiCityCodes::new(None)?),
+                    endpoints.cities.clone(),
                 )?
-                .with_file_hosts(&file_hosts)
-                .with_search_confirmed(search_confirmed),
+                .with_file_hosts(&endpoints.nfeio_file_hosts)
+                .with_search_confirmed(endpoints.nfeio_search_confirmed),
             )))
         }
         Some(other) => Err(format!("FISCAL_GATEWAY={other} is not a known gateway").into()),
@@ -1269,23 +1143,91 @@ fn lookup_enabled(name: &str, setting: Option<&str>) -> Result<bool, String> {
 }
 
 // Strict on purpose: a typo such as `TRUE` must not silently turn off a security setting.
-/// `FISCAL_WEBHOOK_SECRET` (at least 32 characters; unset keeps the door shut) and `FISCAL_WEBHOOK_HEADER` (the name of the header
-/// the gateway puts it in, `x-fiscal-webhook-token` by default): what the operator registers at the gateway as the hook's
-/// authorization (ADR 0083). A secret that is too short, or a header name that is not one, stops the server.
-fn fiscal_webhook_from_env()
--> Result<Option<conta_verde_api::FiscalWebhook>, Box<dyn std::error::Error + Send + Sync>> {
-    let Ok(secret) = std::env::var("FISCAL_WEBHOOK_SECRET") else {
-        return Ok(None);
-    };
-    if secret.chars().count() < 32 {
-        return Err("FISCAL_WEBHOOK_SECRET must have at least 32 characters".into());
+/// What seals the gateway settings' secrets: with the key of `FISCAL_SECRETS_KEY` (64 hexadecimal characters), or nothing, and then no
+/// secret can be saved (ADR 0085). A key that is not 32 bytes of hexadecimal stops the server; its text is never in the message.
+#[derive(Clone)]
+enum ConfiguredCipher {
+    Sealing(std::sync::Arc<conta_verde_infrastructure::RingSecretCipher>),
+    Off(conta_verde_infrastructure::NoSecretCipher),
+}
+
+impl conta_verde_application::SecretCipher for ConfiguredCipher {
+    fn is_available(&self) -> bool {
+        matches!(self, Self::Sealing(_))
     }
+
+    fn seal(
+        &self,
+        company_id: conta_verde_domain::CompanyId,
+        field: &str,
+        plaintext: &conta_verde_domain::SecretText,
+    ) -> Result<Vec<u8>, conta_verde_application::SecretError> {
+        match self {
+            Self::Sealing(cipher) => cipher.seal(company_id, field, plaintext),
+            Self::Off(cipher) => cipher.seal(company_id, field, plaintext),
+        }
+    }
+
+    fn open(
+        &self,
+        company_id: conta_verde_domain::CompanyId,
+        field: &str,
+        sealed: &[u8],
+    ) -> Result<conta_verde_domain::SecretText, conta_verde_application::SecretError> {
+        match self {
+            Self::Sealing(cipher) => cipher.open(company_id, field, sealed),
+            Self::Off(cipher) => cipher.open(company_id, field, sealed),
+        }
+    }
+}
+
+fn secrets_cipher_from_env() -> Result<ConfiguredCipher, Box<dyn std::error::Error + Send + Sync>> {
+    match std::env::var("FISCAL_SECRETS_KEY") {
+        Ok(key) => Ok(ConfiguredCipher::Sealing(std::sync::Arc::new(
+            conta_verde_infrastructure::RingSecretCipher::from_hex(&key)
+                .map_err(|error| format!("FISCAL_SECRETS_KEY: {error}"))?,
+        ))),
+        Err(_) => Ok(ConfiguredCipher::Off(
+            conta_verde_infrastructure::NoSecretCipher,
+        )),
+    }
+}
+
+/// `FISCAL_WEBHOOK_SECRET` (at least 32 characters) and `FISCAL_WEBHOOK_HEADER` (the name of the header the gateway puts it in,
+/// `x-fiscal-webhook-token` by default): what the operator registers at the gateway as the hook's authorization (ADR 0083). With
+/// no secret the operator's door is shut, but a company may still have set a secret of its own (ADR 0085). A secret that is too
+/// short, or a header name that is not one, stops the server.
+fn fiscal_webhook_from_env()
+-> Result<conta_verde_api::FiscalWebhook, Box<dyn std::error::Error + Send + Sync>> {
     let header = std::env::var("FISCAL_WEBHOOK_HEADER")
-        .unwrap_or_else(|_| "x-fiscal-webhook-token".to_owned());
+        .unwrap_or_else(|_| conta_verde_api::DEFAULT_FISCAL_WEBHOOK_HEADER.to_owned());
     if axum::http::HeaderName::from_bytes(header.as_bytes()).is_err() {
         return Err("FISCAL_WEBHOOK_HEADER is not an HTTP header name".into());
     }
-    Ok(Some(conta_verde_api::FiscalWebhook { header, secret }))
+    let secret = std::env::var("FISCAL_WEBHOOK_SECRET").ok();
+    if secret
+        .as_ref()
+        .is_some_and(|secret| secret.chars().count() < 32)
+    {
+        return Err("FISCAL_WEBHOOK_SECRET must have at least 32 characters".into());
+    }
+    Ok(conta_verde_api::FiscalWebhook { header, secret })
+}
+
+/// `API_RATE_LIMIT_PER_MINUTE`: how many requests a key may make a minute (300 by default). It is kept in the memory of
+/// each process, so with several instances a key's real limit is that many times this ([ADR 0087]).
+fn v1_config_from_env() -> Result<V1Config, Box<dyn std::error::Error + Send + Sync>> {
+    let mut config = V1Config::default();
+    if let Ok(raw) = std::env::var("API_RATE_LIMIT_PER_MINUTE") {
+        config.rate_limit_per_minute = raw
+            .parse::<u32>()
+            .ok()
+            .filter(|limit| *limit > 0)
+            .ok_or_else(|| {
+                format!("API_RATE_LIMIT_PER_MINUTE must be a number above 0, got `{raw}`")
+            })?;
+    }
+    Ok(config)
 }
 
 fn parse_flag(name: &str) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {

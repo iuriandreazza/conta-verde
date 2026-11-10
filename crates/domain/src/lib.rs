@@ -1,6 +1,7 @@
 mod account;
 mod address;
 mod amount;
+mod api_key;
 mod attachment;
 mod audit;
 mod bank_account;
@@ -25,6 +26,7 @@ mod fiscal_document;
 mod fiscal_event;
 mod fiscal_settings;
 mod fiscal_time;
+mod gateway_settings;
 mod ids;
 mod inventory_count;
 mod invitation;
@@ -59,30 +61,33 @@ mod transfer;
 pub use account::{Account, AccountDraft, Company, User, validate_password};
 pub use address::{Address, AddressDraft, PostalCode, is_state};
 pub use amount::{Amount, SignedAmount, round_to_cents};
+pub use api_key::{
+    API_KEY_AREAS, ApiKey, ApiKeyDraft, ApiScope, MAX_API_KEYS, MAX_ROTATION_GRACE_HOURS,
+};
 pub use attachment::{Attachment, AttachmentDraft, MAX_ATTACHMENT_BYTES, MAX_ENTRY_ATTACHMENTS};
 pub use audit::{
     Actor, AuditAction, AuditEntity, AuditEntry, AuditRecord, Audited, FieldChange,
-    attachment_changes, attachment_creation_changes, bank_account_changes,
-    bank_account_creation_changes, category_changes, category_creation_changes, charge_changes,
-    charge_creation_changes, collection_settings_changes, collection_settings_creation_changes,
-    commission_rule_changes, commission_rule_creation_changes, contract_changes,
-    contract_creation_changes, cost_center_changes, cost_center_creation_changes, creation_changes,
-    document_check_changes, dunning_plan_changes, dunning_plan_creation_changes, entry_changes,
-    entry_creation_changes, fiscal_document_changes, fiscal_document_creation_changes,
-    fiscal_event_changes, fiscal_event_creation_changes, fiscal_settings_changes,
-    fiscal_settings_creation_changes, inventory_count_changes, inventory_count_creation_changes,
-    opening_changes, opening_creation_changes, package_schedule_changes,
-    package_schedule_creation_changes, party_changes, payment_method_changes,
-    payment_method_creation_changes, payment_term_changes, payment_term_creation_changes,
-    period_lock_changes, period_lock_creation_changes, price_list_changes,
-    price_list_creation_changes, product_changes, product_creation_changes, purchase_order_changes,
-    purchase_order_creation_changes, purchase_receipt_creation_changes, quote_changes,
-    quote_creation_changes, received_invoice_changes, received_invoice_creation_changes,
-    recurrence_changes, recurrence_creation_changes, sale_changes, sale_creation_changes,
-    sale_return_creation_changes, settlement_changes, settlement_creation_changes,
-    statement_line_changes, statement_line_creation_changes, stock_movement_creation_changes,
-    stock_settings_changes, stock_settings_creation_changes, transfer_changes,
-    transfer_creation_changes,
+    api_key_changes, api_key_creation_changes, attachment_changes, attachment_creation_changes,
+    bank_account_changes, bank_account_creation_changes, category_changes,
+    category_creation_changes, charge_changes, charge_creation_changes,
+    collection_settings_changes, collection_settings_creation_changes, commission_rule_changes,
+    commission_rule_creation_changes, contract_changes, contract_creation_changes,
+    cost_center_changes, cost_center_creation_changes, creation_changes, document_check_changes,
+    dunning_plan_changes, dunning_plan_creation_changes, entry_changes, entry_creation_changes,
+    fiscal_document_changes, fiscal_document_creation_changes, fiscal_event_changes,
+    fiscal_event_creation_changes, fiscal_settings_changes, fiscal_settings_creation_changes,
+    inventory_count_changes, inventory_count_creation_changes, opening_changes,
+    opening_creation_changes, package_schedule_changes, package_schedule_creation_changes,
+    party_changes, payment_method_changes, payment_method_creation_changes, payment_term_changes,
+    payment_term_creation_changes, period_lock_changes, period_lock_creation_changes,
+    price_list_changes, price_list_creation_changes, product_changes, product_creation_changes,
+    purchase_order_changes, purchase_order_creation_changes, purchase_receipt_creation_changes,
+    quote_changes, quote_creation_changes, received_invoice_changes,
+    received_invoice_creation_changes, recurrence_changes, recurrence_creation_changes,
+    sale_changes, sale_creation_changes, sale_return_creation_changes, settlement_changes,
+    settlement_creation_changes, statement_line_changes, statement_line_creation_changes,
+    stock_movement_creation_changes, stock_settings_changes, stock_settings_creation_changes,
+    transfer_changes, transfer_creation_changes,
 };
 pub use bank_account::{BankAccount, BankAccountDraft, BankAccountKind};
 pub use calendar_date::CalendarDate;
@@ -125,9 +130,13 @@ pub use fiscal_settings::{
     TaxRuleDraft,
 };
 pub use fiscal_time::{fiscal_day, fiscal_timestamp, state_code, state_utc_offset_minutes};
+pub use gateway_settings::{
+    GatewayKind, GatewaySecret, GatewaySettings, GatewaySettingsDraft, MAX_SEALED_BYTES,
+    SealedSecret, SecretText,
+};
 pub use ids::{
-    AttachmentId, BankAccountId, BlobId, CategoryId, ChargeId, CommissionRuleId, CompanyId,
-    ContractId, CostCenterId, DocumentMailId, EntryId, FiscalDocumentId, FiscalEventId,
+    ApiKeyId, AttachmentId, BankAccountId, BlobId, CategoryId, ChargeId, CommissionRuleId,
+    CompanyId, ContractId, CostCenterId, DocumentMailId, EntryId, FiscalDocumentId, FiscalEventId,
     InventoryCountId, InvitationId, JobId, NotificationId, PartyId, PaymentEventId,
     PaymentMethodId, PaymentTermId, PriceListId, ProductId, PurchaseOrderId, PurchaseReceiptId,
     QuoteId, ReceivedInvoiceId, RecurrenceId, SaleId, SaleReturnId, SettlementId, StatementLineId,
@@ -171,7 +180,10 @@ pub use recurrence::{Frequency, Recurrence, RecurrenceDraft};
 pub use role::{Access, Area, Role};
 /// The exact decimal money is made of, so a layer that adds amounts need not depend on its crate.
 pub use rust_decimal::Decimal;
-pub use sale::{ReturnItemDraft, Sale, SaleDraft, SaleReturn, SaleReturnDraft, SaleStatus};
+pub use sale::{
+    MAX_EXTERNAL_REFERENCE_CHARS, ReturnItemDraft, Sale, SaleDraft, SaleReturn, SaleReturnDraft,
+    SaleStatus, clean_external_reference,
+};
 pub use sales_report::{AbcClass, SalesGroup, SalesReportRow, net_of_lines, sales_report};
 pub use settlement::{Settlement, SettlementDraft, settled_of};
 pub use statement_line::{LineMatch, LineStatus, StatementLine, StatementLineDraft};

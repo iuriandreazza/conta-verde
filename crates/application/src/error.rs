@@ -68,6 +68,8 @@ pub enum RepositoryError {
     FiscalDocumentAlreadyLive,
     /// The fiscal document is no longer in the status the write was made from.
     FiscalDocumentChanged,
+    /// The gateway settings were written by someone else since they were read.
+    GatewaySettingsChanged,
     /// The fiscal document already has a file of this kind.
     DuplicateFiscalFile,
     /// Another document of the issuer already holds this DPS series and number.
@@ -96,6 +98,8 @@ pub enum ApplicationError {
     Repository(RepositoryError),
     Auth(AuthError),
     Secret(SecretError),
+    /// A secret stored for a company cannot be opened: the server's key changed or was lost. It names the field, never the value.
+    SecretUnreadable(&'static str),
     /// No party with this id in the company (another company's party looks the same).
     PartyNotFound,
     /// No product or service with this id in the company (another company's looks the same).
@@ -164,6 +168,8 @@ pub enum ApplicationError {
     /// No recurrence with this id in the company (another company's looks the same).
     RecurrenceNotFound,
     /// No sale with this id in the company (another company's looks the same).
+    /// An external reference that a sale already has, asked for with another request ([ADR 0087]).
+    IdempotencyMismatch,
     SaleNotFound,
     /// No contract with this id in the company (another company's looks the same).
     ContractNotFound,
@@ -233,6 +239,8 @@ pub enum ApplicationError {
     PaymentMethodNotFound,
     /// No cost center with this id in the company (another company's looks the same).
     CostCenterNotFound,
+    /// No API key with this id in the company (another company's looks the same).
+    ApiKeyNotFound,
     /// No invitation behind this token or id (another company's id looks the same).
     InvitationNotFound,
     /// The user is not a member of the company (or no longer is).
@@ -353,6 +361,9 @@ impl fmt::Display for RepositoryError {
                 f.write_str("the sale already has a fiscal document in progress or authorized")
             }
             Self::FiscalDocumentChanged => f.write_str("the fiscal document was changed meanwhile"),
+            Self::GatewaySettingsChanged => f.write_str(
+                "the gateway settings were changed by someone else meanwhile: read them again",
+            ),
             Self::DuplicateFiscalFile => {
                 f.write_str("the fiscal document already has a file of this kind")
             }
@@ -386,9 +397,14 @@ impl fmt::Display for ApplicationError {
             Self::Repository(error) => error.fmt(f),
             Self::Auth(error) => error.fmt(f),
             Self::Secret(error) => error.fmt(f),
+            Self::SecretUnreadable(field) => write!(
+                f,
+                "the stored {field} cannot be read (the server's key changed or was lost): type it again"
+            ),
             Self::PartyNotFound => f.write_str("party not found"),
             Self::ProductNotFound => f.write_str("product not found"),
             Self::CostCenterNotFound => f.write_str("cost center not found"),
+            Self::ApiKeyNotFound => f.write_str("API key not found"),
             Self::BankAccountNotFound => f.write_str("bank account not found"),
             Self::PaymentMethodNotFound => f.write_str("payment method not found"),
             Self::PaymentTermNotFound => f.write_str("payment term not found"),
@@ -421,6 +437,9 @@ impl fmt::Display for ApplicationError {
             Self::RecurrenceNotFound => f.write_str("recurrence not found"),
             Self::QuoteNotFound => f.write_str("quote not found"),
             Self::SaleNotFound => f.write_str("sale not found"),
+            Self::IdempotencyMismatch => f.write_str(
+                "that external reference already made a sale from another request: use a new reference for a different order",
+            ),
             Self::ContractNotFound => f.write_str("contract not found"),
             Self::CommissionRuleNotFound => f.write_str("commission rule not found"),
             Self::ContractChanged => f.write_str("the contract was changed meanwhile: read it again"),

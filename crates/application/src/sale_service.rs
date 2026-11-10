@@ -2,15 +2,16 @@ use conta_verde_domain::{
     Actor, AuditAction, AuditRecord, CategoryId, CompanyId, ContractCycle, CostCenterId, Decimal,
     DomainError, EntryOrigin, FinancialEntry, FinancialEntryDraft, PartyId, PaymentTermId, Quote,
     QuoteId, QuoteStatus, Sale, SaleDraft, SaleId, SaleReturn, SaleReturnDraft, SaleReturnId,
-    SaleStatus, quote_changes, sale_changes, sale_creation_changes, sale_return_creation_changes,
+    SaleStatus, clean_external_reference, quote_changes, sale_changes, sale_creation_changes,
+    sale_return_creation_changes,
 };
 
 use crate::audit::audit_entry;
 use crate::list_query::{clamp_limit, split_page};
 use crate::{
     ApplicationError, DocumentReferences, DocumentStock, EntryReferences, FinancialEntryRepository,
-    FinancialEntryService, LinkChange, NumberCursor, QuoteRepository, RepositoryError, SaleQuery,
-    SaleRepository,
+    FinancialEntryService, LinkChange, NumberCursor, QuoteRepository, RepositoryError,
+    SaleClaimRepository, SaleQuery, SaleRepository,
 };
 
 #[derive(Debug, Clone)]
@@ -97,6 +98,50 @@ where
         let sale = Sale::new(SaleId::generate(), company_id, draft)?;
         self.check_references(&sale, None).await?;
         self.save(actor, sale).await
+    }
+
+    /// Makes the sale of an order a program names with `reference`, once: asking again with the same `request` gives the
+    /// same sale (`false`: it was not made now), and with another request is refused. The reference is claimed **before** the
+    /// sale, with the sale's id, so a crash between the two is finished by the retry and two requests at once end in one sale
+    /// ([ADR 0087]). `request` is what the caller says the request was, in a form that is equal for equal requests.
+    pub async fn register_external(
+        &self,
+        claims: &impl SaleClaimRepository,
+        company_id: CompanyId,
+        actor: &Actor,
+        reference: &str,
+        request: &str,
+        draft: SaleDraft,
+    ) -> Result<(Sale, bool), ApplicationError> {
+        let reference = clean_external_reference(reference)?;
+        let claim = match claims.find(company_id, &reference).await? {
+            Some(held) => held,
+            None => {
+                // What a rule refuses must not take the reference for good: the order is checked before it is claimed, so a
+                // client that fixes its request may send it again under the same reference.
+                let probe = Sale::new(SaleId::generate(), company_id, draft.clone())?;
+                self.check_references(&probe, None).await?;
+                claims
+                    .claim(company_id, &reference, probe.id(), request)
+                    .await?
+            }
+        };
+        if claim.request != request {
+            return Err(ApplicationError::IdempotencyMismatch);
+        }
+        if let Some(existing) = self.sales.find(company_id, claim.sale_id).await? {
+            return Ok((existing, false));
+        }
+        let sale = Sale::new(claim.sale_id, company_id, draft)?;
+        self.check_references(&sale, None).await?;
+        match self.save(actor, sale).await {
+            Ok(sale) => Ok((sale, true)),
+            // The same claim, followed by another request at the same moment, wrote it first.
+            Err(error) => match self.sales.find(company_id, claim.sale_id).await? {
+                Some(existing) => Ok((existing, false)),
+                None => Err(error),
+            },
+        }
     }
 
     async fn save(&self, actor: &Actor, sale: Sale) -> Result<Sale, ApplicationError> {

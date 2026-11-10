@@ -128,7 +128,11 @@ const SETTINGS: NavArea = {
   key: "settings",
   label: "Configurações",
   icon: UserPlusIcon,
-  items: [{ path: "/members", label: "Membros", icon: UserPlusIcon }],
+  items: [
+    { path: "/members", label: "Membros", icon: UserPlusIcon },
+    { path: "/gateway", label: "Gateway fiscal", icon: LayersIcon },
+    { path: "/api-keys", label: "Chaves de API", icon: SendIcon },
+  ],
 };
 
 function itemsOf(area: NavArea): NavItem[] {

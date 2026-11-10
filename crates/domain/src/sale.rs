@@ -10,6 +10,21 @@ use crate::{
 };
 
 const MAX_NOTES_CHARS: usize = 2000;
+/// The longest an external reference may be.
+pub const MAX_EXTERNAL_REFERENCE_CHARS: usize = 100;
+
+/// The reference a program gives an order so that asking for it twice makes one sale ([ADR 0087]): trimmed, 1 to 100
+/// characters, no control characters.
+pub fn clean_external_reference(raw: &str) -> Result<String, DomainError> {
+    let reference = raw.trim();
+    if reference.is_empty()
+        || reference.chars().count() > MAX_EXTERNAL_REFERENCE_CHARS
+        || reference.chars().any(char::is_control)
+    {
+        return Err(DomainError::InvalidExternalReference);
+    }
+    Ok(reference.to_owned())
+}
 
 /// Where a sale is in its life ([ADR 0039]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -9640,7 +9640,7 @@ pub async fn runs_the_quote_lifecycle<Q, R, E, S>(
     );
 }
 
-fn sale_draft(entry_seed: &EntrySeed, seed: &SalesSeed) -> SaleDraft {
+pub(crate) fn sale_draft(entry_seed: &EntrySeed, seed: &SalesSeed) -> SaleDraft {
     SaleDraft {
         customer_id: seed.customer,
         seller_id: Some(seed.seller),
@@ -18153,15 +18153,15 @@ pub async fn fiscal_documents_are_kept<R: conta_verde_application::FiscalDocumen
     );
 
     // The poll's view: what waits for the authority, from a moment on, across companies.
-    let waiting = repository.pending(0, 1_000_000).await.unwrap();
+    let waiting = repository.pending(None, 0, 1_000_000).await.unwrap();
     assert!(waiting.iter().any(|stored| stored.id() == draft.id()));
     assert!(waiting.iter().all(|stored| stored.status().is_pending()));
     let after = repository
-        .pending(draft.issued_at_unix() + 1, 1_000_000)
+        .pending(None, draft.issued_at_unix() + 1, 1_000_000)
         .await
         .unwrap();
     assert!(!after.iter().any(|stored| stored.id() == draft.id()));
-    assert!(repository.pending(0, 0).await.unwrap().is_empty());
+    assert!(repository.pending(None, 0, 0).await.unwrap().is_empty());
 
     // One live document per sale and kind; the refused write leaves nothing in the trail.
     let second = a_fiscal_document(company, sale, "100.50");
@@ -18660,6 +18660,219 @@ fn issue_request(sale: SaleId) -> conta_verde_application::IssueNfe {
 
 /// 2026-11-09 17:30 UTC, which is the same day in São Paulo.
 const FISCAL_NOW: i64 = 1_794_245_400;
+
+/// The gateway of each company, as a test arranges it: a fake of its own, so what one company's gateway answers can be told from
+/// another's. A company with none is refused, as a server with no gateway refuses.
+#[derive(Clone, Default)]
+pub struct GatewaysByCompany(
+    std::sync::Arc<
+        std::sync::Mutex<std::collections::HashMap<CompanyId, crate::FakeFiscalGateway>>,
+    >,
+);
+
+impl GatewaysByCompany {
+    pub fn give(&self, company: CompanyId, gateway: crate::FakeFiscalGateway) {
+        self.0.lock().unwrap().insert(company, gateway);
+    }
+
+    pub fn remove(&self, company: CompanyId) {
+        self.0.lock().unwrap().remove(&company);
+    }
+}
+
+impl conta_verde_application::FiscalGatewayResolver for GatewaysByCompany {
+    type Gateway = crate::FakeFiscalGateway;
+
+    async fn resolve(
+        &self,
+        issuer: &conta_verde_domain::FiscalSettings,
+    ) -> Result<crate::FakeFiscalGateway, conta_verde_application::ApplicationError> {
+        self.0
+            .lock()
+            .unwrap()
+            .get(&issuer.company_id())
+            .cloned()
+            .ok_or_else(|| conta_verde_application::GatewayError::Disabled.into())
+    }
+
+    fn server_key(&self) -> Option<String> {
+        None
+    }
+
+    async fn key_for(&self, _company_id: CompanyId) -> Option<String> {
+        None
+    }
+}
+
+/// What one company of the pass needs to issue: its books' seeds.
+pub struct IssuingCompany<'a> {
+    pub id: CompanyId,
+    pub entry_seed: &'a EntrySeed,
+    pub seed: &'a SalesSeed,
+    pub fiscal: &'a FiscalSeed,
+}
+
+/// The pass that finishes what is waiting reaches **every company**, and each document is asked through the gateway of its own
+/// company (ADR 0085): one whose gateway cannot be reached stays waiting while the other's is finished, the answer of one is
+/// never taken for the other's, and nothing one company's gateway was asked is asked by the other's.
+pub async fn a_pass_over_many_companies_asks_each_through_its_own_gateway<D, S, P, Y, F, B, R>(
+    service: &conta_verde_application::FiscalDocumentService<
+        D,
+        S,
+        P,
+        Y,
+        F,
+        GatewaysByCompany,
+        B,
+        R,
+    >,
+    gateways: &GatewaysByCompany,
+    settings: &F,
+    sales: &S,
+    first: IssuingCompany<'_>,
+    second: IssuingCompany<'_>,
+) where
+    D: conta_verde_application::FiscalDocumentRepository,
+    S: conta_verde_application::SaleRepository,
+    P: PartyRepository,
+    Y: conta_verde_application::ProductRepository,
+    F: conta_verde_application::FiscalSettingsRepository,
+    B: BlobStore,
+    R: conta_verde_application::EntryReferences,
+{
+    use conta_verde_domain::{FiscalDocumentStatus, TaxRuleDraft};
+
+    let user = actor();
+    let (first_gateway, second_gateway) = (
+        crate::FakeFiscalGateway::authorizing_after(1),
+        crate::FakeFiscalGateway::authorizing_after(1),
+    );
+    gateways.give(first.id, first_gateway.clone());
+    gateways.give(second.id, second_gateway.clone());
+    let mut documents = Vec::new();
+    for company in [&first, &second] {
+        let mut draft = fiscal_settings_draft(
+            "11222333000181",
+            conta_verde_domain::FiscalEnvironment::Homologation,
+        );
+        draft.natures[0].rules = vec![TaxRuleDraft {
+            regime: conta_verde_domain::TaxRegime::SimplesNacional,
+            ncm_prefix: Some("1905".into()),
+            icms_code: "102".into(),
+            pis_code: "49".into(),
+            cofins_code: "49".into(),
+            icms_rate: None,
+            pis_rate: None,
+            cofins_rate: None,
+        }];
+        settings
+            .save(
+                &conta_verde_domain::FiscalSettings::new(company.id, draft).unwrap(),
+                &AuditEntry {
+                    company_id: company.id,
+                    actor: actor(),
+                    entity: AuditEntity::FiscalSettings,
+                    entity_id: company.id.as_uuid(),
+                    action: AuditAction::Created,
+                    changes: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        let sale = save_a_completed_sale(
+            sales,
+            company.id,
+            company.entry_seed,
+            company.seed,
+            company.fiscal,
+        )
+        .await;
+        let document = service
+            .issue(company.id, &user, issue_request(sale), FISCAL_NOW)
+            .await
+            .unwrap();
+        assert_eq!(document.status(), FiscalDocumentStatus::Processing);
+        documents.push(document.id());
+    }
+    // The gateway of a company is not changed while its document waits for the authority.
+    for company in [&first, &second] {
+        assert!(matches!(
+            service.ensure_gateway_may_change(company.id).await,
+            Err(conta_verde_application::ApplicationError::FiscalRule(text)) if text.contains("waiting")
+        ));
+    }
+    // Each document went out through the gateway of its own company, and only through it.
+    assert_eq!(first_gateway.submitted().len(), 1);
+    assert_eq!(second_gateway.submitted().len(), 1);
+    assert_eq!(
+        first_gateway.submitted()[0].reference,
+        documents[0].as_uuid().to_string()
+    );
+    assert_eq!(
+        second_gateway.submitted()[0].reference,
+        documents[1].as_uuid().to_string()
+    );
+
+    // A pass for one company asks that company's gateway only: the second's cannot be reached, and asking about it leaves the
+    // first's document alone.
+    second_gateway.set_unavailable(true);
+    service
+        .poll_company(second.id, 0, 1_000, FISCAL_NOW + 1)
+        .await
+        .unwrap();
+    assert_eq!(
+        service.get(first.id, documents[0]).await.unwrap().status(),
+        FiscalDocumentStatus::Processing,
+        "a pass for the second company does not ask about the first's document"
+    );
+    service
+        .poll_company(first.id, 0, 1_000, FISCAL_NOW + 1)
+        .await
+        .unwrap();
+    assert_eq!(
+        service.get(first.id, documents[0]).await.unwrap().status(),
+        FiscalDocumentStatus::Authorized
+    );
+    assert_eq!(
+        service.get(second.id, documents[1]).await.unwrap().status(),
+        FiscalDocumentStatus::Processing,
+        "the answer of the first company's gateway is not the second's"
+    );
+
+    // And when the second answers, the pass finishes it.
+    second_gateway.set_unavailable(false);
+    service
+        .poll_pending(0, 1_000, FISCAL_NOW + 2)
+        .await
+        .unwrap();
+    assert_eq!(
+        service.get(second.id, documents[1]).await.unwrap().status(),
+        FiscalDocumentStatus::Authorized
+    );
+    assert_eq!(first_gateway.submitted().len(), 1);
+    assert_eq!(second_gateway.submitted().len(), 1);
+
+    // Nothing waits any more: the gateway may be changed.
+    for company in [&first, &second] {
+        service.ensure_gateway_may_change(company.id).await.unwrap();
+    }
+
+    // A company whose gateway is gone is refused, not served by another's.
+    gateways.remove(second.id);
+    assert!(matches!(
+        service
+            .cancel(
+                second.id,
+                &user,
+                documents[1],
+                "Pedido feito em duplicidade"
+            )
+            .await,
+        Err(conta_verde_application::ApplicationError::FiscalGateway(
+            conta_verde_application::GatewayError::Disabled
+        ))
+    ));
+}
 
 fn issue_nfse_request(sale: SaleId) -> conta_verde_application::IssueNfse {
     conta_verde_application::IssueNfse {
@@ -19950,6 +20163,340 @@ pub async fn the_regular_regimes_issue_nothing_until_their_calculation_is_signed
             .items
             .is_empty(),
         "no document was written"
+    );
+}
+
+/// The key the gateway-settings tests seal with: 32 bytes written as hexadecimal.
+pub const SECRETS_KEY: &str = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+
+/// A company's gateway settings keep their secrets sealed and write-only: `Set` seals for that company and field, `Keep` rewrites
+/// nothing, `Clear` removes, a server without a key refuses a secret and still saves what is not one, no trail, `Debug` or value read
+/// back holds a secret, and another company sees nothing.
+pub async fn gateway_settings_are_sealed_audited_and_never_shown<R>(
+    service: &conta_verde_application::GatewaySettingsService<R, crate::RingSecretCipher>,
+    without_key: &conta_verde_application::GatewaySettingsService<R, crate::NoSecretCipher>,
+    company: CompanyId,
+    other_company: CompanyId,
+) where
+    R: conta_verde_application::GatewaySettingsRepository,
+{
+    use conta_verde_application::{ApplicationError, GatewaySettingsInput, SecretChange};
+    use conta_verde_domain::{GatewayKind, GatewaySecret, SecretText};
+
+    let secret = |text: &str| SecretChange::Set(SecretText::new(text).unwrap());
+    let input = |kind| GatewaySettingsInput {
+        kind,
+        focus_token_homologation: SecretChange::Keep,
+        focus_token_production: SecretChange::Keep,
+        nfeio_api_key: SecretChange::Keep,
+        webhook_secret: SecretChange::Keep,
+        nfeio_company_homologation: None,
+        nfeio_company_production: None,
+        nfeio_search_confirmed: false,
+    };
+    let user = actor();
+    // Whether a text holds any secret this test ever typed.
+    let leaks = |text: &str| {
+        [
+            "tok_homol_1234567890",
+            "tok_prod_1234567890",
+            "tok_prod_other_567890",
+            "hook_1234567890abc",
+        ]
+        .iter()
+        .any(|value| text.contains(value))
+    };
+    let secrets_in = |history: &[conta_verde_domain::AuditRecord]| -> String {
+        history
+            .iter()
+            .flat_map(|record| record.entry.changes.iter())
+            .flat_map(|change| [change.from.clone(), change.to.clone()])
+            .flatten()
+            .collect::<Vec<_>>()
+            .join("|")
+    };
+
+    assert!(service.get(company).await.unwrap().is_none());
+    assert!(service.encryption_available());
+    let first = service
+        .replace(
+            company,
+            &user,
+            GatewaySettingsInput {
+                focus_token_homologation: secret("tok_homol_1234567890"),
+                focus_token_production: secret("tok_prod_1234567890"),
+                webhook_secret: secret("hook_1234567890abc"),
+                ..input(GatewayKind::Focus)
+            },
+        )
+        .await
+        .unwrap();
+    for stored in [
+        GatewaySecret::FocusTokenHomologation,
+        GatewaySecret::FocusTokenProduction,
+        GatewaySecret::WebhookSecret,
+    ] {
+        assert!(first.secret(stored).is_some());
+    }
+    assert!(first.secret(GatewaySecret::NfeIoApiKey).is_none());
+    // Opened, it is what was typed; sealed, it is not, and nothing prints it.
+    assert_eq!(
+        service
+            .open(company, GatewaySecret::FocusTokenProduction)
+            .await
+            .unwrap()
+            .unwrap()
+            .expose(),
+        "tok_prod_1234567890"
+    );
+    assert!(
+        service
+            .open(company, GatewaySecret::NfeIoApiKey)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let sealed = first
+        .secret(GatewaySecret::FocusTokenProduction)
+        .unwrap()
+        .as_bytes();
+    assert!(!String::from_utf8_lossy(sealed).contains("tok_prod"));
+    let shown = format!("{first:?} {:?}", service.get(company).await.unwrap());
+    assert!(!leaks(&shown), "{shown}");
+
+    // The trail says a secret was set, never what it was.
+    let history = service.history(company).await.unwrap();
+    assert_eq!(history.len(), 1);
+    let said = secrets_in(&history);
+    assert!(said.contains("set") && said.contains("focus"));
+    assert!(!leaks(&said), "{said}");
+    assert!(
+        history[0]
+            .entry
+            .changes
+            .iter()
+            .any(|change| change.field == "webhook_secret" && change.to.as_deref() == Some("set"))
+    );
+
+    // Another company sees nothing of it, and a secret sealed for one does not open for the other.
+    assert!(service.get(other_company).await.unwrap().is_none());
+    assert!(
+        service
+            .open(other_company, GatewaySecret::FocusTokenProduction)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(service.history(other_company).await.unwrap().is_empty());
+
+    // The same settings again, every secret kept, write nothing: not a record in the trail, not a byte of what is stored.
+    let again = service
+        .replace(company, &user, input(GatewayKind::Focus))
+        .await
+        .unwrap();
+    assert_eq!(again, first);
+    assert_eq!(service.history(company).await.unwrap().len(), 1);
+    assert_eq!(service.get(company).await.unwrap().unwrap(), first);
+
+    // A secret replaced is told as changed, one cleared as gone, the others stay; what is not secret is told in the clear.
+    let changed = service
+        .replace(
+            company,
+            &user,
+            GatewaySettingsInput {
+                focus_token_production: secret("tok_prod_other_567890"),
+                webhook_secret: SecretChange::Clear,
+                nfeio_company_homologation: Some("company-123".into()),
+                ..input(GatewayKind::NfeIo)
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(changed.kind(), GatewayKind::NfeIo);
+    assert_eq!(changed.nfeio_company_homologation(), Some("company-123"));
+    assert!(changed.secret(GatewaySecret::WebhookSecret).is_none());
+    assert_eq!(
+        changed.secret(GatewaySecret::FocusTokenHomologation),
+        first.secret(GatewaySecret::FocusTokenHomologation)
+    );
+    assert_eq!(
+        service
+            .open(company, GatewaySecret::FocusTokenProduction)
+            .await
+            .unwrap()
+            .unwrap()
+            .expose(),
+        "tok_prod_other_567890"
+    );
+    let history = service.history(company).await.unwrap();
+    assert_eq!(history.len(), 2);
+    let latest = &history[1].entry.changes;
+    let field = |name: &str| latest.iter().find(|change| change.field == name).unwrap();
+    assert_eq!(
+        field("focus_token_production").to.as_deref(),
+        Some("changed")
+    );
+    assert_eq!(field("webhook_secret").from.as_deref(), Some("set"));
+    assert_eq!(field("webhook_secret").to, None);
+    assert_eq!(field("kind").to.as_deref(), Some("nfeio"));
+    assert!(
+        latest
+            .iter()
+            .all(|change| change.field != "focus_token_homologation"),
+        "kept is not a change"
+    );
+    assert!(!leaks(&secrets_in(&history)));
+
+    // What is not a token is refused, and a bad id at the gateway too: nothing is written.
+    assert!(matches!(
+        service
+            .replace(
+                company,
+                &user,
+                GatewaySettingsInput {
+                    nfeio_company_production: Some("has space".into()),
+                    ..input(GatewayKind::NfeIo)
+                }
+            )
+            .await,
+        Err(ApplicationError::Domain(_))
+    ));
+    assert_eq!(service.history(company).await.unwrap().len(), 2);
+    assert!(SecretText::new("short").is_err());
+
+    // A server without a key saves what is not a secret and refuses a secret, naming the key and never the value.
+    let created = without_key
+        .replace(other_company, &user, input(GatewayKind::Focus))
+        .await
+        .unwrap();
+    assert_eq!(created.kind(), GatewayKind::Focus);
+    assert!(!without_key.encryption_available());
+    let refused = without_key
+        .replace(
+            other_company,
+            &user,
+            GatewaySettingsInput {
+                focus_token_production: secret("tok_prod_1234567890"),
+                ..input(GatewayKind::Focus)
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&refused, ApplicationError::FiscalRule(text) if text.contains("FISCAL_SECRETS_KEY") && !leaks(text))
+    );
+    assert_eq!(without_key.history(other_company).await.unwrap().len(), 1);
+    // What was sealed cannot be opened without the key: the answer is a named error, not an empty value, and the secrets that cannot
+    // be read are told apart from the ones that can (the page says so instead of showing them as configured).
+    assert!(matches!(
+        without_key
+            .open(company, GatewaySecret::FocusTokenProduction)
+            .await,
+        Err(ApplicationError::SecretUnreadable("focus_token_production"))
+    ));
+    assert_eq!(
+        without_key.unreadable(company).await.unwrap(),
+        vec![
+            GatewaySecret::FocusTokenHomologation,
+            GatewaySecret::FocusTokenProduction
+        ]
+    );
+    assert!(service.unreadable(company).await.unwrap().is_empty());
+
+    // Reset removes the company's own settings (the server's come back), tells the trail what was cleared and never a value, and
+    // resetting again writes nothing. Setting it up again starts from the first version.
+    service.reset(company, &user).await.unwrap();
+    assert!(service.get(company).await.unwrap().is_none());
+    let history = service.history(company).await.unwrap();
+    assert_eq!(history.len(), 3);
+    let gone = &history[2].entry.changes;
+    assert!(gone.iter().any(|change| change.field == "kind"
+        && change.from.as_deref() == Some("nfeio")
+        && change.to.is_none()));
+    assert!(
+        gone.iter()
+            .any(|change| change.field == "focus_token_production"
+                && change.from.as_deref() == Some("set"))
+    );
+    assert!(!leaks(&secrets_in(&history)));
+    service.reset(company, &user).await.unwrap();
+    assert_eq!(service.history(company).await.unwrap().len(), 3);
+    let again = service
+        .replace(company, &user, input(GatewayKind::Focus))
+        .await
+        .unwrap();
+    assert_eq!(again.version(), 1);
+}
+
+/// A write is made from the version it read: one from an old read is refused and changes nothing, and so is a removal from an old
+/// read, so two people editing the settings never undo each other without knowing.
+pub async fn gateway_settings_refuse_a_write_from_an_old_read<R>(repository: &R, company: CompanyId)
+where
+    R: conta_verde_application::GatewaySettingsRepository,
+{
+    use conta_verde_domain::{GatewayKind, GatewaySettings, GatewaySettingsDraft, SealedSecret};
+
+    let draft = |kind, token: Option<u8>| GatewaySettingsDraft {
+        kind,
+        focus_token_homologation: token.map(|byte| SealedSecret::new(vec![byte; 40]).unwrap()),
+        focus_token_production: None,
+        nfeio_api_key: None,
+        webhook_secret: None,
+        nfeio_company_homologation: None,
+        nfeio_company_production: None,
+        nfeio_search_confirmed: false,
+    };
+    let write = || AuditEntry {
+        company_id: company,
+        actor: actor(),
+        entity: AuditEntity::GatewaySettings,
+        entity_id: company.as_uuid(),
+        action: AuditAction::Updated,
+        changes: Vec::new(),
+    };
+    let first = GatewaySettings::new(company, draft(GatewayKind::Focus, None), 1).unwrap();
+    repository.save(&first, &write()).await.unwrap();
+    // A first write again (someone else made it meanwhile) and one that skips a version are refused.
+    assert_eq!(
+        repository.save(&first, &write()).await,
+        Err(RepositoryError::GatewaySettingsChanged)
+    );
+    let skipped = GatewaySettings::new(company, draft(GatewayKind::Focus, None), 3).unwrap();
+    assert_eq!(
+        repository.save(&skipped, &write()).await,
+        Err(RepositoryError::GatewaySettingsChanged)
+    );
+
+    // Two people read version 1: B sets a token, A (from the same old read) changes the kind keeping what it read, which has no token.
+    let by_b = GatewaySettings::new(company, draft(GatewayKind::Focus, Some(7)), 2).unwrap();
+    repository.save(&by_b, &write()).await.unwrap();
+    let by_a = GatewaySettings::new(company, draft(GatewayKind::NfeIo, None), 2).unwrap();
+    assert_eq!(
+        repository.save(&by_a, &write()).await,
+        Err(RepositoryError::GatewaySettingsChanged)
+    );
+    let stored = repository.find(company).await.unwrap().unwrap();
+    assert_eq!(
+        stored, by_b,
+        "B's write stands: the refused one changed nothing"
+    );
+    assert_eq!(
+        repository.history(company).await.unwrap().len(),
+        2,
+        "and left no entry"
+    );
+
+    // A removal from an old read is refused too; from the version it has, it removes.
+    assert_eq!(
+        repository.remove(company, 1, &write()).await,
+        Err(RepositoryError::GatewaySettingsChanged)
+    );
+    assert!(repository.find(company).await.unwrap().is_some());
+    repository.remove(company, 2, &write()).await.unwrap();
+    assert!(repository.find(company).await.unwrap().is_none());
+    assert_eq!(
+        repository.remove(company, 2, &write()).await,
+        Err(RepositoryError::NotFound)
     );
 }
 
