@@ -4,6 +4,7 @@ import { api, errorMessage, type FiscalDocument, type FiscalDocumentFilters, typ
 import { Button } from "../components/Button";
 import { FiscalDocumentSheet } from "../components/FiscalDocumentSheet";
 import { IssueForm } from "../components/FiscalIssueForm";
+import { ServiceIssueForm } from "../components/FiscalServiceIssueForm";
 import { HelpTitle } from "../components/HelpTitle";
 import { ListRow } from "../components/ListRow";
 import { Notice } from "../components/Notice";
@@ -12,17 +13,17 @@ import { Sheet } from "../components/Sheet";
 import { Spinner } from "../components/Spinner";
 import { formatMoney } from "../lib/decimal";
 import { formatDate } from "../lib/entryInstallments";
-import { EVENT_STATUS_LABELS, STATUS_LABELS, numberLabel } from "../lib/fiscalDocuments";
+import { EVENT_STATUS_LABELS, KIND_LABELS, STATUS_LABELS, documentLabel } from "../lib/fiscalDocuments";
 import { useCanWrite } from "../lib/useCanWrite";
 import { usePagedList } from "../lib/usePagedList";
 
-/** NF-e issued from sales, what the authority said about each, and the numbers declared unused (ADR 0076). */
+/** NF-e and NFS-e issued from sales, what the authority said about each, and the numbers declared unused (ADR 0076, ADR 0081). */
 export function FiscalDocumentsPage() {
   const { companyId = "" } = useParams();
   const canWrite = useCanWrite("fiscal");
   const [filters, setFilters] = useState<FiscalDocumentFilters>({ status: "" });
   const [natures, setNatures] = useState<OperationNature[]>([]);
-  const [issuing, setIssuing] = useState(false);
+  const [issuing, setIssuing] = useState<"nfe" | "nfse" | null>(null);
   const [shown, setShown] = useState<string | null>(null);
   const [highlighted, setHighlighted] = useState<string | null>(null);
 
@@ -47,12 +48,17 @@ export function FiscalDocumentsPage() {
     <>
       <PageHeader
         title="Documentos fiscais"
-        description="As NF-e emitidas a partir das vendas concluídas, o que a SEFAZ respondeu sobre cada uma, os arquivos para baixar, o cancelamento, as cartas de correção e a inutilização de numeração."
+        description="As NF-e (produtos) e as NFS-e (serviços) emitidas a partir das vendas concluídas, o que a autoridade respondeu sobre cada uma, os arquivos para baixar, o cancelamento, as cartas de correção da NF-e e a inutilização de numeração. Uma venda com produtos e serviços tem um documento de cada tipo."
         actions={
           canWrite && (
-            <Button type="button" onClick={() => setIssuing(true)}>
-              Emitir NF-e
-            </Button>
+            <>
+              <Button type="button" onClick={() => setIssuing("nfe")}>
+                Emitir NF-e
+              </Button>
+              <Button type="button" onClick={() => setIssuing("nfse")}>
+                Emitir NFS-e
+              </Button>
+            </>
           )
         }
       />
@@ -80,6 +86,7 @@ export function FiscalDocumentsPage() {
         <table className="list-table">
           <thead>
             <tr>
+              <th>Tipo</th>
               <th>Número</th>
               <th>Destinatário</th>
               <th>Emitida em</th>
@@ -90,9 +97,10 @@ export function FiscalDocumentsPage() {
           <tbody>
             {list.items.map((item, index) => (
               <ListRow key={item.id} index={index} highlighted={item.id === highlighted} tone={item.status === "rejected" || item.status === "denied" ? "critical" : undefined}>
+                <td>{KIND_LABELS[item.kind]}</td>
                 <td>
                   <button type="button" className="link-button" onClick={() => setShown(item.id)}>
-                    {numberLabel(item.series, item.number)}
+                    {documentLabel(item)}
                   </button>
                 </td>
                 <td>{item.recipient_name}</td>
@@ -114,14 +122,28 @@ export function FiscalDocumentsPage() {
 
       <Invalidations companyId={companyId} canWrite={canWrite} />
 
-      <Sheet open={issuing} title="Emitir NF-e" onClose={() => setIssuing(false)}>
+      <Sheet open={issuing === "nfe"} title="Emitir NF-e" onClose={() => setIssuing(null)}>
         <IssueForm
           companyId={companyId}
           natures={natures}
           submitLabel="Emitir"
           onSubmit={async (choices) => {
             const made = await api.issueFiscalDocument(companyId, choices);
-            setIssuing(false);
+            setIssuing(null);
+            setHighlighted(made.id);
+            await list.reload();
+            setShown(made.id);
+          }}
+        />
+      </Sheet>
+      <Sheet open={issuing === "nfse"} title="Emitir NFS-e" onClose={() => setIssuing(null)}>
+        <ServiceIssueForm
+          companyId={companyId}
+          natures={natures}
+          submitLabel="Emitir"
+          onSubmit={async (choices) => {
+            const made = await api.issueServiceDocument(companyId, choices);
+            setIssuing(null);
             setHighlighted(made.id);
             await list.reload();
             setShown(made.id);

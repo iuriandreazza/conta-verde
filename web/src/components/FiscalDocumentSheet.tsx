@@ -10,11 +10,12 @@ import {
 import { saveFile } from "../lib/csv";
 import { formatDate } from "../lib/entryInstallments";
 import { formatMoney } from "../lib/decimal";
-import { EVENT_STATUS_LABELS, STATUS_LABELS, isWaiting, numberLabel } from "../lib/fiscalDocuments";
+import { EVENT_STATUS_LABELS, KIND_LABELS, STATUS_LABELS, isWaiting, numberLabel } from "../lib/fiscalDocuments";
 import { Button } from "./Button";
 import { History } from "./History";
 import { HelpTitle } from "./HelpTitle";
 import { IssueForm } from "./FiscalIssueForm";
+import { ServiceIssueForm } from "./FiscalServiceIssueForm";
 import { Notice } from "./Notice";
 
 const FILE_LABELS: Record<FiscalFileKind, string> = {
@@ -22,6 +23,9 @@ const FILE_LABELS: Record<FiscalFileKind, string> = {
   pdf: "Baixar DANFE (PDF)",
   cancellation_xml: "Baixar XML do cancelamento",
 };
+
+/** The printed form of an NFS-e is the DANFSe. */
+const SERVICE_FILE_LABELS: Record<FiscalFileKind, string> = { ...FILE_LABELS, pdf: "Baixar DANFSe (PDF)" };
 
 const FIELD_LABELS: Record<string, string> = {
   kind: "Tipo",
@@ -36,6 +40,11 @@ const FIELD_LABELS: Record<string, string> = {
   number: "Número",
   series: "Série",
   protocol: "Protocolo",
+  dps: "DPS (série/número)",
+  nfse_number: "Número da NFS-e",
+  nfse_key: "Chave da NFS-e",
+  verification_code: "Código de verificação",
+  gateway_reference: "Referência do gateway",
   refusal: "Recusa",
   note: "Observação",
 };
@@ -57,6 +66,7 @@ export function FiscalDocumentSheet({ companyId, document, natures, canWrite, on
   const [letter, setLetter] = useState("");
   const [letters, setLetters] = useState<FiscalEvent[] | null>(null);
   const [resending, setResending] = useState(false);
+  const isService = document.kind === "nfse";
 
   const loadLetters = useCallback(async () => {
     try {
@@ -73,8 +83,9 @@ export function FiscalDocumentSheet({ companyId, document, natures, canWrite, on
   );
 
   useEffect(() => {
-    if (document.status === "authorized") void loadLetters();
-  }, [document.status, loadLetters]);
+    // The national NFS-e has no correction letter.
+    if (document.status === "authorized" && !isService) void loadLetters();
+  }, [document.status, isService, loadLetters]);
 
   async function run(name: string, action: () => Promise<unknown>) {
     setPending(name);
@@ -119,8 +130,37 @@ export function FiscalDocumentSheet({ companyId, document, natures, canWrite, on
         <dd>
           <span className="badge">{STATUS_LABELS[document.status]}</span>
         </dd>
-        <dt>Número / série</dt>
-        <dd>{numberLabel(document.series, document.number)}</dd>
+        <dt>Tipo</dt>
+        <dd>{KIND_LABELS[document.kind]}</dd>
+        {isService ? (
+          <>
+            <dt>Número da NFS-e</dt>
+            <dd>{document.nfse ? document.nfse.number : "—"}</dd>
+            {document.dps && (
+              <>
+                <dt>DPS (série/número)</dt>
+                <dd>{numberLabel(document.dps.series, document.dps.number)}</dd>
+              </>
+            )}
+            {document.nfse?.verification_code && (
+              <>
+                <dt>Código de verificação</dt>
+                <dd>{document.nfse.verification_code}</dd>
+              </>
+            )}
+            {document.nfse?.key && (
+              <>
+                <dt>Chave da NFS-e</dt>
+                <dd className="access-key">{document.nfse.key}</dd>
+              </>
+            )}
+          </>
+        ) : (
+          <>
+            <dt>Número / série</dt>
+            <dd>{numberLabel(document.series, document.number)}</dd>
+          </>
+        )}
         <dt>Destinatário</dt>
         <dd>
           {document.recipient_name}
@@ -158,7 +198,7 @@ export function FiscalDocumentSheet({ companyId, document, natures, canWrite, on
       <div className="form-actions">
         {document.files.map((kind) => (
           <Button key={kind} type="button" pending={pending === kind} disabled={pending !== null} onClick={() => void download(kind)}>
-            {FILE_LABELS[kind]}
+            {(isService ? SERVICE_FILE_LABELS : FILE_LABELS)[kind]}
           </Button>
         ))}
         {canWrite && isWaiting(document.status) && (
@@ -178,7 +218,7 @@ export function FiscalDocumentSheet({ companyId, document, natures, canWrite, on
         )}
       </div>
 
-      {resending && (
+      {resending && !isService && (
         <IssueForm
           companyId={companyId}
           natures={natures}
@@ -186,6 +226,18 @@ export function FiscalDocumentSheet({ companyId, document, natures, canWrite, on
           submitLabel="Reenviar a mesma nota"
           onSubmit={async (choices) => {
             onChanged(await api.resendFiscalDocument(companyId, document.id, choices));
+            setResending(false);
+          }}
+        />
+      )}
+      {resending && isService && (
+        <ServiceIssueForm
+          companyId={companyId}
+          natures={natures}
+          fixedSale={document.sale_id}
+          submitLabel="Reenviar a mesma nota (mesmo número de DPS)"
+          onSubmit={async (choices) => {
+            onChanged(await api.resendServiceDocument(companyId, document.id, choices));
             setResending(false);
           }}
         />
@@ -234,6 +286,7 @@ export function FiscalDocumentSheet({ companyId, document, natures, canWrite, on
             </Button>
           </form>
           )}
+          {!isService && (
           <form className="record-form" onSubmit={(event) => void correct(event)}>
             <HelpTitle title="Carta de correção" level={3}>
               <p>
@@ -249,6 +302,7 @@ export function FiscalDocumentSheet({ companyId, document, natures, canWrite, on
               Enviar carta
             </Button>
           </form>
+          )}
         </>
       )}
 
