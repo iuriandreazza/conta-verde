@@ -929,6 +929,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_regular_regimes_issue_nothing_until_their_calculation_is_signed() {
+        use crate::memory_entries::tests::Registers;
+        use crate::{
+            FakeFiscalGateway, InMemoryBlobStore, InMemoryFiscalSettingsRepository,
+            InMemoryPaymentTermRepository, InMemoryProductRepository, InMemorySaleRepository,
+        };
+        use conta_verde_application::FiscalDocumentService;
+
+        let registers = Registers::new();
+        let company = CompanyId::generate();
+        let entry_seed = registers.seed(company).await;
+        let products = InMemoryProductRepository::default();
+        let seed = contract::seed_sales_records(
+            &registers.parties,
+            &products,
+            &InMemoryPaymentTermRepository::default(),
+            company,
+        )
+        .await;
+        let fiscal = contract::seed_fiscal_customer(&registers.parties, company).await;
+        let gateway = FakeFiscalGateway::authorizing_after(1);
+        let settings = InMemoryFiscalSettingsRepository::default();
+        let sales = InMemorySaleRepository::default();
+        let service = FiscalDocumentService::new(
+            InMemoryFiscalDocumentRepository::default(),
+            sales.clone(),
+            registers.parties.clone(),
+            products,
+            settings.clone(),
+            gateway.clone(),
+            InMemoryBlobStore::default(),
+            registers.references(),
+        );
+        contract::the_regular_regimes_issue_nothing_until_their_calculation_is_signed(
+            &service,
+            &gateway,
+            &settings,
+            &sales,
+            company,
+            &entry_seed,
+            &seed,
+            &fiscal,
+        )
+        .await;
+    }
+
+    #[tokio::test]
     async fn keeps_fiscal_events() {
         contract::fiscal_events_are_kept(
             &InMemoryFiscalDocumentRepository::default(),

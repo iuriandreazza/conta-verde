@@ -1668,6 +1668,55 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires DATABASE_URL"]
+    async fn the_regular_regimes_issue_nothing_until_their_calculation_is_signed() {
+        use crate::{
+            FakeFiscalGateway, LocalBlobStore, PostgresFiscalSettingsRepository,
+            PostgresPeriodLockRepository, RegisterReferences,
+        };
+        use conta_verde_application::FiscalDocumentService;
+
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let (entry_seed, seed) = seeds(&pool, company).await;
+        let parties = PostgresPartyRepository::new(pool.clone());
+        let fiscal = contract::seed_fiscal_customer(&parties, company).await;
+        let gateway = FakeFiscalGateway::authorizing_after(1);
+        let settings = PostgresFiscalSettingsRepository::new(pool.clone());
+        let sales = PostgresSaleRepository::new(pool.clone());
+        let root =
+            std::env::temp_dir().join(format!("conta-verde-fiscal-{}", uuid::Uuid::new_v4()));
+        let service = FiscalDocumentService::new(
+            PostgresFiscalDocumentRepository::new(pool.clone()),
+            sales.clone(),
+            parties,
+            PostgresProductRepository::new(pool.clone()),
+            settings.clone(),
+            gateway.clone(),
+            LocalBlobStore::new(&root),
+            RegisterReferences::new(
+                PostgresCategoryRepository::new(pool.clone()),
+                PostgresCostCenterRepository::new(pool.clone()),
+                PostgresPartyRepository::new(pool.clone()),
+                PostgresBankAccountRepository::new(pool.clone()),
+                PostgresPaymentMethodRepository::new(pool.clone()),
+                PostgresPeriodLockRepository::new(pool.clone()),
+            ),
+        );
+        contract::the_regular_regimes_issue_nothing_until_their_calculation_is_signed(
+            &service,
+            &gateway,
+            &settings,
+            &sales,
+            company,
+            &entry_seed,
+            &seed,
+            &fiscal,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
     async fn follows_a_gateway_that_names_and_queues() {
         use crate::{
             FakeFiscalGateway, LocalBlobStore, PostgresFiscalSettingsRepository,
