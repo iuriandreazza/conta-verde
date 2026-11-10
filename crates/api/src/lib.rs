@@ -7033,7 +7033,22 @@ mod tests {
             "nfce_series": 1,
             "nfse_series": 1,
             "certificate_valid_until": "2027-03-31",
+            "city_ibge_code": "3550308",
             "natures": [{
+                "code": "service",
+                "name": "Prestação de serviço",
+                "kind": "service",
+                "cfop_in_state": null,
+                "cfop_interstate": null,
+                "active": true,
+                "rules": [],
+                "service": {
+                    "national_tax_code": "010701",
+                    "municipal_service_code": "1.07",
+                    "iss_taxation": "taxable",
+                    "iss_rate": "2.5"
+                }
+            }, {
                 "code": "sale",
                 "name": "Venda de mercadoria",
                 "kind": "product",
@@ -7049,7 +7064,8 @@ mod tests {
                     "icms_rate": null,
                     "pis_rate": null,
                     "cofins_rate": null
-                }]
+                }],
+                "service": null
             }]
         })
     }
@@ -7094,14 +7110,24 @@ mod tests {
         assert_eq!(saved.body["cnpj"], "11222333000181");
         assert_eq!(saved.body["state_registration"], "110042490114");
         assert_eq!(saved.body["address"]["postal_code"], "01310100");
-        assert_eq!(saved.body["natures"][0]["rules"][0]["icms_code"], "102");
+        assert_eq!(saved.body["natures"][1]["rules"][0]["icms_code"], "102");
+        assert_eq!(saved.body["city_ibge_code"], "3550308");
+        assert_eq!(
+            saved.body["natures"][0]["service"],
+            json!({
+                "national_tax_code": "010701",
+                "municipal_service_code": "1.07",
+                "iss_taxation": "taxable",
+                "iss_rate": "2.5"
+            })
+        );
         let read = send(&app, get_request(&uri, Some(&seller))).await;
         assert_eq!(read.body, saved.body);
 
         // A shape the domain refuses is a 422 that says which field; a value that is no key of ours too; an unknown
         // field is refused; and nothing of it was kept.
         let mut bad_cfop = fiscal_settings_body();
-        bad_cfop["natures"][0]["cfop_in_state"] = json!("6102");
+        bad_cfop["natures"][1]["cfop_in_state"] = json!("6102");
         let refused = send(&app, json_request("PUT", &uri, Some(&owner), bad_cfop)).await;
         assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY);
         assert!(
@@ -7112,6 +7138,19 @@ mod tests {
             "{}",
             refused.body
         );
+        let mut bad_terms = fiscal_settings_body();
+        bad_terms["natures"][0]["service"]["iss_taxation"] = json!("whatever");
+        let refused = send(&app, json_request("PUT", &uri, Some(&owner), bad_terms)).await;
+        assert_eq!(
+            refused.status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{}",
+            refused.body
+        );
+        let mut bad_code = fiscal_settings_body();
+        bad_code["natures"][0]["service"]["national_tax_code"] = json!("10701");
+        let refused = send(&app, json_request("PUT", &uri, Some(&owner), bad_code)).await;
+        assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY);
         let mut mei = fiscal_settings_body();
         mei["regime"] = json!("mei");
         let refused = send(&app, json_request("PUT", &uri, Some(&owner), mei)).await;

@@ -8,8 +8,9 @@ use conta_verde_application::{
 };
 use conta_verde_domain::{
     AddressDraft, FiscalDocument, FiscalDocumentId, FiscalEnvironment, FiscalEvent, FiscalEventId,
-    FiscalEventSubject, FiscalFileKind, FiscalSettings, FiscalSettingsDraft, NatureKind,
-    OperationNature, OperationNatureDraft, SaleId, TaxRegime, TaxRule, TaxRuleDraft,
+    FiscalEventSubject, FiscalFileKind, FiscalSettings, FiscalSettingsDraft, IssTaxation,
+    NatureKind, OperationNature, OperationNatureDraft, SaleId, ServiceTerms, ServiceTermsDraft,
+    TaxRegime, TaxRule, TaxRuleDraft,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -50,6 +51,25 @@ impl From<&TaxRule> for TaxRuleResponse {
 }
 
 #[derive(Serialize)]
+pub(crate) struct ServiceTermsResponse {
+    national_tax_code: String,
+    municipal_service_code: Option<String>,
+    iss_taxation: &'static str,
+    iss_rate: Option<String>,
+}
+
+impl From<&ServiceTerms> for ServiceTermsResponse {
+    fn from(terms: &ServiceTerms) -> Self {
+        Self {
+            national_tax_code: terms.national_tax_code().to_owned(),
+            municipal_service_code: terms.municipal_service_code().map(str::to_owned),
+            iss_taxation: terms.iss_taxation().key(),
+            iss_rate: terms.iss_rate().map(|rate| rate.to_string()),
+        }
+    }
+}
+
+#[derive(Serialize)]
 pub(crate) struct NatureResponse {
     code: String,
     name: String,
@@ -58,6 +78,7 @@ pub(crate) struct NatureResponse {
     cfop_interstate: Option<String>,
     active: bool,
     rules: Vec<TaxRuleResponse>,
+    service: Option<ServiceTermsResponse>,
 }
 
 impl From<&OperationNature> for NatureResponse {
@@ -70,6 +91,7 @@ impl From<&OperationNature> for NatureResponse {
             cfop_interstate: nature.cfop_interstate().map(str::to_owned),
             active: nature.is_active(),
             rules: nature.rules().iter().map(TaxRuleResponse::from).collect(),
+            service: nature.service().map(ServiceTermsResponse::from),
         }
     }
 }
@@ -88,6 +110,8 @@ pub(crate) struct FiscalSettingsResponse {
     nfse_series: u16,
     /// The day the A1 certificate expires, as the person typed it; the certificate itself is at the gateway.
     certificate_valid_until: Option<String>,
+    /// The IBGE code of the issuer's municipality, which an NFS-e names as where it is issued.
+    city_ibge_code: Option<String>,
     natures: Vec<NatureResponse>,
 }
 
@@ -107,6 +131,7 @@ impl From<&FiscalSettings> for FiscalSettingsResponse {
             certificate_valid_until: settings
                 .certificate_valid_until()
                 .map(|day| day.to_string()),
+            city_ibge_code: settings.city_ibge_code().map(str::to_owned),
             natures: settings
                 .natures()
                 .iter()
@@ -131,6 +156,15 @@ pub(crate) struct TaxRuleRequest {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct ServiceTermsRequest {
+    national_tax_code: String,
+    municipal_service_code: Option<String>,
+    iss_taxation: String,
+    iss_rate: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct NatureRequest {
     code: String,
     name: String,
@@ -139,6 +173,7 @@ pub(crate) struct NatureRequest {
     cfop_interstate: Option<String>,
     active: bool,
     rules: Vec<TaxRuleRequest>,
+    service: Option<ServiceTermsRequest>,
 }
 
 /// The whole settings, replaced by a `PUT`: everything is said, so an old client cannot drop a nature by leaving the
@@ -157,6 +192,7 @@ pub(crate) struct FiscalSettingsRequest {
     nfce_series: u16,
     nfse_series: u16,
     certificate_valid_until: Option<String>,
+    city_ibge_code: Option<String>,
     natures: Vec<NatureRequest>,
 }
 
@@ -178,6 +214,19 @@ impl TaxRuleRequest {
     }
 }
 
+impl ServiceTermsRequest {
+    fn into_draft(self) -> Result<ServiceTermsDraft, ApiError> {
+        Ok(ServiceTermsDraft {
+            national_tax_code: self.national_tax_code,
+            municipal_service_code: self.municipal_service_code,
+            iss_taxation: IssTaxation::parse(&self.iss_taxation).ok_or(ApiError::InvalidField(
+                "iss_taxation must be taxable, immune, export or not_incident",
+            ))?,
+            iss_rate: self.iss_rate,
+        })
+    }
+}
+
 impl NatureRequest {
     fn into_draft(self) -> Result<OperationNatureDraft, ApiError> {
         Ok(OperationNatureDraft {
@@ -193,6 +242,10 @@ impl NatureRequest {
                 .into_iter()
                 .map(TaxRuleRequest::into_draft)
                 .collect::<Result<_, _>>()?,
+            service: self
+                .service
+                .map(ServiceTermsRequest::into_draft)
+                .transpose()?,
         })
     }
 }
@@ -213,6 +266,7 @@ impl FiscalSettingsRequest {
             nfce_series: self.nfce_series,
             nfse_series: self.nfse_series,
             certificate_valid_until: self.certificate_valid_until,
+            city_ibge_code: self.city_ibge_code,
             natures: self
                 .natures
                 .into_iter()

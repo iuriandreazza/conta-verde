@@ -1,5 +1,5 @@
 import { useRef, useState, type FormEvent } from "react";
-import type { NatureKind, OperationNature, TaxRegime, TaxRule } from "../api";
+import type { IssTaxation, NatureKind, OperationNature, TaxRegime, TaxRule } from "../api";
 import { toApiDecimal, toInputDecimal } from "../lib/decimal";
 import { BackButton } from "./BackButton";
 import { Button } from "./Button";
@@ -55,6 +55,28 @@ const rowOf = (key: number, rule: TaxRule): RuleRow => ({
 /** A rate as the API takes it: blank is not set, and a comma is written as a point. */
 const rateOf = (text: string): string | null => toApiDecimal(text) ?? null;
 
+const ISS_TAXATION_LABELS: Record<IssTaxation, string> = {
+  taxable: "Tributável",
+  immune: "Imune",
+  export: "Exportação",
+  not_incident: "Não incidente",
+};
+
+/** The ISSQN terms of a service as they are typed. */
+interface TermsFields {
+  national_tax_code: string;
+  municipal_service_code: string;
+  iss_taxation: IssTaxation | "";
+  iss_rate: string;
+}
+
+const termsOf = (nature: OperationNature | null): TermsFields => ({
+  national_tax_code: nature?.service?.national_tax_code ?? "",
+  municipal_service_code: nature?.service?.municipal_service_code ?? "",
+  iss_taxation: nature?.service?.iss_taxation ?? "",
+  iss_rate: toInputDecimal(nature?.service?.iss_rate ?? null),
+});
+
 interface NatureFormProps {
   /** The nature being changed, or `null` to add one. */
   nature: OperationNature | null;
@@ -73,8 +95,11 @@ export function NatureForm({ nature, regime, onSubmit, onCancel }: NatureFormPro
   const nextKey = useRef(0);
   const [kind, setKind] = useState<NatureKind>(nature?.kind ?? "product");
   const [rows, setRows] = useState<RuleRow[]>(() => (nature?.rules ?? []).map((rule) => rowOf(nextKey.current++, rule)));
+  const [terms, setTerms] = useState<TermsFields>(() => termsOf(nature));
   const markDirty = useSheetDirty();
   const isProduct = kind === "product";
+  // The ISSQN terms are optional until one is typed: then the national code and the taxation are both needed.
+  const termsStarted = Object.values(terms).some((value) => value.trim() !== "");
 
   function change(key: number, update: Partial<RuleRow>) {
     setRows((current) => current.map((row) => (row.key === key ? { ...row, ...update } : row)));
@@ -104,6 +129,15 @@ export function NatureForm({ nature, regime, onSubmit, onCancel }: NatureFormPro
             cofins_rate: rateOf(row.cofins_rate),
           }))
         : [],
+      service:
+        !isProduct && termsStarted && terms.iss_taxation !== ""
+          ? {
+              national_tax_code: terms.national_tax_code.trim(),
+              municipal_service_code: terms.municipal_service_code.trim() || null,
+              iss_taxation: terms.iss_taxation,
+              iss_rate: rateOf(terms.iss_rate),
+            }
+          : null,
     });
   }
 
@@ -113,8 +147,7 @@ export function NatureForm({ nature, regime, onSubmit, onCancel }: NatureFormPro
         <HelpTitle id="nature-info" title="Dados da natureza">
           <p>
             O nome é o que a pessoa lê; o código é a chave estável que o documento fiscal guarda e não muda depois de
-            salvo. Mercadoria leva CFOP; serviço não leva CFOP nem regras aqui (o imposto de um serviço é decidido na
-            NFS-e).
+            salvo. Mercadoria leva CFOP e regras de tributação; serviço leva o ISSQN, mais abaixo.
           </p>
         </HelpTitle>
         <div className="field-grid">
@@ -313,6 +346,80 @@ export function NatureForm({ nature, regime, onSubmit, onCancel }: NatureFormPro
             </div>
           </section>
         </>
+      )}
+
+      {!isProduct && (
+        <section className="form-section" aria-labelledby="nature-iss">
+          <HelpTitle id="nature-iss" title="ISSQN do serviço">
+            <p>
+              O que a NFS-e diz sobre o imposto deste serviço: o código nacional (seis dígitos: item, subitem e
+              desdobro da lista nacional de serviços), o código do próprio município quando o gateway pede, como o ISS
+              é cobrado e, se a empresa define, a alíquota em %, com até duas casas. Sem o código nacional e a forma de
+              cobrança nenhuma NFS-e sai com esta natureza. O produto não traz tabela de serviços nem escolhe a
+              tributação: confirme com o seu contador.
+            </p>
+          </HelpTitle>
+          <div className="field-grid">
+            <label>
+              Código nacional do serviço
+              <input
+                inputMode="numeric"
+                maxLength={6}
+                pattern="[0-9]{6}"
+                autoComplete="off"
+                placeholder="010701"
+                required={termsStarted}
+                value={terms.national_tax_code}
+                onChange={(event) => {
+                  markDirty();
+                  setTerms({ ...terms, national_tax_code: event.target.value });
+                }}
+              />
+            </label>
+            <label>
+              Código municipal do serviço
+              <input
+                maxLength={20}
+                autoComplete="off"
+                value={terms.municipal_service_code}
+                onChange={(event) => {
+                  markDirty();
+                  setTerms({ ...terms, municipal_service_code: event.target.value });
+                }}
+              />
+            </label>
+            <label>
+              Cobrança do ISS
+              <select
+                required={termsStarted}
+                value={terms.iss_taxation}
+                onChange={(event) => {
+                  markDirty();
+                  setTerms({ ...terms, iss_taxation: event.target.value as IssTaxation | "" });
+                }}
+              >
+                <option value="">Ainda não definida</option>
+                {(Object.keys(ISS_TAXATION_LABELS) as IssTaxation[]).map((key) => (
+                  <option key={key} value={key}>
+                    {ISS_TAXATION_LABELS[key]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Alíquota do ISS (%)
+              <input
+                inputMode="decimal"
+                autoComplete="off"
+                value={terms.iss_rate}
+                onChange={(event) => {
+                  markDirty();
+                  setTerms({ ...terms, iss_rate: event.target.value });
+                }}
+              />
+            </label>
+          </div>
+        </section>
       )}
 
       <div className="form-footer">

@@ -16956,8 +16956,9 @@ pub async fn stores_the_fiscal_settings<R: conta_verde_application::FiscalSettin
     other_company: CompanyId,
 ) {
     use conta_verde_domain::{
-        FiscalEnvironment, FiscalSettings, NatureKind, OperationNatureDraft, TaxRegime,
-        TaxRuleDraft, fiscal_settings_changes, fiscal_settings_creation_changes,
+        FiscalEnvironment, FiscalSettings, IssTaxation, NatureKind, OperationNatureDraft,
+        ServiceTermsDraft, TaxRegime, TaxRuleDraft, fiscal_settings_changes,
+        fiscal_settings_creation_changes,
     };
 
     let ana = actor();
@@ -16998,6 +16999,7 @@ pub async fn stores_the_fiscal_settings<R: conta_verde_application::FiscalSettin
             ),
             rule(TaxRegime::LucroPresumido, None, "00", Some("18")),
         ],
+        service: None,
     };
     let service = OperationNatureDraft {
         code: "service".into(),
@@ -17007,6 +17009,12 @@ pub async fn stores_the_fiscal_settings<R: conta_verde_application::FiscalSettin
         cfop_interstate: None,
         active: false,
         rules: vec![],
+        service: Some(ServiceTermsDraft {
+            national_tax_code: "010701".into(),
+            municipal_service_code: Some("1.07".into()),
+            iss_taxation: IssTaxation::Taxable,
+            iss_rate: Some("2.5".into()),
+        }),
     };
     let draft = |natures: Vec<OperationNatureDraft>, regime| FiscalSettingsDraft {
         legal_name: "Verde Comércio Ltda".into(),
@@ -17028,6 +17036,7 @@ pub async fn stores_the_fiscal_settings<R: conta_verde_application::FiscalSettin
         nfce_series: 2,
         nfse_series: 3,
         certificate_valid_until: Some("2033-03-31".into()),
+        city_ibge_code: Some("3550308".into()),
         natures,
     };
 
@@ -17144,6 +17153,7 @@ pub async fn fiscal_settings_are_replaced_and_audited<
         nfce_series: 1,
         nfse_series: 1,
         certificate_valid_until: None,
+        city_ibge_code: None,
         natures: vec![OperationNatureDraft {
             code: "service".into(),
             name: "Serviço".into(),
@@ -17152,6 +17162,7 @@ pub async fn fiscal_settings_are_replaced_and_audited<
             cfop_interstate: None,
             active: true,
             rules: vec![],
+            service: None,
         }],
     };
 
@@ -17227,6 +17238,7 @@ pub fn fiscal_settings_draft(
         nfce_series: 1,
         nfse_series: 1,
         certificate_valid_until: Some("2033-03-31".into()),
+        city_ibge_code: Some("3550308".into()),
         natures: vec![OperationNatureDraft {
             code: "sale".into(),
             name: "Venda".into(),
@@ -17235,6 +17247,7 @@ pub fn fiscal_settings_draft(
             cfop_interstate: Some("6102".into()),
             active: true,
             rules: vec![],
+            service: None,
         }],
     }
 }

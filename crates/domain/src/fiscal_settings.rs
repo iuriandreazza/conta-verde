@@ -12,6 +12,8 @@ const MAX_LEGAL_NAME_CHARS: usize = 150;
 const MAX_MUNICIPAL_REGISTRATION_CHARS: usize = 20;
 const MAX_NATURE_CODE_CHARS: usize = 30;
 const MAX_NATURE_NAME_CHARS: usize = 60;
+const MAX_MUNICIPAL_SERVICE_CODE_CHARS: usize = 20;
+const IBGE_CODE_DIGITS: usize = 7;
 const MIN_NCM_PREFIX_DIGITS: usize = 2;
 const MAX_NCM_PREFIX_DIGITS: usize = 8;
 const CFOP_DIGITS: usize = 4;
@@ -85,6 +87,107 @@ impl NatureKind {
         [Self::Product, Self::Service]
             .into_iter()
             .find(|kind| kind.key() == raw)
+    }
+}
+
+/// How the ISSQN is charged on a service, in the national standard's own terms (`tribISSQN`). The product keeps four of its
+/// values and **does not decide which one fits a service**: the company and its accountant do (verify with an accountant).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IssTaxation {
+    /// The ISSQN is due: taxable operation.
+    Taxable,
+    Immune,
+    Export,
+    NotIncident,
+}
+
+impl IssTaxation {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Taxable => "taxable",
+            Self::Immune => "immune",
+            Self::Export => "export",
+            Self::NotIncident => "not_incident",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        [Self::Taxable, Self::Immune, Self::Export, Self::NotIncident]
+            .into_iter()
+            .find(|taxation| taxation.key() == raw)
+    }
+}
+
+/// What a service nature says about the ISSQN of the services issued under it, as it is asked for: unvalidated.
+#[derive(Debug, Clone)]
+pub struct ServiceTermsDraft {
+    pub national_tax_code: String,
+    pub municipal_service_code: Option<String>,
+    pub iss_taxation: IssTaxation,
+    pub iss_rate: Option<String>,
+}
+
+/// What a service nature says about the ISSQN: the **national tax code** of the service (six digits: item, sub-item and
+/// detail of the national list), the municipality's own code for it (a gateway whose layout is municipal asks for it), how
+/// the tax is charged and, when the company sets it, the rate. The codes and the rate are the company's and its accountant's:
+/// only their shape is checked ([ADR 0080]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServiceTerms {
+    national_tax_code: String,
+    municipal_service_code: Option<String>,
+    iss_taxation: IssTaxation,
+    iss_rate: Option<TaxRate>,
+}
+
+impl ServiceTerms {
+    fn new(draft: &ServiceTermsDraft) -> Result<Self, DomainError> {
+        Ok(Self {
+            national_tax_code: digits_of(&draft.national_tax_code, 6, "national_tax_code")?,
+            municipal_service_code: municipal_service_code_of(
+                draft.municipal_service_code.as_deref(),
+            )?,
+            iss_taxation: draft.iss_taxation,
+            iss_rate: rate_of(draft.iss_rate.as_deref(), "iss_rate")?,
+        })
+    }
+
+    pub fn national_tax_code(&self) -> &str {
+        &self.national_tax_code
+    }
+
+    pub fn municipal_service_code(&self) -> Option<&str> {
+        self.municipal_service_code.as_deref()
+    }
+
+    pub fn iss_taxation(&self) -> IssTaxation {
+        self.iss_taxation
+    }
+
+    pub fn iss_rate(&self) -> Option<TaxRate> {
+        self.iss_rate
+    }
+
+    fn text(&self) -> String {
+        format!(
+            "{}:{}:{}:{}",
+            self.national_tax_code,
+            self.municipal_service_code.as_deref().unwrap_or(""),
+            self.iss_taxation.key(),
+            self.iss_rate
+                .map(|rate| rate.to_string())
+                .unwrap_or_default()
+        )
+    }
+}
+
+/// The municipality's own code for a service: free text of one line, without the characters the trail's text separates its
+/// parts with, so what it records can always be read back.
+fn municipal_service_code_of(raw: Option<&str>) -> Result<Option<String>, DomainError> {
+    let invalid = DomainError::InvalidFiscalField("municipal_service_code");
+    let code = optional_line(raw, MAX_MUNICIPAL_SERVICE_CODE_CHARS, invalid.clone())?;
+    match code {
+        Some(code) if code.contains([':', '|', ';']) => Err(invalid),
+        code => Ok(code),
     }
 }
 
@@ -225,6 +328,8 @@ pub struct OperationNatureDraft {
     pub cfop_interstate: Option<String>,
     pub active: bool,
     pub rules: Vec<TaxRuleDraft>,
+    /// For a service: what it says about the ISSQN. Optional while the company has not set it; an NFS-e needs it.
+    pub service: Option<ServiceTermsDraft>,
 }
 
 /// What a company calls an operation (a sale, a sale for delivery, a service) with the CFOP that goes on its goods
@@ -239,6 +344,7 @@ pub struct OperationNature {
     cfop_interstate: Option<String>,
     active: bool,
     rules: Vec<TaxRule>,
+    service: Option<ServiceTerms>,
 }
 
 impl OperationNature {
@@ -253,8 +359,11 @@ impl OperationNature {
             return Err(DomainError::InvalidFiscalField("code"));
         }
         let name = required_line(&draft.name, MAX_NATURE_NAME_CHARS, "name")?;
+        if draft.kind == NatureKind::Product && draft.service.is_some() {
+            return Err(DomainError::ProductNatureHasNoServiceTerms);
+        }
         let blank = |raw: &Option<String>| raw.as_deref().is_none_or(|raw| raw.trim().is_empty());
-        let (cfop_in_state, cfop_interstate, rules) = match draft.kind {
+        let (cfop_in_state, cfop_interstate, rules, service) = match draft.kind {
             NatureKind::Product => (
                 Some(cfop_of(
                     draft.cfop_in_state.as_deref(),
@@ -267,8 +376,9 @@ impl OperationNature {
                     "cfop_interstate",
                 )?),
                 rules_of(&draft.rules)?,
+                None,
             ),
-            // A service has no CFOP, and the municipal tax of one is decided with the NFS-e (ADR 0073).
+            // A service has no CFOP and no tax rules; what it says about the ISSQN is its terms (ADR 0080).
             NatureKind::Service => {
                 if !blank(&draft.cfop_in_state) || !blank(&draft.cfop_interstate) {
                     return Err(DomainError::ServiceNatureHasNoCfop);
@@ -276,7 +386,12 @@ impl OperationNature {
                 if !draft.rules.is_empty() {
                     return Err(DomainError::ServiceNatureHasNoRules);
                 }
-                (None, None, Vec::new())
+                (
+                    None,
+                    None,
+                    Vec::new(),
+                    draft.service.as_ref().map(ServiceTerms::new).transpose()?,
+                )
             }
         };
         Ok(Self {
@@ -287,6 +402,7 @@ impl OperationNature {
             cfop_interstate,
             active: draft.active,
             rules,
+            service,
         })
     }
 
@@ -318,6 +434,11 @@ impl OperationNature {
         &self.rules
     }
 
+    /// What a service nature says about the ISSQN, when the company has set it.
+    pub fn service(&self) -> Option<&ServiceTerms> {
+        self.service.as_ref()
+    }
+
     /// The rule for an item of this regime and NCM ([ADR 0074]): the one whose NCM prefix is the **longest** the NCM
     /// begins with, else the nature's general rule (no prefix); `None` when no rule covers it. A rule of another
     /// regime never applies.
@@ -333,7 +454,7 @@ impl OperationNature {
     }
 
     fn text(&self) -> String {
-        format!(
+        let text = format!(
             "{}|{}|{}|{}|{}|{}|{}",
             self.code,
             self.name,
@@ -346,7 +467,12 @@ impl OperationNature {
                 .map(TaxRule::text)
                 .collect::<Vec<_>>()
                 .join(";")
-        )
+        );
+        // The ISSQN terms are an eighth part only when there are some, so what the trail recorded before stays the same.
+        match &self.service {
+            Some(service) => format!("{text}|{}", service.text()),
+            None => text,
+        }
     }
 }
 
@@ -364,6 +490,8 @@ pub struct FiscalSettingsDraft {
     pub nfce_series: u16,
     pub nfse_series: u16,
     pub certificate_valid_until: Option<String>,
+    /// The IBGE code (seven digits) of the municipality the issuer is in: what an NFS-e says about where it is issued.
+    pub city_ibge_code: Option<String>,
     pub natures: Vec<OperationNatureDraft>,
 }
 
@@ -387,6 +515,7 @@ pub struct FiscalSettings {
     nfce_series: u16,
     nfse_series: u16,
     certificate_valid_until: Option<CalendarDate>,
+    city_ibge_code: Option<String>,
     natures: Vec<OperationNature>,
 }
 
@@ -435,6 +564,13 @@ impl FiscalSettings {
             nfce_series: draft.nfce_series,
             nfse_series: draft.nfse_series,
             certificate_valid_until,
+            city_ibge_code: draft
+                .city_ibge_code
+                .as_deref()
+                .map(str::trim)
+                .filter(|raw| !raw.is_empty())
+                .map(|raw| digits_of(raw, IBGE_CODE_DIGITS, "city_ibge_code"))
+                .transpose()?,
             natures: natures_of(&draft.natures)?,
         })
     }
@@ -486,6 +622,10 @@ impl FiscalSettings {
 
     pub fn certificate_valid_until(&self) -> Option<CalendarDate> {
         self.certificate_valid_until
+    }
+
+    pub fn city_ibge_code(&self) -> Option<&str> {
+        self.city_ibge_code.as_deref()
     }
 
     pub fn natures(&self) -> &[OperationNature] {
@@ -640,6 +780,7 @@ mod tests {
             cfop_interstate: Some("6102".into()),
             active: true,
             rules: vec![rule(TaxRegime::SimplesNacional, None, "102")],
+            service: None,
         }
     }
 
@@ -656,6 +797,7 @@ mod tests {
             nfce_series: 1,
             nfse_series: 1,
             certificate_valid_until: Some("2027-03-31".into()),
+            city_ibge_code: Some("3550308".into()),
             natures: vec![sale()],
         }
     }
@@ -834,6 +976,7 @@ mod tests {
                     cfop_interstate: None,
                     active: true,
                     rules: vec![],
+                    service: None,
                 }];
                 change(&mut d.natures[0]);
             })
@@ -847,6 +990,129 @@ mod tests {
             service(|n| n.rules = vec![rule(TaxRegime::SimplesNacional, None, "102")]).unwrap_err(),
             DomainError::ServiceNatureHasNoRules
         );
+    }
+
+    #[test]
+    fn a_service_nature_may_carry_the_issqn_terms_and_a_product_may_not() {
+        let terms = |national: &str, rate: Option<&str>| ServiceTermsDraft {
+            national_tax_code: national.into(),
+            municipal_service_code: Some(" 1.07 ".into()),
+            iss_taxation: IssTaxation::Taxable,
+            iss_rate: rate.map(Into::into),
+        };
+        let service = |terms: Option<ServiceTermsDraft>| {
+            settings(|d| {
+                d.natures = vec![OperationNatureDraft {
+                    code: "service".into(),
+                    name: "Prestação de serviço".into(),
+                    kind: NatureKind::Service,
+                    cfop_in_state: None,
+                    cfop_interstate: None,
+                    active: true,
+                    rules: vec![],
+                    service: terms,
+                }];
+            })
+        };
+        let stored = service(Some(terms("010701", Some("2.5")))).unwrap();
+        let kept = stored.natures()[0].service().unwrap();
+        assert_eq!(kept.national_tax_code(), "010701");
+        assert_eq!(kept.municipal_service_code(), Some("1.07"));
+        assert_eq!(kept.iss_taxation(), IssTaxation::Taxable);
+        assert_eq!(kept.iss_rate().unwrap().to_string(), "2.5");
+        assert!(service(None).unwrap().natures()[0].service().is_none());
+        for bad in ["10701", "0107011", "01070a"] {
+            assert_eq!(
+                field(service(Some(terms(bad, None))).unwrap_err()),
+                "national_tax_code"
+            );
+        }
+        assert_eq!(
+            field(service(Some(terms("010701", Some("101")))).unwrap_err()),
+            "iss_rate"
+        );
+        let product = settings(|d| {
+            d.natures[0].service = Some(terms("010701", None));
+        });
+        assert_eq!(
+            product.unwrap_err(),
+            DomainError::ProductNatureHasNoServiceTerms
+        );
+    }
+
+    #[test]
+    fn the_trail_text_of_a_nature_grows_a_part_only_for_a_service_with_terms() {
+        let nature = |service: Option<ServiceTermsDraft>| {
+            settings(|d| {
+                d.natures = vec![OperationNatureDraft {
+                    code: "service".into(),
+                    name: "Serviço".into(),
+                    kind: NatureKind::Service,
+                    cfop_in_state: None,
+                    cfop_interstate: None,
+                    active: true,
+                    rules: vec![],
+                    service,
+                }];
+            })
+            .unwrap()
+            .natures_text()
+        };
+        let terms = |municipal: Option<&str>| ServiceTermsDraft {
+            national_tax_code: "010701".into(),
+            municipal_service_code: municipal.map(Into::into),
+            iss_taxation: IssTaxation::Export,
+            iss_rate: Some("2.5".into()),
+        };
+        assert_eq!(nature(None), "service|Serviço|service|||true|");
+        assert_eq!(
+            nature(Some(terms(Some("1.07")))),
+            "service|Serviço|service|||true||010701:1.07:export:2.5"
+        );
+        // The separators of that text are never part of a municipal code, so it reads back whole.
+        for bad in ["1:07", "1|07", "1;07"] {
+            assert_eq!(
+                field(
+                    settings(|d| {
+                        d.natures[0] = OperationNatureDraft {
+                            code: "service".into(),
+                            name: "Serviço".into(),
+                            kind: NatureKind::Service,
+                            cfop_in_state: None,
+                            cfop_interstate: None,
+                            active: true,
+                            rules: vec![],
+                            service: Some(terms(Some(bad))),
+                        }
+                    })
+                    .unwrap_err()
+                ),
+                "municipal_service_code"
+            );
+        }
+    }
+
+    #[test]
+    fn the_issuers_municipality_code_is_seven_digits_or_nothing() {
+        assert_eq!(settings(|_| {}).unwrap().city_ibge_code(), Some("3550308"));
+        assert_eq!(
+            settings(|d| d.city_ibge_code = Some("  ".into()))
+                .unwrap()
+                .city_ibge_code(),
+            None
+        );
+        assert_eq!(
+            settings(|d| d.city_ibge_code = None)
+                .unwrap()
+                .city_ibge_code(),
+            None
+        );
+        for bad in ["355030", "35503081", "35503a8"] {
+            assert_eq!(
+                field(settings(|d| d.city_ibge_code = Some(bad.into())).unwrap_err()),
+                "city_ibge_code"
+            );
+        }
     }
 
     #[test]

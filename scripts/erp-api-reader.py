@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reads a company books from the API of the cloud ERP being left into local JSON files (ADR 0080).
+"""Reads a company books from the API of the cloud ERP being left into local JSON files (ADR 0081).
 
     uv run scripts/erp-api-reader.py --env-file .env login
     uv run scripts/erp-api-reader.py --env-file .env login --callback "https://...?code=...&state=..."

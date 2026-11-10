@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Turns what `erp-api-reader.py fetch` wrote into what conta-verde takes (ADR 0080).
+"""Turns what `erp-api-reader.py fetch` wrote into what conta-verde takes (ADR 0081).
 
     uv run scripts/erp-to-conta-verde.py plan --data-dir out/erp --out-dir out/plan
 

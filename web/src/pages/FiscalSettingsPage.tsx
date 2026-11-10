@@ -46,6 +46,7 @@ interface Form {
   nfce_series: string;
   nfse_series: string;
   certificate_valid_until: string;
+  city_ibge_code: string;
   natures: OperationNature[];
 }
 
@@ -68,6 +69,7 @@ const EMPTY: Form = {
   nfce_series: "1",
   nfse_series: "1",
   certificate_valid_until: "",
+  city_ibge_code: "",
   natures: [],
 };
 
@@ -92,6 +94,7 @@ function formOf(settings: FiscalSettings | null): Form {
     nfce_series: String(settings.nfce_series),
     nfse_series: String(settings.nfse_series),
     certificate_valid_until: settings.certificate_valid_until ?? "",
+    city_ibge_code: settings.city_ibge_code ?? "",
     natures: settings.natures,
   };
 }
@@ -120,6 +123,7 @@ function settingsOf(form: Form): FiscalSettings {
     nfce_series: Number(form.nfce_series),
     nfse_series: Number(form.nfse_series),
     certificate_valid_until: optional(form.certificate_valid_until),
+    city_ibge_code: optional(form.city_ibge_code),
     natures: form.natures,
   };
 }
@@ -280,7 +284,8 @@ export function FiscalSettingsPage() {
                   <HelpTitle id="fiscal-issuer" title="Emitente">
                     <p>
                       Os dados da empresa que emite as notas, como constam no cadastro do CNPJ. Só o formato é conferido
-                      aqui; a inscrição estadual pode ser ISENTO.
+                      aqui; a inscrição estadual pode ser ISENTO. O código IBGE do município (sete dígitos, tabela do IBGE) é o que a
+                      NFS-e diz sobre onde foi emitida: sem ele nenhuma NFS-e pode ser emitida.
                     </p>
                   </HelpTitle>
                   <div className="field-grid">
@@ -339,6 +344,20 @@ export function FiscalSettingsPage() {
                       </select>
                     </label>
                   </fieldset>
+                  <div className="field-grid">
+                    <label>
+                      Código IBGE do município
+                      <input
+                        inputMode="numeric"
+                        maxLength={7}
+                        pattern="[0-9]{7}"
+                        autoComplete="off"
+                        placeholder="3550308"
+                        value={form.city_ibge_code}
+                        onChange={(event) => set("city_ibge_code", event.target.value)}
+                      />
+                    </label>
+                  </div>
                 </section>
 
                 <section className="form-section" aria-labelledby="fiscal-regime">
