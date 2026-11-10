@@ -6920,6 +6920,7 @@ mod tests {
              {note};{sale};Nota ç.pdf;application/pdf;13;{note_path}\r\n\
              {lease};{rent};Contrato: aluguel.pdf;application/pdf;17;{lease_path}\r\n"
         );
+        let fiscal_csv = "\u{feff}document_id;kind;status;number;series;access_key;issued_on;recipient_name;recipient_document;total;environment;nature;xml_path;pdf_path;cancellation_path\r\n";
         let files = crate::export_files::tests::unzip(&bytes);
         assert_eq!(
             files,
@@ -6928,6 +6929,8 @@ mod tests {
                 ("settlements.csv".to_owned(), settlements_csv.into_bytes()),
                 ("transfers.csv".to_owned(), transfers_csv.into_bytes()),
                 ("attachments.csv".to_owned(), attachments_csv.into_bytes()),
+                // No fiscal document was issued in production: the list holds its header only.
+                ("fiscal.csv".to_owned(), fiscal_csv.as_bytes().to_vec()),
                 (note_path, b"%PDF-1.4 nota".to_vec()),
                 (lease_path, b"%PDF-1.4 contrato".to_vec()),
             ]

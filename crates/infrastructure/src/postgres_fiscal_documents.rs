@@ -394,6 +394,29 @@ impl FiscalDocumentRepository for PostgresFiscalDocumentRepository {
         .await
     }
 
+    async fn issued_between(
+        &self,
+        company_id: CompanyId,
+        from: CalendarDate,
+        to: CalendarDate,
+        limit: usize,
+    ) -> Result<Vec<FiscalDocument>, RepositoryError> {
+        let rows = sqlx::query(&format!(
+            "SELECT {COLUMNS} FROM fiscal_documents WHERE company_id = $1 AND environment = 'production' \
+             AND status IN ('authorized', 'cancelled') \
+             AND issued_on BETWEEN CAST($2 AS date) AND CAST($3 AS date) \
+             ORDER BY issued_at, id LIMIT $4"
+        ))
+        .bind(company_id.as_uuid())
+        .bind(from.to_string())
+        .bind(to.to_string())
+        .bind(i64::try_from(limit).unwrap_or(i64::MAX))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        rows.iter().map(document_from_row).collect()
+    }
+
     async fn record_event(
         &self,
         event: &FiscalEvent,

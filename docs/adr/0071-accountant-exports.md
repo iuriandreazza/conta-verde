@@ -132,10 +132,10 @@ on `TransferQuery`, and `AttachmentRepository::list_by_entries`; each is held to
 
 - An export carries what the reader of the other areas can already see, gathered; it is an `accounting` read, so the
   accountant and every other role that reaches the area can download it, and nobody else.
-- **The product does not keep the NF-e XML of a purchase it enters** ([ADR 0057](0057-purchase-entry-from-nfe-xml.md)) and
-  issues no fiscal document ([ADR 0006](0006-fiscal-last.md)): the package carries only what someone **attached** to an
-  entry (a supplier's XML, a boleto or invoice PDF). The Contador page says it plainly. Phase 7's XMLs are to reach this
-  package.
+- **The product does not keep the NF-e XML of a purchase it enters** ([ADR 0057](0057-purchase-entry-from-nfe-xml.md)): of
+  what comes in, the package carries only what someone **attached** to an entry (a supplier's XML, a boleto or invoice PDF).
+  The Contador page says it plainly. **Amended by [ADR 0076](0076-nfe-documents.md):** the fiscal documents the product itself
+  issues (production, issued in the span) are in the package too, with `fiscal.csv`.
 - A name is looked up per distinct party of the span: a company with many thousands of parties in one month pays that many
   reads. Acceptable at the sizes the limits allow; a batch read is the next step if it shows. The registers are read
   once per request, and the settlements' entries are read whole (installments included) only to name their rows.

@@ -63,8 +63,9 @@ export function AccountantDownloads({ companyId, lockedThrough }: { companyId: s
         </p>
       </HelpTitle>
       <p className="muted">
-        O sistema não guarda o XML das notas de compra e não emite notas fiscais: o pacote leva só o que foi anexado aos
-        lançamentos.
+        O sistema não guarda o XML das notas de compra: do que entra, o pacote leva só o que foi anexado aos lançamentos.
+        Das notas emitidas em produção no período, leva a lista (fiscal.csv) e os arquivos delas: XML, DANFE, cancelamentos
+        e cartas de correção.
       </p>
       <Notice message={error} />
       <div className="settle-form">

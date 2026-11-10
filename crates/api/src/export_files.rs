@@ -343,6 +343,8 @@ pub fn package_zip(package: ExportPackage, format: ExportFormat) -> Result<Vec<u
         ),
         // The list of the attached files is always a CSV: it is read by people more than by software.
         ("attachments.csv".to_owned(), csv_of(&package.attachments)),
+        // The fiscal documents issued in the span, always a CSV like the list above ([ADR 0073]).
+        ("fiscal.csv".to_owned(), csv_of(&package.fiscal)),
     ];
     files.extend(
         package

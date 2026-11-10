@@ -18463,6 +18463,100 @@ pub async fn issues_an_nfe_from_a_sale<D, S, P, Y, F, B, R>(
             .is_empty()
     );
 
+    // The accountant's package: only production documents of the span, their files and their letters, counted against the
+    // limits before any file is read.
+    let mut production = draft.clone();
+    production.environment = conta_verde_domain::FiscalEnvironment::Production;
+    settings
+        .save(
+            &conta_verde_domain::FiscalSettings::new(company, production).unwrap(),
+            &AuditEntry {
+                company_id: company,
+                actor: actor(),
+                entity: AuditEntity::FiscalSettings,
+                entity_id: company.as_uuid(),
+                action: AuditAction::Updated,
+                changes: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    let sale = save_a_completed_sale(sales, company, entry_seed, seed, fiscal).await;
+    let made = service
+        .issue(company, &user, issue_request(sale), FISCAL_NOW)
+        .await
+        .unwrap();
+    let made = service
+        .refresh(company, made.id(), FISCAL_NOW + 3_600)
+        .await
+        .unwrap();
+    assert_eq!(made.status(), FiscalDocumentStatus::Authorized);
+    service
+        .correct(company, &user, made.id(), text)
+        .await
+        .unwrap();
+    let day = conta_verde_domain::CalendarDate::parse("2026-11-09").unwrap();
+    let roomy = conta_verde_application::ExportLimits {
+        rows: 100,
+        attached_files: 10,
+        attached_bytes: 1 << 20,
+    };
+    let (table, files) = service.package(company, day, day, roomy).await.unwrap();
+    assert_eq!(
+        table.rows.len(),
+        1,
+        "the homologation documents are not in it"
+    );
+    let key = made
+        .authorization()
+        .unwrap()
+        .access_key()
+        .as_str()
+        .to_owned();
+    let paths: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
+    assert!(paths.contains(&format!("fiscal/nfe/{key}.xml").as_str()));
+    assert!(paths.contains(&format!("fiscal/nfe/{key}-cce-1.xml").as_str()));
+    assert!(files.iter().all(|file| !file.bytes.is_empty()));
+    assert_eq!(
+        table.rows[0][5],
+        conta_verde_application::ExportCell::Text(key)
+    );
+    let too_many_files = conta_verde_application::ExportLimits {
+        attached_files: 1,
+        ..roomy
+    };
+    assert!(matches!(
+        service.package(company, day, day, too_many_files).await,
+        Err(ApplicationError::ExportTooLarge(_))
+    ));
+    let too_big = conta_verde_application::ExportLimits {
+        attached_bytes: 1,
+        ..roomy
+    };
+    assert!(matches!(
+        service.package(company, day, day, too_big).await,
+        Err(ApplicationError::ExportTooLarge(_))
+    ));
+    let none = service
+        .package(
+            company,
+            day.plus_days(1).unwrap(),
+            day.plus_days(2).unwrap(),
+            roomy,
+        )
+        .await
+        .unwrap();
+    assert!(none.0.rows.is_empty() && none.1.is_empty());
+    assert!(
+        service
+            .package(other_company, day, day, roomy)
+            .await
+            .unwrap()
+            .0
+            .rows
+            .is_empty()
+    );
+
     // After the certificate's day nothing is sent.
     let mut expired = draft;
     expired.certificate_valid_until = Some("2026-11-08".into());
