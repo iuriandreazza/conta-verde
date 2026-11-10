@@ -6,7 +6,8 @@ use conta_verde_application::{
     FiscalGateway, GatewayError, NfceRequest, NfeRequest, NfseRequest, Refusal, Submission,
 };
 use conta_verde_domain::{
-    AccessKey, CalendarDate, FiscalSettings, state_code, state_utc_offset_minutes,
+    AccessKey, CalendarDate, FiscalSettings, Manifestation, ReceivedInvoiceDraft,
+    ReceivedSituation, state_code, state_utc_offset_minutes,
 };
 
 const MIN_REASON_CHARS: usize = 15;
@@ -74,6 +75,24 @@ impl FiscalGateway for NoFiscalGateway {
         _first: u32,
         _last: u32,
         _reason: &str,
+    ) -> Result<EventOutcome, GatewayError> {
+        Err(GatewayError::Disabled)
+    }
+
+    async fn list_received_nfe(
+        &self,
+        _issuer: &FiscalSettings,
+        _since_version: u64,
+    ) -> Result<Vec<ReceivedInvoiceDraft>, GatewayError> {
+        Err(GatewayError::Disabled)
+    }
+
+    async fn manifest_received_nfe(
+        &self,
+        _issuer: &FiscalSettings,
+        _access_key: &AccessKey,
+        _word: Manifestation,
+        _justification: Option<&str>,
     ) -> Result<EventOutcome, GatewayError> {
         Err(GatewayError::Disabled)
     }
@@ -171,6 +190,12 @@ struct FakeState {
     submitted_nfce: Vec<NfceRequest>,
     /// A gateway that does not issue NFC-e.
     without_nfce: bool,
+    /// What the authority holds against the issuers: the invoices a supplier issued to them, with their versions.
+    received: Vec<ReceivedInvoiceDraft>,
+    /// The words declared, in order, as `(key, word, justification)`.
+    manifested: Vec<(String, Manifestation, Option<String>)>,
+    /// A gateway that does not list received invoices.
+    without_manifestation: bool,
     invalidated: Vec<(u16, u32, u32)>,
     rejection: Option<Refusal>,
     denial: Option<Refusal>,
@@ -264,6 +289,29 @@ impl FakeFiscalGateway {
     /// From now on the gateway does not issue NFS-e: an issue is refused before a DPS number is taken.
     pub fn without_nfse(&self, without: bool) {
         self.lock().without_nfse = without;
+    }
+
+    /// A supplier issues this invoice to the company: the authority holds it from now on, with the next version.
+    pub fn receive(&self, mut invoice: ReceivedInvoiceDraft) {
+        let mut state = self.lock();
+        invoice.version = state
+            .received
+            .iter()
+            .map(|held| held.version)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        state.received.push(invoice);
+    }
+
+    /// The words declared through the gateway, in order.
+    pub fn manifested(&self) -> Vec<(String, Manifestation, Option<String>)> {
+        self.lock().manifested.clone()
+    }
+
+    /// From now on the gateway does not list received invoices.
+    pub fn without_manifestation(&self, without: bool) {
+        self.lock().without_manifestation = without;
     }
 
     /// From now on the gateway does not issue NFC-e.
@@ -496,6 +544,83 @@ impl FiscalGateway for FakeFiscalGateway {
 
     fn issues_nfce(&self) -> bool {
         !self.lock().without_nfce
+    }
+
+    fn issues_manifestation(&self) -> bool {
+        !self.lock().without_manifestation
+    }
+
+    async fn list_received_nfe(
+        &self,
+        _issuer: &FiscalSettings,
+        since_version: u64,
+    ) -> Result<Vec<ReceivedInvoiceDraft>, GatewayError> {
+        let state = self.lock();
+        if state.unavailable {
+            return Err(GatewayError::Unavailable("the fake is switched off".into()));
+        }
+        let mut found: Vec<ReceivedInvoiceDraft> = state
+            .received
+            .iter()
+            .filter(|invoice| invoice.version > since_version)
+            .cloned()
+            .collect();
+        found.sort_by_key(|invoice| invoice.version);
+        // A page at a time, like the real one: the caller asks again from the biggest version it got.
+        found.truncate(2);
+        Ok(found)
+    }
+
+    async fn manifest_received_nfe(
+        &self,
+        _issuer: &FiscalSettings,
+        access_key: &AccessKey,
+        word: Manifestation,
+        justification: Option<&str>,
+    ) -> Result<EventOutcome, GatewayError> {
+        let mut state = self.lock();
+        if state.unavailable {
+            return Err(GatewayError::Unavailable("the fake is switched off".into()));
+        }
+        if let Some(refusal) = state.refuse_events.clone() {
+            return Ok(EventOutcome::Refused(refusal));
+        }
+        let next_version = state
+            .received
+            .iter()
+            .map(|held| held.version)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        let Some(held) = state
+            .received
+            .iter_mut()
+            .find(|held| held.access_key == *access_key)
+        else {
+            return Ok(EventOutcome::Refused(Refusal::new(
+                "nao_encontrada",
+                "the authority has no such invoice",
+            )));
+        };
+        if held.situation != ReceivedSituation::Authorized || !held.manifestation.may_become(word) {
+            return Ok(EventOutcome::Refused(Refusal::new(
+                "573",
+                "Duplicidade de evento, ou evento que não segue o anterior",
+            )));
+        }
+        held.manifestation = word;
+        held.version = next_version;
+        state.manifested.push((
+            access_key.as_str().to_owned(),
+            word,
+            justification.map(str::to_owned),
+        ));
+        Ok(EventOutcome::Accepted(AcceptedEvent {
+            protocol: Some("FAKEMDE".to_owned()),
+            number: None,
+            xml: None,
+            pdf: None,
+        }))
     }
 
     async fn query_nfce(
@@ -939,6 +1064,16 @@ mod tests {
         };
         assert_eq!(nfe.number, 1);
         assert_eq!(nfe.access_key.model(), "55");
+    }
+
+    #[tokio::test]
+    async fn lists_and_manifests_received_invoices() {
+        let gateway = FakeFiscalGateway::default();
+        contract::a_gateway_lists_and_manifests_received_invoices(&gateway, &issuer(), |draft| {
+            gateway.receive(draft);
+        })
+        .await;
+        assert_eq!(gateway.manifested().len(), 2);
     }
 
     #[tokio::test]

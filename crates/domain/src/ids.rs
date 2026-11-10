@@ -43,6 +43,7 @@ uuid_id!(PaymentEventId);
 uuid_id!(PaymentMethodId);
 uuid_id!(PaymentTermId);
 uuid_id!(PriceListId);
+uuid_id!(ReceivedInvoiceId);
 uuid_id!(ProductId);
 uuid_id!(PurchaseOrderId);
 uuid_id!(PurchaseReceiptId);

@@ -127,6 +127,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".to_owned());
     let config = ApiConfig {
         cookie_secure: parse_flag("COOKIE_SECURE")?,
+        fiscal_webhook: fiscal_webhook_from_env()?,
     };
 
     let pool = connect_and_migrate(&database_url).await?;
@@ -704,6 +705,30 @@ impl FiscalGateway for ConfiguredFiscalGateway {
         on_gateway!(self, gateway => gateway.issues_nfce())
     }
 
+    fn issues_manifestation(&self) -> bool {
+        on_gateway!(self, gateway => gateway.issues_manifestation())
+    }
+
+    async fn list_received_nfe(
+        &self,
+        issuer: &FiscalSettings,
+        since_version: u64,
+    ) -> Result<Vec<conta_verde_domain::ReceivedInvoiceDraft>, GatewayError> {
+        on_gateway!(self, gateway => gateway.list_received_nfe(issuer, since_version).await)
+    }
+
+    async fn manifest_received_nfe(
+        &self,
+        issuer: &FiscalSettings,
+        access_key: &conta_verde_domain::AccessKey,
+        word: conta_verde_domain::Manifestation,
+        justification: Option<&str>,
+    ) -> Result<EventOutcome, GatewayError> {
+        on_gateway!(self, gateway => gateway
+            .manifest_received_nfe(issuer, access_key, word, justification)
+            .await)
+    }
+
     async fn submit_nfce(&self, request: &NfceRequest) -> Result<Submission, GatewayError> {
         on_gateway!(self, gateway => gateway.submit_nfce(request).await)
     }
@@ -1244,6 +1269,25 @@ fn lookup_enabled(name: &str, setting: Option<&str>) -> Result<bool, String> {
 }
 
 // Strict on purpose: a typo such as `TRUE` must not silently turn off a security setting.
+/// `FISCAL_WEBHOOK_SECRET` (at least 32 characters; unset keeps the door shut) and `FISCAL_WEBHOOK_HEADER` (the name of the header
+/// the gateway puts it in, `x-fiscal-webhook-token` by default): what the operator registers at the gateway as the hook's
+/// authorization (ADR 0083). A secret that is too short, or a header name that is not one, stops the server.
+fn fiscal_webhook_from_env()
+-> Result<Option<conta_verde_api::FiscalWebhook>, Box<dyn std::error::Error + Send + Sync>> {
+    let Ok(secret) = std::env::var("FISCAL_WEBHOOK_SECRET") else {
+        return Ok(None);
+    };
+    if secret.chars().count() < 32 {
+        return Err("FISCAL_WEBHOOK_SECRET must have at least 32 characters".into());
+    }
+    let header = std::env::var("FISCAL_WEBHOOK_HEADER")
+        .unwrap_or_else(|_| "x-fiscal-webhook-token".to_owned());
+    if axum::http::HeaderName::from_bytes(header.as_bytes()).is_err() {
+        return Err("FISCAL_WEBHOOK_HEADER is not an HTTP header name".into());
+    }
+    Ok(Some(conta_verde_api::FiscalWebhook { header, secret }))
+}
+
 fn parse_flag(name: &str) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     match std::env::var(name).as_deref() {
         Err(_) | Ok("false") => Ok(false),

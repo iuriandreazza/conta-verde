@@ -6,8 +6,8 @@ use conta_verde_application::{
     Submission,
 };
 use conta_verde_domain::{
-    AccessKey, Amount, Decimal, FiscalEnvironment, FiscalSettings, IssTaxation, TaxRegime,
-    fiscal_timestamp,
+    AccessKey, Amount, CalendarDate, Decimal, FiscalEnvironment, FiscalSettings, IssTaxation,
+    Manifestation, ReceivedInvoiceDraft, ReceivedSituation, TaxRegime, fiscal_timestamp,
 };
 use reqwest::{Method, StatusCode};
 use serde_json::{Map, Value, json};
@@ -527,6 +527,47 @@ fn refusal_of_error(body: &Value) -> Refusal {
     let mut refusal = refusal_of(body);
     refusal.code = Refusal::new(&code, "").code;
     refusal
+}
+
+/// One invoice of the gateway's list of those issued against the company. A record this adapter cannot read is not skipped
+/// (the versions after it would hide it for good): the whole listing is unavailable until it can be read.
+fn received_of(item: &Value) -> Result<ReceivedInvoiceDraft, GatewayError> {
+    let unreadable =
+        || GatewayError::Unavailable("a received invoice this adapter cannot read".to_owned());
+    let key = text(item, "chave_nfe").ok_or_else(unreadable)?;
+    let access_key =
+        AccessKey::parse(key.strip_prefix("NFe").unwrap_or(&key)).map_err(|_| unreadable())?;
+    let situation = match item["situacao"].as_str() {
+        Some("autorizada") => ReceivedSituation::Authorized,
+        Some("cancelada") => ReceivedSituation::Cancelled,
+        Some("denegada") => ReceivedSituation::Denied,
+        _ => return Err(unreadable()),
+    };
+    let manifestation = match item["manifestacao_destinatario"].as_str() {
+        Some("nulo") | None => Manifestation::None,
+        Some("ciencia") => Manifestation::Awareness,
+        Some("confirmacao") => Manifestation::Confirmation,
+        Some("desconhecimento") => Manifestation::Unknown,
+        Some("nao_realizada") => Manifestation::NotPerformed,
+        _ => return Err(unreadable()),
+    };
+    // The date comes with a time and an offset: the day is its first ten characters.
+    let issued = text(item, "data_emissao").ok_or_else(unreadable)?;
+    Ok(ReceivedInvoiceDraft {
+        access_key,
+        issuer_name: text(item, "nome_emitente").ok_or_else(unreadable)?,
+        issuer_document: text(item, "documento_emitente").ok_or_else(unreadable)?,
+        total: text(item, "valor_total")
+            .and_then(|total| Amount::parse(&total))
+            .ok_or_else(unreadable)?,
+        issued_on: issued
+            .get(..10)
+            .and_then(CalendarDate::parse)
+            .ok_or_else(unreadable)?,
+        situation,
+        manifestation,
+        version: whole(item, "versao").ok_or_else(unreadable)?,
+    })
 }
 
 /// The reason of an NFS-e that was not authorized or of a cancellation that was refused: each of the `erros` has a
@@ -1050,6 +1091,65 @@ impl FiscalGateway for FocusNfeGateway {
         true
     }
 
+    async fn list_received_nfe(
+        &self,
+        issuer: &FiscalSettings,
+        since_version: u64,
+    ) -> Result<Vec<ReceivedInvoiceDraft>, GatewayError> {
+        let (base, token) = self.target(issuer)?;
+        let answer = self
+            .call(
+                Method::GET,
+                &format!(
+                    "{base}/v2/nfes_recebidas?cnpj={}&versao={since_version}",
+                    issuer.cnpj()
+                ),
+                token,
+                None,
+            )
+            .await?;
+        if !answer.status.is_success() {
+            return Err(GatewayError::Unavailable(format!("{}", answer.status)));
+        }
+        let items = answer.body.as_array().ok_or_else(|| {
+            GatewayError::Unavailable("the list of received invoices is not a list".to_owned())
+        })?;
+        items.iter().map(received_of).collect()
+    }
+
+    async fn manifest_received_nfe(
+        &self,
+        issuer: &FiscalSettings,
+        access_key: &AccessKey,
+        word: Manifestation,
+        justification: Option<&str>,
+    ) -> Result<EventOutcome, GatewayError> {
+        let (base, token) = self.target(issuer)?;
+        let kind = match word {
+            Manifestation::Awareness => "ciencia",
+            Manifestation::Confirmation => "confirmacao",
+            Manifestation::Unknown => "desconhecimento",
+            Manifestation::NotPerformed => "nao_realizada",
+            Manifestation::None => {
+                return Err(GatewayError::Unsupported("declaring no manifestation"));
+            }
+        };
+        let mut body = json!({ "tipo": kind });
+        if let Some(reason) = justification {
+            body["justificativa"] = json!(reason);
+        }
+        let answer = self
+            .call(
+                Method::POST,
+                &format!("{base}/v2/nfes_recebidas/{}/manifesto", access_key.as_str()),
+                token,
+                Some(body.to_string()),
+            )
+            .await?;
+        self.event_of(&base, token, &answer, "evento_registrado", &[], refusal_of)
+            .await
+    }
+
     async fn submit_nfce(&self, request: &NfceRequest) -> Result<Submission, GatewayError> {
         self.submit_consumer(request).await.map(Submission::of)
     }
@@ -1254,6 +1354,8 @@ mod tests {
         nfse: HashMap<String, Stored>,
         nfce: HashMap<String, Stored>,
         nfce_bodies: Vec<String>,
+        received: Vec<Value>,
+        manifestos: Vec<Value>,
         /// The DPS (series, number) each issuer used, and under which reference.
         dps_used: HashMap<(String, u64, u64), String>,
         nfse_bodies: Vec<String>,
@@ -1527,6 +1629,48 @@ mod tests {
                         }
                     },
                 ),
+            )
+            .route(
+                "/v2/nfes_recebidas",
+                get(|State(fake): State<Shared>, headers: HeaderMap, Query(query): Query<HashMap<String, String>>| async move {
+                    if !authorized(&headers, HOMOLOGATION_TOKEN) {
+                        return json_reply(StatusCode::UNAUTHORIZED, json!({}));
+                    }
+                    let since: u64 = query.get("versao").and_then(|v| v.parse().ok()).unwrap_or(0);
+                    let fake = fake.lock().unwrap();
+                    let items: Vec<Value> = fake
+                        .received
+                        .iter()
+                        .filter(|item| item["versao"].as_u64().unwrap() > since)
+                        .cloned()
+                        .collect();
+                    json_reply(StatusCode::OK, Value::Array(items))
+                }),
+            )
+            .route(
+                "/v2/nfes_recebidas/{key}/manifesto",
+                post(|State(fake): State<Shared>, headers: HeaderMap, Path(key): Path<String>, body: String| async move {
+                    if !authorized(&headers, HOMOLOGATION_TOKEN) {
+                        return json_reply(StatusCode::UNAUTHORIZED, json!({}));
+                    }
+                    let sent: Value = serde_json::from_str(&body).unwrap();
+                    let mut fake = fake.lock().unwrap();
+                    fake.manifestos.push(sent.clone());
+                    let next = fake.received.iter().map(|i| i["versao"].as_u64().unwrap()).max().unwrap_or(0) + 1;
+                    let Some(item) = fake.received.iter_mut().find(|item| item["chave_nfe"] == format!("NFe{key}")) else {
+                        return json_reply(StatusCode::NOT_FOUND, json!({"codigo": "nao_encontrada", "mensagem": "sem nota"}));
+                    };
+                    let kind = sent["tipo"].as_str().unwrap().to_owned();
+                    if item["manifestacao_destinatario"] != "nulo" && item["manifestacao_destinatario"] != "ciencia" || item["manifestacao_destinatario"] == kind {
+                        return json_reply(
+                            StatusCode::OK,
+                            json!({"status": "erro", "status_sefaz": "573", "mensagem_sefaz": "Rejeicao: Duplicidade de evento"}),
+                        );
+                    }
+                    item["manifestacao_destinatario"] = json!(kind);
+                    item["versao"] = json!(next);
+                    json_reply(StatusCode::OK, json!({"status": "evento_registrado", "status_sefaz": "135", "protocolo": "P9"}))
+                }),
             )
             .route(
                 "/v2/nfce",
@@ -2050,6 +2194,56 @@ mod tests {
     /// homologation**). CI runs the ignored tests without them and this one does nothing. It issues one NF-e from a
     /// sale of goods and asks for it, which settles what this adapter's documentation reading left open: the fields,
     /// contingency, and where the files are. Fill in the issuer's data of that company before running.
+    #[tokio::test]
+    async fn lists_and_manifests_received_invoices_through_the_stand_in() {
+        let fake = Shared::default();
+        let addr = serve(fake.clone()).await;
+        let issuer = contract::fiscal_issuer(CNPJ, FiscalEnvironment::Homologation);
+        let gateway = gateway(addr, Some(HOMOLOGATION_TOKEN), None);
+        let version = std::sync::atomic::AtomicU64::new(0);
+        contract::a_gateway_lists_and_manifests_received_invoices(&gateway, &issuer, |draft| {
+            let next = version.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            fake.lock().unwrap().received.push(json!({
+                "chave_nfe": format!("NFe{}", draft.access_key.as_str()),
+                "nome_emitente": draft.issuer_name,
+                "documento_emitente": draft.issuer_document,
+                "valor_total": draft.total.to_string(),
+                "data_emissao": format!("{}T10:00:00-03:00", draft.issued_on),
+                "situacao": "autorizada",
+                "manifestacao_destinatario": "nulo",
+                "versao": next,
+            }));
+        })
+        .await;
+        // The words go out as the gateway names them, and a reason only with the word that has one.
+        let sent = fake.lock().unwrap().manifestos.clone();
+        assert_eq!(sent[0], json!({ "tipo": "ciencia" }));
+        assert_eq!(sent[2]["tipo"], "nao_realizada");
+        assert!(
+            sent[2]["justificativa"]
+                .as_str()
+                .unwrap()
+                .contains("nunca chegou")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_received_invoice_the_adapter_cannot_read_makes_the_listing_unavailable() {
+        let fake = Shared::default();
+        let addr = serve(fake.clone()).await;
+        let issuer = contract::fiscal_issuer(CNPJ, FiscalEnvironment::Homologation);
+        fake.lock()
+            .unwrap()
+            .received
+            .push(json!({ "chave_nfe": "not-a-key", "versao": 1 }));
+        assert!(matches!(
+            gateway(addr, Some(HOMOLOGATION_TOKEN), None)
+                .list_received_nfe(&issuer, 0)
+                .await,
+            Err(GatewayError::Unavailable(_))
+        ));
+    }
+
     #[tokio::test]
     async fn an_nfce_is_answered_at_once_and_its_printed_page_is_not_kept() {
         let fake = Shared::default();

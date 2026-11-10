@@ -43,6 +43,7 @@ mod price_list;
 mod product;
 mod purchase_order;
 mod quote;
+mod received_invoice;
 mod recurrence;
 mod role;
 mod sale;
@@ -75,11 +76,12 @@ pub use audit::{
     period_lock_changes, period_lock_creation_changes, price_list_changes,
     price_list_creation_changes, product_changes, product_creation_changes, purchase_order_changes,
     purchase_order_creation_changes, purchase_receipt_creation_changes, quote_changes,
-    quote_creation_changes, recurrence_changes, recurrence_creation_changes, sale_changes,
-    sale_creation_changes, sale_return_creation_changes, settlement_changes,
-    settlement_creation_changes, statement_line_changes, statement_line_creation_changes,
-    stock_movement_creation_changes, stock_settings_changes, stock_settings_creation_changes,
-    transfer_changes, transfer_creation_changes,
+    quote_creation_changes, received_invoice_changes, received_invoice_creation_changes,
+    recurrence_changes, recurrence_creation_changes, sale_changes, sale_creation_changes,
+    sale_return_creation_changes, settlement_changes, settlement_creation_changes,
+    statement_line_changes, statement_line_creation_changes, stock_movement_creation_changes,
+    stock_settings_changes, stock_settings_creation_changes, transfer_changes,
+    transfer_creation_changes,
 };
 pub use bank_account::{BankAccount, BankAccountDraft, BankAccountKind};
 pub use calendar_date::CalendarDate;
@@ -127,8 +129,8 @@ pub use ids::{
     ContractId, CostCenterId, DocumentMailId, EntryId, FiscalDocumentId, FiscalEventId,
     InventoryCountId, InvitationId, JobId, NotificationId, PartyId, PaymentEventId,
     PaymentMethodId, PaymentTermId, PriceListId, ProductId, PurchaseOrderId, PurchaseReceiptId,
-    QuoteId, RecurrenceId, SaleId, SaleReturnId, SettlementId, StatementLineId, StockMovementId,
-    TransferId, UserId,
+    QuoteId, ReceivedInvoiceId, RecurrenceId, SaleId, SaleReturnId, SettlementId, StatementLineId,
+    StockMovementId, TransferId, UserId,
 };
 pub use inventory_count::{
     CountLine, CountLineDraft, CountStatus, InventoryCount, InventoryCountDraft, MAX_COUNT_LINES,
@@ -161,6 +163,9 @@ pub use purchase_order::{
     ReceiptItem, ReceiptItemDraft, ScheduleDraft,
 };
 pub use quote::{Quote, QuoteDraft, QuoteStatus};
+pub use received_invoice::{
+    Manifestation, ReceivedInvoice, ReceivedInvoiceDraft, ReceivedSituation,
+};
 pub use recurrence::{Frequency, Recurrence, RecurrenceDraft};
 pub use role::{Access, Area, Role};
 /// The exact decimal money is made of, so a layer that adds amounts need not depend on its crate.

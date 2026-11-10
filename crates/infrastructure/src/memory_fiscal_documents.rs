@@ -1,13 +1,14 @@
 use std::sync::{Arc, Mutex};
 
 use conta_verde_application::{
-    FiscalDocumentCursor, FiscalDocumentQuery, FiscalDocumentRepository, RepositoryError,
-    ensure_audit_describes,
+    FiscalDocumentCursor, FiscalDocumentQuery, FiscalDocumentRepository, ReceivedInvoiceCursor,
+    ReceivedInvoiceQuery, RepositoryError, ensure_audit_describes,
 };
 use conta_verde_domain::{
-    AuditEntity, AuditEntry, AuditRecord, CalendarDate, CompanyId, FiscalDocument,
+    AccessKey, AuditEntity, AuditEntry, AuditRecord, CalendarDate, CompanyId, FiscalDocument,
     FiscalDocumentId, FiscalDocumentKind, FiscalDocumentStatus, FiscalEnvironment, FiscalEvent,
     FiscalEventId, FiscalEventStatus, FiscalEventSubject, FiscalFile, FiscalFileKind, FiscalOrigin,
+    Manifestation, ReceivedInvoice, ReceivedInvoiceDraft, ReceivedInvoiceId,
 };
 
 use crate::memory_audit::AuditLog;
@@ -24,6 +25,7 @@ struct DocumentState {
     documents: Vec<FiscalDocument>,
     files: Vec<FiscalFile>,
     events: Vec<FiscalEvent>,
+    received: Vec<ReceivedInvoice>,
     audit: AuditLog,
 }
 
@@ -487,6 +489,137 @@ impl FiscalDocumentRepository for InMemoryFiscalDocumentRepository {
         }))
     }
 
+    async fn mirror_received(
+        &self,
+        company_id: CompanyId,
+        invoices: &[ReceivedInvoiceDraft],
+    ) -> Result<usize, RepositoryError> {
+        let mut state = self.state.lock().expect("repository lock poisoned");
+        let mut added = 0;
+        for draft in invoices {
+            let held = state.received.iter_mut().find(|held| {
+                held.company_id() == company_id && held.access_key() == &draft.access_key
+            });
+            match held {
+                Some(held) => {
+                    // What the gateway says now: the reason the company gave stays with the word it gave.
+                    let kept = held.justification().map(str::to_owned);
+                    let word_changed = held.manifestation() != draft.manifestation;
+                    let mirrored = held
+                        .mirrored(draft.clone())
+                        .map_err(|error| RepositoryError::Storage(error.to_string()))?;
+                    *held = mirrored.restored(if word_changed { None } else { kept });
+                }
+                None => {
+                    let invoice = ReceivedInvoice::new(
+                        ReceivedInvoiceId::generate(),
+                        company_id,
+                        draft.clone(),
+                    )
+                    .map_err(|error| RepositoryError::Storage(error.to_string()))?;
+                    state.received.push(invoice);
+                    added += 1;
+                }
+            }
+        }
+        Ok(added)
+    }
+
+    async fn max_received_version(&self, company_id: CompanyId) -> Result<u64, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        Ok(state
+            .received
+            .iter()
+            .filter(|held| held.company_id() == company_id)
+            .map(ReceivedInvoice::version)
+            .max()
+            .unwrap_or(0))
+    }
+
+    async fn find_received(
+        &self,
+        company_id: CompanyId,
+        id: ReceivedInvoiceId,
+    ) -> Result<Option<ReceivedInvoice>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        Ok(state
+            .received
+            .iter()
+            .find(|held| held.company_id() == company_id && held.id() == id)
+            .cloned())
+    }
+
+    async fn find_received_by_key(
+        &self,
+        company_id: CompanyId,
+        key: &AccessKey,
+    ) -> Result<Option<ReceivedInvoice>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        Ok(state
+            .received
+            .iter()
+            .find(|held| held.company_id() == company_id && held.access_key() == key)
+            .cloned())
+    }
+
+    async fn list_received(
+        &self,
+        company_id: CompanyId,
+        query: &ReceivedInvoiceQuery,
+        after: Option<&ReceivedInvoiceCursor>,
+        limit: usize,
+    ) -> Result<Vec<ReceivedInvoice>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        let mut found: Vec<ReceivedInvoice> = state
+            .received
+            .iter()
+            .filter(|held| held.company_id() == company_id && query.matches(held))
+            .cloned()
+            .collect();
+        // Newest first by the day of issue, then the id: the order of the keyset cursor.
+        found.sort_by(|a, b| {
+            (b.issued_on(), b.id().as_uuid()).cmp(&(a.issued_on(), a.id().as_uuid()))
+        });
+        let found = found.into_iter().filter(|held| {
+            after.is_none_or(|cursor| {
+                (held.issued_on(), held.id().as_uuid()) < (cursor.issued_on, cursor.id.as_uuid())
+            })
+        });
+        Ok(found.take(limit).collect())
+    }
+
+    async fn record_manifestation(
+        &self,
+        invoice: &ReceivedInvoice,
+        expected: Manifestation,
+        audit: &AuditEntry,
+    ) -> Result<(), RepositoryError> {
+        ensure_audit_describes(audit, invoice)?;
+        let mut state = self.state.lock().expect("repository lock poisoned");
+        let held = state
+            .received
+            .iter_mut()
+            .find(|held| held.company_id() == invoice.company_id() && held.id() == invoice.id())
+            .ok_or(RepositoryError::NotFound)?;
+        if held.manifestation() != expected {
+            return Err(RepositoryError::FiscalDocumentChanged);
+        }
+        *held = invoice.clone();
+        state.audit.record(audit);
+        Ok(())
+    }
+
+    async fn received_history(
+        &self,
+        company_id: CompanyId,
+        id: ReceivedInvoiceId,
+    ) -> Result<Vec<AuditRecord>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        Ok(state
+            .audit
+            .history(company_id, AuditEntity::ReceivedInvoice, id.as_uuid()))
+    }
+
     async fn next_dps_number(
         &self,
         company_id: CompanyId,
@@ -575,6 +708,16 @@ mod tests {
             CompanyId::generate(),
             SaleId::generate(),
             SaleId::generate(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn keeps_received_invoices() {
+        contract::received_invoices_are_kept(
+            &InMemoryFiscalDocumentRepository::default(),
+            CompanyId::generate(),
+            CompanyId::generate(),
         )
         .await;
     }
@@ -683,6 +826,39 @@ mod tests {
             &entry_seed,
             &seed,
             &fiscal,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn syncs_and_manifests_received_invoices() {
+        use crate::memory_entries::tests::Registers;
+        use crate::{
+            FakeFiscalGateway, InMemoryBlobStore, InMemoryFiscalSettingsRepository,
+            InMemoryProductRepository, InMemorySaleRepository,
+        };
+        use conta_verde_application::FiscalDocumentService;
+
+        let registers = Registers::new();
+        let (company, other_company) = (CompanyId::generate(), CompanyId::generate());
+        let gateway = FakeFiscalGateway::default();
+        let settings = InMemoryFiscalSettingsRepository::default();
+        let service = FiscalDocumentService::new(
+            InMemoryFiscalDocumentRepository::default(),
+            InMemorySaleRepository::default(),
+            registers.parties.clone(),
+            InMemoryProductRepository::default(),
+            settings.clone(),
+            gateway.clone(),
+            InMemoryBlobStore::default(),
+            registers.references(),
+        );
+        contract::syncs_and_manifests_received_invoices(
+            &service,
+            &gateway,
+            &settings,
+            company,
+            other_company,
         )
         .await;
     }

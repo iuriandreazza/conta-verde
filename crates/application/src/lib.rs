@@ -137,10 +137,12 @@ pub use entry_repository::{
 pub use error::{ApplicationError, AuthError, RepositoryError};
 pub use financial_entry_service::{FinancialEntryPage, FinancialEntryService};
 pub use fiscal_document_repository::{
-    FiscalDocumentCursor, FiscalDocumentQuery, FiscalDocumentRepository,
+    FiscalDocumentCursor, FiscalDocumentQuery, FiscalDocumentRepository, ReceivedInvoiceCursor,
+    ReceivedInvoiceQuery,
 };
 pub use fiscal_document_service::{
     FiscalDocumentPage, FiscalDocumentService, IssueNfce, IssueNfe, IssueNfse, PollReport,
+    ReceivedInvoicePage,
 };
 pub use fiscal_gateway::{
     AcceptedEvent, AuthorizedDocument, AuthorizedNfse, BuyerPresence, Destination, DocumentOutcome,

@@ -24,6 +24,8 @@ const NAMED: &str = "nfeio:";
 /// The text our reference is written into on the document (its complementary information), so that a document the
 /// gateway made for it can be found again without knowing the gateway's own id.
 const MARKER: &str = "cv-";
+/// What the person reads when a received invoice or a manifestation is asked of this gateway.
+const MANIFESTATION_NOT_BUILT: &str = "received invoices through NFE.io: its inbound distribution API is not written in this adapter yet (use another gateway)";
 /// What the person reads when an NFC-e is asked of this gateway.
 const NFCE_NOT_BUILT: &str = "an NFC-e through NFE.io: its consumer invoices API is not written in this adapter yet (use another gateway)";
 /// What the person reads when an NFS-e is asked of this gateway.
@@ -1014,6 +1016,31 @@ impl FiscalGateway for NfeIoGateway {
         false
     }
 
+    fn issues_manifestation(&self) -> bool {
+        false
+    }
+
+    // NFE.io distributes the invoices issued against a company through another API (its inbound endpoints), **not written in this
+    // adapter**: the received invoices and the recipient's manifestation are refused with that reason and nothing is sent
+    // ([ADR 0083]).
+    async fn list_received_nfe(
+        &self,
+        _issuer: &conta_verde_domain::FiscalSettings,
+        _since_version: u64,
+    ) -> Result<Vec<conta_verde_domain::ReceivedInvoiceDraft>, GatewayError> {
+        Err(GatewayError::Unsupported(MANIFESTATION_NOT_BUILT))
+    }
+
+    async fn manifest_received_nfe(
+        &self,
+        _issuer: &conta_verde_domain::FiscalSettings,
+        _access_key: &AccessKey,
+        _word: conta_verde_domain::Manifestation,
+        _justification: Option<&str>,
+    ) -> Result<EventOutcome, GatewayError> {
+        Err(GatewayError::Unsupported(MANIFESTATION_NOT_BUILT))
+    }
+
     // NFE.io has an API for consumer invoices (`consumerinvoices`, another OpenAPI file) with the same listing by `q` and the same
     // queued cancellation as its product invoices, but **this adapter was not written for it**: the schema of its request was not
     // read in this slice, and an NFC-e is not sent on a guess ([ADR 0082]). Refused with that reason, nothing is sent.
@@ -1352,6 +1379,31 @@ mod tests {
             .unwrap(),
         );
         request
+    }
+
+    #[tokio::test]
+    async fn received_invoices_are_refused_with_the_reason_and_nothing_is_sent() {
+        let stand = Shared::default();
+        let addr = serve(stand.clone()).await;
+        let gateway = gateway(addr, true);
+        let issuer = fiscal_issuer(CNPJ, FiscalEnvironment::Homologation);
+        assert!(!gateway.issues_manifestation());
+        assert!(matches!(
+            gateway.list_received_nfe(&issuer, 0).await,
+            Err(GatewayError::Unsupported(reason)) if reason.contains("another gateway")
+        ));
+        assert!(matches!(
+            gateway
+                .manifest_received_nfe(
+                    &issuer,
+                    &crate::contract::received_draft(1, "2026-11-01", 1).access_key,
+                    conta_verde_domain::Manifestation::Awareness,
+                    None,
+                )
+                .await,
+            Err(GatewayError::Unsupported(_))
+        ));
+        assert_eq!(stand.lock().unwrap().posts, 0);
     }
 
     #[tokio::test]
