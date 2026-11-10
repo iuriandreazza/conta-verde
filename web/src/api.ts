@@ -754,6 +754,37 @@ export interface IssueServiceChoices {
   special_regime: SpecialTaxRegime;
 }
 
+/** The company's gateway settings: **no secret ever comes back**, only whether each is set (ADR 0085). */
+export interface GatewaySettings {
+  /** `null` while the company has set none: the server's own settings, if any, are used. */
+  kind: "focus" | "nfeio" | null;
+  focus_token_homologation_set: boolean;
+  focus_token_production_set: boolean;
+  nfeio_api_key_set: boolean;
+  webhook_secret_set: boolean;
+  nfeio_company_homologation: string | null;
+  nfeio_company_production: string | null;
+  nfeio_search_confirmed: boolean;
+  /** Whether the server can seal secrets (it has `FISCAL_SECRETS_KEY`). */
+  encryption_available: boolean;
+  server_gateway: string | null;
+  webhook_path: string;
+}
+
+/** What to do with one secret: keep the stored one, set a new one, or clear it. */
+export type SecretChange = { action: "keep" } | { action: "clear" } | { action: "set"; value: string };
+
+export interface GatewaySettingsInput {
+  kind: "focus" | "nfeio";
+  focus_token_homologation: SecretChange;
+  focus_token_production: SecretChange;
+  nfeio_api_key: SecretChange;
+  webhook_secret: SecretChange;
+  nfeio_company_homologation: string | null;
+  nfeio_company_production: string | null;
+  nfeio_search_confirmed: boolean;
+}
+
 export type Manifestation = "none" | "awareness" | "confirmation" | "unknown" | "not_performed";
 
 /** An invoice another company issued against this one, as the gateway lists it (ADR 0083). */
@@ -2260,6 +2291,15 @@ export const api = {
     post<FiscalDocument>(`/companies/${companyId}/fiscal/documents`, choices),
   resendFiscalDocument: (companyId: string, id: string, choices: IssueChoices) =>
     post<FiscalDocument>(`/companies/${companyId}/fiscal/documents/${id}/resend`, choices),
+  getGatewaySettings: (companyId: string) =>
+    request<GatewaySettings>(`/companies/${companyId}/gateway-settings`),
+  saveGatewaySettings: (companyId: string, input: GatewaySettingsInput) =>
+    request<GatewaySettings>(`/companies/${companyId}/gateway-settings`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  gatewaySettingsHistory: (companyId: string) =>
+    request<HistoryEntry[]>(`/companies/${companyId}/gateway-settings/history`),
   listReceivedInvoices: (companyId: string, filters: ReceivedInvoiceFilters, after?: string) => {
     const params = new URLSearchParams();
     if (filters.manifestation) params.set("manifestation", filters.manifestation);

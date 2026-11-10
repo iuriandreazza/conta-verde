@@ -22,6 +22,7 @@ mod error;
 mod export_files;
 mod exports;
 mod fiscal;
+mod gateway_settings;
 mod history;
 mod inventory_counts;
 mod json;
@@ -61,16 +62,16 @@ use conta_verde_application::{
     DocumentMailRepository, DocumentMailService, DocumentReferences, DreService, EmailSender,
     EntryLookups, EntryReferences, ExportLookups, FinancialEntryRepository, FinancialEntryService,
     FiscalDocumentRepository, FiscalDocumentService, FiscalGateway, FiscalSettingsRepository,
-    FiscalSettingsService, IdentityRepository, InventoryCountRepository, InventoryCountService,
-    InvitationRepository, MemberService, OpeningRepository, PackageScheduleRepository,
-    PackageScheduleService, PartyRepository, PartyService, PaymentMethodRepository,
-    PaymentMethodService, PaymentProvider, PaymentTermRepository, PaymentTermService,
-    PostalCodeDirectory, PostalCodeService, PriceListRepository, PriceListService,
-    ProductRepository, ProductService, PurchaseOrderRepository, PurchaseService, QuoteRepository,
-    QuoteService, ReconciliationService, RecurrenceRepository, RecurrenceService, SaleRepository,
-    SaleService, SalesReportService, SecretService, StatementLineRepository,
-    StockMovementRepository, StockService, StockSettingsRepository, TransferRepository,
-    TransferService,
+    FiscalSettingsService, GatewaySettingsRepository, GatewaySettingsService, IdentityRepository,
+    InventoryCountRepository, InventoryCountService, InvitationRepository, MemberService,
+    OpeningRepository, PackageScheduleRepository, PackageScheduleService, PartyRepository,
+    PartyService, PaymentMethodRepository, PaymentMethodService, PaymentProvider,
+    PaymentTermRepository, PaymentTermService, PostalCodeDirectory, PostalCodeService,
+    PriceListRepository, PriceListService, ProductRepository, ProductService,
+    PurchaseOrderRepository, PurchaseService, QuoteRepository, QuoteService, ReconciliationService,
+    RecurrenceRepository, RecurrenceService, SaleRepository, SaleService, SalesReportService,
+    SecretService, StatementLineRepository, StockMovementRepository, StockService,
+    StockSettingsRepository, TransferRepository, TransferService,
 };
 use conta_verde_application::{
     CollectionService, CollectionSettingsRepository, DunningPlanRepository, DunningService,
@@ -126,6 +127,9 @@ pub trait Ports: 'static {
     type PeriodLocks: PeriodLockRepository + 'static;
     type PackageSchedules: PackageScheduleRepository + 'static;
     type FiscalSettings: FiscalSettingsRepository + 'static;
+    type GatewaySettings: GatewaySettingsRepository + 'static;
+    /// What seals the gateway settings' secrets ([ADR 0085]).
+    type Cipher: conta_verde_application::SecretCipher + 'static;
     type Gateway: FiscalGateway + 'static;
     type FiscalDocuments: FiscalDocumentRepository + 'static;
     type Attachments: AttachmentRepository + 'static;
@@ -331,6 +335,7 @@ pub struct Services<X: Ports> {
     pub exports: ExportsOf<X>,
     pub packages: PackagesOf<X>,
     pub fiscal_settings: FiscalSettingsService<X::FiscalSettings>,
+    pub gateway_settings: GatewaySettingsService<X::GatewaySettings, X::Cipher>,
     pub fiscal_documents: FiscalDocumentsOf<X>,
     pub postal_codes: PostalCodeService<X::PostalCodes>,
     pub members: MemberService<X::Invitations, X::Identity, X::Emails, X::Secrets>,
@@ -372,6 +377,7 @@ pub(crate) struct AppState<X: Ports> {
     exports: ExportsOf<X>,
     packages: PackagesOf<X>,
     fiscal_settings: FiscalSettingsService<X::FiscalSettings>,
+    gateway_settings: GatewaySettingsService<X::GatewaySettings, X::Cipher>,
     fiscal_documents: FiscalDocumentsOf<X>,
     postal_codes: PostalCodeService<X::PostalCodes>,
     members: MemberService<X::Invitations, X::Identity, X::Emails, X::Secrets>,
@@ -417,6 +423,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         exports: services.exports,
         packages: services.packages,
         fiscal_settings: services.fiscal_settings,
+        gateway_settings: services.gateway_settings,
         fiscal_documents: services.fiscal_documents,
         postal_codes: services.postal_codes,
         members: services.members,
@@ -685,6 +692,15 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         .route(
             "/companies/{company_id}/accounting/package-schedule/history",
             get(accounting::package_schedule_history::<X>),
+        )
+        .route(
+            "/companies/{company_id}/gateway-settings",
+            get(gateway_settings::get_gateway_settings::<X>)
+                .put(gateway_settings::replace_gateway_settings::<X>),
+        )
+        .route(
+            "/companies/{company_id}/gateway-settings/history",
+            get(gateway_settings::gateway_settings_history::<X>),
         )
         .route(
             "/companies/{company_id}/fiscal/gateway",
@@ -1136,9 +1152,9 @@ mod tests {
         InMemoryCommissionRuleRepository, InMemoryContractRepository, InMemoryCostCenterRepository,
         InMemoryDocumentMailRepository, InMemoryDunningPlanRepository, InMemoryEmailSender,
         InMemoryFinancialEntryRepository, InMemoryFiscalDocumentRepository,
-        InMemoryFiscalSettingsRepository, InMemoryIdentityRepository,
-        InMemoryInventoryCountRepository, InMemoryInvitationRepository, InMemoryMessageSender,
-        InMemoryNotificationRepository, InMemoryOpeningRepository,
+        InMemoryFiscalSettingsRepository, InMemoryGatewaySettingsRepository,
+        InMemoryIdentityRepository, InMemoryInventoryCountRepository, InMemoryInvitationRepository,
+        InMemoryMessageSender, InMemoryNotificationRepository, InMemoryOpeningRepository,
         InMemoryPackageScheduleRepository, InMemoryPartyRepository, InMemoryPaymentEventRepository,
         InMemoryPaymentLinkRepository, InMemoryPaymentMethodRepository,
         InMemoryPaymentTermRepository, InMemoryPeriodLockRepository, InMemoryPostalCodeDirectory,
@@ -1146,7 +1162,7 @@ mod tests {
         InMemoryQuoteRepository, InMemoryRecurrenceRepository, InMemorySaleRepository,
         InMemoryStatementLineRepository, InMemoryStockMovementRepository,
         InMemoryStockSettingsRepository, InMemoryTransferRepository, RegisterDocumentReferences,
-        RegisterReferences,
+        RegisterReferences, RingSecretCipher,
     };
     use http_body_util::BodyExt;
     use serde_json::{Value, json};
@@ -1216,6 +1232,8 @@ mod tests {
         type PeriodLocks = InMemoryPeriodLockRepository;
         type PackageSchedules = InMemoryPackageScheduleRepository;
         type FiscalSettings = InMemoryFiscalSettingsRepository;
+        type GatewaySettings = InMemoryGatewaySettingsRepository;
+        type Cipher = RingSecretCipher;
         type Gateway = FakeFiscalGateway;
         type FiscalDocuments = InMemoryFiscalDocumentRepository;
         type Attachments = InMemoryAttachmentRepository;
@@ -1267,6 +1285,8 @@ mod tests {
         type PeriodLocks = InMemoryPeriodLockRepository;
         type PackageSchedules = InMemoryPackageScheduleRepository;
         type FiscalSettings = InMemoryFiscalSettingsRepository;
+        type GatewaySettings = InMemoryGatewaySettingsRepository;
+        type Cipher = RingSecretCipher;
         type Gateway = FakeFiscalGateway;
         type FiscalDocuments = InMemoryFiscalDocumentRepository;
         type Attachments = InMemoryAttachmentRepository;
@@ -1319,6 +1339,18 @@ mod tests {
         /// The fiscal gateway the app of this test asks, so a test can have an invoice issued against the company.
         static GATEWAY: std::cell::RefCell<FakeFiscalGateway> =
             std::cell::RefCell::new(FakeFiscalGateway::default());
+    }
+
+    type TestGatewaySettings =
+        GatewaySettingsService<InMemoryGatewaySettingsRepository, RingSecretCipher>;
+
+    const SECRETS_KEY: &str = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+
+    fn test_gateway_settings() -> TestGatewaySettings {
+        GatewaySettingsService::new(
+            InMemoryGatewaySettingsRepository::default(),
+            RingSecretCipher::from_hex(SECRETS_KEY).unwrap(),
+        )
     }
 
     fn gateway() -> FakeFiscalGateway {
@@ -2137,6 +2169,7 @@ mod tests {
                 packages: standalone_packages(),
                 fiscal_documents,
                 fiscal_settings: FiscalSettingsService::new(fiscal_settings),
+                gateway_settings: test_gateway_settings(),
                 dre: DreService::new(
                     InMemoryFinancialEntryRepository::default(),
                     InMemoryCategoryRepository::default(),
@@ -2803,6 +2836,7 @@ mod tests {
                 fiscal_settings: FiscalSettingsService::new(
                     InMemoryFiscalSettingsRepository::default(),
                 ),
+                gateway_settings: test_gateway_settings(),
                 dre: DreService::new(
                     InMemoryFinancialEntryRepository::default(),
                     InMemoryCategoryRepository::default(),
@@ -5031,6 +5065,7 @@ mod tests {
                 fiscal_settings: FiscalSettingsService::new(
                     InMemoryFiscalSettingsRepository::default(),
                 ),
+                gateway_settings: test_gateway_settings(),
                 dre: DreService::new(
                     InMemoryFinancialEntryRepository::default(),
                     InMemoryCategoryRepository::default(),
@@ -6708,6 +6743,7 @@ mod tests {
                     )
                 },
                 fiscal_settings: FiscalSettingsService::new(fiscal_settings_store.clone()),
+                gateway_settings: test_gateway_settings(),
                 exports: AccountingExportService::new(
                     entry_store.clone(),
                     transfer_store.clone(),
@@ -10305,6 +10341,169 @@ mod tests {
             };
             assert_eq!(write.status, expected, "{role:?} writes");
         }
+    }
+
+    /// A company's own gateway settings ([ADR 0085]): reached only by the owner and the admin (the `members` area: not even the role
+    /// that writes the fiscal area), sealed by the server, and **no response, no trail and no error ever holds a secret**.
+    #[tokio::test]
+    async fn the_gateway_settings_are_for_the_owner_and_the_admin_and_never_show_a_secret() {
+        use conta_verde_domain::Role;
+
+        let (app, identities) = entry_app_with_identities();
+        let (owner, company_id) = sign_up(&app, "dona@example.com").await;
+        let admin = member_with_role(&app, &identities, company_id, Role::Admin).await;
+        let (stranger, _) = sign_up(&app, "outra@example.com").await;
+        let uri = format!("/companies/{company_id}/gateway-settings");
+        let secret = |action: &str, value: Option<&str>| match value {
+            Some(value) => json!({ "action": action, "value": value }),
+            None => json!({ "action": action }),
+        };
+        let body = |token: Value| {
+            json!({
+                "kind": "focus",
+                "focus_token_homologation": token,
+                "focus_token_production": secret("keep", None),
+                "nfeio_api_key": secret("keep", None),
+                "webhook_secret": secret("set", Some("hook_1234567890abcdef")),
+                "nfeio_company_homologation": null,
+                "nfeio_company_production": null,
+                "nfeio_search_confirmed": false
+            })
+        };
+        let typed = [
+            "tok_homol_1234567890",
+            "hook_1234567890abcdef",
+            "tok_new_1234567890",
+        ];
+        let leaks = |text: &str| typed.iter().any(|value| text.contains(value));
+
+        // Nothing set yet.
+        let none = send(&app, get_request(&uri, Some(&owner))).await;
+        assert_eq!(none.status, StatusCode::OK);
+        assert_eq!(none.body["kind"], Value::Null);
+        assert_eq!(none.body["encryption_available"], true);
+        assert_eq!(
+            none.body["webhook_path"],
+            format!("/public/fiscal/{company_id}/webhook")
+        );
+
+        // Only the owner and the admin reach it: no other role reads it, none writes it, a stranger finds nothing.
+        for role in [
+            Role::Financial,
+            Role::Sales,
+            Role::Stock,
+            Role::Accountant,
+            Role::Viewer,
+        ] {
+            let cookie = member_with_role(&app, &identities, company_id, role).await;
+            assert_eq!(
+                send(&app, get_request(&uri, Some(&cookie))).await.status,
+                StatusCode::FORBIDDEN,
+                "{role:?} reads"
+            );
+            assert_eq!(
+                send(
+                    &app,
+                    json_request(
+                        "PUT",
+                        &uri,
+                        Some(&cookie),
+                        body(secret("set", Some("tok_homol_1234567890")))
+                    )
+                )
+                .await
+                .status,
+                StatusCode::FORBIDDEN,
+                "{role:?} writes"
+            );
+        }
+        assert_eq!(
+            send(&app, get_request(&uri, Some(&stranger))).await.status,
+            StatusCode::NOT_FOUND
+        );
+
+        // Written, it answers with what is set and never a value.
+        let saved = send(
+            &app,
+            json_request(
+                "PUT",
+                &uri,
+                Some(&owner),
+                body(secret("set", Some("tok_homol_1234567890"))),
+            ),
+        )
+        .await;
+        assert_eq!(saved.status, StatusCode::OK, "{}", saved.body);
+        assert_eq!(saved.body["kind"], "focus");
+        assert_eq!(saved.body["focus_token_homologation_set"], true);
+        assert_eq!(saved.body["focus_token_production_set"], false);
+        assert_eq!(saved.body["webhook_secret_set"], true);
+        assert!(!leaks(&saved.body.to_string()));
+        let read = send(&app, get_request(&uri, Some(&admin))).await;
+        assert_eq!(read.status, StatusCode::OK);
+        assert_eq!(read.body, saved.body);
+        assert!(!leaks(&read.body.to_string()));
+
+        // The admin changes it; the trail says a secret was set and changed, never what it was.
+        let changed = send(
+            &app,
+            json_request(
+                "PUT",
+                &uri,
+                Some(&admin),
+                body(secret("set", Some("tok_new_1234567890"))),
+            ),
+        )
+        .await;
+        assert_eq!(changed.status, StatusCode::OK);
+        let history = send(&app, get_request(&format!("{uri}/history"), Some(&owner))).await;
+        assert_eq!(history.status, StatusCode::OK);
+        assert_eq!(history.body.as_array().unwrap().len(), 2);
+        assert!(!leaks(&history.body.to_string()), "{}", history.body);
+        assert!(history.body.to_string().contains("changed"));
+
+        // What is not a secret write, or is not a token, is refused with no value in the answer.
+        for bad in [
+            body(secret("set", Some("short"))),
+            body(secret("set", None)),
+            body(secret("keep", Some("tok_homol_1234567890"))),
+            body(secret("erase", None)),
+            {
+                let mut b = body(secret("keep", None));
+                b["kind"] = json!("fake");
+                b
+            },
+            {
+                let mut b = body(secret("keep", None));
+                b["extra"] = json!(1);
+                b
+            },
+            {
+                let mut b = body(secret("keep", None));
+                b["nfeio_company_production"] = json!("has space");
+                b
+            },
+        ] {
+            let refused = send(&app, json_request("PUT", &uri, Some(&owner), bad.clone())).await;
+            assert!(
+                matches!(
+                    refused.status,
+                    StatusCode::UNPROCESSABLE_ENTITY | StatusCode::BAD_REQUEST
+                ),
+                "{bad} -> {}",
+                refused.status
+            );
+            assert!(!leaks(&refused.body.to_string()), "{}", refused.body);
+        }
+        assert_eq!(
+            send(&app, get_request(&format!("{uri}/history"), Some(&owner)))
+                .await
+                .body
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     /// The invoices issued against the company ([ADR 0083]): fetched from the gateway on request, declared to the authority in the
