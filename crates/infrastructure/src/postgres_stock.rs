@@ -1,3 +1,4 @@
+use conta_verde_application::{DomainEvent, SharedEvents};
 use std::collections::HashMap;
 use std::str::FromStr;
 
@@ -26,11 +27,12 @@ const SELECT_MOVEMENTS: &str = "SELECT id, company_id, product_id, kind, quantit
 
 pub struct PostgresStockMovementRepository {
     pool: PgPool,
+    events: Option<SharedEvents>,
 }
 
 impl PostgresStockMovementRepository {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self { pool, events: None }
     }
 }
 
@@ -78,8 +80,20 @@ async fn read_balances(
         .collect())
 }
 
-impl StockMovementRepository for PostgresStockMovementRepository {
-    async fn record(
+impl PostgresStockMovementRepository {
+    /// The events a successful write raises go here ([ADR 0088]); none when nobody listens.
+    pub fn with_events(mut self, events: SharedEvents) -> Self {
+        self.events = Some(events);
+        self
+    }
+
+    async fn raise(&self, event: DomainEvent) {
+        if let Some(events) = &self.events {
+            events.publish(event).await;
+        }
+    }
+
+    async fn record_now(
         &self,
         company_id: CompanyId,
         movements: &[StockMovement],
@@ -168,6 +182,24 @@ impl StockMovementRepository for PostgresStockMovementRepository {
             postgres_audit::insert(&mut tx, audit).await?;
         }
         tx.commit().await.map_err(storage_error)
+    }
+}
+
+impl StockMovementRepository for PostgresStockMovementRepository {
+    async fn record(
+        &self,
+        company_id: CompanyId,
+        movements: &[StockMovement],
+        seen: &[(ProductId, StockBalance)],
+        floor: StockFloor,
+        audits: &[AuditEntry],
+    ) -> Result<(), RepositoryError> {
+        self.record_now(company_id, movements, seen, floor, audits)
+            .await?;
+        for event in conta_verde_application::stock_events(company_id, movements, seen) {
+            self.raise(event).await;
+        }
+        Ok(())
     }
 
     async fn balances(

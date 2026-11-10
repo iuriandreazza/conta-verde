@@ -57,6 +57,7 @@ mod stock_settings;
 mod tag;
 mod tax_calculation;
 mod transfer;
+mod webhook;
 
 pub use account::{Account, AccountDraft, Company, User, validate_password};
 pub use address::{Address, AddressDraft, PostalCode, is_state};
@@ -87,7 +88,8 @@ pub use audit::{
     sale_changes, sale_creation_changes, sale_return_creation_changes, settlement_changes,
     settlement_creation_changes, statement_line_changes, statement_line_creation_changes,
     stock_movement_creation_changes, stock_settings_changes, stock_settings_creation_changes,
-    transfer_changes, transfer_creation_changes,
+    transfer_changes, transfer_creation_changes, webhook_secret_change,
+    webhook_subscription_changes, webhook_subscription_creation_changes,
 };
 pub use bank_account::{BankAccount, BankAccountDraft, BankAccountKind};
 pub use calendar_date::CalendarDate;
@@ -140,7 +142,7 @@ pub use ids::{
     InventoryCountId, InvitationId, JobId, NotificationId, PartyId, PaymentEventId,
     PaymentMethodId, PaymentTermId, PriceListId, ProductId, PurchaseOrderId, PurchaseReceiptId,
     QuoteId, ReceivedInvoiceId, RecurrenceId, SaleId, SaleReturnId, SettlementId, StatementLineId,
-    StockMovementId, TransferId, UserId,
+    StockMovementId, TransferId, UserId, WebhookDeliveryId, WebhookSubscriptionId,
 };
 pub use inventory_count::{
     CountLine, CountLineDraft, CountStatus, InventoryCount, InventoryCountDraft, MAX_COUNT_LINES,
@@ -195,3 +197,8 @@ pub use stock_settings::StockSettings;
 pub use tag::{MAX_TAGS, Tag};
 pub use tax_calculation::{DocumentTax, ItemTax, TaxAmount, document_tax, item_tax};
 pub use transfer::{AccountOpening, Transfer, TransferDraft};
+pub use webhook::{
+    DeliveryStatus, MAX_DELIVERY_ERROR_CHARS, MAX_WEBHOOK_SUBSCRIPTIONS, MAX_WEBHOOK_URL_CHARS,
+    SECRET_GRACE_MILLIS, WebhookDelivery, WebhookEventKind, WebhookSubscription,
+    WebhookSubscriptionDraft, delivery_error, is_blocked_address, split_host_port,
+};

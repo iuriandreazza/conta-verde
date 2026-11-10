@@ -241,6 +241,11 @@ pub enum ApplicationError {
     CostCenterNotFound,
     /// No API key with this id in the company (another company's looks the same).
     ApiKeyNotFound,
+    /// No webhook subscription with this id in the company (another company's looks the same).
+    WebhookNotFound,
+    WebhookDeliveryNotFound,
+    /// The installation has no key to seal secrets with, so webhooks are off.
+    WebhooksOff,
     /// No invitation behind this token or id (another company's id looks the same).
     InvitationNotFound,
     /// The user is not a member of the company (or no longer is).
@@ -405,6 +410,11 @@ impl fmt::Display for ApplicationError {
             Self::ProductNotFound => f.write_str("product not found"),
             Self::CostCenterNotFound => f.write_str("cost center not found"),
             Self::ApiKeyNotFound => f.write_str("API key not found"),
+            Self::WebhookNotFound => f.write_str("webhook subscription not found"),
+            Self::WebhookDeliveryNotFound => f.write_str("webhook delivery not found"),
+            Self::WebhooksOff => f.write_str(
+                "webhooks are off: the server has no key to seal their secrets with (FISCAL_SECRETS_KEY)",
+            ),
             Self::BankAccountNotFound => f.write_str("bank account not found"),
             Self::PaymentMethodNotFound => f.write_str("payment method not found"),
             Self::PaymentTermNotFound => f.write_str("payment term not found"),

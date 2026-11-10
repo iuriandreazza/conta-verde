@@ -2,13 +2,18 @@
 
 use conta_verde_application::{
     ApiKeyRepository, ApiKeyService, ApplicationError, AuthError, DocumentReferences,
-    DocumentStock, EntryReferences, FinancialEntryRepository, QuoteRepository, SaleClaimRepository,
-    SaleRepository, SaleService, SecretService,
+    DocumentStock, EntryReferences, FinancialEntryRepository, JobQueue, QuoteRepository,
+    SaleClaimRepository, SaleRepository, SaleService, SecretCipher, SecretService, SendOutcome,
+    WebhookRepository, WebhookService, envelope,
 };
 use conta_verde_domain::{
-    Access, Actor, ApiKeyDraft, ApiKeyId, Area, AuditAction, CalendarDate, CompanyId, DomainError,
-    MAX_API_KEYS, SaleId, SaleStatus,
+    Access, Actor, ApiKeyDraft, ApiKeyId, Area, AuditAction, CalendarDate, CompanyId,
+    DeliveryStatus, DomainError, MAX_API_KEYS, MAX_WEBHOOK_SUBSCRIPTIONS, SECRET_GRACE_MILLIS,
+    SaleId, SaleStatus, WebhookEventKind, WebhookSubscriptionDraft,
 };
+use uuid::Uuid;
+
+use crate::{InMemoryWebhookSender, webhook_signature};
 
 use crate::contract::{EntrySeed, SalesSeed, actor, sale_draft};
 
@@ -511,4 +516,589 @@ pub async fn registers_an_order_once_by_its_reference<S, Q, E, F, R, T, C>(
             .await
             .is_err_and(|error| error != ApplicationError::IdempotencyMismatch)
     );
+}
+
+/// Held by every test that works the job queue of a real database: the queue is one for the whole database, so two tests that
+/// claim jobs at once would take each other's.
+pub static QUEUE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+const WEBHOOK_URL: &str = "https://hooks.example.com/conta-verde";
+
+fn subscription_draft(url: &str, events: &[&str], active: bool) -> WebhookSubscriptionDraft {
+    WebhookSubscriptionDraft {
+        url: url.into(),
+        events: events.iter().map(|event| (*event).to_owned()).collect(),
+        active,
+    }
+}
+
+/// Subscriptions are the company's, audited without their secret, bounded, and a secret is generated or typed, sealed, and
+/// signs a delivery from the moment it exists; a delivery is made once for an event however many times it is published, sent
+/// signed, tried again with the waits of the kind, given up after the last try, sent again by hand, and kept for 30 days.
+#[allow(clippy::too_many_lines)]
+pub async fn runs_webhooks<R, C, Q, S>(
+    service: &WebhookService<R, C, Q, S>,
+    company: CompanyId,
+    other_company: CompanyId,
+) where
+    R: WebhookRepository,
+    C: SecretCipher,
+    Q: JobQueue,
+    S: SecretService,
+{
+    let ana = actor();
+    let created = service
+        .create(
+            company,
+            &ana,
+            subscription_draft(WEBHOOK_URL, &["sale.completed", "sale.completed"], true),
+            NOW,
+        )
+        .await
+        .unwrap();
+    let subscription = created.subscription.clone();
+    assert!(created.secret.starts_with("whsec_") && created.secret.len() > 40);
+    assert_eq!(subscription.events_text(), "sale.completed");
+    assert_eq!(
+        service.list(company).await.unwrap(),
+        vec![subscription.clone()]
+    );
+    assert!(service.list(other_company).await.unwrap().is_empty());
+    // The trail says what was asked and that a secret was set, never the secret.
+    let trail = service.history(company, subscription.id()).await.unwrap();
+    assert_eq!(trail.len(), 1);
+    let written = format!("{:?}", trail[0].entry.changes);
+    assert!(
+        written.contains("secret")
+            && written.contains("set")
+            && !written.contains(&created.secret[6..])
+    );
+    assert_eq!(
+        service
+            .history(other_company, subscription.id())
+            .await
+            .unwrap_err(),
+        ApplicationError::WebhookNotFound
+    );
+
+    // An address that is not https with a public host is refused, and an event that does not exist.
+    for (url, events) in [
+        ("http://hooks.example.com/x", vec![]),
+        ("https://127.0.0.1/x", vec![]),
+        ("https://169.254.169.254/latest", vec![]),
+        ("https://user:pw@hooks.example.com/x", vec![]),
+        (WEBHOOK_URL, vec!["sale.sold"]),
+        (WEBHOOK_URL, vec!["webhook.test"]),
+    ] {
+        assert!(
+            service
+                .create(company, &ana, subscription_draft(url, &events, true), NOW)
+                .await
+                .is_err(),
+            "{url} {events:?}"
+        );
+    }
+    // A change that changes nothing writes nothing; one that does is in the trail.
+    service
+        .update(
+            company,
+            &ana,
+            subscription.id(),
+            subscription_draft(WEBHOOK_URL, &["sale.completed"], true),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .history(company, subscription.id())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // An event is made once per subscription that wants it, however many times it is published.
+    let event = Uuid::new_v4();
+    let body = envelope(
+        event,
+        WebhookEventKind::SaleCompleted,
+        company,
+        NOW,
+        r#"{"id":"s1"}"#,
+    );
+    assert_eq!(
+        service
+            .publish(company, event, WebhookEventKind::SaleCompleted, &body, NOW)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        service
+            .publish(company, event, WebhookEventKind::SaleCompleted, &body, NOW)
+            .await
+            .unwrap(),
+        0
+    );
+    // What it did not ask for, and another company's events, make none.
+    let unwanted = Uuid::new_v4();
+    assert_eq!(
+        service
+            .publish(company, unwanted, WebhookEventKind::SaleCreated, &body, NOW)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        service
+            .publish(
+                other_company,
+                event,
+                WebhookEventKind::SaleCompleted,
+                &body,
+                NOW
+            )
+            .await
+            .unwrap(),
+        0
+    );
+
+    // It is sent signed, with the secret that was shown, and the log says how it went.
+    let _lock = QUEUE.lock().await;
+    let sender = InMemoryWebhookSender::default();
+    let report = service.run_due(NOW / 1000, 50, &sender).await.unwrap();
+    assert_eq!(report.done, 1);
+    let sent = sender.sent();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].url, WEBHOOK_URL);
+    assert_eq!(
+        (sent[0].event_id, sent[0].timestamp, sent[0].body.as_str()),
+        (event, NOW / 1000, body.as_str())
+    );
+    assert_eq!(
+        sent[0].signature,
+        webhook_signature(&created.secret, &event.to_string(), NOW / 1000, &body)
+    );
+    let log = service
+        .deliveries(company, subscription.id(), None, None)
+        .await
+        .unwrap();
+    assert_eq!(log.items.len(), 1);
+    let delivery = log.items[0].clone();
+    assert_eq!(
+        (delivery.status, delivery.attempts, delivery.last_status),
+        (DeliveryStatus::Delivered, 1, Some(200))
+    );
+    assert_eq!(delivery.delivered_at, Some(NOW));
+    assert!(
+        service
+            .deliveries(other_company, subscription.id(), None, None)
+            .await
+            .is_err()
+    );
+
+    // A subscriber that is down: the waits double from a minute, and the answer is only its status and a short reason.
+    let failing = InMemoryWebhookSender::answering(vec![
+        SendOutcome::answered(500),
+        SendOutcome::failed("timed out"),
+    ]);
+    let flaky = Uuid::new_v4();
+    service
+        .publish(company, flaky, WebhookEventKind::SaleCompleted, &body, NOW)
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .run_due(NOW / 1000, 50, &failing)
+            .await
+            .unwrap()
+            .retried,
+        1
+    );
+    assert_eq!(
+        service
+            .run_due(NOW / 1000 + 59, 50, &failing)
+            .await
+            .unwrap()
+            .retried,
+        0
+    );
+    assert_eq!(
+        service
+            .run_due(NOW / 1000 + 60, 50, &failing)
+            .await
+            .unwrap()
+            .retried,
+        1
+    );
+    let log = service
+        .deliveries(company, subscription.id(), None, None)
+        .await
+        .unwrap();
+    let pending = log.items.iter().find(|d| d.event_id == flaky).unwrap();
+    assert_eq!(
+        (pending.status, pending.attempts, pending.last_status),
+        (DeliveryStatus::Pending, 2, None)
+    );
+    assert_eq!(pending.last_error.as_deref(), Some("timed out"));
+    // The third try (a wait of two minutes) is answered with success.
+    assert_eq!(
+        service
+            .run_due(NOW / 1000 + 60 + 119, 50, &failing)
+            .await
+            .unwrap()
+            .done,
+        0
+    );
+    assert_eq!(
+        service
+            .run_due(NOW / 1000 + 60 + 120, 50, &failing)
+            .await
+            .unwrap()
+            .done,
+        1
+    );
+    let log = service
+        .deliveries(company, subscription.id(), None, None)
+        .await
+        .unwrap();
+    let healed = log.items.iter().find(|d| d.event_id == flaky).unwrap();
+    assert_eq!(
+        (healed.status, healed.attempts),
+        (DeliveryStatus::Delivered, 3)
+    );
+
+    // After the last try (the fifteenth, for a webhook) the delivery is given up on, and a person may send it again.
+    let dead = Uuid::new_v4();
+    service
+        .publish(company, dead, WebhookEventKind::SaleCompleted, &body, NOW)
+        .await
+        .unwrap();
+    let hopeless = InMemoryWebhookSender::answering(vec![SendOutcome::answered(503); 20]);
+    let mut at = NOW / 1000;
+    for _ in 0..15 {
+        service.run_due(at, 50, &hopeless).await.unwrap();
+        at += 3_600;
+    }
+    assert_eq!(hopeless.sent().len(), 15);
+    let log = service
+        .deliveries(company, subscription.id(), None, None)
+        .await
+        .unwrap();
+    let failed = log
+        .items
+        .iter()
+        .find(|d| d.event_id == dead)
+        .unwrap()
+        .clone();
+    assert_eq!(
+        (failed.status, failed.attempts, failed.last_status),
+        (DeliveryStatus::Failed, 15, Some(503))
+    );
+    assert_eq!(
+        service
+            .run_due(at + 100_000, 50, &hopeless)
+            .await
+            .unwrap()
+            .done,
+        0
+    );
+    assert_eq!(
+        service
+            .redeliver(other_company, subscription.id(), failed.id, NOW)
+            .await
+            .unwrap_err(),
+        ApplicationError::WebhookDeliveryNotFound
+    );
+    let again = service
+        .redeliver(company, subscription.id(), failed.id, at * 1000)
+        .await
+        .unwrap();
+    assert_eq!((again.status, again.attempts), (DeliveryStatus::Pending, 0));
+    let healthy = InMemoryWebhookSender::default();
+    assert_eq!(service.run_due(at, 50, &healthy).await.unwrap().done, 1);
+    assert_eq!(healthy.sent()[0].event_id, dead);
+
+    // The secret may be typed (and is never given back) or made again: the one it replaces signs for a day more.
+    let typed = "my-own-secret-123";
+    assert_eq!(
+        service
+            .replace_secret(company, &ana, subscription.id(), Some(typed), NOW)
+            .await
+            .unwrap(),
+        None
+    );
+    assert!(
+        service
+            .replace_secret(company, &ana, subscription.id(), Some("short"), NOW)
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .replace_secret(
+                company,
+                &ana,
+                subscription.id(),
+                Some("has a space inside"),
+                NOW
+            )
+            .await
+            .is_err()
+    );
+    let next = Uuid::new_v4();
+    service
+        .publish(company, next, WebhookEventKind::SaleCompleted, &body, NOW)
+        .await
+        .unwrap();
+    let both = InMemoryWebhookSender::default();
+    service.run_due(NOW / 1000, 50, &both).await.unwrap();
+    let expected = [
+        webhook_signature(typed, &next.to_string(), NOW / 1000, &body),
+        webhook_signature(&created.secret, &next.to_string(), NOW / 1000, &body),
+    ];
+    assert_eq!(both.sent()[0].signature, expected.join(" "));
+    let after_a_day = NOW + SECRET_GRACE_MILLIS;
+    let later = Uuid::new_v4();
+    service
+        .publish(
+            company,
+            later,
+            WebhookEventKind::SaleCompleted,
+            &body,
+            after_a_day,
+        )
+        .await
+        .unwrap();
+    let only_new = InMemoryWebhookSender::default();
+    service
+        .run_due(after_a_day / 1000, 50, &only_new)
+        .await
+        .unwrap();
+    assert_eq!(
+        only_new.sent()[0].signature,
+        webhook_signature(typed, &later.to_string(), after_a_day / 1000, &body)
+    );
+    let generated = service
+        .replace_secret(company, &ana, subscription.id(), None, NOW)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(generated.starts_with("whsec_") && generated != typed);
+    let trail = service.history(company, subscription.id()).await.unwrap();
+    let written = format!(
+        "{:?}",
+        trail.iter().map(|r| &r.entry.changes).collect::<Vec<_>>()
+    );
+    assert!(
+        written.contains("changed")
+            && !written.contains(typed)
+            && !written.contains(&generated[6..])
+    );
+
+    // A test goes to a subscription that is off too; an off one is told nothing else.
+    service
+        .update(
+            company,
+            &ana,
+            subscription.id(),
+            subscription_draft(WEBHOOK_URL, &["sale.completed"], false),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .publish(
+                company,
+                Uuid::new_v4(),
+                WebhookEventKind::SaleCompleted,
+                &body,
+                NOW
+            )
+            .await
+            .unwrap(),
+        0
+    );
+    let test = service
+        .send_test(company, subscription.id(), NOW)
+        .await
+        .unwrap();
+    assert_eq!(test.kind, WebhookEventKind::Test);
+    let test_sender = InMemoryWebhookSender::default();
+    service.run_due(NOW / 1000, 50, &test_sender).await.unwrap();
+    assert!(
+        test_sender.sent()[0]
+            .body
+            .contains(r#""type":"webhook.test""#)
+    );
+    assert_eq!(
+        service
+            .send_test(other_company, subscription.id(), NOW)
+            .await
+            .unwrap_err(),
+        ApplicationError::WebhookNotFound
+    );
+
+    // The log is paged newest first and is kept for 30 days.
+    let all = service
+        .deliveries(company, subscription.id(), None, Some(1000))
+        .await
+        .unwrap();
+    assert!(all.items.len() >= 5);
+    let page = service
+        .deliveries(company, subscription.id(), None, Some(2))
+        .await
+        .unwrap();
+    assert_eq!(page.items.len(), 2);
+    let rest = service
+        .deliveries(company, subscription.id(), page.next.as_ref(), Some(1000))
+        .await
+        .unwrap();
+    assert_eq!(page.items.len() + rest.items.len(), all.items.len());
+    assert!(
+        all.items
+            .windows(2)
+            .all(|pair| pair[0].created_at >= pair[1].created_at)
+    );
+    assert!(
+        service
+            .prune(NOW + 31 * 24 * 3_600_000 + at * 1000)
+            .await
+            .unwrap()
+            >= 5
+    );
+    assert!(
+        service
+            .deliveries(company, subscription.id(), None, None)
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
+
+    // A company keeps a bounded number of subscriptions.
+    for number in 1..MAX_WEBHOOK_SUBSCRIPTIONS {
+        service
+            .create(
+                other_company,
+                &ana,
+                subscription_draft(&format!("{WEBHOOK_URL}/{number}"), &[], true),
+                NOW,
+            )
+            .await
+            .unwrap();
+    }
+    service
+        .create(
+            other_company,
+            &ana,
+            subscription_draft(WEBHOOK_URL, &[], true),
+            NOW,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .create(
+                other_company,
+                &ana,
+                subscription_draft(WEBHOOK_URL, &[], true),
+                NOW
+            )
+            .await
+            .unwrap_err(),
+        DomainError::TooManyWebhookSubscriptions.into()
+    );
+}
+
+/// A worker that does one kind of job never takes another's, whatever is due.
+pub async fn claims_jobs_by_kind<Q: JobQueue>(queue: &Q) {
+    use conta_verde_domain::{JobKind, NewJob};
+    let _lock = QUEUE.lock().await;
+    let far = i64::MAX / 2;
+    // The queue of a real database is shared: what other runs left is taken out first.
+    while queue.claim_next(far, 1).await.unwrap().is_some() {}
+    let mail = NewJob::new(
+        JobKind::SendEmail,
+        vec!["a@x.com".into(), "s".into(), "b".into()],
+        0,
+    )
+    .unwrap();
+    let hook = NewJob::new(JobKind::DeliverWebhook, vec![Uuid::new_v4().to_string()], 0).unwrap();
+    let mail_id = queue.enqueue(&mail).await.unwrap();
+    let hook_id = queue.enqueue(&hook).await.unwrap();
+    let taken = queue
+        .claim_next_of(10, 60, &[JobKind::DeliverWebhook])
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((taken.id, taken.kind), (hook_id, JobKind::DeliverWebhook));
+    assert!(
+        queue
+            .claim_next_of(10, 60, &[JobKind::DeliverWebhook])
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let taken = queue
+        .claim_next_of(10, 60, &[JobKind::SendEmail])
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(taken.id, mail_id);
+    assert!(
+        queue
+            .claim_next_of(10, 60, &JobKind::ALL)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    queue.complete(hook_id).await.unwrap();
+    queue.complete(mail_id).await.unwrap();
+}
+
+/// What the lifecycle of sales raised, after the writes that made it: each sale is told as created, and the ones that were
+/// completed and cancelled as that, never twice for one step; a write that was refused raised nothing.
+pub fn sales_tell_what_happens_to_them(events: &[conta_verde_application::DomainEvent]) {
+    use conta_verde_application::DomainEvent;
+    let kinds = |wanted: WebhookEventKind| {
+        events
+            .iter()
+            .filter(|event| matches!(event, DomainEvent::Sale { kind, .. } if *kind == wanted))
+            .count()
+    };
+    assert!(kinds(WebhookEventKind::SaleCreated) >= 2);
+    assert!(kinds(WebhookEventKind::SaleCompleted) >= 1);
+    assert!(kinds(WebhookEventKind::SaleCancelled) >= 1);
+    // A sale is created once, however many things happen to it afterwards.
+    let mut created: Vec<SaleId> = events
+        .iter()
+        .filter_map(|event| match event {
+            DomainEvent::Sale {
+                kind: WebhookEventKind::SaleCreated,
+                sale,
+            } => Some(sale.id()),
+            _ => None,
+        })
+        .collect();
+    let all = created.len();
+    created.sort_by_key(|id| id.as_uuid());
+    created.dedup();
+    assert_eq!(created.len(), all);
+    // What was told of a completed sale says it is completed.
+    assert!(events.iter().all(|event| match event {
+        DomainEvent::Sale {
+            kind: WebhookEventKind::SaleCompleted,
+            sale,
+        } => sale.status() == SaleStatus::Completed,
+        DomainEvent::Sale {
+            kind: WebhookEventKind::SaleCancelled,
+            sale,
+        } => sale.status() == SaleStatus::Cancelled,
+        DomainEvent::Sale {
+            kind: WebhookEventKind::SaleCreated,
+            sale,
+        } => sale.number() >= 1,
+        _ => true,
+    }));
 }

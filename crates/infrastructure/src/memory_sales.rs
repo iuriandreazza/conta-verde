@@ -1,3 +1,5 @@
+use conta_verde_application::{DomainEvent, SharedEvents};
+use conta_verde_domain::WebhookEventKind;
 use std::sync::{Arc, Mutex};
 
 use conta_verde_application::{
@@ -16,6 +18,7 @@ use crate::memory_audit::AuditLog;
 #[derive(Default, Clone)]
 pub struct InMemorySaleRepository {
     state: Arc<Mutex<SaleState>>,
+    events: Option<SharedEvents>,
 }
 
 #[derive(Default)]
@@ -25,8 +28,20 @@ struct SaleState {
     audit: AuditLog,
 }
 
-impl SaleRepository for InMemorySaleRepository {
-    async fn save(&self, sale: &Sale, audit: &AuditEntry) -> Result<i64, RepositoryError> {
+impl InMemorySaleRepository {
+    /// The events a successful write raises go here ([ADR 0088]); none when nobody listens.
+    pub fn with_events(mut self, events: SharedEvents) -> Self {
+        self.events = Some(events);
+        self
+    }
+
+    async fn raise(&self, event: DomainEvent) {
+        if let Some(events) = &self.events {
+            events.publish(event).await;
+        }
+    }
+
+    async fn save_now(&self, sale: &Sale, audit: &AuditEntry) -> Result<i64, RepositoryError> {
         ensure_audit_describes(audit, sale)?;
         let mut state = self.state.lock().expect("repository lock poisoned");
         if state.sales.iter().any(|stored| stored.id() == sale.id()) {
@@ -61,6 +76,47 @@ impl SaleRepository for InMemorySaleRepository {
         state.sales.push(sale.clone().with_number(number));
         state.audit.record(audit);
         Ok(number)
+    }
+
+    async fn set_status_now(
+        &self,
+        sale: &Sale,
+        expected: SaleStatus,
+        audit: &AuditEntry,
+    ) -> Result<(), RepositoryError> {
+        ensure_audit_describes(audit, sale)?;
+        let mut state = self.state.lock().expect("repository lock poisoned");
+        let returned = state
+            .returns
+            .iter()
+            .any(|made| made.company_id() == sale.company_id() && made.sale_id() == sale.id());
+        let stored = state
+            .sales
+            .iter_mut()
+            .find(|stored| stored.company_id() == sale.company_id() && stored.id() == sale.id())
+            .ok_or(RepositoryError::NotFound)?;
+        if stored.status() != expected {
+            return Err(RepositoryError::SaleChanged);
+        }
+        if sale.status() == SaleStatus::Cancelled && returned {
+            return Err(RepositoryError::SaleHasReturns);
+        }
+        // Only the status moves: what an edit wrote meanwhile stays.
+        *stored = stored.with_status(sale.status());
+        state.audit.record(audit);
+        Ok(())
+    }
+}
+
+impl SaleRepository for InMemorySaleRepository {
+    async fn save(&self, sale: &Sale, audit: &AuditEntry) -> Result<i64, RepositoryError> {
+        let done = self.save_now(sale, audit).await?;
+        self.raise(DomainEvent::Sale {
+            kind: WebhookEventKind::SaleCreated,
+            sale: sale.clone().with_number(done),
+        })
+        .await;
+        Ok(done)
     }
 
     async fn find(
@@ -130,26 +186,19 @@ impl SaleRepository for InMemorySaleRepository {
         expected: SaleStatus,
         audit: &AuditEntry,
     ) -> Result<(), RepositoryError> {
-        ensure_audit_describes(audit, sale)?;
-        let mut state = self.state.lock().expect("repository lock poisoned");
-        let returned = state
-            .returns
-            .iter()
-            .any(|made| made.company_id() == sale.company_id() && made.sale_id() == sale.id());
-        let stored = state
-            .sales
-            .iter_mut()
-            .find(|stored| stored.company_id() == sale.company_id() && stored.id() == sale.id())
-            .ok_or(RepositoryError::NotFound)?;
-        if stored.status() != expected {
-            return Err(RepositoryError::SaleChanged);
+        self.set_status_now(sale, expected, audit).await?;
+        let kind = match sale.status() {
+            SaleStatus::Completed => Some(WebhookEventKind::SaleCompleted),
+            SaleStatus::Cancelled => Some(WebhookEventKind::SaleCancelled),
+            SaleStatus::Open => None,
+        };
+        if let Some(kind) = kind {
+            self.raise(DomainEvent::Sale {
+                kind,
+                sale: sale.clone(),
+            })
+            .await;
         }
-        if sale.status() == SaleStatus::Cancelled && returned {
-            return Err(RepositoryError::SaleHasReturns);
-        }
-        // Only the status moves: what an edit wrote meanwhile stays.
-        *stored = stored.with_status(sale.status());
-        state.audit.record(audit);
         Ok(())
     }
 
@@ -318,7 +367,9 @@ mod tests {
         };
         let entry_store = InMemoryFinancialEntryRepository::default();
         let quote_store = InMemoryQuoteRepository::default();
-        let store = InMemorySaleRepository::default();
+        let told = crate::RecordingEvents::default();
+        let store =
+            InMemorySaleRepository::default().with_events(std::sync::Arc::new(told.clone()));
         let sales = SaleService::new(
             store.clone(),
             quote_store.clone(),
@@ -350,6 +401,7 @@ mod tests {
             &seed,
         )
         .await;
+        crate::contract_integrations::sales_tell_what_happens_to_them(&told.events());
         crate::contract_integrations::registers_an_order_once_by_its_reference(
             &sales,
             &crate::InMemorySaleClaimRepository::default(),

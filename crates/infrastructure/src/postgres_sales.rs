@@ -1,3 +1,5 @@
+use conta_verde_application::{DomainEvent, SharedEvents};
+use conta_verde_domain::WebhookEventKind;
 use std::collections::HashMap;
 
 use conta_verde_application::{
@@ -25,11 +27,12 @@ const SELECT_SALES: &str = "SELECT id, company_id, number, customer_id, seller_i
 #[derive(Clone)]
 pub struct PostgresSaleRepository {
     pool: PgPool,
+    events: Option<SharedEvents>,
 }
 
 impl PostgresSaleRepository {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self { pool, events: None }
     }
 }
 
@@ -58,8 +61,20 @@ async fn insert_lines(connection: &mut PgConnection, sale: &Sale) -> Result<(), 
     Ok(())
 }
 
-impl SaleRepository for PostgresSaleRepository {
-    async fn save(&self, sale: &Sale, audit: &AuditEntry) -> Result<i64, RepositoryError> {
+impl PostgresSaleRepository {
+    /// The events a successful write raises go here ([ADR 0088]); none when nobody listens.
+    pub fn with_events(mut self, events: SharedEvents) -> Self {
+        self.events = Some(events);
+        self
+    }
+
+    async fn raise(&self, event: DomainEvent) {
+        if let Some(events) = &self.events {
+            events.publish(event).await;
+        }
+    }
+
+    async fn save_now(&self, sale: &Sale, audit: &AuditEntry) -> Result<i64, RepositoryError> {
         ensure_audit_describes(audit, sale)?;
         let mut tx = self.pool.begin().await.map_err(storage_error)?;
         let number = next_document_number(&mut tx, sale.company_id(), "sale").await?;
@@ -97,6 +112,66 @@ impl SaleRepository for PostgresSaleRepository {
         postgres_audit::insert(&mut tx, audit).await?;
         tx.commit().await.map_err(storage_error)?;
         Ok(number)
+    }
+
+    async fn set_status_now(
+        &self,
+        sale: &Sale,
+        expected: SaleStatus,
+        audit: &AuditEntry,
+    ) -> Result<(), RepositoryError> {
+        ensure_audit_describes(audit, sale)?;
+        let mut tx = self.pool.begin().await.map_err(storage_error)?;
+        // The sale is locked: a return that is being stored takes the same lock before it looks at the status.
+        let stored: Option<String> = sqlx::query_scalar(
+            "SELECT status FROM sales WHERE id = $1 AND company_id = $2 FOR UPDATE",
+        )
+        .bind(sale.id().as_uuid())
+        .bind(sale.company_id().as_uuid())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(storage_error)?;
+        match stored {
+            None => return Err(RepositoryError::NotFound),
+            Some(status) if status != expected.as_str() => {
+                return Err(RepositoryError::SaleChanged);
+            }
+            Some(_) => {}
+        }
+        if sale.status() == SaleStatus::Cancelled {
+            let returned: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM sale_returns WHERE company_id = $1 AND sale_id = $2)",
+            )
+            .bind(sale.company_id().as_uuid())
+            .bind(sale.id().as_uuid())
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(storage_error)?;
+            if returned {
+                return Err(RepositoryError::SaleHasReturns);
+            }
+        }
+        sqlx::query("UPDATE sales SET status = $3 WHERE id = $1 AND company_id = $2")
+            .bind(sale.id().as_uuid())
+            .bind(sale.company_id().as_uuid())
+            .bind(sale.status().as_str())
+            .execute(&mut *tx)
+            .await
+            .map_err(storage_error)?;
+        postgres_audit::insert(&mut tx, audit).await?;
+        tx.commit().await.map_err(storage_error)
+    }
+}
+
+impl SaleRepository for PostgresSaleRepository {
+    async fn save(&self, sale: &Sale, audit: &AuditEntry) -> Result<i64, RepositoryError> {
+        let done = self.save_now(sale, audit).await?;
+        self.raise(DomainEvent::Sale {
+            kind: WebhookEventKind::SaleCreated,
+            sale: sale.clone().with_number(done),
+        })
+        .await;
+        Ok(done)
     }
 
     async fn find(
@@ -201,46 +276,20 @@ impl SaleRepository for PostgresSaleRepository {
         expected: SaleStatus,
         audit: &AuditEntry,
     ) -> Result<(), RepositoryError> {
-        ensure_audit_describes(audit, sale)?;
-        let mut tx = self.pool.begin().await.map_err(storage_error)?;
-        // The sale is locked: a return that is being stored takes the same lock before it looks at the status.
-        let stored: Option<String> = sqlx::query_scalar(
-            "SELECT status FROM sales WHERE id = $1 AND company_id = $2 FOR UPDATE",
-        )
-        .bind(sale.id().as_uuid())
-        .bind(sale.company_id().as_uuid())
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(storage_error)?;
-        match stored {
-            None => return Err(RepositoryError::NotFound),
-            Some(status) if status != expected.as_str() => {
-                return Err(RepositoryError::SaleChanged);
-            }
-            Some(_) => {}
+        self.set_status_now(sale, expected, audit).await?;
+        let kind = match sale.status() {
+            SaleStatus::Completed => Some(WebhookEventKind::SaleCompleted),
+            SaleStatus::Cancelled => Some(WebhookEventKind::SaleCancelled),
+            SaleStatus::Open => None,
+        };
+        if let Some(kind) = kind {
+            self.raise(DomainEvent::Sale {
+                kind,
+                sale: sale.clone(),
+            })
+            .await;
         }
-        if sale.status() == SaleStatus::Cancelled {
-            let returned: bool = sqlx::query_scalar(
-                "SELECT EXISTS (SELECT 1 FROM sale_returns WHERE company_id = $1 AND sale_id = $2)",
-            )
-            .bind(sale.company_id().as_uuid())
-            .bind(sale.id().as_uuid())
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(storage_error)?;
-            if returned {
-                return Err(RepositoryError::SaleHasReturns);
-            }
-        }
-        sqlx::query("UPDATE sales SET status = $3 WHERE id = $1 AND company_id = $2")
-            .bind(sale.id().as_uuid())
-            .bind(sale.company_id().as_uuid())
-            .bind(sale.status().as_str())
-            .execute(&mut *tx)
-            .await
-            .map_err(storage_error)?;
-        postgres_audit::insert(&mut tx, audit).await?;
-        tx.commit().await.map_err(storage_error)
+        Ok(())
     }
 
     async fn history(
@@ -685,9 +734,11 @@ mod tests {
         let other_company = contract::create_company(&pool).await;
         let entry_seed = entry_seed(&pool, company).await;
         let seed = sales_seed(&pool, company).await;
+        let told = crate::RecordingEvents::default();
         let store = PostgresSaleRepository::new(pool.clone());
         let sales = SaleService::new(
-            PostgresSaleRepository::new(pool.clone()),
+            PostgresSaleRepository::new(pool.clone())
+                .with_events(std::sync::Arc::new(told.clone())),
             PostgresQuoteRepository::new(pool.clone()),
             FinancialEntryService::new(
                 PostgresFinancialEntryRepository::new(pool.clone()),
@@ -723,6 +774,7 @@ mod tests {
             &seed,
         )
         .await;
+        crate::contract_integrations::sales_tell_what_happens_to_them(&told.events());
         crate::contract_integrations::registers_an_order_once_by_its_reference(
             &sales,
             &crate::PostgresSaleClaimRepository::new(pool.clone()),

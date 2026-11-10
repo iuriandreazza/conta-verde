@@ -71,6 +71,50 @@ export interface IssuedApiKey {
 /** What a person may be given in an API key: the same areas the roles speak of, never members, accounting or fiscal. */
 export const API_KEY_AREAS = ["parties", "products", "finance", "sales", "purchases"] as const;
 
+/** Where the company wants to be told what happens. Times are milliseconds since the epoch. */
+export interface WebhookSubscription {
+  id: string;
+  url: string;
+  /** The events asked for; none means every one. */
+  events: string[];
+  active: boolean;
+  created_by: string;
+  created_at: number;
+}
+
+export interface WebhookSubscriptionList {
+  items: WebhookSubscription[];
+  /** Whether the server can seal secrets: when it cannot, webhooks are off. */
+  available: boolean;
+  /** What a subscription may ask for. */
+  events: string[];
+}
+
+/** A subscription just made: the only answer that carries its secret. */
+export interface SubscribedWebhook {
+  subscription: WebhookSubscription;
+  secret: string;
+}
+
+export interface WebhookDelivery {
+  id: string;
+  event_id: string;
+  kind: string;
+  status: "pending" | "delivered" | "failed";
+  attempts: number;
+  last_status: number | null;
+  last_error: string | null;
+  created_at: number;
+  updated_at: number;
+  delivered_at: number | null;
+}
+
+export interface WebhookInput {
+  url: string;
+  events: string[];
+  active?: boolean;
+}
+
 /** What a link leads to, shown before the person accepts. */
 export interface InvitationPreview {
   company_name: string;
@@ -2089,6 +2133,28 @@ export const api = {
     request<InvitationPreview>(`/invitations/${encodeURIComponent(token)}`),
   acceptInvitation: (token: string) =>
     post<{ company_id: string }>(`/invitations/${encodeURIComponent(token)}/accept`),
+  listWebhooks: (companyId: string) =>
+    request<WebhookSubscriptionList>(`/companies/${companyId}/webhook-subscriptions`),
+  createWebhook: (companyId: string, input: WebhookInput) =>
+    post<SubscribedWebhook>(`/companies/${companyId}/webhook-subscriptions`, input),
+  updateWebhook: (companyId: string, id: string, input: Required<WebhookInput>) =>
+    request<WebhookSubscription>(`/companies/${companyId}/webhook-subscriptions/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  /** With a `secret` the person's own is set and nothing comes back; without, one is made and given back once. */
+  replaceWebhookSecret: (companyId: string, id: string, secret?: string) =>
+    post<{ secret: string | null }>(`/companies/${companyId}/webhook-subscriptions/${id}/secret`, secret === undefined ? {} : { secret }),
+  testWebhook: (companyId: string, id: string) =>
+    post<WebhookDelivery>(`/companies/${companyId}/webhook-subscriptions/${id}/test`, {}),
+  webhookDeliveries: (companyId: string, id: string, after?: string) =>
+    request<{ items: WebhookDelivery[]; next_cursor: string | null }>(
+      `/companies/${companyId}/webhook-subscriptions/${id}/deliveries${after ? `?after=${encodeURIComponent(after)}` : ""}`,
+    ),
+  redeliverWebhook: (companyId: string, id: string, deliveryId: string) =>
+    post<WebhookDelivery>(`/companies/${companyId}/webhook-subscriptions/${id}/deliveries/${deliveryId}/redeliver`, {}),
+  webhookHistory: (companyId: string, id: string) =>
+    request<HistoryEntry[]>(`/companies/${companyId}/webhook-subscriptions/${id}/history`),
   listApiKeys: (companyId: string) =>
     request<{ items: ApiKey[] }>(`/companies/${companyId}/api-keys`).then((reply) => reply.items),
   createApiKey: (companyId: string, input: { name: string; scopes: string[]; expires_in_hours?: number }) =>

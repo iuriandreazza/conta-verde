@@ -6,6 +6,10 @@ pub enum DomainError {
     /// A scope of an API key that is not `area:read` or `area:write` of an area a key may have.
     InvalidApiScope,
     NoApiScopes,
+    /// A webhook address that is not `https` with a public host.
+    InvalidWebhookUrl,
+    InvalidWebhookEvent,
+    TooManyWebhookSubscriptions,
     InvalidApiKeyExpiry,
     InvalidApiKeyGrace,
     InvalidExternalReference,
@@ -183,6 +187,13 @@ impl fmt::Display for DomainError {
             Self::InvalidExternalReference => f.write_str(
                 "an external reference has 1 to 100 characters and no control characters",
             ),
+            Self::InvalidWebhookUrl => f.write_str(
+                "the address must be https, with a public host (not localhost or a private address), no credentials and at most 2000 characters",
+            ),
+            Self::InvalidWebhookEvent => f.write_str(
+                "events are sale.created, sale.completed, sale.cancelled, charge.paid and stock.below_minimum",
+            ),
+            Self::TooManyWebhookSubscriptions => f.write_str("a company has at most 20 subscriptions"),
             Self::NoApiScopes => f.write_str("a key needs at least one scope"),
             Self::InvalidApiKeyGrace => {
                 f.write_str("the old key may live on for 0 to 168 hours after a rotation")

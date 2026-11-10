@@ -1,4 +1,5 @@
 use conta_verde_application::{ChargeRepository, RepositoryError, ensure_audit_describes};
+use conta_verde_application::{DomainEvent, SharedEvents};
 use conta_verde_domain::{
     Actor, Amount, AuditEntity, AuditEntry, AuditRecord, CalendarDate, Charge, ChargeDraft,
     ChargeId, ChargeMethod, ChargePayment, ChargeReceipt, ChargeStatus, CompanyId, EntryId, UserId,
@@ -20,11 +21,12 @@ const SELECT_CHARGES: &str = "SELECT id, company_id, entry_id, installment, meth
 
 pub struct PostgresChargeRepository {
     pool: PgPool,
+    events: Option<SharedEvents>,
 }
 
 impl PostgresChargeRepository {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self { pool, events: None }
     }
 }
 
@@ -78,6 +80,52 @@ fn issued_by(charge: &Charge) -> (Uuid, &str) {
     // The column holds a person's id and name; no key reaches it ([ADR 0087]).
     let by = charge.issued_by();
     (by.id(), by.name())
+}
+
+impl PostgresChargeRepository {
+    /// The events a successful write raises go here ([ADR 0088]); none when nobody listens.
+    pub fn with_events(mut self, events: SharedEvents) -> Self {
+        self.events = Some(events);
+        self
+    }
+
+    async fn raise(&self, event: DomainEvent) {
+        if let Some(events) = &self.events {
+            events.publish(event).await;
+        }
+    }
+
+    async fn mark_paid_now(
+        &self,
+        paid: &Charge,
+        audit: &AuditEntry,
+    ) -> Result<(), RepositoryError> {
+        ensure_audit_describes(audit, paid)?;
+        let receipt = paid.receipt().ok_or_else(|| {
+            RepositoryError::Storage("a charge is marked paid with its receipt".to_owned())
+        })?;
+        let mut tx = self.pool.begin().await.map_err(storage_error)?;
+        let result = sqlx::query(
+            "UPDATE charges SET status = 'paid', paid_on = CAST($4 AS DATE), \
+             paid_amount = CAST($5 AS NUMERIC), fee = CAST($6 AS NUMERIC), note = $7 \
+             WHERE id = $1 AND company_id = $2 AND entry_id = $3 AND status <> 'paid'",
+        )
+        .bind(paid.id().as_uuid())
+        .bind(paid.company_id().as_uuid())
+        .bind(paid.entry_id().as_uuid())
+        .bind(receipt.paid_on.to_string())
+        .bind(receipt.paid_amount.to_string())
+        .bind(receipt.fee.to_string())
+        .bind(receipt.note.as_deref())
+        .execute(&mut *tx)
+        .await
+        .map_err(storage_error)?;
+        if result.rows_affected() == 0 {
+            return Err(RepositoryError::NotFound);
+        }
+        postgres_audit::insert(&mut tx, audit).await?;
+        tx.commit().await.map_err(storage_error)
+    }
 }
 
 impl ChargeRepository for PostgresChargeRepository {
@@ -143,31 +191,9 @@ impl ChargeRepository for PostgresChargeRepository {
     }
 
     async fn mark_paid(&self, paid: &Charge, audit: &AuditEntry) -> Result<(), RepositoryError> {
-        ensure_audit_describes(audit, paid)?;
-        let receipt = paid.receipt().ok_or_else(|| {
-            RepositoryError::Storage("a charge is marked paid with its receipt".to_owned())
-        })?;
-        let mut tx = self.pool.begin().await.map_err(storage_error)?;
-        let result = sqlx::query(
-            "UPDATE charges SET status = 'paid', paid_on = CAST($4 AS DATE), \
-             paid_amount = CAST($5 AS NUMERIC), fee = CAST($6 AS NUMERIC), note = $7 \
-             WHERE id = $1 AND company_id = $2 AND entry_id = $3 AND status <> 'paid'",
-        )
-        .bind(paid.id().as_uuid())
-        .bind(paid.company_id().as_uuid())
-        .bind(paid.entry_id().as_uuid())
-        .bind(receipt.paid_on.to_string())
-        .bind(receipt.paid_amount.to_string())
-        .bind(receipt.fee.to_string())
-        .bind(receipt.note.as_deref())
-        .execute(&mut *tx)
-        .await
-        .map_err(storage_error)?;
-        if result.rows_affected() == 0 {
-            return Err(RepositoryError::NotFound);
-        }
-        postgres_audit::insert(&mut tx, audit).await?;
-        tx.commit().await.map_err(storage_error)
+        self.mark_paid_now(paid, audit).await?;
+        self.raise(DomainEvent::ChargePaid(paid.clone())).await;
+        Ok(())
     }
 
     async fn expire(&self, expired: &Charge, audit: &AuditEntry) -> Result<(), RepositoryError> {

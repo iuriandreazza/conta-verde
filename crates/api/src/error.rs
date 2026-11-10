@@ -57,7 +57,9 @@ impl IntoResponse for ApiError {
 fn describe(error: &ApplicationError) -> (StatusCode, String) {
     match error {
         // The quote is not in a status that allows it: not the request's fault, but the state's.
-        ApplicationError::IdempotencyMismatch => (StatusCode::CONFLICT, error.to_string()),
+        ApplicationError::IdempotencyMismatch | ApplicationError::WebhooksOff => {
+            (StatusCode::CONFLICT, error.to_string())
+        }
         ApplicationError::Domain(
             error @ (DomainError::QuoteIsLocked
             | DomainError::QuoteIsNotSent
@@ -145,6 +147,8 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
         }
         ApplicationError::ProductNotFound
         | ApplicationError::ApiKeyNotFound
+        | ApplicationError::WebhookNotFound
+        | ApplicationError::WebhookDeliveryNotFound
         | ApplicationError::CostCenterNotFound
         | ApplicationError::BankAccountNotFound
         | ApplicationError::PaymentMethodNotFound

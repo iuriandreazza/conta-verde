@@ -2,6 +2,7 @@
 //! answered in RFC 9457 problem documents. It has types of its own and calls the same use cases as the web app, so no rule,
 //! check or audit entry is skipped through it.
 
+mod events;
 mod rate_limit;
 mod resources;
 
@@ -18,6 +19,7 @@ use conta_verde_application::AuthError;
 use conta_verde_domain::{Access, Actor, Area, CalendarDate, CompanyId};
 use serde::Serialize;
 
+pub use events::V1Events;
 pub(crate) use rate_limit::RateLimiter;
 use rate_limit::{Allowance, Verdict};
 

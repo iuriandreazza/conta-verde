@@ -1377,6 +1377,32 @@
       }
     }
   },
+  "webhooks": {
+    "event": {
+      "post": {
+        "summary": "An event, sent to the address of a subscription",
+        "description": "A subscription is made by an owner or admin of the company in the web app. Each delivery is a POST of a `WebhookEvent` with the headers `Webhook-Id` (the event's id, the same on every try), `Webhook-Timestamp` (Unix seconds, new on every try) and `Webhook-Signature` (`v1,` and the base64 of the HMAC-SHA256 of `{id}.{timestamp}.{body}` under the subscription's secret, the secret's own text being the key; several values separated by a space while a replaced secret still counts). Verify the signature in constant time, refuse a timestamp more than five minutes off, and remember the ids you have seen: a delivery may arrive twice and out of order. Answer with any 2xx within 10 seconds; anything else is tried again for about nine hours. An event can be lost if the server fails right after the change it tells of: reconcile with the reads of this API.",
+        "tags": [
+          "Webhooks"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookEvent"
+              }
+            }
+          }
+        },
+        "responses": {
+          "2XX": {
+            "description": "Received."
+          }
+        }
+      }
+    }
+  },
   "components": {
     "securitySchemes": {
       "bearer": {
@@ -2078,6 +2104,106 @@
           "payment_url",
           "paid_on",
           "paid_amount"
+        ]
+      },
+      "TestMessage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ]
+      },
+      "ChargePaid": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "sale_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "receivable_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "charge": {
+            "$ref": "#/components/schemas/Charge"
+          }
+        },
+        "required": [
+          "sale_id",
+          "receivable_id",
+          "charge"
+        ]
+      },
+      "WebhookEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "sale.created",
+              "sale.completed",
+              "sale.cancelled",
+              "charge.paid",
+              "stock.below_minimum",
+              "webhook.test"
+            ],
+            "description": "What happened. New types are added over time: ignore the ones you do not know."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "object": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Sale"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ChargePaid"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Stock"
+                  },
+                  {
+                    "$ref": "#/components/schemas/TestMessage"
+                  }
+                ],
+                "description": "A `Sale` for sale.*, a `ChargePaid` for charge.paid, a `Stock` for stock.below_minimum."
+              }
+            },
+            "required": [
+              "object"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "created_at",
+          "company_id",
+          "data"
         ]
       },
       "PartyPage": {

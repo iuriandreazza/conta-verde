@@ -1,3 +1,4 @@
+use conta_verde_application::{DomainEvent, SharedEvents};
 use std::sync::{Arc, Mutex};
 
 use conta_verde_application::{ChargeRepository, RepositoryError, ensure_audit_describes};
@@ -12,6 +13,7 @@ use crate::memory_audit::AuditLog;
 #[derive(Default, Clone)]
 pub struct InMemoryChargeRepository {
     state: Arc<Mutex<ChargeState>>,
+    events: Option<SharedEvents>,
 }
 
 #[derive(Default)]
@@ -19,6 +21,44 @@ struct ChargeState {
     /// In the order they were issued.
     charges: Vec<Charge>,
     audit: AuditLog,
+}
+
+impl InMemoryChargeRepository {
+    /// The events a successful write raises go here ([ADR 0088]); none when nobody listens.
+    pub fn with_events(mut self, events: SharedEvents) -> Self {
+        self.events = Some(events);
+        self
+    }
+
+    async fn raise(&self, event: DomainEvent) {
+        if let Some(events) = &self.events {
+            events.publish(event).await;
+        }
+    }
+
+    async fn mark_paid_now(
+        &self,
+        paid: &Charge,
+        audit: &AuditEntry,
+    ) -> Result<(), RepositoryError> {
+        ensure_audit_describes(audit, paid)?;
+        let mut state = self.state.lock().expect("repository lock poisoned");
+        let stored = state
+            .charges
+            .iter_mut()
+            .find(|stored| {
+                stored.company_id() == paid.company_id()
+                    && stored.id() == paid.id()
+                    && stored.status() != ChargeStatus::Paid
+            })
+            .ok_or(RepositoryError::NotFound)?;
+        *stored = stored
+            .clone()
+            .with_status(ChargeStatus::Paid)
+            .with_receipt(paid.receipt().cloned());
+        state.audit.record(audit);
+        Ok(())
+    }
 }
 
 impl ChargeRepository for InMemoryChargeRepository {
@@ -57,22 +97,8 @@ impl ChargeRepository for InMemoryChargeRepository {
     }
 
     async fn mark_paid(&self, paid: &Charge, audit: &AuditEntry) -> Result<(), RepositoryError> {
-        ensure_audit_describes(audit, paid)?;
-        let mut state = self.state.lock().expect("repository lock poisoned");
-        let stored = state
-            .charges
-            .iter_mut()
-            .find(|stored| {
-                stored.company_id() == paid.company_id()
-                    && stored.id() == paid.id()
-                    && stored.status() != ChargeStatus::Paid
-            })
-            .ok_or(RepositoryError::NotFound)?;
-        *stored = stored
-            .clone()
-            .with_status(ChargeStatus::Paid)
-            .with_receipt(paid.receipt().cloned());
-        state.audit.record(audit);
+        self.mark_paid_now(paid, audit).await?;
+        self.raise(DomainEvent::ChargePaid(paid.clone())).await;
         Ok(())
     }
 

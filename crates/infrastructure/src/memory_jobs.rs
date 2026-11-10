@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use conta_verde_application::{JobQueue, RepositoryError};
-use conta_verde_domain::{Job, JobId, NewJob};
+use conta_verde_domain::{Job, JobId, JobKind, NewJob};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Status {
@@ -53,16 +53,20 @@ impl JobQueue for InMemoryJobQueue {
         Ok(id)
     }
 
-    async fn claim_next(
+    async fn claim_next_of(
         &self,
         now: i64,
         lease_seconds: i64,
+        kinds: &[JobKind],
     ) -> Result<Option<Job>, RepositoryError> {
         let mut rows = self.rows.lock().expect("queue lock poisoned");
-        let due = |row: &&mut Row| match row.status {
-            Status::Pending => row.run_at <= now,
-            Status::Running { until } => until <= now,
-            Status::Dead => false,
+        let due = |row: &&mut Row| {
+            kinds.contains(&row.job.kind())
+                && match row.status {
+                    Status::Pending => row.run_at <= now,
+                    Status::Running { until } => until <= now,
+                    Status::Dead => false,
+                }
         };
         let Some(row) = rows
             .iter_mut()
@@ -118,6 +122,11 @@ mod tests {
 
     use super::*;
     use crate::{InMemoryEmailSender, contract};
+
+    #[tokio::test]
+    async fn claims_jobs_by_kind() {
+        crate::contract_integrations::claims_jobs_by_kind(&InMemoryJobQueue::default()).await;
+    }
 
     #[tokio::test]
     async fn runs_the_job_queue() {
