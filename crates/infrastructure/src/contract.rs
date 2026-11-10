@@ -18264,13 +18264,22 @@ pub async fn issues_an_nfe_from_a_sale<D, S, P, Y, F, B, R>(
         .unwrap();
     assert_eq!(waiting.status(), FiscalDocumentStatus::Processing);
     assert!(matches!(
-        service.refresh(company, waiting.id()).await,
+        service.refresh(company, waiting.id(), FISCAL_NOW + 1).await,
         Err(ApplicationError::FiscalGateway(_))
     ));
     gateway.set_unavailable(false);
     // The gateway never took it (it was down when sent), so it has no document under the reference: the document is
     // refused in words the person can act on and is sent again under the same id.
-    let unknown = service.refresh(company, waiting.id()).await.unwrap();
+    // ... but not at once: a submission may still be on its way.
+    let too_soon = service
+        .refresh(company, waiting.id(), FISCAL_NOW + 1)
+        .await
+        .unwrap();
+    assert_eq!(too_soon.status(), FiscalDocumentStatus::Processing);
+    let unknown = service
+        .refresh(company, waiting.id(), FISCAL_NOW + 3_600)
+        .await
+        .unwrap();
     assert_eq!(unknown.status(), FiscalDocumentStatus::Rejected);
     assert_eq!(unknown.refusal().unwrap().code(), "unknown");
     let sent_again = service
@@ -18287,7 +18296,10 @@ pub async fn issues_an_nfe_from_a_sale<D, S, P, Y, F, B, R>(
     assert_eq!(sent_again.status(), FiscalDocumentStatus::Processing);
     // The poll finishes what is still waiting, in the name of whoever submitted it (it reaches every company, so only
     // this document is asserted on).
-    let report = service.poll_pending(0, 1_000).await.unwrap();
+    let report = service
+        .poll_pending(0, 1_000, FISCAL_NOW + 3_600)
+        .await
+        .unwrap();
     assert!(report.asked >= 1);
     let polled = service.get(company, sent_again.id()).await.unwrap();
     assert_eq!(polled.status(), FiscalDocumentStatus::Authorized);

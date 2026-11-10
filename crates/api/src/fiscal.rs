@@ -431,7 +431,7 @@ pub(crate) async fn refresh_document<X: Ports>(
 ) -> Result<Json<FiscalDocumentResponse>, ApiError> {
     let document = state
         .fiscal_documents
-        .refresh(company_id, parse_document(&id)?)
+        .refresh(company_id, parse_document(&id)?, crate::now_unix())
         .await?;
     respond(&state, &document).await
 }

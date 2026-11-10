@@ -372,20 +372,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         FiscalSettingsService::new(PostgresFiscalSettingsRepository::new(pool.clone()));
     // The poll that finishes what the gateway answered "processing" to has a service of its own over its own gateway
     // client: the one the app serves from is owned by its state.
-    let fiscal_documents = || {
-        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(FiscalDocumentService::new(
+    let fiscal_gateway = fiscal_gateway_from_env()?;
+    let fiscal_documents = |gateway: ConfiguredFiscalGateway| {
+        FiscalDocumentService::new(
             PostgresFiscalDocumentRepository::new(pool.clone()),
             PostgresSaleRepository::new(pool.clone()),
             PostgresPartyRepository::new(pool.clone()),
             PostgresProductRepository::new(pool.clone()),
             PostgresFiscalSettingsRepository::new(pool.clone()),
-            fiscal_gateway_from_env()?,
+            gateway,
             LocalBlobStore::new(attachments_dir_from_env()),
             references(),
-        ))
+        )
     };
-    tokio::spawn(poll_fiscal_documents(fiscal_documents()?));
-    let fiscal_documents = fiscal_documents()?;
+    // The poll shares the gateway of the app (one client, and with `FISCAL_GATEWAY=fake` one memory), in a service of
+    // its own because the app's is owned by its state.
+    tokio::spawn(poll_fiscal_documents(fiscal_documents(
+        fiscal_gateway.clone(),
+    )));
+    let fiscal_documents = fiscal_documents(fiscal_gateway);
     let auth = AuthService::new(
         PostgresIdentityRepository::new(pool),
         Argon2SecretService::new()?,
@@ -501,7 +506,10 @@ async fn poll_fiscal_documents<D, S, P, Y, F, G, B, R>(
     loop {
         tick.tick().await;
         let since = conta_verde_api::now_unix() - POLL_WINDOW_SECONDS;
-        match service.poll_pending(since, POLL_BATCH).await {
+        match service
+            .poll_pending(since, POLL_BATCH, conta_verde_api::now_unix())
+            .await
+        {
             Ok(report) if report.asked > 0 => tracing::info!(
                 asked = report.asked,
                 settled = report.settled,

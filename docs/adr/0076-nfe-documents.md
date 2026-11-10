@@ -86,6 +86,11 @@ already recorded does not write it again.
   The issue request carries one `origin` for the whole document, which the person chooses; there is no default. **Verify with an
   accountant** that one origin per document suits the company's products (a document with goods of two origins needs a product-level
   field, which is a later decision).
+- **Only a customer with a CPF is invoiced for now.** A company that buys may be a taxpayer of the ICMS, which changes how the
+  recipient is declared, and the registers do not keep a recipient's state registration: the adapter declares a recipient with none
+  as a non-contributor, which would be a tax fact the product made up for a CNPJ. A recipient with a CNPJ is refused (`422`)
+  until the party register keeps the state registration (a later slice). The freight mode of the document is "no freight" and
+  there is no field for transport yet; **verify with an accountant** that this suits the company's sales.
 - **Buyer presence** is also chosen by the person in the request (ADR 0075); there is no default.
 - **Stepwise and repeatable**: (1) validate and write the `draft`, whose unique index is the claim, so asking twice finds the same
   document; (2) mark it `processing` and `submit` with the document's id as the reference; (3) store the outcome and, if authorized,
@@ -103,6 +108,17 @@ already recorded does not write it again.
   overlapping passes and restarts do no harm, and nothing has to be queued by whoever submitted). A document older than a week
   is left for the person's refresh (`POST .../refresh`). What the poll writes is in the name of **whoever submitted the
   document**. A document that authorizes through the poll or a refresh is written **whatever the period lock says, with a note**.
+- **"Unknown" waits ten minutes.** A refresh, or the poll, believes "the gateway has no document with this reference" only for a
+  document issued at least ten minutes before (`UNKNOWN_GRACE_SECONDS`), so a submission that is still on its way is not refused
+  under the feet of the call making it. A refresh or a cancel also **refuses to ask when the company's issuer CNPJ or environment
+  differs from the document's** (a document of homologation is not asked about in production): put the settings back first.
+- **Asking again after a rejection makes a new document.** `POST .../fiscal/documents` for a sale whose only document is rejected
+  creates a new one with a new id and reference; **`resend` is the way to keep the id**. Both are safe because a rejected document is
+  one the gateway never authorized (a gateway that did authorize it answers the query, which is why a document is rejected for
+  `Unknown` only after the grace above). Asking for a sale that already has a live document, in a month that has since been
+  closed, still returns that document: the lookup comes before the certificate and the lock.
+- **The poll's limits**: it takes the oldest 50 waiting documents of the last seven days each minute, with no rotation, so
+  more than 50 stuck documents would hold newer ones back until they leave the window; the person's refresh is the way past it.
 - **The audit trail**: every move is an `AuditEntry` of the document, written in the transaction that stores the move, in the name of
   whoever submitted it for what the poll does.
 

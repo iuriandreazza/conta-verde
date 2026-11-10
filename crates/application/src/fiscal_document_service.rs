@@ -16,6 +16,9 @@ use crate::{
 
 const MIN_REASON_CHARS: usize = 15;
 const MAX_CANCEL_REASON_CHARS: usize = 255;
+/// How long a document is given before "the gateway has no document with this reference" is believed: a submission
+/// that is still on its way would otherwise be refused under the feet of the call that is making it.
+const UNKNOWN_GRACE_SECONDS: i64 = 10 * 60;
 
 /// What one pass of the poll did.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -102,11 +105,15 @@ where
         &self,
         since_unix: i64,
         limit: usize,
+        now_unix: i64,
     ) -> Result<PollReport, ApplicationError> {
         let mut report = PollReport::default();
         for document in self.documents.pending(since_unix, limit).await? {
             report.asked += 1;
-            match self.refresh(document.company_id(), document.id()).await {
+            match self
+                .refresh(document.company_id(), document.id(), now_unix)
+                .await
+            {
                 Ok(refreshed) if !refreshed.status().is_pending() => report.settled += 1,
                 Ok(_) => {}
                 Err(error) => {
@@ -181,22 +188,24 @@ where
         now_unix: i64,
     ) -> Result<FiscalDocument, ApplicationError> {
         let settings = self.ready_settings(company_id).await?;
-        let issued_on = issue_day(&settings, now_unix)?;
-        ensure_certificate(&settings, issued_on)?;
-        self.references.ensure_open(company_id, issued_on).await?;
         let sale = self.completed_sale(company_id, request.sale_id).await?;
         let origin = FiscalOrigin::Sale(sale.id());
         let live = self
             .documents
             .find_live(company_id, origin, FiscalDocumentKind::Nfe)
             .await?;
-        // What is past the draft is the answer to asking twice, whatever this request says.
+        // What is past the draft is the answer to asking twice, whatever this request says and whatever has closed since.
         if let Some(live) = live
             .as_ref()
             .filter(|live| live.status() != FiscalDocumentStatus::Draft)
         {
-            return self.refresh_or_return(company_id, live.clone()).await;
+            return self
+                .refresh_or_return(company_id, live.clone(), now_unix)
+                .await;
         }
+        let issued_on = issue_day(&settings, now_unix)?;
+        ensure_certificate(&settings, issued_on)?;
+        self.references.ensure_open(company_id, issued_on).await?;
         // A draft a failure left keeps its id, which is the gateway's reference.
         let id = live
             .as_ref()
@@ -237,7 +246,7 @@ where
                             .find_live(company_id, origin, FiscalDocumentKind::Nfe)
                             .await?
                             .ok_or(RepositoryError::FiscalDocumentAlreadyLive)?;
-                        return self.refresh_or_return(company_id, live).await;
+                        return self.refresh_or_return(company_id, live, now_unix).await;
                     }
                     Err(error) => return Err(error.into()),
                 }
@@ -294,18 +303,22 @@ where
         &self,
         company_id: CompanyId,
         id: FiscalDocumentId,
+        now_unix: i64,
     ) -> Result<FiscalDocument, ApplicationError> {
         let document = self.get(company_id, id).await?;
         if !document.status().is_pending() {
             return Ok(document);
         }
-        let settings = self.ready_settings(company_id).await?;
+        let settings = self.settings_of(company_id, &document).await?;
         let actor = submitter(&document);
         let outcome = self
             .gateway
             .query_nfe(&settings, &reference(&document))
             .await?;
-        self.apply(company_id, &actor, document, outcome).await
+        // "No such document" is believed only once the submission has had time to arrive.
+        let unknown_is_final = now_unix - document.issued_at_unix() >= UNKNOWN_GRACE_SECONDS;
+        self.apply(company_id, &actor, document, outcome, unknown_is_final)
+            .await
     }
 
     /// Cancels an authorized NF-e with a reason of 15 to 255 characters. The deadline is the authority's. It asks the
@@ -334,13 +347,13 @@ where
         self.references
             .ensure_open(company_id, document.issued_on())
             .await?;
-        let settings = self.ready_settings(company_id).await?;
+        let settings = self.settings_of(company_id, &document).await?;
         let state = self
             .gateway
             .query_nfe(&settings, &reference(&document))
             .await?;
         if let DocumentOutcome::Cancelled { .. } = state {
-            return self.apply(company_id, actor, document, state).await;
+            return self.apply(company_id, actor, document, state, true).await;
         }
         match self
             .gateway
@@ -374,6 +387,25 @@ where
         })
     }
 
+    /// The settings the document was issued under: the gateway's token follows the environment and its CNPJ is the
+    /// issuer's, so a document is asked about only while the company still issues the way it was issued.
+    async fn settings_of(
+        &self,
+        company_id: CompanyId,
+        document: &FiscalDocument,
+    ) -> Result<FiscalSettings, ApplicationError> {
+        let settings = self.ready_settings(company_id).await?;
+        if settings.cnpj() != document.issuer_cnpj()
+            || settings.environment() != document.environment()
+        {
+            return Err(ApplicationError::FiscalRule(
+                "the fiscal settings changed the issuer or the environment since this document was issued: put them back to ask about it"
+                    .to_owned(),
+            ));
+        }
+        Ok(settings)
+    }
+
     async fn completed_sale(
         &self,
         company_id: CompanyId,
@@ -397,9 +429,10 @@ where
         &self,
         company_id: CompanyId,
         document: FiscalDocument,
+        now_unix: i64,
     ) -> Result<FiscalDocument, ApplicationError> {
         if document.status().is_pending() {
-            self.refresh(company_id, document.id()).await
+            self.refresh(company_id, document.id(), now_unix).await
         } else {
             Ok(document)
         }
@@ -419,7 +452,10 @@ where
             .move_to(actor, document, |document| document.submitted())
             .await?;
         match self.gateway.submit_nfe(nfe).await {
-            Ok(outcome) => self.apply(company_id, actor, processing, outcome).await,
+            Ok(outcome) => {
+                self.apply(company_id, actor, processing, outcome, true)
+                    .await
+            }
             Err(GatewayError::Unavailable(detail)) => {
                 tracing::warn!(%detail, "the fiscal gateway did not answer a submission");
                 Ok(processing)
@@ -440,6 +476,7 @@ where
         actor: &Actor,
         document: FiscalDocument,
         outcome: DocumentOutcome,
+        unknown_is_final: bool,
     ) -> Result<FiscalDocument, ApplicationError> {
         match outcome {
             DocumentOutcome::Processing => Ok(document),
@@ -487,6 +524,7 @@ where
             }
             // The gateway has no document under our reference, so nothing of it was taken: it is refused in words
             // the person can act on, and may be sent again under the same reference.
+            DocumentOutcome::Unknown if !unknown_is_final => Ok(document),
             DocumentOutcome::Unknown => {
                 let refusal = FiscalRefusal::new(
                     "unknown",
@@ -726,6 +764,13 @@ fn recipient_of(customer: &Party) -> Result<NfeRecipient, ApplicationError> {
     let document = customer
         .document()
         .ok_or_else(|| rule("the customer has no CPF or CNPJ"))?;
+    // A company that buys may be a taxpayer of the ICMS, which changes the invoice; the registers do not keep the
+    // recipient's state registration yet, so the product would be inventing it (ADR 0076).
+    if document.as_str().len() != 11 {
+        return Err(rule(
+            "only a customer with a CPF can be invoiced for now: the state registration of a company recipient is not kept",
+        ));
+    }
     Ok(NfeRecipient {
         name: customer.name().to_owned(),
         document: Some(document.as_str().to_owned()),
@@ -781,4 +826,31 @@ fn item_of(
         pis_code: rule.pis_code().to_owned(),
         cofins_code: rule.cofins_code().to_owned(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use conta_verde_domain::{PartyDraft, PartyId};
+
+    fn customer(document: &str) -> Party {
+        Party::new(
+            PartyId::generate(),
+            CompanyId::generate(),
+            PartyDraft {
+                name: "Cliente".into(),
+                document: Some(document.into()),
+                is_customer: true,
+                ..PartyDraft::default()
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn only_a_customer_with_a_cpf_is_invoiced_because_a_company_may_be_a_taxpayer_of_the_icms() {
+        assert!(recipient_of(&customer("529.982.247-25")).is_ok());
+        let refused = recipient_of(&customer("11.222.333/0001-81")).unwrap_err();
+        assert!(matches!(refused, ApplicationError::FiscalRule(text) if text.contains("CPF")));
+    }
 }
