@@ -121,6 +121,15 @@ DPS series in the series column, the national key in the key column (empty when 
   Focus NFe's national endpoint accepts this body, the numbering rule above, the cancellation window of a municipality, and anything of
   NFE.io. The tests prove the product's rules on both storage adapters and through the API, against the fake and a local stand-in.
 
+## The screens (slice 5c)
+
+The Documentos page lists both kinds with a **Tipo** column and names an NFS-e by its number, or by `DPS series/number` while the authority
+has not given one. **Emitir NFS-e** asks the person for every choice (sale, a service nature, competence day, the IBGE code of where the
+service was rendered, the special tax regime), none filled in; only an active service nature **with its ISSQN terms** is offered, and the
+form says so when there is none. The sheet shows the NFS-e's own identity (number, DPS, verification code, key), says DANFSe for the
+printed form, offers no correction letter, and sends a rejected NFS-e again under the same DPS number. The numbering of invalidations stays
+the NF-e's.
+
 ## What this does not decide, and is left
 
-The screens (slice 5c); municipal (non-national) layouts; the tax calculation of the other regimes (slice 8); the NFS-e through NFE.io.
+Municipal (non-national) layouts; the tax calculation of the other regimes (slice 8); the NFS-e through NFE.io.

@@ -10,7 +10,17 @@ afterEach(() => vi.unstubAllGlobals());
 const settings = {
   natures: [
     { code: "venda", name: "Venda de mercadoria", kind: "product", cfop_in_state: "5102", cfop_interstate: "6102", active: true, rules: [] },
-    { code: "servico", name: "Prestação de serviço", kind: "service", cfop_in_state: null, cfop_interstate: null, active: true, rules: [] },
+    {
+      code: "servico",
+      name: "Prestação de serviço",
+      kind: "service",
+      cfop_in_state: null,
+      cfop_interstate: null,
+      active: true,
+      rules: [],
+      service: { national_tax_code: "171001", municipal_service_code: null, iss_taxation: "taxable", iss_rate: null },
+    },
+    { code: "sem-termos", name: "Serviço sem termos", kind: "service", cfop_in_state: null, cfop_interstate: null, active: true, rules: [], service: null },
   ],
 } as unknown as FiscalSettings;
 
@@ -235,4 +245,106 @@ it("lets whoever only reads see the documents and download, but not issue, cance
   expect(screen.queryByRole("button", { name: "Cancelar nota" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Enviar carta" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Inutilizar" })).toBeNull();
+});
+
+const service = (over: Partial<FiscalDocument> = {}): FiscalDocument =>
+  document({
+    id: "n1",
+    kind: "nfse",
+    access_key: null,
+    number: null,
+    series: null,
+    protocol: null,
+    nfse: { number: 41, key: null, verification_code: "ABC123" },
+    dps: { series: 1, number: 7 },
+    total: "240",
+    nature_code: "servico",
+    files: ["xml", "pdf"],
+    ...over,
+  });
+
+it("lists an NFS-e by its number, or by its DPS while the authority has not given one, and tells the kinds apart", async () => {
+  serve([document(), service(), service({ id: "n2", status: "processing", nfse: null, dps: { series: 1, number: 8 }, files: [] })]);
+  renderAt("/companies/c1/fiscal/documents");
+
+  const table = within(await screen.findByRole("table"));
+  expect(table.getAllByText("NFS-e")).toHaveLength(2);
+  expect(table.getByText("NF-e")).toBeInTheDocument();
+  expect(table.getByRole("button", { name: "41" })).toBeInTheDocument();
+  expect(table.getByRole("button", { name: "DPS 1/8" })).toBeInTheDocument();
+});
+
+it("issues an NFS-e only with every choice made by the person, from a service nature that has its ISSQN terms", async () => {
+  const fetchMock = serve([service({ status: "processing", nfse: null, files: [] })], profile, {
+    "/fiscal/service-documents": service({ status: "processing", nfse: null, files: [] }),
+  });
+  renderAt("/companies/c1/fiscal/documents");
+  await userEvent.click(await screen.findByRole("button", { name: "Emitir NFS-e" }));
+  const sheet = within(await screen.findByRole("dialog"));
+
+  for (const label of ["Venda", "Natureza de operação", "Competência", "Município da prestação (código do IBGE)", "Regime especial de tributação"]) {
+    expect(await sheet.findByLabelText(label)).toHaveValue("");
+  }
+  // Only a service nature with its terms is offered: not a product's, not a service the company has not described.
+  expect(sheet.getByRole("option", { name: "Prestação de serviço" })).toBeInTheDocument();
+  expect(sheet.queryByRole("option", { name: "Venda de mercadoria" })).toBeNull();
+  expect(sheet.queryByRole("option", { name: "Serviço sem termos" })).toBeNull();
+
+  await userEvent.selectOptions(sheet.getByLabelText("Venda"), "s1");
+  await userEvent.selectOptions(sheet.getByLabelText("Natureza de operação"), "servico");
+  await userEvent.type(sheet.getByLabelText("Competência"), "2026-11-09");
+  await userEvent.type(sheet.getByLabelText("Município da prestação (código do IBGE)"), "3550308");
+  await userEvent.selectOptions(sheet.getByLabelText("Regime especial de tributação"), "none");
+  await userEvent.click(sheet.getByRole("button", { name: "Emitir" }));
+
+  await screen.findByRole("button", { name: "Atualizar situação" });
+  expect(postsOf(fetchMock)).toEqual([
+    [
+      "/fiscal/service-documents",
+      { sale_id: "s1", nature_code: "servico", competence: "2026-11-09", service_city_code: "3550308", special_regime: "none" },
+    ],
+  ]);
+});
+
+it("shows an NFS-e's own identity, offers the DANFSe and no correction letter", async () => {
+  serve([service({ nfse: { number: 41, key: "NFS35503082", verification_code: "ABC123" } })]);
+  renderAt("/companies/c1/fiscal/documents");
+  await userEvent.click(await screen.findByRole("button", { name: "41" }));
+
+  const sheet = within(await screen.findByRole("dialog"));
+  expect(await sheet.findByText("ABC123")).toBeInTheDocument();
+  expect(sheet.getByText("NFS35503082")).toBeInTheDocument();
+  expect(sheet.getByText("1/7")).toBeInTheDocument();
+  expect(sheet.getByRole("button", { name: "Baixar DANFSe (PDF)" })).toBeInTheDocument();
+  expect(sheet.getByRole("button", { name: "Cancelar nota" })).toBeInTheDocument();
+  expect(sheet.queryByRole("button", { name: "Enviar carta" })).toBeNull();
+  expect(sheet.queryByText("Chave de acesso")).toBeNull();
+});
+
+it("sends a rejected NFS-e again under the same DPS number with the choices made again", async () => {
+  const fetchMock = serve(
+    [service({ status: "rejected", nfse: null, refusal: { code: "E0014", message: "Número de DPS inválido" }, files: [] })],
+    profile,
+    { "/fiscal/documents/n1/resend-service": service({ status: "processing", nfse: null, files: [] }) },
+  );
+  renderAt("/companies/c1/fiscal/documents");
+  await userEvent.click(await screen.findByRole("button", { name: "DPS 1/7" }));
+
+  expect(await screen.findByText(/Recusada \(E0014\): Número de DPS inválido/)).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Reenviar" }));
+  const form = screen.getByRole("button", { name: "Reenviar a mesma nota (mesmo número de DPS)" }).closest("form")!;
+  expect(within(form).queryByLabelText("Venda")).toBeNull();
+  await userEvent.selectOptions(within(form).getByLabelText("Natureza de operação"), "servico");
+  await userEvent.type(within(form).getByLabelText("Competência"), "2026-11-09");
+  await userEvent.type(within(form).getByLabelText("Município da prestação (código do IBGE)"), "3550308");
+  await userEvent.selectOptions(within(form).getByLabelText("Regime especial de tributação"), "other");
+  await userEvent.click(within(form).getByRole("button", { name: "Reenviar a mesma nota (mesmo número de DPS)" }));
+
+  await within(screen.getByRole("dialog")).findByText("Processando", { selector: ".badge" });
+  expect(postsOf(fetchMock)).toEqual([
+    [
+      "/fiscal/documents/n1/resend-service",
+      { sale_id: "s1", nature_code: "servico", competence: "2026-11-09", service_city_code: "3550308", special_regime: "other" },
+    ],
+  ]);
 });

@@ -733,6 +733,27 @@ export type PaymentForm =
   | "no_payment"
   | "other";
 
+export type SpecialTaxRegime =
+  | "none"
+  | "cooperative_act"
+  | "estimate"
+  | "municipal_microenterprise"
+  | "notary_or_registrar"
+  | "autonomous_professional"
+  | "professionals_society"
+  | "other";
+
+/** What the person chooses to issue an NFS-e: nothing has a default (ADR 0081); the ISSQN terms are the nature's. */
+export interface IssueServiceChoices {
+  sale_id: string;
+  nature_code: string;
+  /** The competence day, `YYYY-MM-DD`. */
+  competence: string;
+  /** The IBGE code of the municipality where the service was rendered: seven digits. */
+  service_city_code: string;
+  special_regime: SpecialTaxRegime;
+}
+
 /** Every tax choice is the person's: nothing has a default (ADR 0076). */
 export interface IssueChoices {
   sale_id: string;
@@ -2196,6 +2217,10 @@ export const api = {
     post<FiscalDocument>(`/companies/${companyId}/fiscal/documents`, choices),
   resendFiscalDocument: (companyId: string, id: string, choices: IssueChoices) =>
     post<FiscalDocument>(`/companies/${companyId}/fiscal/documents/${id}/resend`, choices),
+  issueServiceDocument: (companyId: string, choices: IssueServiceChoices) =>
+    post<FiscalDocument>(`/companies/${companyId}/fiscal/service-documents`, choices),
+  resendServiceDocument: (companyId: string, id: string, choices: IssueServiceChoices) =>
+    post<FiscalDocument>(`/companies/${companyId}/fiscal/documents/${id}/resend-service`, choices),
   refreshFiscalDocument: (companyId: string, id: string) =>
     post<FiscalDocument>(`/companies/${companyId}/fiscal/documents/${id}/refresh`),
   cancelFiscalDocument: (companyId: string, id: string, reason: string) =>
