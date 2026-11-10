@@ -51,6 +51,9 @@ pub struct ReceivedInvoicePage {
 
 /// How many times a sync asks the gateway for more before it stops: the gateway gives a page at a time.
 const MAX_REFRESH_ATTEMPTS: u32 = 3;
+/// How many times the pass's size a pass over every company reads, so that a company with many waiting documents does not hide
+/// the others behind them.
+const POLL_READ_AHEAD: usize = 10;
 const MAX_SYNC_PASSES: usize = 20;
 
 /// What one pass of the poll did.
@@ -267,7 +270,18 @@ where
         now_unix: i64,
     ) -> Result<PollReport, ApplicationError> {
         let mut report = PollReport::default();
-        for document in self.documents.pending(company, since_unix, limit).await? {
+        // The oldest first would let one company whose gateway cannot answer take every place of a pass; a pass over every
+        // company reads further and gives each a turn.
+        let waiting = if company.is_some() {
+            self.documents.pending(company, since_unix, limit).await?
+        } else {
+            let all = self
+                .documents
+                .pending(None, since_unix, limit.saturating_mul(POLL_READ_AHEAD))
+                .await?;
+            one_group_after_another(all, FiscalDocument::company_id, limit)
+        };
+        for document in waiting {
             report.asked += 1;
             match self
                 .refresh(document.company_id(), document.id(), now_unix)
@@ -2360,6 +2374,36 @@ fn issue_day(settings: &FiscalSettings, now_unix: i64) -> Result<CalendarDate, A
     })
 }
 
+/// Takes `limit` items giving each group (a company) a turn in turn, the oldest of each first, so a company whose documents never
+/// settle cannot take every place of a pass.
+fn one_group_after_another<T, K: std::hash::Hash + Eq>(
+    items: Vec<T>,
+    group_of: impl Fn(&T) -> K,
+    limit: usize,
+) -> Vec<T> {
+    let mut queues: Vec<std::collections::VecDeque<T>> = Vec::new();
+    let mut place: std::collections::HashMap<K, usize> = std::collections::HashMap::new();
+    for item in items {
+        let index = *place.entry(group_of(&item)).or_insert_with(|| {
+            queues.push(std::collections::VecDeque::new());
+            queues.len() - 1
+        });
+        queues[index].push_back(item);
+    }
+    let mut taken = Vec::new();
+    while taken.len() < limit && queues.iter().any(|queue| !queue.is_empty()) {
+        for queue in &mut queues {
+            if taken.len() == limit {
+                break;
+            }
+            if let Some(item) = queue.pop_front() {
+                taken.push(item);
+            }
+        }
+    }
+    taken
+}
+
 /// A gateway that does not issue NFC-e is refused before anything is written.
 fn ensure_issues_nfce(gateway: &impl FiscalGateway) -> Result<(), ApplicationError> {
     if gateway.issues_nfce() {
@@ -2499,5 +2543,35 @@ mod tests {
         assert!(recipient_of(&customer("529.982.247-25")).is_ok());
         let refused = recipient_of(&customer("11.222.333/0001-81")).unwrap_err();
         assert!(matches!(refused, ApplicationError::FiscalRule(text) if text.contains("CPF")));
+    }
+}
+
+#[cfg(test)]
+mod fair_order_tests {
+    use super::one_group_after_another;
+
+    /// A company with many waiting documents does not hide the others, and what each has keeps its order.
+    #[test]
+    fn each_group_takes_a_turn_and_keeps_its_own_order() {
+        let waiting = vec![
+            ("a", 1),
+            ("a", 2),
+            ("a", 3),
+            ("a", 4),
+            ("b", 1),
+            ("c", 1),
+            ("b", 2),
+        ];
+        let first = |item: &(&'static str, i32)| item.0;
+        assert_eq!(
+            one_group_after_another(waiting.clone(), first, 5),
+            [("a", 1), ("b", 1), ("c", 1), ("a", 2), ("b", 2)]
+        );
+        assert_eq!(
+            one_group_after_another(waiting.clone(), first, 2),
+            [("a", 1), ("b", 1)]
+        );
+        assert_eq!(one_group_after_another(waiting.clone(), first, 99).len(), 7);
+        assert!(one_group_after_another(waiting, first, 0).is_empty());
     }
 }
