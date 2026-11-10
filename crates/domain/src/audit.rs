@@ -1396,6 +1396,10 @@ fn fiscal_settings_fields(settings: &FiscalSettings) -> Fields {
                 .certificate_valid_until()
                 .map(|day| day.to_string()),
         ),
+        (
+            "city_ibge_code",
+            settings.city_ibge_code().map(str::to_owned),
+        ),
         ("natures", Some(settings.natures_text())),
     ]
 }

@@ -36,6 +36,7 @@ const stored: FiscalSettings = {
   nfce_series: 1,
   nfse_series: 1,
   certificate_valid_until: "2027-03-31",
+  city_ibge_code: null,
   natures: [
     {
       code: "venda",
@@ -56,6 +57,7 @@ const stored: FiscalSettings = {
           cofins_rate: null,
         },
       ],
+      service: null,
     },
   ],
 };
@@ -124,6 +126,7 @@ it("saves everything that was typed in one PUT, as the API names it", async () =
   await type("Número", "1000");
   await type("Cidade", "São Paulo");
   await userEvent.selectOptions(screen.getByLabelText("UF"), "SP");
+  await type("Código IBGE do município", "3550308");
   await userEvent.selectOptions(screen.getByLabelText("Regime tributário"), "lucro_presumido");
   await userEvent.selectOptions(screen.getByLabelText("Ambiente"), "production");
   await userEvent.clear(screen.getByLabelText("Série da NF-e"));
@@ -153,6 +156,7 @@ it("saves everything that was typed in one PUT, as the API names it", async () =
       nfce_series: 1,
       nfse_series: 1,
       certificate_valid_until: "2027-03-31",
+      city_ibge_code: "3550308",
       natures: [],
     },
   ]);
@@ -210,6 +214,7 @@ it("adds a product nature with a rule in the sheet, shows it in the table and se
               cofins_rate: null,
             },
           ],
+          service: null,
         },
       ],
     },
@@ -233,7 +238,47 @@ it("adds a service nature with no CFOP and no rules", async () => {
 
   await screen.findByText("Configurações fiscais salvas.");
   expect(putsOf(fetchMock)[0].natures).toEqual([
-    { code: "servico", name: "Prestação de serviço", kind: "service", cfop_in_state: null, cfop_interstate: null, active: true, rules: [] },
+    { code: "servico", name: "Prestação de serviço", kind: "service", cfop_in_state: null, cfop_interstate: null, active: true, rules: [], service: null },
+  ]);
+});
+
+it("sends the ISSQN terms of a service, and asks for the code and the taxation together", async () => {
+  const fetchMock = serve({ ...stored, natures: [] });
+  renderAt("/companies/c1/fiscal/settings");
+  await screen.findByDisplayValue("Verde Comércio Ltda");
+
+  await userEvent.click(screen.getByRole("button", { name: "Adicionar natureza" }));
+  const sheet = within(await screen.findByRole("dialog", { name: "Nova natureza" }));
+  await userEvent.type(sheet.getByLabelText("Nome"), "Prestação de serviço");
+  await userEvent.type(sheet.getByLabelText("Código"), "servico");
+  expect(sheet.queryByLabelText("Código nacional do serviço")).toBeNull();
+  await userEvent.selectOptions(sheet.getByLabelText("Tipo"), "service");
+
+  // Nothing typed: the terms are optional, and both fields stay free.
+  expect(sheet.getByLabelText("Código nacional do serviço")).not.toBeRequired();
+  expect(sheet.getByLabelText("Cobrança do ISS")).not.toBeRequired();
+  // Once one is typed, the national code and the taxation are both needed.
+  await userEvent.type(sheet.getByLabelText("Alíquota do ISS (%)"), "2,5");
+  expect(sheet.getByLabelText("Código nacional do serviço")).toBeRequired();
+  expect(sheet.getByLabelText("Cobrança do ISS")).toBeRequired();
+  await userEvent.type(sheet.getByLabelText("Código nacional do serviço"), "010701");
+  await userEvent.type(sheet.getByLabelText("Código municipal do serviço"), "1.07");
+  await userEvent.selectOptions(sheet.getByLabelText("Cobrança do ISS"), "taxable");
+  await userEvent.click(sheet.getByRole("button", { name: "Adicionar natureza" }));
+  await userEvent.click(screen.getByRole("button", { name: "Salvar" }));
+
+  await screen.findByText("Configurações fiscais salvas.");
+  expect(putsOf(fetchMock)[0].natures).toEqual([
+    {
+      code: "servico",
+      name: "Prestação de serviço",
+      kind: "service",
+      cfop_in_state: null,
+      cfop_interstate: null,
+      active: true,
+      rules: [],
+      service: { national_tax_code: "010701", municipal_service_code: "1.07", iss_taxation: "taxable", iss_rate: "2.5" },
+    },
   ]);
 });
 

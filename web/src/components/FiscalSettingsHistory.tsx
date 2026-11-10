@@ -15,6 +15,7 @@ const FIELD_LABELS: Record<string, string> = {
   nfce_series: "Série da NFC-e",
   nfse_series: "Série da NFS-e",
   certificate_valid_until: "Certificado vence em",
+  city_ibge_code: "Código IBGE do município",
   natures: "Naturezas de operação",
 };
 
@@ -22,18 +23,32 @@ const REGIMES: Record<string, string> = { simples_nacional: "Simples Nacional", 
 const ENVIRONMENTS: Record<string, string> = { homologation: "Homologação", production: "Produção" };
 
 // The trail keeps a nature as `code|name|kind|cfop in state|cfop interstate|active|rules`, the rules apart by `;` and
-// each one `regime:ncm prefix:icms:pis:cofins:icms rate:pis rate:cofins rate`: written out so a changed rate shows.
+// each one `regime:ncm prefix:icms:pis:cofins:icms rate:pis rate:cofins rate`: written out so a changed rate shows. A
+// service that has ISSQN terms adds an eighth part, `national code:municipal code:taxation:rate`.
 function ruleLine(rule: string): string {
   const [regime, prefix, icms, pis, cofins, icmsRate, pisRate, cofinsRate] = rule.split(":");
   const rate = (label: string, code: string, value: string) => `${label} ${code}${value === "" ? "" : ` a ${value}%`}`;
   return `${REGIMES[regime] ?? regime}${prefix === "" ? "" : ` NCM ${prefix}*`}: ${rate("ICMS", icms, icmsRate)}, ${rate("PIS", pis, pisRate)}, ${rate("COFINS", cofins, cofinsRate)}`;
 }
 
+const TAXATIONS: Record<string, string> = {
+  taxable: "tributável",
+  immune: "imune",
+  export: "exportação",
+  not_incident: "não incidente",
+};
+
+function serviceLine(terms: string): string {
+  const [national, municipal, taxation, rate] = terms.split(":");
+  return `ISS: código nacional ${national}${municipal === "" ? "" : `, municipal ${municipal}`}, ${TAXATIONS[taxation] ?? taxation}${rate === "" ? "" : ` a ${rate}%`}`;
+}
+
 function natureLine(row: string): string {
-  const [code, name, kind, cfopIn, cfopOut, active, rules] = row.split("|");
+  const [code, name, kind, cfopIn, cfopOut, active, rules, terms] = row.split("|");
   const cfops = kind === "service" ? "serviço" : `CFOP ${cfopIn}/${cfopOut}`;
   const detail = rules === "" ? "" : ` [${rules.split(";").map(ruleLine).join("; ")}]`;
-  return `${name} (${code}), ${cfops}, ${active === "true" ? "ativa" : "inativa"}${detail}`;
+  const iss = terms === undefined ? "" : ` [${serviceLine(terms)}]`;
+  return `${name} (${code}), ${cfops}, ${active === "true" ? "ativa" : "inativa"}${detail}${iss}`;
 }
 
 function display(field: string, value: string | null): string {
