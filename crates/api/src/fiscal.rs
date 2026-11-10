@@ -1244,8 +1244,8 @@ fn work_is_finished(company: Uuid) -> bool {
 /// secret when it set one ([ADR 0085]) and only that one, the operator's otherwise.
 ///
 /// The company is looked up **before** the secret is compared, and a company that does not exist, a secret that is wrong and a
-/// secret that cannot be read all answer the same `401`: the route is no oracle for which companies exist. `404` when there is
-/// no secret to compare with at all (the door is shut), and, for a knock that is believed, for a company with no fiscal
+/// secret that cannot be read, and no secret to compare with at all (the door is shut), all answer the same `401`: the route is no
+/// oracle for which companies exist or have a secret. `404` only for a knock that is believed, for a company with no fiscal
 /// settings. `202` at once: the work is done in the background, a burst of knocks is worked as one run and one more, and a failure
 /// is the poll's to retry, not the notice's.
 pub(crate) async fn receive_fiscal_webhook<X: Ports>(
@@ -1270,15 +1270,19 @@ pub(crate) async fn receive_fiscal_webhook<X: Ports>(
             .await
         {
             Ok(own) => own.map(|secret| secret.expose().to_owned()),
-            Err(error) => {
-                tracing::warn!(%error, "the webhook secret of a company cannot be read");
+            // A secret that does not open is a knock that cannot be believed; a storage failure is the server's, and the gateway
+            // must not read it as "wrong secret" and give up.
+            Err(ApplicationError::SecretUnreadable(field)) => {
+                tracing::warn!(field, "the webhook secret of a company cannot be read");
                 return Err(unauthorized());
             }
+            Err(error) => return Err(error.into()),
         },
         None => None,
     };
+    // With no secret at all the door is shut, and shut like a wrong secret: which companies set one is not for a stranger to tell.
     let Some(expected) = own.as_ref().or(hook.secret.as_ref()) else {
-        return Err(not_found());
+        return Err(unauthorized());
     };
     let sent = HeaderName::from_bytes(hook.header.as_bytes())
         .ok()

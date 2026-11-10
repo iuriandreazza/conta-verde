@@ -98,9 +98,22 @@ A company may have its own webhook secret (sealed like the others). **A company 
 operator's no longer opens it, and neither does another company's. A company with none is knocked at with the operator's
 (`FISCAL_WEBHOOK_SECRET`); the header's name is the operator's in both cases. The company is looked up **before** the secret is compared:
 a malformed id, a company that does not exist, a wrong secret and a secret that cannot be read all answer the same `401`, so the route is
-no oracle for which companies exist ([ADR 0083](0083-received-invoices-and-the-fiscal-webhook.md)); what is still `404` is no secret to
-compare with at all (the door is shut) and, for a knock that carries the right secret, a company with no fiscal settings. The body is
-still never read.
+no oracle for which companies exist or have a secret ([ADR 0083](0083-received-invoices-and-the-fiscal-webhook.md)); the door being shut
+(no secret to compare with at all) is the same `401`. What is still `404`, for a knock that carries the right secret, is a company with no
+fiscal settings. A storage failure is a `5xx`, so the gateway retries instead of reading it as a wrong secret. The body is still never read.
+
+### What this does not solve (known limits, for a follow-up)
+
+- **Changing a company's gateway while documents are in flight.** A document submitted through one gateway and then asked about through
+  another (the settings were saved or reset meanwhile) gets `Unknown`, and after the grace period is marked `rejected`: sending it again
+  could issue it twice if the first gateway had taken it. The document does not remember which gateway submitted it. Until it does,
+  **do not change or reset the gateway settings while documents are `processing`**.
+- **The pass is global and oldest first.** A company whose gateway cannot be resolved keeps its waiting documents at the front of the
+  50 the minute pass takes, which can starve the others; the webhook's poll also covers every company (the knock is per company, the
+  poll is not). Both want a poll scoped by company and a fair order.
+- **Error precedence.** Fiscal settings are read before the gateway is resolved, so a company with none gets "set the fiscal settings"
+  even on a server with no gateway, where it used to get `Disabled` first.
+- A client is built on every resolve and the row is read and opened every time: cheap at this volume, not measured.
 
 ### In two steps
 

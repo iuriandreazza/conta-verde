@@ -18659,6 +18659,10 @@ impl GatewaysByCompany {
     pub fn give(&self, company: CompanyId, gateway: crate::FakeFiscalGateway) {
         self.0.lock().unwrap().insert(company, gateway);
     }
+
+    pub fn remove(&self, company: CompanyId) {
+        self.0.lock().unwrap().remove(&company);
+    }
 }
 
 impl conta_verde_application::FiscalGatewayResolver for GatewaysByCompany {
@@ -18817,12 +18821,19 @@ pub async fn a_pass_over_many_companies_asks_each_through_its_own_gateway<D, S, 
     assert_eq!(second_gateway.submitted().len(), 1);
 
     // A company whose gateway is gone is refused, not served by another's.
-    let gone = CompanyId::generate();
+    gateways.remove(second.id);
     assert!(matches!(
         service
-            .issue(gone, &user, issue_request(SaleId::generate()), FISCAL_NOW)
+            .cancel(
+                second.id,
+                &user,
+                documents[1],
+                "Pedido feito em duplicidade"
+            )
             .await,
-        Err(conta_verde_application::ApplicationError::FiscalRule(_))
+        Err(conta_verde_application::ApplicationError::FiscalGateway(
+            conta_verde_application::GatewayError::Disabled
+        ))
     ));
 }
 
