@@ -8,7 +8,7 @@ tags: [plan, scope, roadmap]
 # Macro plan
 
 conta-verde is an open-source, self-hostable ERP for Brazilian small businesses.
-The functional reference is the cloud ERP Conta Azul: its module set, workflows and
+The functional reference is a leading Brazilian cloud ERP for small businesses: its module set, workflows and
 vocabulary define what "complete" means for this project. We copy the **functionality**,
 never the brand, visuals, copy or data (see [ADR 0001](adr/0001-license-agpl.md)).
 

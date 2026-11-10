@@ -121,6 +121,17 @@ class ErpApiReaderTest(unittest.TestCase):
         self.assertEqual(client.pages("/v1/x", page_size=2), [{"id": 1}, {"id": 2}])
         self.assertIn("pagina=2&tamanho_pagina=2", api.seen[1][1])
 
+    def test_the_addresses_of_the_api_come_from_the_environment_and_are_asked_for_when_missing(self):
+        os.environ.pop("ERP_API_URL", None)
+        with self.assertRaises(tool.ErpApiError) as raised:
+            tool.Client()
+        self.assertIn("ERP_API_URL", str(raised.exception))
+        os.environ["ERP_API_URL"] = "http://api.example/"
+        try:
+            self.assertEqual(tool.Client().api_url, "http://api.example")
+        finally:
+            del os.environ["ERP_API_URL"]
+
     def test_the_answers_total_wins_over_a_page_shorter_than_asked(self):
         self.tokens()
         api = self.standin({"/v1/x": [(200, {"itens": [{"id": 1}], "itens_totais": 2}), (200, {"itens": [{"id": 2}], "itens_totais": 2})]})

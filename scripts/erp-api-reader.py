@@ -5,11 +5,11 @@
     uv run scripts/erp-api-reader.py --env-file .env login --callback "https://...?code=...&state=..."
     uv run scripts/erp-api-reader.py --env-file .env fetch --from 2020-01-01 --to 2026-12-31 --out-dir out/erp
 
-`ERP_CLIENT_ID`, `ERP_CLIENT_SECRET` and optionally `ERP_OAUTH_URL` (the authorization address the app was registered
-with) come from the environment or an `--env-file`. `login` prints the authorization address; when the app's redirect
-is not a loopback address, the person authorizes in the browser and gives the address it lands on (or the bare code) to
-`login --callback`, which exchanges it for tokens. Without `ERP_OAUTH_URL` it receives the code on a loopback address.
-The tokens are kept in
+`ERP_CLIENT_ID`, `ERP_CLIENT_SECRET` and the three addresses of the API (`ERP_OAUTH_URL`, the authorization address the
+app was registered with, redirect and scope included; `ERP_TOKEN_URL`; `ERP_API_URL`) come from the environment or an
+`--env-file`: no address is written in the code. `login` prints the authorization address; when the app's redirect is a
+loopback address it receives the code there, otherwise the person authorizes in the browser and gives the address it
+lands on (or the bare code) to `login --callback`, which exchanges it for tokens. The tokens are kept in
 `~/.config/conta-verde/erp-api-token.json` (mode 0600, outside the repository). `fetch` refreshes the token
 when it must and writes one JSON file per register (categories, cost centers, financial accounts, people,
 products, receivables, payables), exactly as the API answered. Nothing is written to conta-verde here: the
@@ -33,15 +33,10 @@ from datetime import date, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
-AUTH_URL = "https://api-v2.contaazul.com/oauth/authorize"
-TOKEN_URL = "https://api-v2.contaazul.com/oauth/token"
-API_URL = "https://api-v2.contaazul.com"
-SCOPE = "openid profile aws.cognito.signin.user.admin"
 PERSON_KINDS = ("Física", "Jurídica", "Estrangeira")
 PERSON_PROFILES = ("Cliente", "Fornecedor", "Transportadora")
 PRODUCT_STATUSES = ("ATIVO", "INATIVO")
 LOOPBACK_HOSTS = ("localhost", "127.0.0.1")
-DEFAULT_REDIRECT = "http://localhost:8765/callback"
 TOKEN_FILE = Path.home() / ".config" / "conta-verde" / "erp-api-token.json"
 PAGE_SIZE = 100
 # The two payable/receivable listings need a due-date window; one window never spans more than this.
@@ -57,6 +52,13 @@ class ErpApiError(Exception):
     """What went wrong, in words for the person running the script."""
 
 
+def required_env(name: str) -> str:
+    value = os.environ.get(name, "")
+    if not value:
+        raise ErpApiError(f"set {name} (in the environment or the --env-file)")
+    return value
+
+
 def client_credentials() -> tuple[str, str]:
     client_id = os.environ.get("ERP_CLIENT_ID", "")
     client_secret = os.environ.get("ERP_CLIENT_SECRET", "")
@@ -65,7 +67,8 @@ def client_credentials() -> tuple[str, str]:
     return client_id, client_secret
 
 
-def token_request(form: dict, token_url: str = TOKEN_URL) -> dict:
+def token_request(form: dict, token_url: str | None = None) -> dict:
+    token_url = token_url or required_env("ERP_TOKEN_URL")
     client_id, client_secret = client_credentials()
     basic = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
     request = urllib.request.Request(
@@ -102,7 +105,7 @@ def load_tokens(path: Path = TOKEN_FILE) -> dict:
         raise ErpApiError("no token yet: run `login` first")
 
 
-def fresh_access_token(path: Path = TOKEN_FILE, token_url: str = TOKEN_URL, force: bool = False) -> str:
+def fresh_access_token(path: Path = TOKEN_FILE, token_url: str | None = None, force: bool = False) -> str:
     tokens = load_tokens(path)
     if not force and tokens["expires_at"] - EXPIRY_MARGIN_SECONDS > time.time():
         return tokens["access_token"]
@@ -183,12 +186,12 @@ def login_with_callback(oauth_url: str, callback: str | None) -> None:
     print(f"Tokens saved in {TOKEN_FILE}", file=sys.stderr)
 
 
-def login(redirect_uri: str, authorize_url: str = AUTH_URL) -> None:
-    client_id, _ = client_credentials()
+def login(oauth_url: str) -> None:
+    """Loopback mode: the registered address with a state of its own, the code received on its redirect address."""
+    parameters = authorization_parameters(oauth_url)
+    redirect_uri = parameters["redirect_uri"]
     state = secrets.token_urlsafe(24)
-    url = authorize_url + "?" + urllib.parse.urlencode(
-        {"response_type": "code", "client_id": client_id, "redirect_uri": redirect_uri, "state": state, "scope": SCOPE}
-    )
+    url = oauth_url.partition("?")[0] + "?" + urllib.parse.urlencode({**parameters, "state": state})
     print(f"Open this address in the browser and authorize the app:\n\n{url}\n", file=sys.stderr)
     code = wait_for_code(redirect_uri, state)
     save_tokens(token_request({"grant_type": "authorization_code", "code": code, "redirect_uri": redirect_uri}))
@@ -198,8 +201,8 @@ def login(redirect_uri: str, authorize_url: str = AUTH_URL) -> None:
 class Client:
     """Reads pages from the API, renewing the token once on a 401 and waiting out 429 and 5xx."""
 
-    def __init__(self, api_url: str = API_URL, token_path: Path = TOKEN_FILE, token_url: str = TOKEN_URL, sleep=time.sleep):
-        self.api_url = api_url
+    def __init__(self, api_url: str | None = None, token_path: Path = TOKEN_FILE, token_url: str | None = None, sleep=time.sleep):
+        self.api_url = (api_url or required_env("ERP_API_URL")).rstrip("/")
         self.token_path = token_path
         self.token_url = token_url
         self.sleep = sleep
@@ -338,7 +341,6 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--env-file", type=Path, help="KEY=VALUE file with the ERP_* variables")
     commands = parser.add_subparsers(dest="command", required=True)
     login_parser = commands.add_parser("login", help="authorize the app and keep the tokens")
-    login_parser.add_argument("--redirect-uri", default=DEFAULT_REDIRECT, help="loopback mode: must be registered in the app")
     login_parser.add_argument("--callback", help="the address the browser landed on after authorizing, or the bare code")
     fetch_parser = commands.add_parser("fetch", help="write one JSON file per register")
     fetch_parser.add_argument("--from", dest="start", type=date.fromisoformat, required=True)
@@ -350,14 +352,11 @@ def main(argv: list[str]) -> int:
         if args.env_file:
             load_env_file(args.env_file)
         if args.command == "login":
-            oauth_url = os.environ.get("ERP_OAUTH_URL")
-            redirect = authorization_parameters(oauth_url or "").get("redirect_uri", args.redirect_uri)
-            if oauth_url and urllib.parse.urlparse(redirect).hostname in LOOPBACK_HOSTS:
-                login(redirect, oauth_url.partition("?")[0])
-            elif oauth_url:
-                login_with_callback(oauth_url, args.callback)
+            oauth_url = required_env("ERP_OAUTH_URL")
+            if urllib.parse.urlparse(authorization_parameters(oauth_url).get("redirect_uri", "")).hostname in LOOPBACK_HOSTS:
+                login(oauth_url)
             else:
-                login(args.redirect_uri)
+                login_with_callback(oauth_url, args.callback)
         else:
             fetch(Client(), args.start, args.end, args.out_dir, args.reuse)
     except ErpApiError as error:

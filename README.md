@@ -4,7 +4,7 @@
 
 # conta-verde
 
-An open-source ERP for small businesses, inspired by cloud ERPs such as Conta Azul.
+An open-source ERP for small businesses, inspired by the cloud ERPs of the market.
 Not affiliated with or endorsed by any commercial product.
 
 > Status: early development. The phases up to 6 are built (registers, finance, sales, collection, purchases and stock, and
