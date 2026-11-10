@@ -205,4 +205,15 @@ pub trait FiscalDocumentRepository: Send + Sync {
         first: u32,
         last: u32,
     ) -> impl Future<Output = Result<bool, RepositoryError>> + Send;
+
+    /// The next number for a DPS of this series in this environment: one more than the biggest the company's documents
+    /// hold, 1 when none does. A number is **never reused** (documents are never deleted), so it is not a counter that can
+    /// be set back. Two callers may be given the same one: the second write is refused with `DuplicateFiscalDps` and it
+    /// asks again ([ADR 0081]).
+    fn next_dps_number(
+        &self,
+        company_id: CompanyId,
+        environment: FiscalEnvironment,
+        series: u16,
+    ) -> impl Future<Output = Result<u64, RepositoryError>> + Send;
 }

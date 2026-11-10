@@ -108,8 +108,9 @@ pub use financial_entry::{
     RecurrenceOrigin,
 };
 pub use fiscal_document::{
-    FiscalAuthorization, FiscalDocument, FiscalDocumentDraft, FiscalDocumentKind,
+    Dps, FiscalAuthorization, FiscalDocument, FiscalDocumentDraft, FiscalDocumentKind,
     FiscalDocumentStatus, FiscalFile, FiscalFileKind, FiscalOrigin, FiscalRefusal,
+    NfseAuthorization,
 };
 pub use fiscal_event::{
     FiscalEvent, FiscalEventStatus, FiscalEventSubject, MAX_CORRECTION_ATTEMPTS, MAX_CORRECTIONS,

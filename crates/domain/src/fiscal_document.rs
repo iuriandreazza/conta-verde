@@ -10,11 +10,18 @@ const MAX_NOTE_CHARS: usize = 500;
 const MAX_REFERENCE_CHARS: usize = 100;
 /// The number of a document has nine digits in its access key.
 const MAX_NUMBER: u32 = 999_999_999;
+/// The number of an NFS-e and of a DPS has up to fifteen digits in the national layout.
+const MAX_SERVICE_NUMBER: u64 = 999_999_999_999_999;
+/// The series of a DPS an API may use is 1 to 49999; the rest are for the portal ([ADR 0081]).
+const MAX_DPS_SERIES: u16 = 49_999;
+const MAX_KEY_CHARS: usize = 60;
 
-/// What kind of fiscal document it is. NFS-e and NFC-e join with their slices ([ADR 0073]).
+/// What kind of fiscal document it is. NFC-e joins with its slice ([ADR 0073]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FiscalDocumentKind {
     Nfe,
+    /// The service invoice of the national standard ([ADR 0081]).
+    Nfse,
 }
 
 impl FiscalDocumentKind {
@@ -22,12 +29,14 @@ impl FiscalDocumentKind {
     pub fn key(self) -> &'static str {
         match self {
             Self::Nfe => "nfe",
+            Self::Nfse => "nfse",
         }
     }
 
     pub fn parse(raw: &str) -> Option<Self> {
         match raw {
             "nfe" => Some(Self::Nfe),
+            "nfse" => Some(Self::Nfse),
             _ => None,
         }
     }
@@ -168,6 +177,89 @@ impl FiscalAuthorization {
     }
 }
 
+/// What the authority gave an authorized NFS-e. Its identity is not the NF-e's 44-digit access key: the national standard
+/// has its own key and a verification code, and a gateway for municipal layouts may give neither, only the number
+/// ([ADR 0081]). So the number is all that is always there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NfseAuthorization {
+    number: u64,
+    key: Option<String>,
+    verification_code: Option<String>,
+    protocol: Option<String>,
+}
+
+impl NfseAuthorization {
+    pub fn new(
+        number: u64,
+        key: Option<&str>,
+        verification_code: Option<&str>,
+        protocol: Option<&str>,
+    ) -> Result<Self, DomainError> {
+        if number == 0 || number > MAX_SERVICE_NUMBER {
+            return Err(DomainError::InvalidFiscalDocument("nfse_number"));
+        }
+        let optional = |raw: Option<&str>, max: usize| {
+            raw.map(|raw| clean(raw, max))
+                .filter(|text| !text.is_empty())
+        };
+        let key = optional(key, MAX_KEY_CHARS);
+        // The key names the invoice in file names and in the accountant's package: letters and digits only.
+        if key
+            .as_deref()
+            .is_some_and(|key| !key.bytes().all(|byte| byte.is_ascii_alphanumeric()))
+        {
+            return Err(DomainError::InvalidFiscalDocument("nfse_key"));
+        }
+        Ok(Self {
+            number,
+            key,
+            verification_code: optional(verification_code, MAX_REFUSAL_CODE_CHARS),
+            protocol: optional(protocol, MAX_REFUSAL_CODE_CHARS),
+        })
+    }
+
+    pub fn number(&self) -> u64 {
+        self.number
+    }
+
+    pub fn key(&self) -> Option<&str> {
+        self.key.as_deref()
+    }
+
+    pub fn verification_code(&self) -> Option<&str> {
+        self.verification_code.as_deref()
+    }
+
+    pub fn protocol(&self) -> Option<&str> {
+        self.protocol.as_deref()
+    }
+}
+
+/// The number of a DPS (*declaração de prestação de serviço*) the issuer gives it: the national standard has the issuer
+/// number it, unlike the NF-e. It is taken once for a document and kept through every new attempt ([ADR 0081]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Dps {
+    series: u16,
+    number: u64,
+}
+
+impl Dps {
+    pub fn new(series: u16, number: u64) -> Result<Self, DomainError> {
+        if series == 0 || series > MAX_DPS_SERIES || number == 0 || number > MAX_SERVICE_NUMBER {
+            return Err(DomainError::InvalidFiscalDocument("dps"));
+        }
+        Ok(Self { series, number })
+    }
+
+    pub fn series(self) -> u16 {
+        self.series
+    }
+
+    pub fn number(self) -> u64 {
+        self.number
+    }
+}
+
 /// Unvalidated input for a new document: what the issue found when it validated the sale and the settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FiscalDocumentDraft {
@@ -206,6 +298,10 @@ pub struct FiscalDocument {
     note: Option<String>,
     /// The gateway's own identifier of the document, when it assigns one: set once, never changed ([ADR 0078]).
     gateway_reference: Option<String>,
+    /// What the authority gave an authorized NFS-e; an NF-e has `authorization` instead.
+    nfse: Option<NfseAuthorization>,
+    /// The number the issuer gave the DPS of an NFS-e.
+    dps: Option<Dps>,
 }
 
 impl FiscalDocument {
@@ -214,17 +310,56 @@ impl FiscalDocument {
         company_id: CompanyId,
         draft: FiscalDocumentDraft,
     ) -> Result<Self, DomainError> {
+        Self::new_of_kind(FiscalDocumentKind::Nfe, id, company_id, draft)
+    }
+
+    pub fn new_of_kind(
+        kind: FiscalDocumentKind,
+        id: FiscalDocumentId,
+        company_id: CompanyId,
+        draft: FiscalDocumentDraft,
+    ) -> Result<Self, DomainError> {
         Ok(Self {
             id,
             company_id,
-            kind: FiscalDocumentKind::Nfe,
+            kind,
             content: validated(draft)?,
             status: FiscalDocumentStatus::Draft,
             refusal: None,
             authorization: None,
             note: None,
             gateway_reference: None,
+            nfse: None,
+            dps: None,
         })
+    }
+
+    /// The document with what an NFS-e keeps, as it was stored.
+    pub fn with_nfse(mut self, nfse: Option<NfseAuthorization>, dps: Option<Dps>) -> Self {
+        self.nfse = nfse;
+        self.dps = dps;
+        self
+    }
+
+    /// The issuer numbers the DPS of an NFS-e: once, and the same number again changes nothing. A different one later is
+    /// refused, because the gateway and the authority know the document by it.
+    pub fn numbered(&self, dps: Dps) -> Result<Self, DomainError> {
+        if self.kind != FiscalDocumentKind::Nfse
+            || !matches!(
+                self.status,
+                FiscalDocumentStatus::Draft | FiscalDocumentStatus::Rejected
+            )
+        {
+            return Err(DomainError::InvalidFiscalDocument("dps"));
+        }
+        match self.dps {
+            Some(known) if known == dps => Ok(self.clone()),
+            Some(_) => Err(DomainError::InvalidFiscalDocument("dps")),
+            None => Ok(Self {
+                dps: Some(dps),
+                ..self.clone()
+            }),
+        }
     }
 
     /// The document as it was stored.
@@ -310,6 +445,29 @@ impl FiscalDocument {
         authorization: FiscalAuthorization,
         note: Option<&str>,
     ) -> Result<Self, DomainError> {
+        if self.kind != FiscalDocumentKind::Nfe {
+            return Err(DomainError::InvalidFiscalTransition);
+        }
+        let mut document = self.authorized_status(note)?;
+        document.authorization = Some(authorization);
+        Ok(document)
+    }
+
+    /// The authority authorized an NFS-e.
+    pub fn authorized_nfse(
+        &self,
+        authorization: NfseAuthorization,
+        note: Option<&str>,
+    ) -> Result<Self, DomainError> {
+        if self.kind != FiscalDocumentKind::Nfse || self.dps.is_none() {
+            return Err(DomainError::InvalidFiscalTransition);
+        }
+        let mut document = self.authorized_status(note)?;
+        document.nfse = Some(authorization);
+        Ok(document)
+    }
+
+    fn authorized_status(&self, note: Option<&str>) -> Result<Self, DomainError> {
         let mut document = self.moved(
             &[
                 FiscalDocumentStatus::Processing,
@@ -317,7 +475,6 @@ impl FiscalDocument {
             ],
             FiscalDocumentStatus::Authorized,
         )?;
-        document.authorization = Some(authorization);
         document.refusal = None;
         document.note = note
             .map(|raw| clean(raw, MAX_NOTE_CHARS))
@@ -446,6 +603,15 @@ impl FiscalDocument {
         self.authorization.as_ref()
     }
 
+    /// What the authority gave an authorized NFS-e.
+    pub fn nfse_authorization(&self) -> Option<&NfseAuthorization> {
+        self.nfse.as_ref()
+    }
+
+    pub fn dps(&self) -> Option<Dps> {
+        self.dps
+    }
+
     pub fn note(&self) -> Option<&str> {
         self.note.as_deref()
     }
@@ -461,6 +627,8 @@ impl FiscalDocument {
         self.content != other.content
             || self.kind != other.kind
             || self.authorization != other.authorization
+            || self.nfse != other.nfse
+            || self.dps != other.dps
             || self.gateway_reference != other.gateway_reference
     }
 }
@@ -875,5 +1043,84 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    fn service_document() -> FiscalDocument {
+        FiscalDocument::new_of_kind(
+            FiscalDocumentKind::Nfse,
+            FiscalDocumentId::generate(),
+            CompanyId::generate(),
+            draft(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn an_nfse_is_numbered_once_and_only_while_it_can_still_be_sent() {
+        let dps = Dps::new(1, 7).unwrap();
+        let numbered = service_document().numbered(dps).unwrap();
+        assert_eq!(numbered.dps(), Some(dps));
+        assert_eq!(numbered.numbered(dps).unwrap(), numbered);
+        assert!(numbered.numbered(Dps::new(1, 8).unwrap()).is_err());
+        // The number survives a new attempt built from the sale again.
+        assert_eq!(numbered.rebuilt_with(draft()).unwrap().dps(), Some(dps));
+        let sent = numbered.submitted().unwrap();
+        assert!(sent.numbered(Dps::new(1, 9).unwrap()).is_err());
+        assert!(document().numbered(dps).is_err(), "an NF-e has no DPS");
+    }
+
+    #[test]
+    fn a_dps_fits_the_series_an_api_may_use_and_fifteen_digits() {
+        assert!(Dps::new(0, 1).is_err());
+        assert!(Dps::new(50_000, 1).is_err());
+        assert!(Dps::new(49_999, 0).is_err());
+        assert!(Dps::new(49_999, 1_000_000_000_000_000).is_err());
+        assert!(Dps::new(49_999, 999_999_999_999_999).is_ok());
+    }
+
+    #[test]
+    fn an_nfse_is_authorized_with_its_own_identity_and_an_nfe_never_takes_it() {
+        let nfse = NfseAuthorization::new(12, None, Some(" ABC-123 "), Some("P1")).unwrap();
+        let sent = service_document()
+            .numbered(Dps::new(1, 1).unwrap())
+            .unwrap()
+            .submitted()
+            .unwrap();
+        let authorized = sent.authorized_nfse(nfse.clone(), None).unwrap();
+        assert_eq!(authorized.status(), FiscalDocumentStatus::Authorized);
+        assert_eq!(authorized.nfse_authorization(), Some(&nfse));
+        assert_eq!(authorized.authorization(), None);
+        assert_eq!(
+            authorized.nfse_authorization().unwrap().verification_code(),
+            Some("ABC-123")
+        );
+        assert!(authorized.cancelled().is_ok());
+        // An NF-e takes the 44-digit key, an NFS-e does not, and neither takes the other's.
+        assert!(
+            document()
+                .submitted()
+                .unwrap()
+                .authorized_nfse(nfse, None)
+                .is_err()
+        );
+        assert!(sent.authorized(authorization(), None).is_err());
+    }
+
+    #[test]
+    fn an_nfse_without_a_dps_is_not_authorized() {
+        let nfse = NfseAuthorization::new(12, None, None, None).unwrap();
+        let sent = service_document().submitted().unwrap();
+        assert!(sent.authorized_nfse(nfse, None).is_err());
+    }
+
+    #[test]
+    fn the_identity_of_an_nfse_is_a_number_and_a_key_of_letters_and_digits_when_there_is_one() {
+        assert!(NfseAuthorization::new(0, None, None, None).is_err());
+        assert!(NfseAuthorization::new(1_000_000_000_000_000, None, None, None).is_err());
+        assert!(NfseAuthorization::new(1, Some("a/b"), None, None).is_err());
+        let key = "NFS".to_owned() + &"1".repeat(50);
+        let nfse = NfseAuthorization::new(1, Some(&key), Some(""), None).unwrap();
+        assert_eq!(nfse.key(), Some(key.as_str()));
+        assert_eq!(nfse.verification_code(), None);
     }
 }

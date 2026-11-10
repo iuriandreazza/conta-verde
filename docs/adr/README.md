@@ -96,6 +96,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0078](0078-gateway-reference-and-queued-events.md) | A reference the gateway assigns and events it answers later | accepted | 7 |
 | [0079](0079-nfeio-adapter.md) | The NFE.io adapter | accepted | 7 |
 | [0080](0080-nfse-plan-and-settings.md) | NFS-e: the plan and what the settings must say first | accepted | 7 |
+| [0081](0081-nfse-documents.md) | NFS-e documents, the DPS numbering and the port's NFS-e calls | accepted | 7 |
 
 ## Template
 
