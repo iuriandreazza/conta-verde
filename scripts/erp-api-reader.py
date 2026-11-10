@@ -16,7 +16,7 @@ products, receivables, payables), exactly as the API answered. Nothing is writte
 files are the input of the converter, which is checked by hand before anything is imported.
 
 The client secret comes from the environment, never from an argument (it would reach the shell history).
-Standard library only.
+Standard library only. The paths and shapes are those of the vendor's published OpenAPI files.
 """
 
 import argparse
@@ -33,15 +33,21 @@ from datetime import date, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
-AUTH_URL = "https://auth.contaazul.com/oauth2/authorize"
-TOKEN_URL = "https://auth.contaazul.com/oauth2/token"
+AUTH_URL = "https://api-v2.contaazul.com/oauth/authorize"
+TOKEN_URL = "https://api-v2.contaazul.com/oauth/token"
 API_URL = "https://api-v2.contaazul.com"
 SCOPE = "openid profile aws.cognito.signin.user.admin"
+PERSON_KINDS = ("Física", "Jurídica", "Estrangeira")
+PERSON_PROFILES = ("Cliente", "Fornecedor", "Transportadora")
+PRODUCT_STATUSES = ("ATIVO", "INATIVO")
+LOOPBACK_HOSTS = ("localhost", "127.0.0.1")
 DEFAULT_REDIRECT = "http://localhost:8765/callback"
 TOKEN_FILE = Path.home() / ".config" / "conta-verde" / "erp-api-token.json"
 PAGE_SIZE = 100
 # The two payable/receivable listings need a due-date window; one window never spans more than this.
 WINDOW_DAYS = 90
+# The transfers and opening balances refuse a span of more than a year.
+YEAR_WINDOW_DAYS = 365
 MAX_ATTEMPTS = 5
 # A token this close to its end is renewed first, so a long page loop never meets a 401 halfway.
 EXPIRY_MARGIN_SECONDS = 60
@@ -175,10 +181,10 @@ def login_with_callback(oauth_url: str, callback: str | None) -> None:
     print(f"Tokens saved in {TOKEN_FILE}", file=sys.stderr)
 
 
-def login(redirect_uri: str) -> None:
+def login(redirect_uri: str, authorize_url: str = AUTH_URL) -> None:
     client_id, _ = client_credentials()
     state = secrets.token_urlsafe(24)
-    url = AUTH_URL + "?" + urllib.parse.urlencode(
+    url = authorize_url + "?" + urllib.parse.urlencode(
         {"response_type": "code", "client_id": client_id, "redirect_uri": redirect_uri, "state": state, "scope": SCOPE}
     )
     print(f"Open this address in the browser and authorize the app:\n\n{url}\n", file=sys.stderr)
@@ -216,19 +222,34 @@ class Client:
                         self.sleep(min(2**attempt, 30))
                         continue
                     raise ErpApiError(f"{path} answered {error.code}: {error.read()[:300].decode(errors='replace')}")
+            except (urllib.error.URLError, TimeoutError, ConnectionError):
+                # A dropped connection is the network's, not an answer: wait and ask again like a 5xx.
+                self.sleep(min(2**attempt, 30))
         raise ErpApiError(f"{path} kept failing after {MAX_ATTEMPTS} attempts")
 
     def pages(self, path: str, params: dict | None = None, page_size: int = PAGE_SIZE) -> list:
-        """Every item of a paged listing: the answer is a list or an object whose `itens` is one."""
+        """Every item of a paged listing: the answer is a list or an object whose `itens` (`items` in the cost centers' listing) is one."""
         items: list = []
         page = 1
         while True:
             answer = self.get(path, {**(params or {}), "pagina": page, "tamanho_pagina": page_size})
-            batch = answer["itens"] if isinstance(answer, dict) else answer
+            batch = (answer.get("itens") or answer.get("items") or []) if isinstance(answer, dict) else answer
             items.extend(batch)
             if len(batch) < page_size:
                 return items
             page += 1
+
+
+def all_people(client: Client) -> list:
+    """The listing defaults to individuals who are customers, so every kind and profile is asked for.
+
+    A person with two profiles comes back under each, so the answers are joined by id."""
+    people: dict = {}
+    for kind in PERSON_KINDS:
+        for profile in PERSON_PROFILES:
+            for person in client.pages("/v1/pessoas", {"tipos_pessoa": kind, "tipo_perfil": profile, "com_endereco": "true"}):
+                people[person["id"]] = person
+    return list(people.values())
 
 
 def windows(start: date, end: date, days: int = WINDOW_DAYS):
@@ -239,36 +260,70 @@ def windows(start: date, end: date, days: int = WINDOW_DAYS):
         start = last + timedelta(days=1)
 
 
-def by_due_date(client: Client, path: str, start: date, end: date) -> list:
+def by_window(
+    client: Client, path: str, start: date, end: date, first_key: str, last_key: str, days: int, with_time: bool = False
+) -> list:
+    """Reads a listing span by span; `with_time` is for the endpoints that want a date-time, from the first second to the last."""
     items: list = []
-    for first, last in windows(start, end):
-        items.extend(
-            client.pages(path, {"data_vencimento_de": first.isoformat(), "data_vencimento_ate": last.isoformat()})
-        )
+    for first, last in windows(start, end, days):
+        first_value, last_value = first.isoformat(), last.isoformat()
+        if with_time:
+            first_value, last_value = first_value + "T00:00:00", last_value + "T23:59:59"
+        items.extend(client.pages(path, {first_key: first_value, last_key: last_value}))
     return items
 
 
-def fetch(client: Client, start: date, end: date, out_dir: Path) -> dict[str, int]:
+def by_due_date(client: Client, path: str, start: date, end: date) -> list:
+    return by_window(client, path, start, end, "data_vencimento_de", "data_vencimento_ate", WINDOW_DAYS)
+
+
+def fetch(client: Client, start: date, end: date, out_dir: Path, reuse: bool = False) -> dict[str, int]:
     out_dir.mkdir(parents=True, exist_ok=True)
     registers = {
-        "categories-income": lambda: client.pages("/v1/categorias", {"tipo": "RECEITA"}),
-        "categories-expense": lambda: client.pages("/v1/categorias", {"tipo": "DESPESA"}),
+        "categories-income": lambda: client.pages("/v1/categorias", {"tipo": "RECEITA", "permite_apenas_filhos": "false"}),
+        "categories-expense": lambda: client.pages("/v1/categorias", {"tipo": "DESPESA", "permite_apenas_filhos": "false"}),
         "cost-centers": lambda: client.pages("/v1/centro-de-custo", {"filtro_rapido": "TODOS"}),
         "financial-accounts": lambda: client.pages("/v1/conta-financeira", {"apenas_ativo": "false"}),
-        "people": lambda: client.pages("/v1/pessoa"),
-        "products": lambda: client.pages("/v1/produto/busca"),
+        "people": lambda: all_people(client),
+        "products": lambda: [
+            item for status in PRODUCT_STATUSES for item in client.pages("/v1/produtos", {"status": status})
+        ],
         "receivables": lambda: by_due_date(
             client, "/v1/financeiro/eventos-financeiros/contas-a-receber/buscar", start, end
         ),
         "payables": lambda: by_due_date(client, "/v1/financeiro/eventos-financeiros/contas-a-pagar/buscar", start, end),
+        "transfers": lambda: by_window(
+            client, "/v1/financeiro/transferencias", start, end, "data_inicio", "data_fim", YEAR_WINDOW_DAYS
+        ),
+        "opening-balances": lambda: by_window(
+            client, "/v1/financeiro/eventos-financeiros/saldo-inicial", start, end, "data_inicio", "data_fim", YEAR_WINDOW_DAYS, with_time=True
+        ),
     }
     counts = {}
     for name, read in registers.items():
-        items = read()
-        (out_dir / f"{name}.json").write_text(json.dumps(items, ensure_ascii=False, indent=1))
+        target = out_dir / f"{name}.json"
+        # Reusing is for finishing a run that failed halfway; a fresh run reads everything again.
+        items = json.loads(target.read_text()) if reuse and target.exists() else read()
+        target.write_text(json.dumps(items, ensure_ascii=False, indent=1))
         counts[name] = len(items)
         print(f"{name}: {len(items)}", file=sys.stderr)
+    installments = [item["id"] for name in ("receivables", "payables") for item in json.loads((out_dir / f"{name}.json").read_text())]
+    counts["installment-details"] = fetch_installment_details(client, installments, out_dir / "installments")
     return counts
+
+
+def fetch_installment_details(client: Client, ids: list[str], directory: Path) -> int:
+    """One file per installment: the listing carries neither the split by category and cost center nor the payments.
+
+    A file already there is kept, so an interrupted run goes on where it stopped."""
+    directory.mkdir(parents=True, exist_ok=True)
+    for number, installment_id in enumerate(ids, 1):
+        target = directory / f"{installment_id}.json"
+        if not target.exists():
+            target.write_text(json.dumps(client.get(f"/v1/financeiro/eventos-financeiros/parcelas/{installment_id}", {}), ensure_ascii=False))
+        if number % 100 == 0:
+            print(f"installment-details: {number}/{len(ids)}", file=sys.stderr)
+    return len(ids)
 
 
 def main(argv: list[str]) -> int:
@@ -282,17 +337,22 @@ def main(argv: list[str]) -> int:
     fetch_parser.add_argument("--from", dest="start", type=date.fromisoformat, required=True)
     fetch_parser.add_argument("--to", dest="end", type=date.fromisoformat, required=True)
     fetch_parser.add_argument("--out-dir", type=Path, required=True)
+    fetch_parser.add_argument("--reuse", action="store_true", help="keep the registers already written in --out-dir")
     args = parser.parse_args(argv)
     try:
         if args.env_file:
             load_env_file(args.env_file)
         if args.command == "login":
-            if os.environ.get("ERP_OAUTH_URL"):
-                login_with_callback(os.environ["ERP_OAUTH_URL"], args.callback)
+            oauth_url = os.environ.get("ERP_OAUTH_URL")
+            redirect = authorization_parameters(oauth_url or "").get("redirect_uri", args.redirect_uri)
+            if oauth_url and urllib.parse.urlparse(redirect).hostname in LOOPBACK_HOSTS:
+                login(redirect, oauth_url.partition("?")[0])
+            elif oauth_url:
+                login_with_callback(oauth_url, args.callback)
             else:
                 login(args.redirect_uri)
         else:
-            fetch(Client(), args.start, args.end, args.out_dir)
+            fetch(Client(), args.start, args.end, args.out_dir, args.reuse)
     except ErpApiError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1

@@ -18,7 +18,7 @@ returns the same registers with their own ids.
 
 A reader outside the application, `scripts/erp-api-reader.py` (standard library only, like the converter it feeds):
 
-- `login` runs the authorization code flow against `auth.contaazul.com` with a loopback redirect and keeps the tokens in
+- `login` runs the authorization code flow against `api-v2.contaazul.com` with a loopback redirect and keeps the tokens in
   `~/.config/conta-verde/erp-api-token.json` (mode 0600, outside the repository). The client id and secret come from
   the environment, never from an argument or a file in the repository.
 - `fetch` renews the token when it must and writes one JSON file per register, as the API answered: categories (income

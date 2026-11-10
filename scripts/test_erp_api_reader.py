@@ -159,6 +159,25 @@ class ErpApiReaderTest(unittest.TestCase):
         self.assertEqual(os.environ["ERP_CLIENT_ID"], "the-id")
         self.assertEqual(os.environ["ERP_X"], "quoted")
 
+    def test_a_dropped_connection_is_tried_again(self):
+        self.tokens()
+        api = self.standin({"/v1/pessoas": [(200, [{"id": 1}])]})
+        client = self.client(api)
+        real = tool.urllib.request.urlopen
+        calls = []
+
+        def flaky(*args, **kwargs):
+            calls.append(1)
+            if len(calls) == 1:
+                raise ConnectionResetError("reset")
+            return real(*args, **kwargs)
+
+        tool.urllib.request.urlopen = flaky
+        try:
+            self.assertEqual(client.pages("/v1/pessoas"), [{"id": 1}])
+        finally:
+            tool.urllib.request.urlopen = real
+
     def test_windows_cover_the_span_once_without_overlap(self):
         spans = list(tool.windows(date(2024, 1, 1), date(2024, 12, 31), days=90))
         self.assertEqual(spans[0][0], date(2024, 1, 1))
@@ -175,10 +194,13 @@ class ErpApiReaderTest(unittest.TestCase):
         api = self.standin(
             {
                 "/v1/categorias": [(200, {"itens": [{"id": "c"}]}), (200, {"itens": []})],
-                "/v1/centro-de-custo": empty(),
+                "/v1/centro-de-custo": [(200, {"items": [{"id": "cc"}]})],
+                "/v1/financeiro/transferencias": empty(),
+                "/v1/financeiro/eventos-financeiros/saldo-inicial": empty(),
+                "/v1/financeiro/eventos-financeiros/parcelas/p": [(200, {"id": "p", "baixas": []})],
                 "/v1/conta-financeira": empty(),
-                "/v1/pessoa": empty(),
-                "/v1/produto/busca": empty(),
+                "/v1/pessoas": [(200, {"items": [{"id": "x"}]})] + [(200, {"items": []})] * 8,
+                "/v1/produtos": empty() * 2,
                 receivable: empty(),
                 listing: [(200, {"itens": [{"id": "p"}]})],
             }
@@ -187,8 +209,11 @@ class ErpApiReaderTest(unittest.TestCase):
         counts = tool.fetch(self.client(api), date(2024, 1, 1), date(2024, 1, 31), out)
         self.assertEqual(counts["categories-income"], 1)
         self.assertEqual(counts["payables"], 1)
+        self.assertEqual(counts["cost-centers"], 1)
+        self.assertEqual(counts["people"], 1)
+        self.assertEqual(json.loads((out / "installments" / "p.json").read_text())["id"], "p")
         self.assertEqual(json.loads((out / "payables.json").read_text()), [{"id": "p"}])
-        self.assertEqual(len(list(out.glob("*.json"))), 8)
+        self.assertEqual(len(list(out.glob("*.json"))), 10)
 
 
 if __name__ == "__main__":
