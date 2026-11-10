@@ -30,6 +30,15 @@ impl FiscalDocumentRepository for InMemoryFiscalDocumentRepository {
     ) -> Result<(), RepositoryError> {
         ensure_audit_describes(audit, document)?;
         let mut state = self.state.lock().expect("repository lock poisoned");
+        if state
+            .documents
+            .iter()
+            .any(|stored| stored.id() == document.id())
+        {
+            return Err(RepositoryError::Storage(
+                "the fiscal document already exists".to_owned(),
+            ));
+        }
         let taken = document.status().is_live()
             && state.documents.iter().any(|stored| {
                 stored.company_id() == document.company_id()

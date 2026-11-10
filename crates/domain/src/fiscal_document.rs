@@ -7,6 +7,8 @@ const MAX_TEXT_CHARS: usize = 150;
 const MAX_REFUSAL_CODE_CHARS: usize = 50;
 const MAX_REFUSAL_MESSAGE_CHARS: usize = 500;
 const MAX_NOTE_CHARS: usize = 500;
+/// The number of a document has nine digits in its access key.
+const MAX_NUMBER: u32 = 999_999_999;
 
 /// What kind of fiscal document it is. NFS-e and NFC-e join with their slices ([ADR 0073]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,7 +136,7 @@ impl FiscalAuthorization {
         series: u16,
         protocol: Option<&str>,
     ) -> Result<Self, DomainError> {
-        if number == 0 || series == 0 || series > 999 {
+        if number == 0 || number > MAX_NUMBER || series == 0 || series > 999 {
             return Err(DomainError::InvalidFiscalDocument("authorization"));
         }
         let protocol = protocol
@@ -286,7 +288,9 @@ impl FiscalDocument {
         )?;
         document.authorization = Some(authorization);
         document.refusal = None;
-        document.note = note.map(|raw| clean(raw, MAX_NOTE_CHARS));
+        document.note = note
+            .map(|raw| clean(raw, MAX_NOTE_CHARS))
+            .filter(|note| !note.is_empty());
         Ok(document)
     }
 
@@ -727,6 +731,19 @@ mod tests {
         assert!(
             FiscalDocument::new(FiscalDocumentId::generate(), CompanyId::generate(), bad).is_err()
         );
+    }
+
+    #[test]
+    fn an_authorization_fits_the_nine_digits_of_a_number_and_a_note_is_never_empty() {
+        let key = authorization().access_key().clone();
+        assert!(FiscalAuthorization::new(key.clone(), 1_000_000_000, 1, None).is_err());
+        assert!(FiscalAuthorization::new(key, 999_999_999, 1, None).is_ok());
+        let authorized = document()
+            .submitted()
+            .unwrap()
+            .authorized(authorization(), Some(" \u{7} "))
+            .unwrap();
+        assert_eq!(authorized.note(), None);
     }
 
     #[test]

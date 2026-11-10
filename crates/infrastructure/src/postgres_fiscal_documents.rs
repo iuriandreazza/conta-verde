@@ -462,12 +462,24 @@ mod tests {
                 .await,
             "never deleted",
         );
+        sqlx::query("UPDATE fiscal_documents SET status = 'cancelled' WHERE id = $1")
+            .bind(document.as_uuid())
+            .execute(&pool)
+            .await
+            .unwrap();
+        refused(
+            sqlx::query("UPDATE fiscal_documents SET status = 'authorized' WHERE id = $1")
+                .bind(document.as_uuid())
+                .execute(&pool)
+                .await,
+            "never moves again",
+        );
         refused(
             sqlx::query("UPDATE fiscal_documents SET status = 'processing' WHERE id = $1")
                 .bind(document.as_uuid())
                 .execute(&pool)
                 .await,
-            "authorization_follows_status",
+            "never moves again",
         );
         refused(
             sqlx::query("UPDATE fiscal_documents SET access_key = '123' WHERE id = $1")

@@ -86,13 +86,16 @@ CREATE UNIQUE INDEX fiscal_documents_access_key_key
     ON fiscal_documents (company_id, access_key) WHERE access_key IS NOT NULL;
 
 -- A fiscal document is the record of an act: it is never deleted, and once authorized its content never changes, only
--- its status (to cancelled). A trigger holds that even against a bug in the application.
+-- its status (to cancelled), which is final like a denial. A trigger holds that even against a bug in the application.
 CREATE FUNCTION fiscal_documents_keep_the_record() RETURNS trigger
     LANGUAGE plpgsql AS
 $$
 BEGIN
     IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'a fiscal document is never deleted';
+    END IF;
+    IF OLD.status IN ('cancelled', 'denied') AND NEW.status <> OLD.status THEN
+        RAISE EXCEPTION 'a cancelled or denied fiscal document never moves again';
     END IF;
     IF OLD.status IN ('authorized', 'cancelled') AND (
         NEW.company_id, NEW.kind, NEW.sale_id, NEW.issuer_cnpj, NEW.issuer_name, NEW.regime, NEW.environment,
