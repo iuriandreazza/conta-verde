@@ -7,7 +7,7 @@ tags: [adr, api, integrations]
 
 # ADR 0015: Public API and webhooks
 
-> **Accepted in Phase 8, as amended by [ADR 0085](0085-integrations-and-mobile-plan.md).** The direction stands (one
+> **Accepted in Phase 8, as amended by [ADR 0086](0086-integrations-and-mobile-plan.md).** The direction stands (one
 > versioned REST API with OpenAPI, keys, signed webhooks through the job queue, connectors that use only that API), but
 > the code moved while this was proposed. What changed: `/v1` is a **curated, frozen set of resources with its own
 > DTOs** and not the SPA's API (which stays unfrozen and is not generated from anything); the document is **hand-written

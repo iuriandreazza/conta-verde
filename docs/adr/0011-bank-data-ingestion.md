@@ -7,7 +7,7 @@ tags: [adr, finance, integrations]
 
 # ADR 0011: Bank data: OFX first, aggregator later
 
-> **Phase 8 amendment ([ADR 0085](0085-integrations-and-mobile-plan.md)).** The OFX half was built as
+> **Phase 8 amendment ([ADR 0086](0086-integrations-and-mobile-plan.md)).** The OFX half was built as
 > [ADR 0034](0034-statement-import-and-reconciliation.md); the table is `statement_lines` with a fingerprint. The port is
 > named **`BankAggregator`** (not `BankConnector`: the word now means the e-commerce packages), its pull is a job of the
 > queue of [ADR 0059](0059-job-queue.md), and **no per-company secret is stored**: the aggregator's credentials are the

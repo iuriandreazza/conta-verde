@@ -5,10 +5,11 @@ use conta_verde_application::{
     AccountingExportService, AttachmentService, AuthService, BalanceService, BankAccountService,
     CategoryService, CommissionService, ContractService, CostCenterService, DocumentMailService,
     DreService, FinancialEntryService, FiscalDocumentService, FiscalSettingsService,
-    InventoryCountService, JobRunner, MemberService, PackageScheduleService, PartyService,
-    PaymentMethodService, PaymentTermService, PeriodLockService, PostalCodeService,
-    PriceListService, ProductService, PurchaseService, QuoteService, ReconciliationService,
-    RecurrenceService, SaleService, SalesReportService, StockService, TransferService,
+    GatewaySettingsService, InventoryCountService, JobRunner, MemberService,
+    PackageScheduleService, PartyService, PaymentMethodService, PaymentTermService,
+    PeriodLockService, PostalCodeService, PriceListService, ProductService, PurchaseService,
+    QuoteService, ReconciliationService, RecurrenceService, SaleService, SalesReportService,
+    StockService, TransferService,
 };
 use conta_verde_application::{
     AuthorizedNfse, BrandedEmailSender, ChargeService, CollectionService, DocumentOutcome,
@@ -25,7 +26,8 @@ use conta_verde_infrastructure::{
     NfeIoGateway, NoFiscalGateway, PostgresAttachmentRepository, PostgresBankAccountRepository,
     PostgresCategoryRepository, PostgresCommissionRuleRepository, PostgresContractRepository,
     PostgresCostCenterRepository, PostgresDocumentMailRepository, PostgresFinancialEntryRepository,
-    PostgresFiscalDocumentRepository, PostgresFiscalSettingsRepository, PostgresIdentityRepository,
+    PostgresFiscalDocumentRepository, PostgresFiscalSettingsRepository,
+    PostgresGatewaySettingsRepository, PostgresIdentityRepository,
     PostgresInventoryCountRepository, PostgresInvitationRepository, PostgresJobQueue,
     PostgresOpeningRepository, PostgresPackageScheduleRepository, PostgresPartyRepository,
     PostgresPaymentMethodRepository, PostgresPaymentTermRepository, PostgresPeriodLockRepository,
@@ -73,6 +75,8 @@ impl Ports for PostgresPorts {
     type PeriodLocks = PostgresPeriodLockRepository;
     type PackageSchedules = PostgresPackageScheduleRepository;
     type FiscalSettings = PostgresFiscalSettingsRepository;
+    type GatewaySettings = PostgresGatewaySettingsRepository;
+    type Cipher = ConfiguredCipher;
     type Gateway = ConfiguredFiscalGateway;
     type FiscalDocuments = PostgresFiscalDocumentRepository;
     type Attachments = PostgresAttachmentRepository;
@@ -372,6 +376,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     );
     let fiscal_settings =
         FiscalSettingsService::new(PostgresFiscalSettingsRepository::new(pool.clone()));
+    let gateway_settings = GatewaySettingsService::new(
+        PostgresGatewaySettingsRepository::new(pool.clone()),
+        secrets_cipher_from_env()?,
+    );
     // The poll that finishes what the gateway answered "processing" to has a service of its own over its own gateway
     // client: the one the app serves from is owned by its state.
     let fiscal_gateway = fiscal_gateway_from_env()?;
@@ -436,6 +444,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 exports,
                 packages,
                 fiscal_settings,
+                gateway_settings,
                 fiscal_documents,
                 postal_codes,
                 members,
@@ -1269,6 +1278,56 @@ fn lookup_enabled(name: &str, setting: Option<&str>) -> Result<bool, String> {
 }
 
 // Strict on purpose: a typo such as `TRUE` must not silently turn off a security setting.
+/// What seals the gateway settings' secrets: with the key of `FISCAL_SECRETS_KEY` (64 hexadecimal characters), or nothing, and then no
+/// secret can be saved (ADR 0085). A key that is not 32 bytes of hexadecimal stops the server; its text is never in the message.
+#[derive(Clone)]
+enum ConfiguredCipher {
+    Sealing(std::sync::Arc<conta_verde_infrastructure::RingSecretCipher>),
+    Off(conta_verde_infrastructure::NoSecretCipher),
+}
+
+impl conta_verde_application::SecretCipher for ConfiguredCipher {
+    fn is_available(&self) -> bool {
+        matches!(self, Self::Sealing(_))
+    }
+
+    fn seal(
+        &self,
+        company_id: conta_verde_domain::CompanyId,
+        field: &str,
+        plaintext: &conta_verde_domain::SecretText,
+    ) -> Result<Vec<u8>, conta_verde_application::SecretError> {
+        match self {
+            Self::Sealing(cipher) => cipher.seal(company_id, field, plaintext),
+            Self::Off(cipher) => cipher.seal(company_id, field, plaintext),
+        }
+    }
+
+    fn open(
+        &self,
+        company_id: conta_verde_domain::CompanyId,
+        field: &str,
+        sealed: &[u8],
+    ) -> Result<conta_verde_domain::SecretText, conta_verde_application::SecretError> {
+        match self {
+            Self::Sealing(cipher) => cipher.open(company_id, field, sealed),
+            Self::Off(cipher) => cipher.open(company_id, field, sealed),
+        }
+    }
+}
+
+fn secrets_cipher_from_env() -> Result<ConfiguredCipher, Box<dyn std::error::Error + Send + Sync>> {
+    match std::env::var("FISCAL_SECRETS_KEY") {
+        Ok(key) => Ok(ConfiguredCipher::Sealing(std::sync::Arc::new(
+            conta_verde_infrastructure::RingSecretCipher::from_hex(&key)
+                .map_err(|error| format!("FISCAL_SECRETS_KEY: {error}"))?,
+        ))),
+        Err(_) => Ok(ConfiguredCipher::Off(
+            conta_verde_infrastructure::NoSecretCipher,
+        )),
+    }
+}
+
 /// `FISCAL_WEBHOOK_SECRET` (at least 32 characters; unset keeps the door shut) and `FISCAL_WEBHOOK_HEADER` (the name of the header
 /// the gateway puts it in, `x-fiscal-webhook-token` by default): what the operator registers at the gateway as the hook's
 /// authorization (ADR 0083). A secret that is too short, or a header name that is not one, stops the server.

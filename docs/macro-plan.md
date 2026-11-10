@@ -68,7 +68,7 @@ These hold for every phase. Each one is justified in an ADR.
 4. PostgreSQL is the only required infrastructure; background work runs on it ([ADR 0009](adr/0009-postgres-only-background-jobs.md)).
 5. Every write to a business record is audited ([ADR 0008](adr/0008-audit-trail.md)).
 6. External services (payments, banks, fiscal, messaging) sit behind ports with at least one real adapter and one fake ([ADR 0010](adr/0010-payment-providers.md), [0011](adr/0011-bank-data-ingestion.md), [0014](adr/0014-notifications.md)).
-7. The SPA and the public `v1` API are two front doors to the same use cases, so no rule, check or audit entry can be skipped through either; the SPA's own routes are not a contract, and `v1` is a curated frozen set ([ADR 0005](adr/0005-spa-frontend.md), [ADR 0015](adr/0015-public-api-and-webhooks.md), amended by [ADR 0085](adr/0085-integrations-and-mobile-plan.md)).
+7. The SPA and the public `v1` API are two front doors to the same use cases, so no rule, check or audit entry can be skipped through either; the SPA's own routes are not a contract, and `v1` is a curated frozen set ([ADR 0005](adr/0005-spa-frontend.md), [ADR 0015](adr/0015-public-api-and-webhooks.md), amended by [ADR 0086](adr/0086-integrations-and-mobile-plan.md)).
 
 ## Releases
 

@@ -358,6 +358,7 @@ dependencies = [
  "lettre",
  "rand 0.10.3",
  "reqwest",
+ "ring",
  "roxmltree",
  "serde",
  "serde_json",

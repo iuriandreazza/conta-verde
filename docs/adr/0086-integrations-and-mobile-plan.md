@@ -1,11 +1,11 @@
 ---
-title: "ADR 0085: Integrations and mobile: the plan for Phase 8"
+title: "ADR 0086: Integrations and mobile: the plan for Phase 8"
 status: accepted
 date: 2026-11-10
 tags: [adr, api, integrations, webhooks, pwa, phase-8]
 ---
 
-# ADR 0085: Integrations and mobile: the plan for Phase 8
+# ADR 0086: Integrations and mobile: the plan for Phase 8
 
 ## Context
 
@@ -60,7 +60,7 @@ What the code is today, and ADR 0015 did not know:
 |--------|------|------|
 | Only its digest, like a token | Nothing recoverable | The server must sign, so it must know the secret: impossible |
 | Derived from a master key and the subscription's id and version | Nothing secret stored; no new crate | The person **cannot choose or edit it** (a requirement: the secret is editable in the interface, so a receiver that already has one can keep it), and a leaked master key exposes every secret ever issued |
-| **Encrypted at rest with an AEAD, a key from the environment** (chosen) | Any value, generated or typed by the person; shown and edited in the interface; no plain secret in the database | A new crate for the cipher (`chacha20poly1305`, from RustCrypto, like the `hmac` and `sha2` already used); a key to guard, back up and rotate |
+| **Sealed at rest with the `SecretCipher` that already exists** ([ADR 0085](0085-gateway-settings-per-company.md), AES-256-GCM through `ring`) (chosen) | Any value, generated or typed by the person, **editable in the interface**; no plain secret in the database; **no new crate and no second mechanism**: the company and the field are bound as associated data | A key to guard and back up (`FISCAL_SECRETS_KEY` today); losing it means every secret is typed again; rotating the key is not built there either |
 
 ### Idempotency of a create
 
@@ -190,21 +190,18 @@ could move earlier. They stay where the roadmap put them unless a slice says why
 ### 4. Webhooks
 
 - A **subscription** is a company's, with an `https` URL, a list of event types (or all) and an `active` flag, at most 20
-  per company, audited (without the secret). Its **signing secret is editable in the interface**: it is made at random
-  when the subscription is created (`whsec_` and 32 random bytes in base64), the owner or admin can **see it** (a reveal
-  action, answered `no-store`) and **replace it** with a value of their own (24 to 128 printable characters, no spaces),
-  for a receiver that already has one. Replacing it keeps the previous one signing too for 24 hours, so a receiver can
-  switch without a gap. A change is audited **without the values**; seeing it is not a write and is not audited.
-  **It is stored encrypted, never in plain text**: a new `SecretBox` port (`seal`/`open`) with an adapter over
-  **ChaCha20-Poly1305** (the `chacha20poly1305` crate, the one new dependency of the phase) and a key from the
-  environment, `SECRETS_KEY` (32 random bytes, 64 hex characters). A sealed value is a version byte, a key id (the first
-  bytes of the key's SHA-256), a nonce and the ciphertext, in one text column, with **the company and the subscription as
-  associated data** so a value copied to another row does not open. `SECRETS_KEY_PREVIOUS` (optional) opens what was sealed
-  before a key change, and the next edit of a secret seals it with the current one; if the key leaks, every secret must be
-  replaced, which the page offers in one action. **Without `SECRETS_KEY` webhooks are off** and the page says so (the
-  pattern of `PAYMENT_PROVIDER`); losing the key means every secret has to be replaced, never that data is lost. The key
-  is the installation's, so the aggregator of slice 4 and any later adapter that needs a per-company secret use the same
-  port.
+  per company, audited (without the secret). Its **signing secret is editable in the interface**: the
+  server makes one at random when the subscription is created (`whsec_` and 32 random bytes in base64) and **shows it once**;
+  the owner or admin can **replace it at any time** with a value of their own (the rule of [ADR 0085](0085-gateway-settings-per-company.md):
+  printable ASCII, no spaces, 8 to 200 bytes; the page also offers "generate a new one"), for a receiver that already has
+  one. Replacing it keeps the previous one signing too for 24 hours, so a receiver can switch without a gap. It follows the
+  repository's convention for secrets, **write-only**: it is **sealed with the existing `SecretCipher`** (company and field
+  as associated data) and the API never returns it, only whether it is set; a person who lost it replaces it. A change is
+  audited **without the value**. The **key is the installation's** (`FISCAL_SECRETS_KEY` of ADR 0085, 64 hex characters;
+  slice 3 may add `SECRETS_KEY` as the general name with the old one as a fallback). **Without it webhooks are off** and the
+  page says so (the pattern of `PAYMENT_PROVIDER`); losing it means every secret has to be replaced, never that data is lost.
+  A secret that does not open is a `409` naming the subscription, as ADR 0085 does. The aggregator of slice 4 and any later
+  adapter that needs a per-company secret use the same port.
 - **The catalogue of events** starts with `sale.created`, `sale.completed`, `sale.cancelled`, `charge.paid`,
   `stock.below_minimum` and `webhook.test`. It only grows. `stock.below_minimum` is derived on read in the product (it is
   never stored), so the event fires on a **crossing**: when a movement takes a product that has a minimum from a balance
@@ -258,7 +255,7 @@ could move earlier. They stay where the roadmap put them unless a slice says why
   account per installation, like the fiscal gateway); what is stored per company is a **connection record**: the bank
   account it feeds, the provider, the aggregator's connection id and the day of the last pull. A connection id alone
   gives nothing without the installation's credentials. An adapter that needed a token per company would store it through the
-  `SecretBox` of slice 3 and say so in its own ADR.
+  `SecretCipher` and say so in its own ADR.
 - **It feeds what already exists.** Transactions become statement lines through the **same import and fingerprint**
   ([ADR 0034](0034-statement-import-and-reconciliation.md)): the aggregator's transaction id takes the place of the bank
   reference, so a pull that overlaps the last one adds nothing, and reconciliation does not know where a line came from.
@@ -325,8 +322,8 @@ could move earlier. They stay where the roadmap put them unless a slice says why
   Moving to an outbox in the transaction would remove the first gap at the price of every write's signature; it is the
   first thing to revisit if the loss is ever seen.
 - The rate limit is approximate across instances and forgotten on restart.
-- `SECRETS_KEY` becomes a secret to keep and back up, and `chacha20poly1305` the phase's one new dependency; in return
-  no webhook secret is ever at rest in plain text and the person can see and choose it.
+- Webhook secrets reuse the sealing of ADR 0085 (same key, no new dependency): none is ever at rest in plain text and the
+  person can choose it, at the price of the same key to keep and the same lack of key rotation.
 - `Actor` gaining a variant touches about two dozen places once, in slice 2, and the audit CHECK is widened by a new
   migration (the one already merged is not edited).
 - `JobKind` gets a per-kind retry limit, and `MAX_ATTEMPTS` stops being a single number.
@@ -338,5 +335,5 @@ could move earlier. They stay where the roadmap put them unless a slice says why
 - A real integrator needs an exact distributed rate limit, a per-key limit or a per-IP throttle.
 - An event is seen lost: move events to an outbox written in the business transaction.
 - A client needs real-time push beyond webhooks (server-sent events).
-- The `SecretBox` needs a key per company, a hardware-backed key or an external key service instead of one environment key.
+- The `SecretCipher` needs rotation, a key per company, a hardware-backed key or an external key service instead of one environment key.
 - `v1` needs a breaking change: write `v2` and start the year.
