@@ -72,7 +72,7 @@ class CategoriesTest(unittest.TestCase):
         report = tool.Report()
         registers, paths = tool.plan_categories([category("i", "Fees")], [category("e", "Fees")], report)
         self.assertEqual(len({r["name"].casefold() for r in registers}), 2)
-        self.assertEqual(report.counts["root category with a repeated name, renamed"], 1)
+        self.assertEqual(report.counts["category with a repeated name among its siblings, renamed"], 1)
 
     def test_a_groups_name_that_matches_nothing_is_said(self):
         report = tool.Report()
