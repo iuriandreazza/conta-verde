@@ -32,7 +32,7 @@ leaves a recipient called "Consumidor não identificado" with no document) and *
 lines** of the sale (a service line is the NFS-e's), taxed as the nature says for a sale **inside the state** (the CFOP is the nature's for
 the issuer's state), under the Simples Nacional only. **What is paid must add up to the total of the invoice: no change is given**,
 because Focus NFe's documentation does not say how change (`troco`) is declared, and a total that did not add up would be refused by the
-authority. The code refuses a payment that is short or over before anything is sent.
+authority. The code refuses a payment that is short or over, a payment of 0 and an amount with more than two decimals before anything is sent. The buyer's presence is one the counter has (in person, delivery, outside the establishment or other: **unverified against the authority's rule**, recalled from the layout and to be confirmed), and the authorized document's key must be of the kind's model (55 or 65).
 
 ### The port, the fake, Focus NFe and NFE.io
 
@@ -51,10 +51,12 @@ NFe (or the fake) until that adapter is written; this is the second place ADR 00
 
 The **Caixa** page (`/companies/{id}/pos`, for whoever writes `sales` and `fiscal`) sells products and invoices them in one go **through
 the endpoints that exist**, one after the other in the browser: the sale (`POST /sales`), its completion, and `POST
-/fiscal/consumer-documents`. The sale is made once: if the invoice is refused, the sale stays made and the page offers only the invoice
-again. The sale is dated today where the person is (the server reads no clock), and the lines use the shared editor with the price of the
+/fiscal/consumer-documents`. The sale is made once, completed once and invoiced until the invoice is authorized: a step that fails is the one asked again (a
+completion refused for want of stock leaves an open sale, completed on the next try), the lines stop being editable once the sale exists,
+and an invoice the authority refused is **sent again under its own id** (`resend-consumer`), never issued as a second one. A lost
+response to the creation of the sale can still make a second sale on retry (there is no idempotency key). The sale is dated today where the person is (the server reads no clock), and the lines use the shared editor with the price of the
 product. It does not print: the XML is in the documents list. The Documentos page lists NFC-e with their kind and cancels them; a
-**rejected NFC-e has no resend screen** (the API has `POST .../resend-consumer`; the Caixa tries again right after the refusal).
+**rejected NFC-e has no resend screen in Documentos** (the Caixa resends it right after the refusal; the API has `POST .../resend-consumer`).
 
 ## Consequences
 

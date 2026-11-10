@@ -18808,6 +18808,31 @@ pub async fn issues_an_nfce_from_a_sale<D, S, P, Y, F, B, R>(
             .contains("add up")
         );
     }
+    let mut online = issue_nfce_request(sale, "30.00", true);
+    online.presence = conta_verde_application::BuyerPresence::Internet;
+    assert!(
+        rule(
+            service
+                .issue_nfce(company, &user, online, FISCAL_NOW)
+                .await
+                .unwrap_err()
+        )
+        .contains("present")
+    );
+    let mut nothing = issue_nfce_request(sale, "30.00", true);
+    nothing.payments.push((
+        conta_verde_application::PaymentForm::Cash,
+        conta_verde_domain::Amount::parse("0").unwrap(),
+    ));
+    assert!(
+        rule(
+            service
+                .issue_nfce(company, &user, nothing, FISCAL_NOW)
+                .await
+                .unwrap_err()
+        )
+        .contains("above 0")
+    );
     let mut unpaid = issue_nfce_request(sale, "30.00", true);
     unpaid.payments.clear();
     assert!(
@@ -18912,27 +18937,12 @@ pub async fn issues_an_nfce_from_a_sale<D, S, P, Y, F, B, R>(
         )
         .contains("no correction letter")
     );
-    let number = authorized.authorization().unwrap().number();
     let held = service
         .refresh(company, nfe.id(), FISCAL_NOW + 1)
         .await
         .unwrap();
     assert_eq!(held.status(), FiscalDocumentStatus::Authorized);
     let nfe_number = held.authorization().unwrap().number();
-    let free = nfe_number + 1000;
-    let range = service
-        .invalidate(
-            company,
-            &user,
-            1,
-            free,
-            free,
-            "Numeração pulada por falha do sistema",
-        )
-        .await
-        .unwrap();
-    assert_eq!(range.status(), FiscalEventStatus::Accepted);
-    assert!(number >= 1);
 
     // Cancelled with a reason, which frees the sale for another.
     let cancelled = service
@@ -18967,6 +18977,43 @@ pub async fn issues_an_nfce_from_a_sale<D, S, P, Y, F, B, R>(
     assert_eq!(anonymous.recipient_name(), "Consumidor não identificado");
     assert_eq!(anonymous.recipient_document(), None);
     assert!(gateway.submitted_nfce().last().unwrap().consumer.is_none());
+    // An NFC-e has its own numbers: one that only it holds is not an NF-e's, so invalidating a range around it is not refused
+    // (the NF-e holds another number of the same series).
+    let anonymous = service
+        .refresh(company, anonymous.id(), FISCAL_NOW + 1)
+        .await
+        .unwrap();
+    let consumer_number = anonymous.authorization().unwrap().number();
+    assert_ne!(consumer_number, nfe_number);
+    let range = service
+        .invalidate(
+            company,
+            &user,
+            1,
+            consumer_number,
+            consumer_number,
+            "Numeração pulada por falha do sistema",
+        )
+        .await
+        .unwrap();
+    assert_eq!(range.status(), FiscalEventStatus::Accepted);
+    // ...while the NF-e's own number is refused.
+    assert!(
+        rule(
+            service
+                .invalidate(
+                    company,
+                    &user,
+                    1,
+                    nfe_number,
+                    nfe_number,
+                    "Numeração pulada por falha do sistema"
+                )
+                .await
+                .unwrap_err()
+        )
+        .contains("in use")
+    );
 
     // A rejection keeps the authority's words and is sent again under the same id; only an NFC-e is sent again by this path.
     let rejected_sale = save_a_mixed_sale(sales, company, entry_seed, seed, fiscal).await;

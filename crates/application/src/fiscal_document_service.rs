@@ -1887,6 +1887,26 @@ where
             ));
         }
         let total = amount(total)?;
+        // An NFC-e is made at the counter: the buyer is there (1), at a delivery (4), outside the establishment (5) or other (9)
+        // (unverified against the authority's rule: ADR 0082).
+        if !matches!(
+            request.presence,
+            BuyerPresence::InPerson
+                | BuyerPresence::HomeDelivery
+                | BuyerPresence::OutsideTheEstablishment
+                | BuyerPresence::Other
+        ) {
+            return Err(rule(
+                "an NFC-e is for a buyer who is present, at a delivery, outside the establishment or other: choose one of those",
+            ));
+        }
+        if request
+            .payments
+            .iter()
+            .any(|(_, paid)| paid.as_decimal().is_zero())
+        {
+            return Err(rule("every payment of an NFC-e is above 0"));
+        }
         if request.payments.is_empty()
             || request
                 .payments

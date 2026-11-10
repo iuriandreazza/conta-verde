@@ -457,6 +457,15 @@ impl FiscalDocument {
         ) {
             return Err(DomainError::InvalidFiscalTransition);
         }
+        // The key says which model it is: 55 is an NF-e's and 65 an NFC-e's, and neither is the other's.
+        let model = if self.kind == FiscalDocumentKind::Nfce {
+            "65"
+        } else {
+            "55"
+        };
+        if authorization.access_key().model() != model {
+            return Err(DomainError::InvalidFiscalDocument("access_key"));
+        }
         let mut document = self.authorized_status(note)?;
         document.authorization = Some(authorization);
         Ok(document)
@@ -1142,10 +1151,37 @@ mod tests {
             draft(),
         )
         .unwrap();
+        let consumer_key = AccessKey::from_parts(
+            35,
+            CalendarDate::parse("2026-11-10").unwrap(),
+            "11222333000181",
+            65,
+            1,
+            7,
+            1,
+            12345678,
+        )
+        .unwrap();
+        let identity = FiscalAuthorization::new(consumer_key, 7, 1, None).unwrap();
+        // The model of the key is the kind's: a model-55 key is not an NFC-e's, nor a model-65 key an NF-e's.
+        assert!(
+            consumer
+                .submitted()
+                .unwrap()
+                .authorized(authorization(), None)
+                .is_err()
+        );
+        assert!(
+            document()
+                .submitted()
+                .unwrap()
+                .authorized(identity.clone(), None)
+                .is_err()
+        );
         let authorized = consumer
             .submitted()
             .unwrap()
-            .authorized(authorization(), None)
+            .authorized(identity, None)
             .unwrap();
         assert_eq!(authorized.kind(), FiscalDocumentKind::Nfce);
         assert!(authorized.authorization().is_some());

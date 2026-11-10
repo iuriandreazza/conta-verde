@@ -70,12 +70,14 @@ const invoice: FiscalDocument = {
   files: ["xml"],
 };
 
-const serve = (consumer: (calls: number) => Reply) => {
+const serve = (consumer: (calls: number) => Reply, complete: (calls: number) => Reply = () => ({ status: 200, body: { id: "s1" } })) => {
   let issued = 0;
+  let completions = 0;
   return mockApi((url, init): Reply => {
+    if (init?.method === "POST" && url.endsWith("/fiscal/documents/d0/resend-consumer")) return consumer(++issued);
     if (url === "/api/auth/me") return { status: 200, body: profile };
     if (init?.method === "POST" && url.endsWith("/sales")) return { status: 201, body: { id: "s1" } };
-    if (init?.method === "POST" && url.endsWith("/sales/s1/complete")) return { status: 200, body: { id: "s1" } };
+    if (init?.method === "POST" && url.endsWith("/sales/s1/complete")) return complete(++completions);
     if (init?.method === "POST" && url.endsWith("/fiscal/consumer-documents")) return consumer(++issued);
     if (url.endsWith("/fiscal/settings")) return { status: 200, body: settings };
     if (url.includes("/parties")) return { status: 200, body: { items: [customer], next_cursor: null } };
@@ -122,6 +124,9 @@ it("starts with no fiscal choice made, offers only products and the natures of p
     expect(await screen.findByLabelText(label)).toHaveValue("");
   }
   expect(screen.queryByRole("option", { name: /Consultoria/ })).toBeNull();
+  // The counter's presences only: not "Pela internet" nor "Por telefone".
+  expect(screen.queryByRole("option", { name: "Pela internet" })).toBeNull();
+  expect(screen.getByRole("option", { name: "Presencial" })).toBeInTheDocument();
   expect(screen.queryByRole("option", { name: "Prestação de serviço" })).toBeNull();
 
   await fillTheSale("29.99");
@@ -178,4 +183,50 @@ it("never makes the sale twice: when the invoice fails the person tries the invo
   expect(issues).toHaveLength(2);
   expect(issues[1].sale_id).toBe("s1");
   expect(issues[1].identify_consumer).toBe(false);
+});
+
+it("when the sale could not be completed, asks to complete it again: the sale is not made twice and its lines are not editable", async () => {
+  const fetchMock = serve(
+    () => ({ status: 200, body: invoice }),
+    (call) => (call === 1 ? { status: 409, body: { error: "not enough stock" } } : { status: 200, body: { id: "s1" } }),
+  );
+  renderAt("/companies/c1/pos");
+  await fillTheSale("30");
+  await fillTheChoices();
+  await userEvent.click(screen.getByRole("button", { name: "Finalizar e emitir NFC-e" }));
+
+  expect(await screen.findByText(/not enough stock/)).toBeInTheDocument();
+  expect(screen.getByText(/A venda foi feita, mas ainda não concluída/)).toBeInTheDocument();
+  expect(screen.getByLabelText("Quantidade do item 1")).toBeDisabled();
+  await userEvent.click(screen.getByRole("button", { name: "Concluir a venda e emitir" }));
+
+  await screen.findByRole("button", { name: "Nova venda" });
+  expect(bodyOf(fetchMock, "/sales")).toHaveLength(1);
+  expect(bodyOf(fetchMock, "/sales/s1/complete")).toHaveLength(2);
+  expect(bodyOf(fetchMock, "/fiscal/consumer-documents")).toHaveLength(1);
+});
+
+it("sends a refused NFC-e again under its own id instead of issuing a second one", async () => {
+  const rejected: FiscalDocument = { ...invoice, id: "d0", status: "rejected", access_key: null, number: null, series: null, refusal: { code: "E225", message: "Falha no schema" } };
+  const fetchMock = serve((call) => ({ status: 200, body: call === 1 ? rejected : invoice }));
+  renderAt("/companies/c1/pos");
+  await fillTheSale("30");
+  await fillTheChoices();
+  await userEvent.click(screen.getByRole("button", { name: "Finalizar e emitir NFC-e" }));
+
+  expect(await screen.findByText(/Recusada \(E225\): Falha no schema/)).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Emitir a NFC-e de novo" }));
+
+  await screen.findByRole("button", { name: "Nova venda" });
+  expect(bodyOf(fetchMock, "/sales")).toHaveLength(1);
+  expect(bodyOf(fetchMock, "/fiscal/consumer-documents")).toHaveLength(1);
+  expect(bodyOf(fetchMock, "/fiscal/documents/d0/resend-consumer")).toHaveLength(1);
+});
+
+it("does not take a payment of nothing as a payment", async () => {
+  serve(() => ({ status: 200, body: invoice }));
+  renderAt("/companies/c1/pos");
+  await fillTheSale("0");
+  await fillTheChoices();
+  expect(screen.getByRole("button", { name: "Finalizar e emitir NFC-e" })).toBeDisabled();
 });

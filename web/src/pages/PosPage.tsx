@@ -50,7 +50,11 @@ export function PosPage() {
   const [origin, setOrigin] = useState("");
   const [presence, setPresence] = useState("");
   const [identify, setIdentify] = useState("");
+  // The sale as it stands on the server: made, then completed. A step that failed is the one asked again, never the ones before.
   const [saleId, setSaleId] = useState<string | null>(null);
+  const [completed, setCompleted] = useState(false);
+  // The invoice the authority refused: it is sent again under its own id, never issued as a second one.
+  const [refused, setRefused] = useState<FiscalDocument | null>(null);
   const [made, setMade] = useState<FiscalDocument | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -68,7 +72,8 @@ export function PosPage() {
     for (const row of payments) {
       if (row.amount.trim() === "") continue;
       const cents = toCents(row.amount);
-      if (cents === null) return null;
+      // A payment of nothing is not one: the invoice refuses it.
+      if (cents === null || cents === 0n) return null;
       sum += cents;
     }
     return sum;
@@ -79,6 +84,10 @@ export function PosPage() {
   const products = targets.products.filter((product) => product.active && product.kind === "product");
   const categoryRows = treeRows(targets.categories).filter(({ category: item }) => item.active && item.dre_group !== "transfers");
   const productNatures = natures.filter((item) => item.kind === "product" && item.active);
+  // The buyer is at the counter: the presences an NFC-e takes.
+  const counterPresences = Object.entries(PRESENCE_LABELS).filter(([key]) =>
+    ["in_person", "home_delivery", "outside_the_establishment", "other"].includes(key),
+  );
 
   async function finish(event: FormEvent) {
     event.preventDefault();
@@ -91,7 +100,7 @@ export function PosPage() {
     setPending(true);
     setError(null);
     try {
-      // The sale is made and completed once: a failure of the invoice leaves it, and the next try only asks for the invoice.
+      // The sale is made once, completed once and invoiced until the invoice is authorized: whatever failed is what is asked again.
       let sale = saleId;
       if (sale === null) {
         const created = await api.createSale(companyId, {
@@ -102,9 +111,12 @@ export function PosPage() {
         });
         sale = created.id;
         setSaleId(sale);
-        await api.completeSale(companyId, sale);
       }
-      const document = await api.issueConsumerDocument(companyId, {
+      if (!completed) {
+        await api.completeSale(companyId, sale);
+        setCompleted(true);
+      }
+      const choices = {
         sale_id: sale,
         nature_code: nature,
         origin: Number(origin),
@@ -113,8 +125,18 @@ export function PosPage() {
         payments: payments
           .filter((row) => row.amount.trim() !== "")
           .map((row) => ({ form: row.form as PaymentForm, amount: centsToApi(toCents(row.amount) ?? 0n) })),
-      });
-      setMade(document);
+      };
+      const document = refused
+        ? await api.resendConsumerDocument(companyId, refused.id, choices)
+        : await api.issueConsumerDocument(companyId, choices);
+      if (document.status === "rejected") {
+        // The sale stands and the invoice is asked again under the same id: the person fixes what was refused first.
+        setRefused(document);
+        setError(`Recusada (${document.refusal?.code ?? "?"}): ${document.refusal?.message ?? ""}`);
+      } else {
+        setRefused(null);
+        setMade(document);
+      }
     } catch (failure) {
       setError(errorMessage(failure));
     } finally {
@@ -126,6 +148,8 @@ export function PosPage() {
     setRows([newLine()]);
     setPayments([newPayment()]);
     setSaleId(null);
+    setCompleted(false);
+    setRefused(null);
     setMade(null);
     setError(null);
     setIdentify("");
@@ -168,7 +192,14 @@ export function PosPage() {
         <form className="record-form" onSubmit={(event) => void finish(event)}>
           <Notice message={error ?? targets.error} />
           {saleId !== null && (
-            <Notice tone="warning" message="A venda já foi feita e concluída. Corrija o que a NFC-e pede e tente emitir de novo: a venda não é refeita." />
+            <Notice
+              tone="warning"
+              message={
+                completed
+                  ? "A venda já foi feita e concluída. Corrija o que a NFC-e pede e emita de novo: a venda não é refeita."
+                  : "A venda foi feita, mas ainda não concluída. Tente de novo: ela não é refeita."
+              }
+            />
           )}
           <div className="field-grid">
             <label>
@@ -194,7 +225,10 @@ export function PosPage() {
               </select>
             </label>
           </div>
-          <LinesEditor companyId={companyId} rows={rows} onChange={setRows} products={products} />
+          {/* Once the sale exists its lines are the server's: they are not edited here, and the total the payment must match is theirs. */}
+          <fieldset disabled={saleId !== null} className="fieldset-plain">
+            <LinesEditor companyId={companyId} rows={rows} onChange={setRows} products={products} />
+          </fieldset>
 
           <h3>Pagamento</h3>
           {payments.map((row) => (
@@ -260,7 +294,7 @@ export function PosPage() {
               Presença do comprador
               <select required value={presence} onChange={(event) => setPresence(event.target.value)}>
                 <option value="">Escolha a presença</option>
-                {Object.entries(PRESENCE_LABELS).map(([key, label]) => (
+                {counterPresences.map(([key, label]) => (
                   <option key={key} value={key}>
                     {label}
                   </option>
@@ -277,7 +311,7 @@ export function PosPage() {
             </label>
           </div>
           <Button type="submit" pending={pending} disabled={!balanced}>
-            {saleId === null ? "Finalizar e emitir NFC-e" : "Emitir a NFC-e de novo"}
+            {saleId === null ? "Finalizar e emitir NFC-e" : completed ? "Emitir a NFC-e de novo" : "Concluir a venda e emitir"}
           </Button>
         </form>
       )}

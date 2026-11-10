@@ -667,8 +667,9 @@ impl IssueConsumerRequest {
                         PaymentForm::parse(&payment.form).ok_or_else(|| {
                             rule("a payment form is not one of the payment forms")
                         })?,
-                        Amount::parse(&payment.amount)
-                            .ok_or_else(|| rule("an amount paid is not a valid amount"))?,
+                        Amount::in_cents(&payment.amount).ok_or_else(|| {
+                            rule("an amount paid is a value in reais with at most two decimals")
+                        })?,
                     ))
                 })
                 .collect::<Result<_, ApplicationError>>()?,
