@@ -17462,6 +17462,105 @@ pub async fn a_gateway_authorizes_and_cancels_an_nfse<G: conta_verde_application
     ));
 }
 
+pub fn nfce_request(
+    issuer: &conta_verde_domain::FiscalSettings,
+    reference: &str,
+) -> conta_verde_application::NfceRequest {
+    use conta_verde_application::{BuyerPresence, NfceConsumer, NfceRequest, PaymentForm};
+
+    let nfe = nfe_request(issuer, reference);
+    NfceRequest {
+        reference: reference.to_owned(),
+        issuer: issuer.clone(),
+        nature: nfe.nature,
+        issued_at_unix: nfe.issued_at_unix,
+        presence: BuyerPresence::InPerson,
+        consumer: Some(NfceConsumer {
+            name: Some("Maria Souza".into()),
+            document: "52998224725".into(),
+        }),
+        items: nfe.items,
+        payments: vec![(PaymentForm::Cash, nfe.total)],
+        total_products: nfe.total_products,
+        total_discount: nfe.total_discount,
+        total: nfe.total,
+    }
+}
+
+/// What every gateway does with an NFC-e: authorizes it (the key is of model 65, the number the gateway's own), keeps it
+/// under our reference, and cancels only what is authorized. It has no correction letter in the port.
+pub async fn a_gateway_authorizes_and_cancels_an_nfce<G: conta_verde_application::FiscalGateway>(
+    gateway: &G,
+    issuer: &conta_verde_domain::FiscalSettings,
+) {
+    use conta_verde_application::{DocumentOutcome, EventOutcome};
+
+    assert!(gateway.issues_nfce());
+    let first = Uuid::new_v4().to_string();
+    let second = Uuid::new_v4().to_string();
+    assert_eq!(
+        gateway.query_nfce(issuer, &first).await.unwrap(),
+        DocumentOutcome::Unknown
+    );
+    let authorized = |outcome: DocumentOutcome| match outcome {
+        DocumentOutcome::Authorized(document) => document,
+        other => panic!("authorized was expected, got {other:?}"),
+    };
+    let send = |reference: String| async move {
+        let sent = gateway
+            .submit_nfce(&nfce_request(issuer, &reference))
+            .await
+            .unwrap()
+            .outcome;
+        match sent {
+            DocumentOutcome::Processing => {
+                let mut last = DocumentOutcome::Processing;
+                for _ in 0..6 {
+                    last = gateway.query_nfce(issuer, &reference).await.unwrap();
+                    if last != DocumentOutcome::Processing {
+                        break;
+                    }
+                }
+                last
+            }
+            other => other,
+        }
+    };
+    let one = authorized(send(first.clone()).await);
+    assert_eq!(one.access_key.model(), "65", "the key is of an NFC-e");
+    assert!(one.number >= 1);
+    assert!(!one.xml.is_empty());
+    let again = authorized(send(first.clone()).await);
+    assert_eq!(again.number, one.number);
+    let two = authorized(send(second.clone()).await);
+    assert_ne!(two.number, one.number);
+
+    let reason = "Venda desfeita a pedido do cliente";
+    assert!(matches!(
+        gateway.cancel_nfce(issuer, &first, "short").await.unwrap(),
+        EventOutcome::Refused(_)
+    ));
+    assert!(matches!(
+        gateway
+            .cancel_nfce(issuer, &Uuid::new_v4().to_string(), reason)
+            .await
+            .unwrap(),
+        EventOutcome::Refused(_)
+    ));
+    assert!(matches!(
+        gateway.cancel_nfce(issuer, &first, reason).await.unwrap(),
+        EventOutcome::Accepted(_)
+    ));
+    assert!(matches!(
+        gateway.query_nfce(issuer, &first).await.unwrap(),
+        DocumentOutcome::Cancelled { .. }
+    ));
+    assert!(matches!(
+        gateway.query_nfce(issuer, &second).await.unwrap(),
+        DocumentOutcome::Authorized(_)
+    ));
+}
+
 pub async fn a_gateway_authorizes_cancels_and_corrects<
     G: conta_verde_application::FiscalGateway,
 >(
@@ -18586,6 +18685,361 @@ async fn save_a_mixed_sale<S: conta_verde_application::SaleRepository>(
     };
     sales.save(&sale, &audit).await.unwrap();
     sale.id()
+}
+
+fn issue_nfce_request(
+    sale: SaleId,
+    total: &str,
+    identify_consumer: bool,
+) -> conta_verde_application::IssueNfce {
+    conta_verde_application::IssueNfce {
+        sale_id: sale,
+        nature_code: "sale".into(),
+        origin: 0,
+        presence: conta_verde_application::BuyerPresence::InPerson,
+        identify_consumer,
+        payments: vec![(
+            conta_verde_application::PaymentForm::Pix,
+            conta_verde_domain::Amount::parse(total).unwrap(),
+        )],
+    }
+}
+
+/// An NFC-e is issued at the counter from the **product lines** of a completed sale, inside the state, with what is paid
+/// adding up to the total (no change); the consumer is named only when the person says so; it has no correction letter; its
+/// numbers are not the NF-e's, so invalidating one is not refused for a number only an NFC-e holds; and a gateway that does
+/// not issue it is refused before anything is written.
+#[allow(clippy::too_many_arguments)]
+pub async fn issues_an_nfce_from_a_sale<D, S, P, Y, F, B, R>(
+    service: &conta_verde_application::FiscalDocumentService<
+        D,
+        S,
+        P,
+        Y,
+        F,
+        crate::FakeFiscalGateway,
+        B,
+        R,
+    >,
+    gateway: &crate::FakeFiscalGateway,
+    settings: &F,
+    sales: &S,
+    company: CompanyId,
+    other_company: CompanyId,
+    entry_seed: &EntrySeed,
+    seed: &SalesSeed,
+    fiscal: &FiscalSeed,
+) where
+    D: conta_verde_application::FiscalDocumentRepository,
+    S: conta_verde_application::SaleRepository,
+    P: PartyRepository,
+    Y: conta_verde_application::ProductRepository,
+    F: conta_verde_application::FiscalSettingsRepository,
+    B: BlobStore,
+    R: conta_verde_application::EntryReferences,
+{
+    use conta_verde_application::ApplicationError;
+    use conta_verde_domain::{
+        FiscalDocumentKind, FiscalDocumentStatus, FiscalEventStatus, FiscalFileKind, TaxRuleDraft,
+    };
+
+    let rule = |error: ApplicationError| match error {
+        ApplicationError::FiscalRule(text) => text,
+        other => panic!("a fiscal rule was expected, got {other:?}"),
+    };
+    let user = actor();
+    let mut draft = fiscal_settings_draft(
+        "11222333000181",
+        conta_verde_domain::FiscalEnvironment::Homologation,
+    );
+    draft.natures[0].rules = vec![TaxRuleDraft {
+        regime: conta_verde_domain::TaxRegime::SimplesNacional,
+        ncm_prefix: Some("1905".into()),
+        icms_code: "102".into(),
+        pis_code: "49".into(),
+        cofins_code: "49".into(),
+        icms_rate: None,
+        pis_rate: None,
+        cofins_rate: None,
+    }];
+    draft.natures.push(service_nature_draft());
+    settings
+        .save(
+            &conta_verde_domain::FiscalSettings::new(company, draft).unwrap(),
+            &AuditEntry {
+                company_id: company,
+                actor: actor(),
+                entity: AuditEntity::FiscalSettings,
+                entity_id: company.as_uuid(),
+                action: AuditAction::Created,
+                changes: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    // The product lines of this sale are worth 30.00 (Café 3 x 10.10 less 0.30), the services are the NFS-e's.
+    let sale = save_a_mixed_sale(sales, company, entry_seed, seed, fiscal).await;
+
+    // Every choice is the person's, and what is paid adds up: no change is given. Nothing is sent when it is refused.
+    let mut wrong_nature = issue_nfce_request(sale, "30.00", true);
+    wrong_nature.nature_code = "consulting".into();
+    assert!(
+        rule(
+            service
+                .issue_nfce(company, &user, wrong_nature, FISCAL_NOW)
+                .await
+                .unwrap_err()
+        )
+        .contains("for products")
+    );
+    for paid in ["29.99", "30.01"] {
+        assert!(
+            rule(
+                service
+                    .issue_nfce(
+                        company,
+                        &user,
+                        issue_nfce_request(sale, paid, true),
+                        FISCAL_NOW
+                    )
+                    .await
+                    .unwrap_err()
+            )
+            .contains("add up")
+        );
+    }
+    let mut unpaid = issue_nfce_request(sale, "30.00", true);
+    unpaid.payments.clear();
+    assert!(
+        rule(
+            service
+                .issue_nfce(company, &user, unpaid, FISCAL_NOW)
+                .await
+                .unwrap_err()
+        )
+        .contains("add up")
+    );
+    assert!(matches!(
+        service
+            .issue_nfce(
+                other_company,
+                &user,
+                issue_nfce_request(sale, "30.00", true),
+                FISCAL_NOW
+            )
+            .await,
+        Err(ApplicationError::FiscalRule(_) | ApplicationError::SaleNotFound)
+    ));
+    assert!(gateway.submitted_nfce().is_empty());
+
+    // Issued with the consumer named: the product lines only, inside the state, the customer's CPF on the invoice.
+    let issued = service
+        .issue_nfce(
+            company,
+            &user,
+            issue_nfce_request(sale, "30.00", true),
+            FISCAL_NOW,
+        )
+        .await
+        .unwrap();
+    assert_eq!(issued.kind(), FiscalDocumentKind::Nfce);
+    assert_eq!(issued.total().as_decimal().to_string(), "30");
+    assert_eq!(issued.recipient_name(), "Maria Souza");
+    assert_eq!(issued.recipient_document(), Some("52998224725"));
+    let sent = gateway.submitted_nfce();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].items.len(), 1);
+    assert_eq!(sent[0].items[0].cfop, "5102", "inside the state");
+    assert_eq!(sent[0].payments.len(), 1);
+    assert_eq!(
+        sent[0]
+            .consumer
+            .as_ref()
+            .map(|consumer| consumer.document.as_str()),
+        Some("52998224725")
+    );
+    let authorized = service
+        .refresh(company, issued.id(), FISCAL_NOW + 1)
+        .await
+        .unwrap();
+    assert_eq!(authorized.status(), FiscalDocumentStatus::Authorized);
+    let key = authorized.authorization().unwrap().access_key().clone();
+    assert_eq!(key.model(), "65");
+    assert!(
+        !service
+            .file(company, issued.id(), FiscalFileKind::Xml)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        gateway.submitted_nfce().len(),
+        1,
+        "asking twice sends nothing twice"
+    );
+    let again = service
+        .issue_nfce(
+            company,
+            &user,
+            issue_nfce_request(sale, "30.00", true),
+            FISCAL_NOW,
+        )
+        .await
+        .unwrap();
+    assert_eq!(again.id(), issued.id());
+
+    // An NFC-e, an NF-e and an NFS-e of the same sale live side by side.
+    let nfe = service
+        .issue(company, &user, issue_request(sale), FISCAL_NOW)
+        .await
+        .unwrap();
+    assert_eq!(nfe.kind(), FiscalDocumentKind::Nfe);
+    assert_ne!(nfe.id(), issued.id());
+
+    // No correction letter; a number only an NFC-e holds is not an NF-e's: the NF-e series is 1 too and the NFC-e has its
+    // own numbers, so a range around its number is not refused for it.
+    assert!(
+        rule(
+            service
+                .correct(
+                    company,
+                    &user,
+                    issued.id(),
+                    "Corrige o endereço do consumidor"
+                )
+                .await
+                .unwrap_err()
+        )
+        .contains("no correction letter")
+    );
+    let number = authorized.authorization().unwrap().number();
+    let held = service
+        .refresh(company, nfe.id(), FISCAL_NOW + 1)
+        .await
+        .unwrap();
+    assert_eq!(held.status(), FiscalDocumentStatus::Authorized);
+    let nfe_number = held.authorization().unwrap().number();
+    let free = nfe_number + 1000;
+    let range = service
+        .invalidate(
+            company,
+            &user,
+            1,
+            free,
+            free,
+            "Numeração pulada por falha do sistema",
+        )
+        .await
+        .unwrap();
+    assert_eq!(range.status(), FiscalEventStatus::Accepted);
+    assert!(number >= 1);
+
+    // Cancelled with a reason, which frees the sale for another.
+    let cancelled = service
+        .cancel(
+            company,
+            &user,
+            issued.id(),
+            "Venda desfeita a pedido do cliente",
+        )
+        .await
+        .unwrap();
+    assert_eq!(cancelled.status(), FiscalDocumentStatus::Cancelled);
+    assert!(
+        !service
+            .file(company, issued.id(), FiscalFileKind::CancellationXml)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // Not naming the consumer is the person's choice: no document goes out and the invoice has no recipient.
+    let anonymous = service
+        .issue_nfce(
+            company,
+            &user,
+            issue_nfce_request(sale, "30.00", false),
+            FISCAL_NOW,
+        )
+        .await
+        .unwrap();
+    assert_ne!(anonymous.id(), issued.id());
+    assert_eq!(anonymous.recipient_name(), "Consumidor não identificado");
+    assert_eq!(anonymous.recipient_document(), None);
+    assert!(gateway.submitted_nfce().last().unwrap().consumer.is_none());
+
+    // A rejection keeps the authority's words and is sent again under the same id; only an NFC-e is sent again by this path.
+    let rejected_sale = save_a_mixed_sale(sales, company, entry_seed, seed, fiscal).await;
+    gateway.reject_with("E225", "Falha no Schema XML");
+    let rejected = service
+        .issue_nfce(
+            company,
+            &user,
+            issue_nfce_request(rejected_sale, "30.00", false),
+            FISCAL_NOW,
+        )
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), FiscalDocumentStatus::Rejected);
+    gateway.accept_again();
+    assert!(matches!(
+        service
+            .resend(
+                company,
+                &user,
+                rejected.id(),
+                issue_request(rejected_sale),
+                FISCAL_NOW
+            )
+            .await,
+        Err(ApplicationError::Domain(_))
+    ));
+    let resent = service
+        .resend_nfce(
+            company,
+            &user,
+            rejected.id(),
+            issue_nfce_request(rejected_sale, "30.00", false),
+            FISCAL_NOW,
+        )
+        .await
+        .unwrap();
+    assert_eq!(resent.id(), rejected.id());
+    assert_ne!(resent.status(), FiscalDocumentStatus::Rejected);
+
+    // A gateway that does not issue NFC-e is refused before anything is written.
+    let another = save_a_mixed_sale(sales, company, entry_seed, seed, fiscal).await;
+    gateway.without_nfce(true);
+    assert!(matches!(
+        service
+            .issue_nfce(
+                company,
+                &user,
+                issue_nfce_request(another, "30.00", false),
+                FISCAL_NOW
+            )
+            .await,
+        Err(ApplicationError::FiscalGateway(
+            conta_verde_application::GatewayError::Unsupported(_)
+        ))
+    ));
+    gateway.without_nfce(false);
+    assert!(
+        service
+            .list(
+                company,
+                &conta_verde_application::FiscalDocumentQuery {
+                    sale: Some(another),
+                    ..Default::default()
+                },
+                None,
+                Some(10),
+            )
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
 }
 
 /// An NFS-e is issued from the **service lines** of a completed sale under a service nature that carries the company's

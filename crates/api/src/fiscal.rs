@@ -4,13 +4,13 @@ use axum::http::{HeaderValue, header};
 use axum::response::{IntoResponse, Response};
 use conta_verde_application::{
     ApplicationError, BuyerPresence, FiscalDocumentCursor, FiscalDocumentQuery, FiscalGateway,
-    IssueNfe, IssueNfse, PaymentForm, SpecialTaxRegime,
+    IssueNfce, IssueNfe, IssueNfse, PaymentForm, SpecialTaxRegime,
 };
 use conta_verde_domain::{
-    AddressDraft, CalendarDate, FiscalDocument, FiscalDocumentId, FiscalEnvironment, FiscalEvent,
-    FiscalEventId, FiscalEventSubject, FiscalFileKind, FiscalSettings, FiscalSettingsDraft,
-    IssTaxation, NatureKind, OperationNature, OperationNatureDraft, SaleId, ServiceTerms,
-    ServiceTermsDraft, TaxRegime, TaxRule, TaxRuleDraft,
+    AddressDraft, Amount, CalendarDate, FiscalDocument, FiscalDocumentId, FiscalEnvironment,
+    FiscalEvent, FiscalEventId, FiscalEventSubject, FiscalFileKind, FiscalSettings,
+    FiscalSettingsDraft, IssTaxation, NatureKind, OperationNature, OperationNatureDraft, SaleId,
+    ServiceTerms, ServiceTermsDraft, TaxRegime, TaxRule, TaxRuleDraft,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -617,6 +617,93 @@ pub(crate) async fn resend_service_document<X: Ports>(
     let document = state
         .fiscal_documents
         .resend_nfse(
+            company_id,
+            &actor,
+            parse_document(&id)?,
+            request.into_request()?,
+            crate::now_unix(),
+        )
+        .await?;
+    respond(&state, &document).await
+}
+
+/// What is paid with one form, as a decimal string.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PaymentRequest {
+    form: String,
+    amount: String,
+}
+
+/// What is chosen to issue an NFC-e at the counter: every field is a fiscal fact the product does not know, so none has a
+/// default ([ADR 0082]); what is paid adds up to the total, and no change is given.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct IssueConsumerRequest {
+    sale_id: Uuid,
+    nature_code: String,
+    origin: u8,
+    presence: String,
+    /// Whether the consumer is named on the invoice (the sale's customer).
+    identify_consumer: bool,
+    payments: Vec<PaymentRequest>,
+}
+
+impl IssueConsumerRequest {
+    fn into_request(self) -> Result<IssueNfce, ApiError> {
+        let rule = |text: &str| ApplicationError::FiscalRule(text.to_owned());
+        Ok(IssueNfce {
+            sale_id: SaleId::from_uuid(self.sale_id),
+            nature_code: self.nature_code,
+            origin: self.origin,
+            presence: BuyerPresence::parse(&self.presence)
+                .ok_or_else(|| rule("presence is not one of the buyer presences"))?,
+            identify_consumer: self.identify_consumer,
+            payments: self
+                .payments
+                .into_iter()
+                .map(|payment| {
+                    Ok((
+                        PaymentForm::parse(&payment.form).ok_or_else(|| {
+                            rule("a payment form is not one of the payment forms")
+                        })?,
+                        Amount::parse(&payment.amount)
+                            .ok_or_else(|| rule("an amount paid is not a valid amount"))?,
+                    ))
+                })
+                .collect::<Result<_, ApplicationError>>()?,
+        })
+    }
+}
+
+/// Issues an NFC-e from a completed sale, or answers with the one the sale already has.
+pub(crate) async fn issue_consumer_document<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, actor): CompanyAccess,
+    ApiJson(request): ApiJson<IssueConsumerRequest>,
+) -> Result<Json<FiscalDocumentResponse>, ApiError> {
+    let document = state
+        .fiscal_documents
+        .issue_nfce(
+            company_id,
+            &actor,
+            request.into_request()?,
+            crate::now_unix(),
+        )
+        .await?;
+    respond(&state, &document).await
+}
+
+/// Sends a rejected NFC-e again under the same id, with the choices made again.
+pub(crate) async fn resend_consumer_document<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, actor): CompanyAccess,
+    Path((_, id)): Path<(Uuid, String)>,
+    ApiJson(request): ApiJson<IssueConsumerRequest>,
+) -> Result<Json<FiscalDocumentResponse>, ApiError> {
+    let document = state
+        .fiscal_documents
+        .resend_nfce(
             company_id,
             &actor,
             parse_document(&id)?,

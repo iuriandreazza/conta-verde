@@ -16,12 +16,15 @@ const MAX_SERVICE_NUMBER: u64 = 999_999_999_999_999;
 const MAX_DPS_SERIES: u16 = 49_999;
 const MAX_KEY_CHARS: usize = 60;
 
-/// What kind of fiscal document it is. NFC-e joins with its slice ([ADR 0073]).
+/// What kind of fiscal document it is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FiscalDocumentKind {
     Nfe,
     /// The service invoice of the national standard ([ADR 0081]).
     Nfse,
+    /// The consumer's invoice (model 65): an NF-e's identity (a 44-digit key, a number and a series), issued at the counter
+    /// ([ADR 0082]).
+    Nfce,
 }
 
 impl FiscalDocumentKind {
@@ -30,6 +33,7 @@ impl FiscalDocumentKind {
         match self {
             Self::Nfe => "nfe",
             Self::Nfse => "nfse",
+            Self::Nfce => "nfce",
         }
     }
 
@@ -37,6 +41,7 @@ impl FiscalDocumentKind {
         match raw {
             "nfe" => Some(Self::Nfe),
             "nfse" => Some(Self::Nfse),
+            "nfce" => Some(Self::Nfce),
             _ => None,
         }
     }
@@ -445,7 +450,11 @@ impl FiscalDocument {
         authorization: FiscalAuthorization,
         note: Option<&str>,
     ) -> Result<Self, DomainError> {
-        if self.kind != FiscalDocumentKind::Nfe {
+        // An NF-e and an NFC-e are identified by a 44-digit access key; an NFS-e is not.
+        if !matches!(
+            self.kind,
+            FiscalDocumentKind::Nfe | FiscalDocumentKind::Nfce
+        ) {
             return Err(DomainError::InvalidFiscalTransition);
         }
         let mut document = self.authorized_status(note)?;
@@ -1122,5 +1131,35 @@ mod tests {
         let nfse = NfseAuthorization::new(1, Some(&key), Some(""), None).unwrap();
         assert_eq!(nfse.key(), Some(key.as_str()));
         assert_eq!(nfse.verification_code(), None);
+    }
+
+    #[test]
+    fn an_nfce_has_an_nfes_identity_and_an_nfse_does_not() {
+        let consumer = FiscalDocument::new_of_kind(
+            FiscalDocumentKind::Nfce,
+            FiscalDocumentId::generate(),
+            CompanyId::generate(),
+            draft(),
+        )
+        .unwrap();
+        let authorized = consumer
+            .submitted()
+            .unwrap()
+            .authorized(authorization(), None)
+            .unwrap();
+        assert_eq!(authorized.kind(), FiscalDocumentKind::Nfce);
+        assert!(authorized.authorization().is_some());
+        assert!(authorized.cancelled().is_ok());
+        assert!(
+            service_document()
+                .submitted()
+                .unwrap()
+                .authorized(authorization(), None)
+                .is_err()
+        );
+        assert_eq!(
+            FiscalDocumentKind::parse("nfce"),
+            Some(FiscalDocumentKind::Nfce)
+        );
     }
 }

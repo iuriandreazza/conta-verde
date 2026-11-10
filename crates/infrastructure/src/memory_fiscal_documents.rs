@@ -478,6 +478,8 @@ impl FiscalDocumentRepository for InMemoryFiscalDocumentRepository {
         Ok(state.documents.iter().any(|stored| {
             stored.company_id() == company_id
                 && stored.environment() == environment
+                // The invalidation is the NF-e's: an NFC-e has a series of its own.
+                && stored.kind() == FiscalDocumentKind::Nfe
                 && stored.authorization().is_some_and(|authorization| {
                     authorization.series() == series
                         && (first..=last).contains(&authorization.number())
@@ -672,6 +674,54 @@ mod tests {
             registers.references(),
         );
         contract::issues_an_nfse_from_a_sale(
+            &service,
+            &gateway,
+            &settings,
+            &sales,
+            company,
+            other_company,
+            &entry_seed,
+            &seed,
+            &fiscal,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn issues_an_nfce_from_a_sale() {
+        use crate::memory_entries::tests::Registers;
+        use crate::{
+            FakeFiscalGateway, InMemoryBlobStore, InMemoryFiscalSettingsRepository,
+            InMemoryPaymentTermRepository, InMemoryProductRepository, InMemorySaleRepository,
+        };
+        use conta_verde_application::FiscalDocumentService;
+
+        let registers = Registers::new();
+        let (company, other_company) = (CompanyId::generate(), CompanyId::generate());
+        let entry_seed = registers.seed(company).await;
+        let products = InMemoryProductRepository::default();
+        let seed = contract::seed_sales_records(
+            &registers.parties,
+            &products,
+            &InMemoryPaymentTermRepository::default(),
+            company,
+        )
+        .await;
+        let fiscal = contract::seed_fiscal_customer(&registers.parties, company).await;
+        let gateway = FakeFiscalGateway::authorizing_after(1);
+        let settings = InMemoryFiscalSettingsRepository::default();
+        let sales = InMemorySaleRepository::default();
+        let service = FiscalDocumentService::new(
+            InMemoryFiscalDocumentRepository::default(),
+            sales.clone(),
+            registers.parties.clone(),
+            products,
+            settings.clone(),
+            gateway.clone(),
+            InMemoryBlobStore::default(),
+            registers.references(),
+        );
+        contract::issues_an_nfce_from_a_sale(
             &service,
             &gateway,
             &settings,

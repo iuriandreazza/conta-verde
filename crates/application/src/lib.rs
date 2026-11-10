@@ -140,12 +140,13 @@ pub use fiscal_document_repository::{
     FiscalDocumentCursor, FiscalDocumentQuery, FiscalDocumentRepository,
 };
 pub use fiscal_document_service::{
-    FiscalDocumentPage, FiscalDocumentService, IssueNfe, IssueNfse, PollReport,
+    FiscalDocumentPage, FiscalDocumentService, IssueNfce, IssueNfe, IssueNfse, PollReport,
 };
 pub use fiscal_gateway::{
     AcceptedEvent, AuthorizedDocument, AuthorizedNfse, BuyerPresence, Destination, DocumentOutcome,
-    EventOutcome, EventQuery, FiscalGateway, GatewayError, NfeItem, NfeRecipient, NfeRequest,
-    NfseRecipient, NfseRequest, PaymentForm, Refusal, SpecialTaxRegime, Submission,
+    EventOutcome, EventQuery, FiscalGateway, GatewayError, NfceConsumer, NfceRequest, NfeItem,
+    NfeRecipient, NfeRequest, NfseRecipient, NfseRequest, PaymentForm, Refusal, SpecialTaxRegime,
+    Submission,
 };
 pub use fiscal_settings_repository::FiscalSettingsRepository;
 pub use fiscal_settings_service::FiscalSettingsService;

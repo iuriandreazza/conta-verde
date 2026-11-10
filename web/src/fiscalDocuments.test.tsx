@@ -348,3 +348,15 @@ it("sends a rejected NFS-e again under the same DPS number with the choices made
     ],
   ]);
 });
+
+it("lists an NFC-e by its series and number and gives it no correction letter, only the cancellation", async () => {
+  serve([document({ id: "c9", kind: "nfce", files: ["xml"] })]);
+  renderAt("/companies/c1/fiscal/documents");
+
+  expect(await within(await screen.findByRole("table")).findByText("NFC-e")).toBeInTheDocument();
+  await userEvent.click(await screen.findByRole("button", { name: "1/7" }));
+  const sheet = within(await screen.findByRole("dialog"));
+  expect(await sheet.findByRole("button", { name: "Cancelar nota" })).toBeInTheDocument();
+  expect(sheet.queryByRole("button", { name: "Enviar carta" })).toBeNull();
+  expect(sheet.queryByRole("button", { name: "Reenviar" })).toBeNull();
+});

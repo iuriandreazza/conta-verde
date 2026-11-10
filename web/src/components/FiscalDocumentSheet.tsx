@@ -67,6 +67,8 @@ export function FiscalDocumentSheet({ companyId, document, natures, canWrite, on
   const [letters, setLetters] = useState<FiscalEvent[] | null>(null);
   const [resending, setResending] = useState(false);
   const isService = document.kind === "nfse";
+  // Only the NF-e takes a correction letter; the NFC-e and the national NFS-e are cancelled and issued again.
+  const takesLetters = document.kind === "nfe";
 
   const loadLetters = useCallback(async () => {
     try {
@@ -84,8 +86,8 @@ export function FiscalDocumentSheet({ companyId, document, natures, canWrite, on
 
   useEffect(() => {
     // The national NFS-e has no correction letter.
-    if (document.status === "authorized" && !isService) void loadLetters();
-  }, [document.status, isService, loadLetters]);
+    if (document.status === "authorized" && takesLetters) void loadLetters();
+  }, [document.status, takesLetters, loadLetters]);
 
   async function run(name: string, action: () => Promise<unknown>) {
     setPending(name);
@@ -211,14 +213,17 @@ export function FiscalDocumentSheet({ companyId, document, natures, canWrite, on
             Atualizar situação
           </Button>
         )}
-        {canWrite && document.status === "rejected" && (
+        {canWrite && document.status === "rejected" && document.kind !== "nfce" && (
           <Button type="button" onClick={() => setResending((open) => !open)}>
             Reenviar
           </Button>
         )}
       </div>
 
-      {resending && !isService && (
+      {document.kind === "nfce" && document.status === "rejected" && (
+        <Notice tone="warning" message="O reenvio de uma NFC-e recusada ainda não tem tela aqui: use o Caixa logo depois da recusa, ou a API." />
+      )}
+      {resending && takesLetters && (
         <IssueForm
           companyId={companyId}
           natures={natures}
@@ -286,7 +291,7 @@ export function FiscalDocumentSheet({ companyId, document, natures, canWrite, on
             </Button>
           </form>
           )}
-          {!isService && (
+          {takesLetters && (
           <form className="record-form" onSubmit={(event) => void correct(event)}>
             <HelpTitle title="Carta de correção" level={3}>
               <p>

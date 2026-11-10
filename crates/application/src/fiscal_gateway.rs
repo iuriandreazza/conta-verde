@@ -295,6 +295,33 @@ pub struct NfseRequest {
     pub total: Amount,
 }
 
+/// Who is identified on a consumer invoice: optional on the NFC-e, so the name may be missing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NfceConsumer {
+    pub name: Option<String>,
+    /// The CPF or CNPJ, stored without punctuation.
+    pub document: String,
+}
+
+/// An NFC-e to be authorized ([ADR 0082]): the sale of products at the counter. It is always inside the issuer's state and
+/// the goods are delivered at once (no freight), and what is paid adds up to the total: **no change is given**, because
+/// the gateway's documentation does not say how it is declared.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NfceRequest {
+    /// Our id of the document, which the gateway keeps as its reference.
+    pub reference: String,
+    pub issuer: FiscalSettings,
+    pub nature: String,
+    pub issued_at_unix: i64,
+    pub presence: BuyerPresence,
+    pub consumer: Option<NfceConsumer>,
+    pub items: Vec<NfeItem>,
+    pub payments: Vec<(PaymentForm, Amount)>,
+    pub total_products: Amount,
+    pub total_discount: Amount,
+    pub total: Amount,
+}
+
 /// A document the tax authority authorized, with its files.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthorizedDocument {
@@ -537,6 +564,33 @@ pub trait FiscalGateway: Send + Sync {
     /// the port has no call for them. An answer is never `Queued` here: a gateway that answers a cancellation later
     /// would need the event query to know NFS-e too ([ADR 0081]).
     fn cancel_nfse(
+        &self,
+        issuer: &FiscalSettings,
+        reference: &str,
+        reason: &str,
+    ) -> impl Future<Output = Result<EventOutcome, GatewayError>> + Send;
+
+    /// Whether the gateway issues NFC-e: one that does not is refused before the document is written ([ADR 0082]).
+    fn issues_nfce(&self) -> bool {
+        true
+    }
+
+    /// Asks the gateway to authorize an NFC-e. Same rule as [`submit_nfe`](Self::submit_nfe): the reference is ours and
+    /// asking again with it is the same document. The NFC-e has the NF-e's answers (the key is of model 65).
+    fn submit_nfce(
+        &self,
+        request: &NfceRequest,
+    ) -> impl Future<Output = Result<Submission, GatewayError>> + Send;
+
+    /// The state of the NFC-e with this reference.
+    fn query_nfce(
+        &self,
+        issuer: &FiscalSettings,
+        reference: &str,
+    ) -> impl Future<Output = Result<DocumentOutcome, GatewayError>> + Send;
+
+    /// Cancels an authorized NFC-e. It has no correction letter, and its numbers are not invalidated through this port.
+    fn cancel_nfce(
         &self,
         issuer: &FiscalSettings,
         reference: &str,
