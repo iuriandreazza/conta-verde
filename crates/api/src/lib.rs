@@ -79,10 +79,30 @@ use conta_verde_application::{
 };
 use serde::Serialize;
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ApiConfig {
     /// Adds the `Secure` flag to the session cookie. Turn it on whenever the API is served over HTTPS.
     pub cookie_secure: bool,
+    /// Where the fiscal gateway may knock to say something happened ([ADR 0083]); without it the door is shut.
+    pub fiscal_webhook: Option<FiscalWebhook>,
+}
+
+/// The secret the fiscal gateway sends in a header of its own choosing: the notice it wakes the server with is believed for
+/// nothing (the server asks the gateway), so this only keeps strangers from making the server ask.
+#[derive(Clone)]
+pub struct FiscalWebhook {
+    /// The name of the HTTP header the gateway puts the secret in.
+    pub header: String,
+    pub secret: String,
+}
+
+impl std::fmt::Debug for FiscalWebhook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FiscalWebhook")
+            .field("header", &self.header)
+            .field("secret", &"<hidden>")
+            .finish()
+    }
 }
 
 /// The adapters the use cases run on, named once so that a handler has one type parameter however
@@ -683,6 +703,30 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
             get(fiscal::list_documents::<X>).post(fiscal::issue_document::<X>),
         )
         .route(
+            "/companies/{company_id}/fiscal/received-invoices",
+            get(fiscal::list_received::<X>),
+        )
+        .route(
+            "/companies/{company_id}/fiscal/received-invoices/sync",
+            post(fiscal::sync_received::<X>),
+        )
+        .route(
+            "/companies/{company_id}/fiscal/received-invoices/{id}",
+            get(fiscal::get_received::<X>),
+        )
+        .route(
+            "/companies/{company_id}/fiscal/received-invoices/{id}/history",
+            get(fiscal::received_history::<X>),
+        )
+        .route(
+            "/companies/{company_id}/fiscal/received-invoices/{id}/manifest",
+            post(fiscal::manifest_received::<X>),
+        )
+        .route(
+            "/public/fiscal/{company_id}/webhook",
+            post(fiscal::receive_fiscal_webhook::<X>),
+        )
+        .route(
             "/companies/{company_id}/fiscal/service-documents",
             post(fiscal::issue_service_document::<X>),
         )
@@ -1270,6 +1314,47 @@ mod tests {
         static LOCKS: std::cell::RefCell<InMemoryPeriodLockRepository> =
             std::cell::RefCell::new(InMemoryPeriodLockRepository::default());
     }
+
+    thread_local! {
+        /// The fiscal gateway the app of this test asks, so a test can have an invoice issued against the company.
+        static GATEWAY: std::cell::RefCell<FakeFiscalGateway> =
+            std::cell::RefCell::new(FakeFiscalGateway::default());
+    }
+
+    fn gateway() -> FakeFiscalGateway {
+        GATEWAY.with(|gateway| gateway.borrow().clone())
+    }
+
+    /// An invoice a supplier issued to the company, as the gateway would list it.
+    fn received_invoice(number: u32, day: &str) -> conta_verde_domain::ReceivedInvoiceDraft {
+        use conta_verde_domain::{
+            AccessKey, Amount, CalendarDate, Manifestation, ReceivedInvoiceDraft, ReceivedSituation,
+        };
+
+        let day = CalendarDate::parse(day).unwrap();
+        ReceivedInvoiceDraft {
+            access_key: AccessKey::from_parts(
+                35,
+                day,
+                "12345678000195",
+                55,
+                1,
+                number,
+                1,
+                10_000_000 + number,
+            )
+            .unwrap(),
+            issuer_name: format!("Fornecedor {number} Ltda"),
+            issuer_document: "12345678000195".into(),
+            total: Amount::parse("150.50").unwrap(),
+            issued_on: day,
+            situation: ReceivedSituation::Authorized,
+            manifestation: Manifestation::None,
+            version: 0,
+        }
+    }
+
+    const FISCAL_HOOK_SECRET: &str = "a-fiscal-webhook-secret-of-32-chars-or-more";
 
     fn locks() -> InMemoryPeriodLockRepository {
         LOCKS.with(|locks| locks.borrow().clone())
@@ -6611,13 +6696,17 @@ mod tests {
                     mailbox.clone(),
                     "http://localhost:5173",
                 ),
-                fiscal_documents: fiscal_documents_over(
-                    &sale_store,
-                    &parties,
-                    &products,
-                    &fiscal_settings_store,
-                    &FakeFiscalGateway::authorizing_after(1),
-                ),
+                fiscal_documents: {
+                    let gateway = FakeFiscalGateway::authorizing_after(1);
+                    GATEWAY.with(|held| held.replace(gateway.clone()));
+                    fiscal_documents_over(
+                        &sale_store,
+                        &parties,
+                        &products,
+                        &fiscal_settings_store,
+                        &gateway,
+                    )
+                },
                 fiscal_settings: FiscalSettingsService::new(fiscal_settings_store.clone()),
                 exports: AccountingExportService::new(
                     entry_store.clone(),
@@ -6648,7 +6737,13 @@ mod tests {
                     Duration::from_secs(3600),
                 ),
             },
-            ApiConfig::default(),
+            ApiConfig {
+                fiscal_webhook: Some(FiscalWebhook {
+                    header: "x-fiscal-webhook-token".to_owned(),
+                    secret: FISCAL_HOOK_SECRET.to_owned(),
+                }),
+                ..ApiConfig::default()
+            },
         );
         (app, mailbox)
     }
@@ -10210,6 +10305,290 @@ mod tests {
             };
             assert_eq!(write.status, expected, "{role:?} writes");
         }
+    }
+
+    /// The invoices issued against the company ([ADR 0083]): fetched from the gateway on request, declared to the authority in the
+    /// name of the person with the rules of the words, each role keeping to its area; and the webhook only wakes the server up:
+    /// a secret in the header the gateway was told to use, nothing in its body believed.
+    #[tokio::test]
+    async fn received_invoices_are_synced_declared_and_the_webhook_only_wakes_the_server() {
+        use conta_verde_domain::Role;
+
+        let (app, identities) = entry_app_with_identities();
+        let (owner, company_id) = sign_up(&app, "dona@example.com").await;
+        let seller = member_with_role(&app, &identities, company_id, Role::Sales).await;
+        let accountant = member_with_role(&app, &identities, company_id, Role::Accountant).await;
+        let (stranger, _) = sign_up(&app, "outra@example.com").await;
+        let received = format!("/companies/{company_id}/fiscal/received-invoices");
+        let fake = gateway();
+
+        // Nothing is asked before the company says how it issues.
+        let early = send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{received}/sync"),
+                Some(&owner),
+                Value::Null,
+            ),
+        )
+        .await;
+        assert_eq!(early.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            send(
+                &app,
+                json_request(
+                    "PUT",
+                    &format!("/companies/{company_id}/fiscal/settings"),
+                    Some(&owner),
+                    fiscal_settings_body(),
+                ),
+            )
+            .await
+            .status,
+            StatusCode::OK
+        );
+        for number in 1..=3 {
+            fake.receive(received_invoice(number, "2026-11-02"));
+        }
+
+        // Only those who write the area fetch; everybody who reads the area reads what was fetched.
+        for cookie in [&seller, &accountant] {
+            assert_eq!(
+                send(
+                    &app,
+                    json_request(
+                        "POST",
+                        &format!("{received}/sync"),
+                        Some(cookie),
+                        Value::Null
+                    )
+                )
+                .await
+                .status,
+                StatusCode::FORBIDDEN
+            );
+        }
+        let synced = send(
+            &app,
+            json_request(
+                "POST",
+                &format!("{received}/sync"),
+                Some(&owner),
+                Value::Null,
+            ),
+        )
+        .await;
+        assert_eq!(synced.status, StatusCode::OK, "{}", synced.body);
+        assert_eq!(synced.body["added"], 3);
+        let listed = send(&app, get_request(&received, Some(&accountant))).await;
+        assert_eq!(listed.status, StatusCode::OK);
+        assert_eq!(listed.body["items"].as_array().unwrap().len(), 3);
+        assert_eq!(listed.body["items"][0]["manifestation"], "none");
+        let id = listed.body["items"][0]["id"].as_str().unwrap().to_owned();
+        let one = format!("{received}/{id}");
+        assert_eq!(
+            send(&app, get_request(&one, Some(&seller))).await.status,
+            StatusCode::OK
+        );
+        assert_eq!(
+            send(&app, get_request(&received, Some(&stranger)))
+                .await
+                .status,
+            StatusCode::NOT_FOUND
+        );
+        let narrowed = send(
+            &app,
+            get_request(&format!("{received}?manifestation=awareness"), Some(&owner)),
+        )
+        .await;
+        assert!(narrowed.body["items"].as_array().unwrap().is_empty());
+        for bad in ["manifestation=nonsense", "after=garbage"] {
+            assert_eq!(
+                send(
+                    &app,
+                    get_request(&format!("{received}?{bad}"), Some(&owner))
+                )
+                .await
+                .status,
+                StatusCode::BAD_REQUEST,
+                "{bad}"
+            );
+        }
+        let paged = send(
+            &app,
+            get_request(&format!("{received}?limit=2"), Some(&owner)),
+        )
+        .await;
+        assert_eq!(paged.body["items"].as_array().unwrap().len(), 2);
+        let cursor = paged.body["next_cursor"].as_str().unwrap();
+        let rest = send(
+            &app,
+            get_request(&format!("{received}?limit=2&after={cursor}"), Some(&owner)),
+        )
+        .await;
+        assert_eq!(rest.body["items"].as_array().unwrap().len(), 1);
+
+        // The words: the rules first, then the authority, then the trail in the name of the person.
+        let manifest = format!("{one}/manifest");
+        for (body, status) in [
+            (json!({ "word": "none" }), StatusCode::UNPROCESSABLE_ENTITY),
+            (
+                json!({ "word": "somewhere" }),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                json!({ "word": "not_performed" }),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                json!({ "word": "awareness", "extra": 1 }),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+        ] {
+            assert_eq!(
+                send(
+                    &app,
+                    json_request("POST", &manifest, Some(&owner), body.clone())
+                )
+                .await
+                .status,
+                status,
+                "{body}"
+            );
+        }
+        assert_eq!(
+            send(
+                &app,
+                json_request(
+                    "POST",
+                    &manifest,
+                    Some(&seller),
+                    json!({ "word": "awareness" })
+                )
+            )
+            .await
+            .status,
+            StatusCode::FORBIDDEN
+        );
+        let aware = send(
+            &app,
+            json_request(
+                "POST",
+                &manifest,
+                Some(&owner),
+                json!({ "word": "awareness" }),
+            ),
+        )
+        .await;
+        assert_eq!(aware.status, StatusCode::OK, "{}", aware.body);
+        assert_eq!(aware.body["manifestation"], "awareness");
+        let last = send(
+            &app,
+            json_request(
+                "POST",
+                &manifest,
+                Some(&owner),
+                json!({ "word": "not_performed", "justification": "A mercadoria nunca chegou ao estabelecimento" }),
+            ),
+        )
+        .await;
+        assert_eq!(last.body["manifestation"], "not_performed", "{}", last.body);
+        assert_eq!(
+            send(
+                &app,
+                json_request(
+                    "POST",
+                    &manifest,
+                    Some(&owner),
+                    json!({ "word": "confirmation" })
+                )
+            )
+            .await
+            .status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "nothing follows the last word"
+        );
+        let history = send(
+            &app,
+            get_request(&format!("{one}/history"), Some(&accountant)),
+        )
+        .await;
+        assert_eq!(history.body.as_array().unwrap().len(), 2);
+        assert_eq!(fake.manifested().len(), 2);
+        assert_eq!(
+            send(
+                &app,
+                get_request(&format!("{received}/{}", Uuid::new_v4()), Some(&owner))
+            )
+            .await
+            .status,
+            StatusCode::NOT_FOUND
+        );
+
+        // The webhook: no session, a secret in the header, nothing in the body believed, and it wakes the server up to ask.
+        let hook = format!("/public/fiscal/{company_id}/webhook");
+        let knock = |secret: Option<&str>, uri: &str| {
+            let mut request = axum::http::Request::builder()
+                .method("POST")
+                .uri(uri.to_owned());
+            if let Some(secret) = secret {
+                request = request.header("x-fiscal-webhook-token", secret);
+            }
+            request
+                .body(axum::body::Body::from(
+                    r#"{"event":"nfe_recebida","chave":"nothing believed"}"#,
+                ))
+                .unwrap()
+        };
+        assert_eq!(
+            send(&app, knock(None, &hook)).await.status,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            send(&app, knock(Some("wrong"), &hook)).await.status,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            send(
+                &app,
+                knock(
+                    Some(FISCAL_HOOK_SECRET),
+                    &format!("/public/fiscal/{}/webhook", Uuid::new_v4())
+                )
+            )
+            .await
+            .status,
+            StatusCode::NOT_FOUND,
+            "a company that issues nothing"
+        );
+        assert_eq!(
+            send(
+                &app,
+                knock(Some(FISCAL_HOOK_SECRET), "/public/fiscal/not-an-id/webhook")
+            )
+            .await
+            .status,
+            StatusCode::NOT_FOUND
+        );
+        fake.receive(received_invoice(9, "2026-11-04"));
+        assert_eq!(
+            send(&app, knock(Some(FISCAL_HOOK_SECRET), &hook))
+                .await
+                .status,
+            StatusCode::ACCEPTED
+        );
+        // The answer is at once and the work is done meanwhile: the knock made the server ask.
+        let mut found = 0;
+        for _ in 0..50 {
+            let after = send(&app, get_request(&received, Some(&owner))).await;
+            found = after.body["items"].as_array().unwrap().len();
+            if found == 4 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(found, 4, "the knock made the server ask");
     }
 
     /// An NFC-e through the API ([ADR 0082]): the product lines of a completed sale at the counter, what is paid adding up to the

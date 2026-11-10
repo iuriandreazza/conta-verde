@@ -19104,6 +19104,747 @@ pub async fn issues_an_nfce_from_a_sale<D, S, P, Y, F, B, R>(
     );
 }
 
+pub fn received_draft(
+    number: u32,
+    issued_on: &str,
+    version: u64,
+) -> conta_verde_domain::ReceivedInvoiceDraft {
+    use conta_verde_domain::{
+        AccessKey, Amount, CalendarDate, Manifestation, ReceivedInvoiceDraft, ReceivedSituation,
+    };
+
+    let day = CalendarDate::parse(issued_on).unwrap();
+    ReceivedInvoiceDraft {
+        access_key: AccessKey::from_parts(
+            35,
+            day,
+            "12345678000195",
+            55,
+            1,
+            number,
+            1,
+            10_000_000 + number,
+        )
+        .unwrap(),
+        issuer_name: format!("Fornecedor {number} Ltda"),
+        issuer_document: "12345678000195".into(),
+        total: Amount::parse("150.50").unwrap(),
+        issued_on: day,
+        situation: ReceivedSituation::Authorized,
+        manifestation: Manifestation::None,
+        version,
+    }
+}
+
+/// The invoices issued against the company are a mirror of the gateway's list: added once, brought up to what the gateway says
+/// when it lists them again (a reason stays only with the word it was given for), found only by their company, listed newest
+/// first by a cursor, narrowed by what was declared, and the recipient's declaration is written with its audit entry only from
+/// the word it was made from.
+pub async fn received_invoices_are_kept<R: conta_verde_application::FiscalDocumentRepository>(
+    repository: &R,
+    company: CompanyId,
+    other_company: CompanyId,
+) {
+    use conta_verde_application::{ReceivedInvoiceCursor, ReceivedInvoiceQuery};
+    use conta_verde_domain::{
+        Manifestation, ReceivedInvoice, ReceivedSituation, received_invoice_changes,
+        received_invoice_creation_changes,
+    };
+
+    assert_eq!(repository.max_received_version(company).await.unwrap(), 0);
+    let first = received_draft(1, "2026-11-01", 5);
+    let second = received_draft(2, "2026-11-03", 7);
+    let third = received_draft(3, "2026-11-03", 6);
+    assert_eq!(
+        repository
+            .mirror_received(company, &[first.clone(), second.clone(), third.clone()])
+            .await
+            .unwrap(),
+        3
+    );
+    assert_eq!(repository.max_received_version(company).await.unwrap(), 7);
+    assert_eq!(
+        repository
+            .max_received_version(other_company)
+            .await
+            .unwrap(),
+        0
+    );
+    // Listed again, nothing is added.
+    assert_eq!(
+        repository
+            .mirror_received(company, &[first.clone(), second.clone()])
+            .await
+            .unwrap(),
+        0
+    );
+
+    // Found by its company only, by id and by key.
+    let stored = repository
+        .find_received_by_key(company, &first.access_key)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.issuer_name(), "Fornecedor 1 Ltda");
+    assert_eq!(stored.manifestation(), Manifestation::None);
+    assert_eq!(
+        repository
+            .find_received(company, stored.id())
+            .await
+            .unwrap(),
+        Some(stored.clone())
+    );
+    assert_eq!(
+        repository
+            .find_received(other_company, stored.id())
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        repository
+            .find_received_by_key(other_company, &first.access_key)
+            .await
+            .unwrap(),
+        None
+    );
+    assert!(
+        repository
+            .received_history(other_company, stored.id())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // Newest first by the day, then the id; a page after a cursor continues the same list.
+    let all = repository
+        .list_received(company, &ReceivedInvoiceQuery::default(), None, 10)
+        .await
+        .unwrap();
+    assert_eq!(all.len(), 3);
+    assert_eq!(
+        all[2].access_key(),
+        &first.access_key,
+        "the oldest day is last"
+    );
+    let page = repository
+        .list_received(company, &ReceivedInvoiceQuery::default(), None, 2)
+        .await
+        .unwrap();
+    let rest = repository
+        .list_received(
+            company,
+            &ReceivedInvoiceQuery::default(),
+            Some(&ReceivedInvoiceCursor::from(&page[1])),
+            10,
+        )
+        .await
+        .unwrap();
+    assert_eq!(rest.len(), 1);
+    assert_eq!(rest[0].id(), all[2].id());
+    assert!(
+        repository
+            .list_received(other_company, &ReceivedInvoiceQuery::default(), None, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // A declaration is written with its audit entry, from the word it was made from, and only once.
+    let declared = stored
+        .manifested(
+            Manifestation::NotPerformed,
+            Some("A mercadoria nunca chegou ao estabelecimento"),
+        )
+        .unwrap();
+    let audit = |invoice: &ReceivedInvoice, changes| AuditEntry {
+        company_id: invoice.company_id(),
+        actor: actor(),
+        entity: AuditEntity::ReceivedInvoice,
+        entity_id: invoice.id().as_uuid(),
+        action: AuditAction::Updated,
+        changes,
+    };
+    assert_eq!(
+        repository
+            .record_manifestation(
+                &declared,
+                Manifestation::Awareness,
+                &audit(&declared, received_invoice_creation_changes(&declared)),
+            )
+            .await,
+        Err(RepositoryError::FiscalDocumentChanged),
+        "a declaration made from another word is refused and leaves no trail"
+    );
+    assert!(
+        repository
+            .received_history(company, stored.id())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let wrong = audit(&stored, Vec::new());
+    assert!(
+        repository
+            .record_manifestation(
+                &declared,
+                Manifestation::None,
+                &AuditEntry {
+                    entity_id: Uuid::new_v4(),
+                    ..wrong
+                }
+            )
+            .await
+            .is_err(),
+        "an audit entry of another record is refused"
+    );
+    repository
+        .record_manifestation(
+            &declared,
+            Manifestation::None,
+            &audit(&declared, received_invoice_creation_changes(&declared)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        repository
+            .find_received(company, stored.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .justification(),
+        Some("A mercadoria nunca chegou ao estabelecimento")
+    );
+    assert_eq!(
+        repository
+            .received_history(company, stored.id())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    let narrowed = repository
+        .list_received(
+            company,
+            &ReceivedInvoiceQuery {
+                manifestation: Some(Manifestation::NotPerformed),
+            },
+            None,
+            10,
+        )
+        .await
+        .unwrap();
+    assert_eq!(narrowed.len(), 1);
+    assert_eq!(
+        repository
+            .list_received(
+                company,
+                &ReceivedInvoiceQuery {
+                    manifestation: Some(Manifestation::None)
+                },
+                None,
+                10,
+            )
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        repository
+            .record_manifestation(
+                &declared,
+                Manifestation::None,
+                &audit(&declared, received_invoice_changes(&stored, &declared)),
+            )
+            .await,
+        Err(RepositoryError::FiscalDocumentChanged),
+        "asking twice is told it moved"
+    );
+    assert_eq!(
+        repository
+            .record_manifestation(
+                &declared,
+                Manifestation::NotPerformed,
+                &audit(&declared, Vec::new()),
+            )
+            .await
+            .map_err(|_| ()),
+        Ok(()),
+        "from the word it has, a write is allowed (the use case rules what may follow)"
+    );
+
+    // The gateway listing it again brings it up to date: its own word replaces ours, and the reason goes with our word.
+    let mut said = first.clone();
+    said.manifestation = Manifestation::Confirmation;
+    said.version = 9;
+    said.situation = ReceivedSituation::Authorized;
+    repository.mirror_received(company, &[said]).await.unwrap();
+    let after = repository
+        .find_received(company, stored.id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.manifestation(), Manifestation::Confirmation);
+    assert_eq!(
+        after.justification(),
+        None,
+        "the reason goes with the word it was given for"
+    );
+    assert_eq!(after.version(), 9);
+    assert_eq!(repository.max_received_version(company).await.unwrap(), 9);
+
+    // A list that has not caught up never takes a word back: the gateway saying "nothing" or "awareness" after the company
+    // holds a final word changes the version and nothing else, and the reason stays with its word.
+    let reason = "A mercadoria nunca chegou ao estabelecimento";
+    let held = repository
+        .find_received(company, second_id(repository, company, &second).await)
+        .await
+        .unwrap()
+        .unwrap();
+    let declared = held
+        .manifested(Manifestation::NotPerformed, Some(reason))
+        .unwrap();
+    repository
+        .record_manifestation(
+            &declared,
+            Manifestation::None,
+            &audit(&declared, received_invoice_creation_changes(&declared)),
+        )
+        .await
+        .unwrap();
+    for behind in [Manifestation::None, Manifestation::Awareness] {
+        let mut lagging = second.clone();
+        lagging.manifestation = behind;
+        lagging.version = 20;
+        repository
+            .mirror_received(company, &[lagging])
+            .await
+            .unwrap();
+        let still = repository
+            .find_received(company, held.id())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(still.manifestation(), Manifestation::NotPerformed);
+        assert_eq!(still.justification(), Some(reason));
+        assert_eq!(still.version(), 20);
+    }
+    // A declaration writes only the word and the reason: what the row says of the gateway (its version) is not rewritten from
+    // the copy that was read before the gateway was asked.
+    let mut fresh = third.clone();
+    fresh.version = 30;
+    repository.mirror_received(company, &[fresh]).await.unwrap();
+    let before = repository
+        .find_received_by_key(company, &third.access_key)
+        .await
+        .unwrap()
+        .unwrap();
+    let stale = before
+        .mirrored({
+            let mut older = third.clone();
+            older.version = 1;
+            older
+        })
+        .unwrap()
+        .manifested(Manifestation::Awareness, None)
+        .unwrap();
+    repository
+        .record_manifestation(
+            &stale,
+            Manifestation::None,
+            &audit(&stale, received_invoice_creation_changes(&stale)),
+        )
+        .await
+        .unwrap();
+    let after = repository
+        .find_received(company, before.id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.manifestation(), Manifestation::Awareness);
+    assert_eq!(
+        after.version(),
+        30,
+        "the gateway's version is not written back from a stale copy"
+    );
+}
+
+async fn second_id<R: conta_verde_application::FiscalDocumentRepository>(
+    repository: &R,
+    company: CompanyId,
+    draft: &conta_verde_domain::ReceivedInvoiceDraft,
+) -> conta_verde_domain::ReceivedInvoiceId {
+    repository
+        .find_received_by_key(company, &draft.access_key)
+        .await
+        .unwrap()
+        .unwrap()
+        .id()
+}
+
+/// What every gateway does with the invoices issued against the company: lists them in pages of versions (asking again from the
+/// biggest version gives the rest and, later, only what changed), takes the recipient's word and refuses one that does not
+/// follow or an invoice it does not hold. `seed` puts an invoice where the gateway holds it.
+pub async fn a_gateway_lists_and_manifests_received_invoices<
+    G: conta_verde_application::FiscalGateway,
+>(
+    gateway: &G,
+    issuer: &conta_verde_domain::FiscalSettings,
+    seed: impl Fn(conta_verde_domain::ReceivedInvoiceDraft),
+) {
+    use conta_verde_application::EventOutcome;
+    use conta_verde_domain::Manifestation;
+
+    assert!(gateway.issues_manifestation());
+    assert!(
+        gateway
+            .list_received_nfe(issuer, 0)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    for (number, day) in [(11, "2026-11-01"), (12, "2026-11-02"), (13, "2026-11-03")] {
+        seed(received_draft(number, day, 0));
+    }
+    // A page at a time, and the next from the biggest version of the last: all three arrive once.
+    let mut seen = Vec::new();
+    let mut since = 0;
+    loop {
+        let page = gateway.list_received_nfe(issuer, since).await.unwrap();
+        if page.is_empty() {
+            break;
+        }
+        for invoice in &page {
+            assert!(invoice.version > since);
+            assert_eq!(invoice.manifestation, Manifestation::None);
+            seen.push(invoice.clone());
+        }
+        since = page.iter().map(|invoice| invoice.version).max().unwrap();
+    }
+    assert_eq!(seen.len(), 3);
+    assert_eq!(seen[0].issuer_name, "Fornecedor 11 Ltda");
+    assert_eq!(seen[0].total.to_string(), "150.5");
+    assert_eq!(seen[0].issued_on.to_string(), "2026-11-01");
+
+    // The word is taken, shows in the list as a newer version, and only what follows is taken after it.
+    let key = &seen[0].access_key;
+    let accepted = |outcome: EventOutcome| matches!(outcome, EventOutcome::Accepted(_));
+    assert!(accepted(
+        gateway
+            .manifest_received_nfe(issuer, key, Manifestation::Awareness, None)
+            .await
+            .unwrap()
+    ));
+    let changed = gateway.list_received_nfe(issuer, since).await.unwrap();
+    assert_eq!(changed.len(), 1);
+    assert_eq!(changed[0].access_key, *key);
+    assert_eq!(changed[0].manifestation, Manifestation::Awareness);
+    assert!(changed[0].version > since);
+    assert!(matches!(
+        gateway
+            .manifest_received_nfe(issuer, key, Manifestation::Awareness, None)
+            .await
+            .unwrap(),
+        EventOutcome::Refused(_)
+    ));
+    assert!(accepted(
+        gateway
+            .manifest_received_nfe(
+                issuer,
+                key,
+                Manifestation::NotPerformed,
+                Some("A mercadoria nunca chegou ao estabelecimento"),
+            )
+            .await
+            .unwrap()
+    ));
+    assert!(matches!(
+        gateway
+            .manifest_received_nfe(issuer, key, Manifestation::Confirmation, None)
+            .await
+            .unwrap(),
+        EventOutcome::Refused(_)
+    ));
+    let unknown = received_draft(99, "2026-11-01", 1).access_key;
+    assert!(matches!(
+        gateway
+            .manifest_received_nfe(issuer, &unknown, Manifestation::Awareness, None)
+            .await
+            .unwrap(),
+        EventOutcome::Refused(_)
+    ));
+}
+
+/// The company's received invoices are fetched from the gateway on request (a page at a time until it has no more, and asking
+/// again adds nothing), the recipient's word follows the rules of the words (the domain's, checked first), is declared through
+/// the gateway and recorded in the name of the person only when the authority took it, and what the authority refused or never
+/// answered leaves the invoice as it was.
+#[allow(clippy::too_many_arguments)]
+pub async fn syncs_and_manifests_received_invoices<D, S, P, Y, F, B, R>(
+    service: &conta_verde_application::FiscalDocumentService<
+        D,
+        S,
+        P,
+        Y,
+        F,
+        crate::FakeFiscalGateway,
+        B,
+        R,
+    >,
+    gateway: &crate::FakeFiscalGateway,
+    settings: &F,
+    company: CompanyId,
+    other_company: CompanyId,
+) where
+    D: conta_verde_application::FiscalDocumentRepository,
+    S: conta_verde_application::SaleRepository,
+    P: PartyRepository,
+    Y: conta_verde_application::ProductRepository,
+    F: conta_verde_application::FiscalSettingsRepository,
+    B: BlobStore,
+    R: conta_verde_application::EntryReferences,
+{
+    use conta_verde_application::{ApplicationError, ReceivedInvoiceQuery};
+    use conta_verde_domain::{Manifestation, ReceivedSituation};
+
+    let user = actor();
+    // Nothing is asked before the company says how it issues.
+    assert!(matches!(
+        service.sync_received(company).await,
+        Err(ApplicationError::FiscalRule(text)) if text.contains("fiscal settings")
+    ));
+    settings
+        .save(
+            &conta_verde_domain::FiscalSettings::new(
+                company,
+                fiscal_settings_draft(
+                    "11222333000181",
+                    conta_verde_domain::FiscalEnvironment::Homologation,
+                ),
+            )
+            .unwrap(),
+            &AuditEntry {
+                company_id: company,
+                actor: actor(),
+                entity: AuditEntity::FiscalSettings,
+                entity_id: company.as_uuid(),
+                action: AuditAction::Created,
+                changes: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+
+    // Five invoices, given in pages of two: all arrive once, and asking again adds nothing.
+    for number in 1..=4 {
+        gateway.receive(received_draft(number, "2026-11-02", 0));
+    }
+    let mut cancelled = received_draft(5, "2026-11-03", 0);
+    cancelled.situation = ReceivedSituation::Cancelled;
+    gateway.receive(cancelled);
+    assert_eq!(service.sync_received(company).await.unwrap(), 5);
+    assert_eq!(service.sync_received(company).await.unwrap(), 0);
+    let page = service
+        .list_received(company, &ReceivedInvoiceQuery::default(), None, Some(3))
+        .await
+        .unwrap();
+    assert_eq!(page.items.len(), 3);
+    assert!(page.next.is_some());
+    assert_eq!(
+        page.items[0].situation(),
+        ReceivedSituation::Cancelled,
+        "the newest day first"
+    );
+    let all = service
+        .list_received(company, &ReceivedInvoiceQuery::default(), None, Some(100))
+        .await
+        .unwrap()
+        .items;
+    assert_eq!(all.len(), 5);
+    let invoice = all
+        .iter()
+        .find(|invoice| invoice.situation() == ReceivedSituation::Authorized)
+        .unwrap()
+        .clone();
+    assert!(
+        service
+            .list_received(other_company, &ReceivedInvoiceQuery::default(), None, None)
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
+    assert!(matches!(
+        service.get_received(other_company, invoice.id()).await,
+        Err(ApplicationError::FiscalDocumentNotFound)
+    ));
+
+    // The rules of the words come first, and nothing reaches the gateway when they refuse.
+    let reason = "A mercadoria nunca chegou ao estabelecimento";
+    assert!(matches!(
+        service
+            .manifest(
+                company,
+                &user,
+                invoice.id(),
+                Manifestation::NotPerformed,
+                None
+            )
+            .await,
+        Err(ApplicationError::Domain(_))
+    ));
+    assert!(matches!(
+        service
+            .manifest(
+                company,
+                &user,
+                invoice.id(),
+                Manifestation::Confirmation,
+                Some(reason)
+            )
+            .await,
+        Err(ApplicationError::Domain(_))
+    ));
+    let gone = all
+        .iter()
+        .find(|invoice| invoice.situation() == ReceivedSituation::Cancelled)
+        .unwrap();
+    assert!(matches!(
+        service
+            .manifest(company, &user, gone.id(), Manifestation::Awareness, None)
+            .await,
+        Err(ApplicationError::Domain(_))
+    ));
+    assert!(gateway.manifested().is_empty());
+
+    // Declared through the gateway and recorded in the name of the person, with the word it replaced.
+    let aware = service
+        .manifest(company, &user, invoice.id(), Manifestation::Awareness, None)
+        .await
+        .unwrap();
+    assert_eq!(aware.manifestation(), Manifestation::Awareness);
+    assert_eq!(gateway.manifested().len(), 1);
+    assert_eq!(
+        service
+            .get_received(company, invoice.id())
+            .await
+            .unwrap()
+            .manifestation(),
+        Manifestation::Awareness
+    );
+    let trail = service
+        .received_history(company, invoice.id())
+        .await
+        .unwrap();
+    assert_eq!(trail.len(), 1);
+    assert_eq!(trail[0].entry.actor, user);
+
+    // What the authority refuses is told and recorded nowhere; what never answered leaves the invoice as it was.
+    gateway.refuse_events_with("573", "Duplicidade de evento");
+    assert!(matches!(
+        service
+            .manifest(company, &user, invoice.id(), Manifestation::Confirmation, None)
+            .await,
+        Err(ApplicationError::FiscalRule(text)) if text.contains("authority refused") && text.contains("573")
+    ));
+    gateway.accept_events_again();
+    gateway.set_unavailable(true);
+    assert!(matches!(
+        service
+            .manifest(
+                company,
+                &user,
+                invoice.id(),
+                Manifestation::Confirmation,
+                None
+            )
+            .await,
+        Err(ApplicationError::FiscalGateway(_))
+    ));
+    assert!(matches!(
+        service.sync_received(company).await,
+        Err(ApplicationError::FiscalGateway(_))
+    ));
+    gateway.set_unavailable(false);
+    assert_eq!(
+        service
+            .get_received(company, invoice.id())
+            .await
+            .unwrap()
+            .manifestation(),
+        Manifestation::Awareness
+    );
+    assert_eq!(
+        service
+            .received_history(company, invoice.id())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // The final word, with its reason; nothing follows it.
+    let last = service
+        .manifest(
+            company,
+            &user,
+            invoice.id(),
+            Manifestation::NotPerformed,
+            Some(reason),
+        )
+        .await
+        .unwrap();
+    assert_eq!(last.justification(), Some(reason));
+    assert!(matches!(
+        service
+            .manifest(company, &user, invoice.id(), Manifestation::Unknown, None)
+            .await,
+        Err(ApplicationError::Domain(_))
+    ));
+    assert_eq!(
+        service
+            .received_history(company, invoice.id())
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+    // The narrowing the list offers.
+    let said = service
+        .list_received(
+            company,
+            &ReceivedInvoiceQuery {
+                manifestation: Some(Manifestation::NotPerformed),
+            },
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(said.items.len(), 1);
+    // What changed at the gateway after the company's own words (versions moved) is brought in without adding invoices.
+    assert_eq!(service.sync_received(company).await.unwrap(), 0);
+
+    // A gateway that does not list received invoices is refused before anything is asked.
+    gateway.without_manifestation(true);
+    assert!(matches!(
+        service.sync_received(company).await,
+        Err(ApplicationError::FiscalGateway(
+            conta_verde_application::GatewayError::Unsupported(_)
+        ))
+    ));
+    assert!(matches!(
+        service
+            .manifest(company, &user, all[1].id(), Manifestation::Awareness, None)
+            .await,
+        Err(ApplicationError::FiscalGateway(
+            conta_verde_application::GatewayError::Unsupported(_)
+        ))
+    ));
+    gateway.without_manifestation(false);
+}
+
 /// An NFS-e is issued from the **service lines** of a completed sale under a service nature that carries the company's
 /// ISSQN terms; the DPS is numbered once and never reused (not by a cancelled document, not by a resend, not after a
 /// gateway that was down); the NF-e of the same sale covers only the products; and nothing is sent until every choice is

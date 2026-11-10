@@ -1,12 +1,13 @@
 use conta_verde_application::{
-    FiscalDocumentCursor, FiscalDocumentQuery, FiscalDocumentRepository, RepositoryError,
-    ensure_audit_describes,
+    FiscalDocumentCursor, FiscalDocumentQuery, FiscalDocumentRepository, ReceivedInvoiceCursor,
+    ReceivedInvoiceQuery, RepositoryError, ensure_audit_describes,
 };
 use conta_verde_domain::{
     AccessKey, Amount, AuditEntity, AuditEntry, AuditRecord, BlobId, CalendarDate, CompanyId, Dps,
     FiscalAuthorization, FiscalDocument, FiscalDocumentDraft, FiscalDocumentId, FiscalDocumentKind,
     FiscalDocumentStatus, FiscalEnvironment, FiscalEvent, FiscalEventId, FiscalEventStatus,
-    FiscalEventSubject, FiscalFile, FiscalFileKind, FiscalOrigin, FiscalRefusal, NfseAuthorization,
+    FiscalEventSubject, FiscalFile, FiscalFileKind, FiscalOrigin, FiscalRefusal, Manifestation,
+    NfseAuthorization, ReceivedInvoice, ReceivedInvoiceDraft, ReceivedInvoiceId, ReceivedSituation,
     SaleId, TaxRegime, UserId,
 };
 use sqlx::postgres::PgRow;
@@ -165,6 +166,39 @@ fn document_from_row(row: &PgRow) -> Result<FiscalDocument, RepositoryError> {
     .restored(status, refusal, authorization, note)
     .with_nfse(nfse, dps)
     .with_gateway_reference(row.try_get("gateway_reference").map_err(storage_error)?))
+}
+
+const RECEIVED_COLUMNS: &str = "id, company_id, access_key, issuer_name, issuer_document, total::text AS total, \
+     issued_on::text AS issued_on, situation, manifestation, manifestation_reason, gateway_version";
+
+fn received_from_row(row: &PgRow) -> Result<ReceivedInvoice, RepositoryError> {
+    let text = |name: &str| -> Result<String, RepositoryError> {
+        row.try_get(name).map_err(storage_error)
+    };
+    let storage =
+        |error: conta_verde_domain::DomainError| RepositoryError::Storage(error.to_string());
+    let version: i64 = row.try_get("gateway_version").map_err(storage_error)?;
+    let draft = ReceivedInvoiceDraft {
+        access_key: AccessKey::parse(&text("access_key")?).map_err(storage)?,
+        issuer_name: text("issuer_name")?,
+        issuer_document: text("issuer_document")?,
+        total: stored(Amount::parse(&text("total")?), "total")?,
+        issued_on: stored(CalendarDate::parse(&text("issued_on")?), "issue day")?,
+        situation: stored(ReceivedSituation::parse(&text("situation")?), "situation")?,
+        manifestation: stored(
+            Manifestation::parse(&text("manifestation")?),
+            "manifestation",
+        )?,
+        version: u64::try_from(version)
+            .map_err(|_| RepositoryError::Storage("stored version".to_owned()))?,
+    };
+    Ok(ReceivedInvoice::new(
+        ReceivedInvoiceId::from_uuid(row.try_get("id").map_err(storage_error)?),
+        CompanyId::from_uuid(row.try_get("company_id").map_err(storage_error)?),
+        draft,
+    )
+    .map_err(storage)?
+    .restored(row.try_get("manifestation_reason").map_err(storage_error)?))
 }
 
 fn event_from_row(row: &PgRow) -> Result<FiscalEvent, RepositoryError> {
@@ -787,6 +821,177 @@ impl FiscalDocumentRepository for PostgresFiscalDocumentRepository {
         .map_err(storage_error)
     }
 
+    async fn mirror_received(
+        &self,
+        company_id: CompanyId,
+        invoices: &[ReceivedInvoiceDraft],
+    ) -> Result<usize, RepositoryError> {
+        let mut tx = self.pool.begin().await.map_err(storage_error)?;
+        let mut added = 0;
+        for draft in invoices {
+            let version = i64::try_from(draft.version)
+                .map_err(|_| RepositoryError::Storage("version".to_owned()))?;
+            // A new one is added; one the company has is brought up to what the gateway says. The reason the company gave
+            // stays only with the word it gave.
+            let inserted: bool = sqlx::query_scalar(
+                "INSERT INTO received_invoices (id, company_id, access_key, issuer_name, issuer_document, total, \
+                 issued_on, situation, manifestation, gateway_version) \
+                 VALUES ($1, $2, $3, $4, $5, CAST($6 AS numeric), CAST($7 AS date), $8, $9, $10) \
+                 ON CONFLICT (company_id, access_key) DO UPDATE SET issuer_name = EXCLUDED.issuer_name, \
+                 issuer_document = EXCLUDED.issuer_document, total = EXCLUDED.total, issued_on = EXCLUDED.issued_on, \
+                 situation = EXCLUDED.situation, \
+                 manifestation_reason = CASE \
+                     WHEN EXCLUDED.manifestation = received_invoices.manifestation \
+                          OR (CASE EXCLUDED.manifestation WHEN 'none' THEN 0 WHEN 'awareness' THEN 1 ELSE 2 END) \
+                           < (CASE received_invoices.manifestation WHEN 'none' THEN 0 WHEN 'awareness' THEN 1 ELSE 2 END) \
+                     THEN received_invoices.manifestation_reason END, \
+                 manifestation = CASE \
+                     WHEN (CASE EXCLUDED.manifestation WHEN 'none' THEN 0 WHEN 'awareness' THEN 1 ELSE 2 END) \
+                        < (CASE received_invoices.manifestation WHEN 'none' THEN 0 WHEN 'awareness' THEN 1 ELSE 2 END) \
+                     THEN received_invoices.manifestation ELSE EXCLUDED.manifestation END, \
+                 gateway_version = GREATEST(received_invoices.gateway_version, EXCLUDED.gateway_version) \
+                 RETURNING (xmax = 0)",
+            )
+            .bind(ReceivedInvoiceId::generate().as_uuid())
+            .bind(company_id.as_uuid())
+            .bind(draft.access_key.as_str())
+            .bind(draft.issuer_name.trim())
+            .bind(&draft.issuer_document)
+            .bind(draft.total.as_decimal().to_string())
+            .bind(draft.issued_on.to_string())
+            .bind(draft.situation.key())
+            .bind(draft.manifestation.key())
+            .bind(version)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(storage_error)?;
+            if inserted {
+                added += 1;
+            }
+        }
+        tx.commit().await.map_err(storage_error)?;
+        Ok(added)
+    }
+
+    async fn max_received_version(&self, company_id: CompanyId) -> Result<u64, RepositoryError> {
+        let version: Option<i64> = sqlx::query_scalar(
+            "SELECT MAX(gateway_version) FROM received_invoices WHERE company_id = $1",
+        )
+        .bind(company_id.as_uuid())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        u64::try_from(version.unwrap_or(0))
+            .map_err(|_| RepositoryError::Storage("stored version".to_owned()))
+    }
+
+    async fn find_received(
+        &self,
+        company_id: CompanyId,
+        id: ReceivedInvoiceId,
+    ) -> Result<Option<ReceivedInvoice>, RepositoryError> {
+        let row = sqlx::query(&format!(
+            "SELECT {RECEIVED_COLUMNS} FROM received_invoices WHERE company_id = $1 AND id = $2"
+        ))
+        .bind(company_id.as_uuid())
+        .bind(id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        row.as_ref().map(received_from_row).transpose()
+    }
+
+    async fn find_received_by_key(
+        &self,
+        company_id: CompanyId,
+        key: &AccessKey,
+    ) -> Result<Option<ReceivedInvoice>, RepositoryError> {
+        let row = sqlx::query(&format!(
+            "SELECT {RECEIVED_COLUMNS} FROM received_invoices WHERE company_id = $1 AND access_key = $2"
+        ))
+        .bind(company_id.as_uuid())
+        .bind(key.as_str())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        row.as_ref().map(received_from_row).transpose()
+    }
+
+    async fn list_received(
+        &self,
+        company_id: CompanyId,
+        query: &ReceivedInvoiceQuery,
+        after: Option<&ReceivedInvoiceCursor>,
+        limit: usize,
+    ) -> Result<Vec<ReceivedInvoice>, RepositoryError> {
+        let rows = sqlx::query(&format!(
+            "SELECT {RECEIVED_COLUMNS} FROM received_invoices WHERE company_id = $1 \
+             AND ($2::text IS NULL OR manifestation = $2) \
+             AND ($3::text IS NULL OR (issued_on, id) < (CAST($3 AS date), $4)) \
+             ORDER BY issued_on DESC, id DESC LIMIT $5"
+        ))
+        .bind(company_id.as_uuid())
+        .bind(query.manifestation.map(|word| word.key()))
+        .bind(after.map(|cursor| cursor.issued_on.to_string()))
+        .bind(after.map(|cursor| cursor.id.as_uuid()))
+        .bind(i64::try_from(limit).unwrap_or(i64::MAX))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        rows.iter().map(received_from_row).collect()
+    }
+
+    async fn record_manifestation(
+        &self,
+        invoice: &ReceivedInvoice,
+        expected: Manifestation,
+        audit: &AuditEntry,
+    ) -> Result<(), RepositoryError> {
+        ensure_audit_describes(audit, invoice)?;
+        let mut tx = self.pool.begin().await.map_err(storage_error)?;
+        // The row is locked while it is read, so the word asked about is the one the declaration replaces.
+        let current: Option<String> = sqlx::query_scalar(
+            "SELECT manifestation FROM received_invoices WHERE id = $1 AND company_id = $2 FOR UPDATE",
+        )
+        .bind(invoice.id().as_uuid())
+        .bind(invoice.company_id().as_uuid())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(storage_error)?;
+        match current {
+            None => return Err(RepositoryError::NotFound),
+            Some(word) if word != expected.key() => {
+                return Err(RepositoryError::FiscalDocumentChanged);
+            }
+            Some(_) => {}
+        }
+        sqlx::query(
+            "UPDATE received_invoices SET manifestation = $2, manifestation_reason = $3 WHERE id = $1",
+        )
+        .bind(invoice.id().as_uuid())
+        .bind(invoice.manifestation().key())
+        .bind(invoice.justification())
+        .execute(&mut *tx)
+        .await
+        .map_err(storage_error)?;
+        postgres_audit::insert(&mut tx, audit).await?;
+        tx.commit().await.map_err(storage_error)
+    }
+
+    async fn received_history(
+        &self,
+        company_id: CompanyId,
+        id: ReceivedInvoiceId,
+    ) -> Result<Vec<AuditRecord>, RepositoryError> {
+        postgres_audit::history(
+            &self.pool,
+            company_id,
+            AuditEntity::ReceivedInvoice,
+            id.as_uuid(),
+        )
+        .await
+    }
+
     async fn next_dps_number(
         &self,
         company_id: CompanyId,
@@ -934,6 +1139,20 @@ mod tests {
             other_company,
             sale,
             other_sale,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn keeps_received_invoices() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let other_company = contract::create_company(&pool).await;
+        contract::received_invoices_are_kept(
+            &PostgresFiscalDocumentRepository::new(pool.clone()),
+            company,
+            other_company,
         )
         .await;
     }
@@ -1350,6 +1569,49 @@ mod tests {
         )
         .await;
         std::fs::remove_dir_all(root).expect("the test's own directory is removed");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn syncs_and_manifests_received_invoices() {
+        use crate::{
+            FakeFiscalGateway, LocalBlobStore, PostgresFiscalSettingsRepository,
+            PostgresPeriodLockRepository, RegisterReferences,
+        };
+        use conta_verde_application::FiscalDocumentService;
+
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let other_company = contract::create_company(&pool).await;
+        let gateway = FakeFiscalGateway::default();
+        let settings = PostgresFiscalSettingsRepository::new(pool.clone());
+        let root =
+            std::env::temp_dir().join(format!("conta-verde-fiscal-{}", uuid::Uuid::new_v4()));
+        let service = FiscalDocumentService::new(
+            PostgresFiscalDocumentRepository::new(pool.clone()),
+            PostgresSaleRepository::new(pool.clone()),
+            PostgresPartyRepository::new(pool.clone()),
+            PostgresProductRepository::new(pool.clone()),
+            settings.clone(),
+            gateway.clone(),
+            LocalBlobStore::new(&root),
+            RegisterReferences::new(
+                PostgresCategoryRepository::new(pool.clone()),
+                PostgresCostCenterRepository::new(pool.clone()),
+                PostgresPartyRepository::new(pool.clone()),
+                PostgresBankAccountRepository::new(pool.clone()),
+                PostgresPaymentMethodRepository::new(pool.clone()),
+                PostgresPeriodLockRepository::new(pool.clone()),
+            ),
+        );
+        contract::syncs_and_manifests_received_invoices(
+            &service,
+            &gateway,
+            &settings,
+            company,
+            other_company,
+        )
+        .await;
     }
 
     #[tokio::test]

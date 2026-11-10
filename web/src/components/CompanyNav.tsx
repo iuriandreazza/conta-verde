@@ -107,6 +107,7 @@ const AREAS: NavArea[] = [
     icon: FileTextIcon,
     items: [
       { path: "/fiscal/documents", label: "Documentos", icon: FileTextIcon },
+      { path: "/fiscal/received", label: "Notas recebidas", icon: FileTextIcon },
       { path: "/fiscal/settings", label: "Configurações fiscais", icon: LayersIcon },
     ],
   },

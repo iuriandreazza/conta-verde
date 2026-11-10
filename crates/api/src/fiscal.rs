@@ -1,16 +1,18 @@
 use axum::Json;
 use axum::extract::{Path, State};
-use axum::http::{HeaderValue, header};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use conta_verde_application::{
     ApplicationError, BuyerPresence, FiscalDocumentCursor, FiscalDocumentQuery, FiscalGateway,
-    IssueNfce, IssueNfe, IssueNfse, PaymentForm, SpecialTaxRegime,
+    IssueNfce, IssueNfe, IssueNfse, PaymentForm, ReceivedInvoiceCursor, ReceivedInvoiceQuery,
+    SpecialTaxRegime,
 };
 use conta_verde_domain::{
     AddressDraft, Amount, CalendarDate, FiscalDocument, FiscalDocumentId, FiscalEnvironment,
     FiscalEvent, FiscalEventId, FiscalEventSubject, FiscalFileKind, FiscalSettings,
-    FiscalSettingsDraft, IssTaxation, NatureKind, OperationNature, OperationNatureDraft, SaleId,
-    ServiceTerms, ServiceTermsDraft, TaxRegime, TaxRule, TaxRuleDraft,
+    FiscalSettingsDraft, IssTaxation, Manifestation, NatureKind, OperationNature,
+    OperationNatureDraft, ReceivedInvoice, ReceivedInvoiceId, SaleId, ServiceTerms,
+    ServiceTermsDraft, TaxRegime, TaxRule, TaxRuleDraft,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -1013,4 +1015,280 @@ pub(crate) async fn list_documents<X: Ports>(
             .collect(),
         next_cursor: page.next.as_ref().map(encode_cursor),
     }))
+}
+
+#[derive(Serialize)]
+pub(crate) struct ReceivedInvoiceResponse {
+    id: Uuid,
+    access_key: String,
+    issuer_name: String,
+    issuer_document: String,
+    total: String,
+    issued_on: String,
+    /// `authorized`, `cancelled` or `denied`.
+    situation: &'static str,
+    /// What the recipient has declared: `none`, `awareness`, `confirmation`, `unknown` or `not_performed`.
+    manifestation: &'static str,
+    /// Why the recipient said "operation not performed", when this system recorded it.
+    justification: Option<String>,
+}
+
+impl From<&ReceivedInvoice> for ReceivedInvoiceResponse {
+    fn from(invoice: &ReceivedInvoice) -> Self {
+        Self {
+            id: invoice.id().as_uuid(),
+            access_key: invoice.access_key().as_str().to_owned(),
+            issuer_name: invoice.issuer_name().to_owned(),
+            issuer_document: invoice.issuer_document().to_owned(),
+            total: invoice.total().as_decimal().to_string(),
+            issued_on: invoice.issued_on().to_string(),
+            situation: invoice.situation().key(),
+            manifestation: invoice.manifestation().key(),
+            justification: invoice.justification().map(str::to_owned),
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub(crate) struct ReceivedInvoicePageResponse {
+    items: Vec<ReceivedInvoiceResponse>,
+    next_cursor: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct ReceivedListQuery {
+    limit: Option<usize>,
+    after: Option<String>,
+    /// `none`, `awareness`, `confirmation`, `unknown` or `not_performed`.
+    manifestation: Option<String>,
+}
+
+// Opaque to clients: the day and the id.
+fn encode_received_cursor(cursor: &ReceivedInvoiceCursor) -> String {
+    format!("{}|{}", cursor.issued_on, cursor.id.as_uuid())
+}
+
+fn decode_received_cursor(raw: &str) -> Result<ReceivedInvoiceCursor, ApiError> {
+    let (day, id) = raw.split_once('|').ok_or(ApiError::InvalidCursor)?;
+    Ok(ReceivedInvoiceCursor {
+        issued_on: CalendarDate::parse(day).ok_or(ApiError::InvalidCursor)?,
+        id: ReceivedInvoiceId::from_uuid(Uuid::parse_str(id).map_err(|_| ApiError::InvalidCursor)?),
+    })
+}
+
+fn parse_received(raw: &str) -> Result<ReceivedInvoiceId, ApiError> {
+    Uuid::parse_str(raw)
+        .map(ReceivedInvoiceId::from_uuid)
+        .map_err(|_| ApplicationError::FiscalDocumentNotFound.into())
+}
+
+/// The invoices other companies issued against this one, newest first, a page at a time ([ADR 0083]).
+pub(crate) async fn list_received<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, _): CompanyAccess,
+    ApiQuery(query): ApiQuery<ReceivedListQuery>,
+) -> Result<Json<ReceivedInvoicePageResponse>, ApiError> {
+    let manifestation = query
+        .manifestation
+        .as_deref()
+        .map(|raw| {
+            Manifestation::parse(raw).ok_or(ApiError::InvalidQuery(
+                "invalid manifestation: expected none, awareness, confirmation, unknown or not_performed",
+            ))
+        })
+        .transpose()?;
+    let after = query
+        .after
+        .as_deref()
+        .map(decode_received_cursor)
+        .transpose()?;
+    let page = state
+        .fiscal_documents
+        .list_received(
+            company_id,
+            &ReceivedInvoiceQuery { manifestation },
+            after.as_ref(),
+            query.limit,
+        )
+        .await?;
+    Ok(Json(ReceivedInvoicePageResponse {
+        items: page
+            .items
+            .iter()
+            .map(ReceivedInvoiceResponse::from)
+            .collect(),
+        next_cursor: page.next.as_ref().map(encode_received_cursor),
+    }))
+}
+
+pub(crate) async fn get_received<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, _): CompanyAccess,
+    Path((_, id)): Path<(Uuid, String)>,
+) -> Result<Json<ReceivedInvoiceResponse>, ApiError> {
+    let invoice = state
+        .fiscal_documents
+        .get_received(company_id, parse_received(&id)?)
+        .await?;
+    Ok(Json(ReceivedInvoiceResponse::from(&invoice)))
+}
+
+pub(crate) async fn received_history<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, _): CompanyAccess,
+    Path((_, id)): Path<(Uuid, String)>,
+) -> Result<Json<Vec<HistoryEntryResponse>>, ApiError> {
+    let history = state
+        .fiscal_documents
+        .received_history(company_id, parse_received(&id)?)
+        .await?;
+    Ok(Json(
+        history.iter().map(HistoryEntryResponse::from).collect(),
+    ))
+}
+
+#[derive(Serialize)]
+pub(crate) struct SyncResponse {
+    /// How many invoices the gateway told that the company did not have.
+    added: usize,
+}
+
+/// Asks the gateway for the invoices it has not told yet. A write by the method, so the `fiscal` area's writers.
+pub(crate) async fn sync_received<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, _): CompanyAccess,
+) -> Result<Json<SyncResponse>, ApiError> {
+    let added = state.fiscal_documents.sync_received(company_id).await?;
+    Ok(Json(SyncResponse { added }))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ManifestRequest {
+    /// `awareness`, `confirmation`, `unknown` or `not_performed`.
+    word: String,
+    /// Only "operation not performed" has one, of 15 to 255 characters.
+    justification: Option<String>,
+}
+
+/// Declares the recipient's word on a received invoice to the authority, in the name of the person.
+pub(crate) async fn manifest_received<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, actor): CompanyAccess,
+    Path((_, id)): Path<(Uuid, String)>,
+    ApiJson(request): ApiJson<ManifestRequest>,
+) -> Result<Json<ReceivedInvoiceResponse>, ApiError> {
+    let word = Manifestation::parse(&request.word)
+        .filter(|word| *word != Manifestation::None)
+        .ok_or_else(|| {
+            ApplicationError::FiscalRule(
+                "word is one of awareness, confirmation, unknown or not_performed".to_owned(),
+            )
+        })?;
+    let invoice = state
+        .fiscal_documents
+        .manifest(
+            company_id,
+            &actor,
+            parse_received(&id)?,
+            word,
+            request.justification.as_deref(),
+        )
+        .await?;
+    Ok(Json(ReceivedInvoiceResponse::from(&invoice)))
+}
+
+/// How far back a knock polls the waiting documents: the minute pass's window; older ones are the person's refresh.
+const WEBHOOK_POLL_WINDOW_SECONDS: i64 = 7 * 86_400;
+const WEBHOOK_POLL_BATCH: usize = 100;
+
+/// The companies a knock is being worked for, and whether another knock came meanwhile: a burst of knocks (the gateway sends one
+/// per document) is worked as one run and one more, never as many at once.
+static WAKING: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<Uuid, bool>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// `true` when this knock starts the work; `false` when a run is going and will go once more because of it.
+fn knock_starts_the_work(company: Uuid) -> bool {
+    let mut waking = WAKING
+        .lock()
+        .expect("the waking lock is never held across a panic");
+    match waking.get_mut(&company) {
+        Some(again) => {
+            *again = true;
+            false
+        }
+        None => {
+            waking.insert(company, false);
+            true
+        }
+    }
+}
+
+/// `true` when another knock came while the work ran and it must run once more.
+fn work_is_finished(company: Uuid) -> bool {
+    let mut waking = WAKING
+        .lock()
+        .expect("the waking lock is never held across a panic");
+    if waking.get(&company) == Some(&true) {
+        waking.insert(company, false);
+        true
+    } else {
+        waking.remove(&company);
+        false
+    }
+}
+
+/// Where the fiscal gateway knocks to say a document or a received invoice changed ([ADR 0083]). **It carries nothing that is
+/// believed and its body is never read**: it only wakes the server up, which asks the gateway what is new
+/// (`sync_received`) and runs the poll of the waiting documents, as the minute pass does. It needs no session, and it is
+/// authenticated by a secret in a header the operator chose when registering the hook at the gateway: `404` when no secret is
+/// configured, `401` for a wrong one, `404` for a company with no fiscal settings, and `202` at once: the work is done in the
+/// background, a burst of knocks is worked as one run and one more, and a failure is the poll's to retry, not the notice's.
+pub(crate) async fn receive_fiscal_webhook<X: Ports>(
+    State(state): State<SharedState<X>>,
+    Path(company_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    let not_found = || ApiError::from(ApplicationError::FiscalDocumentNotFound);
+    let Some(hook) = state.config.fiscal_webhook.as_ref() else {
+        return Err(not_found());
+    };
+    let sent = HeaderName::from_bytes(hook.header.as_bytes())
+        .ok()
+        .and_then(|name| headers.get(name))
+        .map(HeaderValue::as_bytes);
+    if !sent.is_some_and(|sent| {
+        conta_verde_infrastructure::constant_time_eq(sent, hook.secret.as_bytes())
+    }) {
+        return Err(ApplicationError::Webhook(
+            conta_verde_application::WebhookError::InvalidSignature,
+        )
+        .into());
+    }
+    let company = Uuid::parse_str(&company_id).map_err(|_| not_found())?;
+    let company_id = conta_verde_domain::CompanyId::from_uuid(company);
+    if state.fiscal_settings.get(company_id).await?.is_none() {
+        return Err(not_found());
+    }
+    if knock_starts_the_work(company) {
+        tokio::spawn(async move {
+            loop {
+                if let Err(error) = state.fiscal_documents.sync_received(company_id).await {
+                    tracing::warn!(%error, "a fiscal webhook could not sync the received invoices");
+                }
+                let now = crate::now_unix();
+                if let Err(error) = state
+                    .fiscal_documents
+                    .poll_pending(now - WEBHOOK_POLL_WINDOW_SECONDS, WEBHOOK_POLL_BATCH, now)
+                    .await
+                {
+                    tracing::warn!(%error, "a fiscal webhook could not poll the documents");
+                }
+                if !work_is_finished(company) {
+                    break;
+                }
+            }
+        });
+    }
+    Ok(StatusCode::ACCEPTED)
 }

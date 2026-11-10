@@ -3,9 +3,10 @@ use conta_verde_domain::{
     FiscalAuthorization, FiscalDocument, FiscalDocumentDraft, FiscalDocumentId, FiscalDocumentKind,
     FiscalDocumentStatus, FiscalEvent, FiscalEventId, FiscalEventStatus, FiscalEventSubject,
     FiscalFile, FiscalFileKind, FiscalOrigin, FiscalRefusal, FiscalSettings,
-    MAX_CORRECTION_ATTEMPTS, MAX_CORRECTIONS, NatureKind, NfseAuthorization, Party, Product,
-    ProductKind, Sale, SaleId, SaleStatus, TaxRegime, fiscal_day, fiscal_document_changes,
-    fiscal_document_creation_changes, fiscal_event_changes, fiscal_event_creation_changes,
+    MAX_CORRECTION_ATTEMPTS, MAX_CORRECTIONS, Manifestation, NatureKind, NfseAuthorization, Party,
+    Product, ProductKind, ReceivedInvoice, ReceivedInvoiceId, Sale, SaleId, SaleStatus, TaxRegime,
+    fiscal_day, fiscal_document_changes, fiscal_document_creation_changes, fiscal_event_changes,
+    fiscal_event_creation_changes, received_invoice_changes, received_invoice_creation_changes,
 };
 
 use crate::accounting_export_service::{
@@ -18,8 +19,8 @@ use crate::{
     DocumentOutcome, EntryReferences, EventOutcome, EventQuery, FiscalDocumentCursor,
     FiscalDocumentQuery, FiscalDocumentRepository, FiscalGateway, FiscalSettingsRepository,
     GatewayError, NfceConsumer, NfceRequest, NfeItem, NfeRecipient, NfeRequest, NfseRecipient,
-    NfseRequest, PartyRepository, PaymentForm, ProductRepository, RepositoryError, SaleRepository,
-    SpecialTaxRegime,
+    NfseRequest, PartyRepository, PaymentForm, ProductRepository, ReceivedInvoiceCursor,
+    ReceivedInvoiceQuery, RepositoryError, SaleRepository, SpecialTaxRegime,
 };
 
 const MIN_REASON_CHARS: usize = 15;
@@ -40,6 +41,16 @@ pub struct FiscalDocumentPage {
     pub items: Vec<FiscalDocument>,
     pub next: Option<FiscalDocumentCursor>,
 }
+
+/// A page of received invoices and where the next one starts.
+#[derive(Debug, Clone)]
+pub struct ReceivedInvoicePage {
+    pub items: Vec<ReceivedInvoice>,
+    pub next: Option<ReceivedInvoiceCursor>,
+}
+
+/// How many times a sync asks the gateway for more before it stops: the gateway gives a page at a time.
+const MAX_SYNC_PASSES: usize = 20;
 
 /// What one pass of the poll did.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -588,6 +599,177 @@ where
             Ok(())
         } else {
             Err(GatewayError::Unsupported("an NFC-e through this gateway: use another one").into())
+        }
+    }
+
+    /// Asks the gateway for the invoices issued against the company that it has not told yet (newer than the biggest version
+    /// the company holds), as many passes as it takes up to a limit, and mirrors them. Returns how many are new. **The
+    /// webhook wakes this up and nothing it carries is believed** ([ADR 0083]).
+    pub async fn sync_received(&self, company_id: CompanyId) -> Result<usize, ApplicationError> {
+        let settings = self.ready_settings(company_id).await?;
+        self.ensure_issues_manifestation()?;
+        let mut added = 0;
+        for _ in 0..MAX_SYNC_PASSES {
+            let since = self.documents.max_received_version(company_id).await?;
+            let found = self.gateway.list_received_nfe(&settings, since).await?;
+            if found.is_empty() {
+                break;
+            }
+            added += self.documents.mirror_received(company_id, &found).await?;
+            // A listing that does not move the version forward is the same page again: it is not asked for in a loop.
+            if self.documents.max_received_version(company_id).await? <= since {
+                break;
+            }
+        }
+        Ok(added)
+    }
+
+    /// The invoices issued against the company, newest first, a page at a time.
+    pub async fn list_received(
+        &self,
+        company_id: CompanyId,
+        query: &ReceivedInvoiceQuery,
+        after: Option<&ReceivedInvoiceCursor>,
+        limit: Option<usize>,
+    ) -> Result<ReceivedInvoicePage, ApplicationError> {
+        let limit = clamp_limit(limit);
+        let rows = self
+            .documents
+            .list_received(company_id, query, after, limit + 1)
+            .await?;
+        let (items, next) = split_page(rows, limit);
+        Ok(ReceivedInvoicePage { items, next })
+    }
+
+    pub async fn get_received(
+        &self,
+        company_id: CompanyId,
+        id: ReceivedInvoiceId,
+    ) -> Result<ReceivedInvoice, ApplicationError> {
+        self.documents
+            .find_received(company_id, id)
+            .await?
+            .ok_or(ApplicationError::FiscalDocumentNotFound)
+    }
+
+    /// What the company declared about the invoice, oldest first.
+    pub async fn received_history(
+        &self,
+        company_id: CompanyId,
+        id: ReceivedInvoiceId,
+    ) -> Result<Vec<AuditRecord>, ApplicationError> {
+        self.get_received(company_id, id).await?;
+        Ok(self.documents.received_history(company_id, id).await?)
+    }
+
+    /// Declares the recipient's word on a received invoice to the authority, through the gateway, and records it in the name of
+    /// the person. The rules of the words are the domain's and are checked first; the authority's refusal is told and nothing
+    /// is recorded; an answer that never came leaves the invoice as it was and **is not sent again on its own** (a word is
+    /// not idempotent): the person syncs and sees what the authority holds.
+    pub async fn manifest(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        id: ReceivedInvoiceId,
+        word: Manifestation,
+        justification: Option<&str>,
+    ) -> Result<ReceivedInvoice, ApplicationError> {
+        let settings = self.ready_settings(company_id).await?;
+        self.ensure_issues_manifestation()?;
+        let invoice = self.get_received(company_id, id).await?;
+        let declared = invoice.manifested(word, justification)?;
+        match self
+            .gateway
+            .manifest_received_nfe(
+                &settings,
+                invoice.access_key(),
+                word,
+                declared.justification(),
+            )
+            .await?
+        {
+            EventOutcome::Accepted(_) => {}
+            EventOutcome::Refused(refusal) => {
+                return Err(ApplicationError::FiscalRule(format!(
+                    "the authority refused the manifestation ({}): {}",
+                    refusal.code, refusal.message
+                )));
+            }
+            // Never asked of a gateway whose events are synchronous, as this one is.
+            EventOutcome::Queued => {}
+        }
+        let first = invoice.manifestation() == Manifestation::None;
+        let audit = audit_entry(
+            &declared,
+            actor,
+            AuditAction::Updated,
+            if first {
+                received_invoice_creation_changes(&declared)
+            } else {
+                received_invoice_changes(&invoice, &declared)
+            },
+        );
+        match self
+            .documents
+            .record_manifestation(&declared, invoice.manifestation(), &audit)
+            .await
+        {
+            Ok(()) => Ok(declared),
+            // The authority took the word, and the mirror moved while it was asked (a sync that brought the same word, or a
+            // later one): the word is the person's act all the same, and an error here would lose it for good (the domain
+            // refuses a word after a final one). The row is written from what it holds now, never failed after the authority.
+            Err(RepositoryError::FiscalDocumentChanged) => {
+                self.record_after_the_mirror_moved(company_id, actor, id, declared)
+                    .await
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// What is done when the authority accepted a word and the mirror moved before it was written: if the row holds the same
+    /// word it is recorded (with the reason) in the name of the person; if it holds a later one the authority had it already and
+    /// there is nothing to write. Neither is an error.
+    async fn record_after_the_mirror_moved(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        id: ReceivedInvoiceId,
+        declared: ReceivedInvoice,
+    ) -> Result<ReceivedInvoice, ApplicationError> {
+        let held = self.get_received(company_id, id).await?;
+        if held.manifestation() != declared.manifestation() {
+            tracing::warn!("a declared word was already past when it was recorded");
+            return Ok(held);
+        }
+        let recorded = held.with_manifestation(
+            declared.manifestation(),
+            declared.justification().map(str::to_owned),
+        );
+        let audit = audit_entry(
+            &recorded,
+            actor,
+            AuditAction::Updated,
+            // The word as it stands, whole: that is what the person declared, whatever the mirror already said.
+            received_invoice_creation_changes(&recorded),
+        );
+        match self
+            .documents
+            .record_manifestation(&recorded, held.manifestation(), &audit)
+            .await
+        {
+            Ok(()) | Err(RepositoryError::FiscalDocumentChanged) => Ok(recorded),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn ensure_issues_manifestation(&self) -> Result<(), ApplicationError> {
+        if self.gateway.issues_manifestation() {
+            Ok(())
+        } else {
+            Err(GatewayError::Unsupported(
+                "received invoices through this gateway: use another one",
+            )
+            .into())
         }
     }
 
