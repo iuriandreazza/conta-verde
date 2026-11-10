@@ -9,9 +9,9 @@ use conta_verde_domain::{
 };
 use reqwest::{Method, StatusCode};
 use serde_json::{Map, Value, json};
-use uuid::Uuid;
 
 use crate::brasil_api::client_without_redirects;
+use crate::json_numbers::Numbers;
 
 const HOMOLOGATION_URL: &str = "https://homologacao.focusnfe.com.br";
 const PRODUCTION_URL: &str = "https://api.focusnfe.com.br";
@@ -374,41 +374,6 @@ fn refusal_of_error(body: &Value) -> Refusal {
     let mut refusal = refusal_of(body);
     refusal.code = Refusal::new(&code, "").code;
     refusal
-}
-
-/// The marker a number is written with until the JSON is rendered: the exact decimal text goes into the body, never
-/// a float ([ADR 0003]). The marker is unique to a body, so no text of a customer can be taken for one.
-struct Numbers {
-    marker: String,
-}
-
-impl Numbers {
-    fn new() -> Self {
-        Self {
-            marker: format!("@@{}:", Uuid::new_v4().simple()),
-        }
-    }
-
-    fn of(&self, number: impl std::fmt::Display) -> Value {
-        Value::String(format!("{}{number}@@", self.marker))
-    }
-
-    fn render(&self, body: &Value) -> String {
-        let text = body.to_string();
-        let opening = format!("\"{}", self.marker);
-        let mut rendered = String::with_capacity(text.len());
-        let mut rest = text.as_str();
-        while let Some(start) = rest.find(&opening) {
-            rendered.push_str(&rest[..start]);
-            let after = &rest[start + opening.len()..];
-            // A number is digits, a point and a minus sign: it cannot hold the closing marker.
-            let end = after.find("@@\"").unwrap_or(after.len());
-            rendered.push_str(&after[..end]);
-            rest = after.get(end + 3..).unwrap_or("");
-        }
-        rendered.push_str(rest);
-        rendered
-    }
 }
 
 /// The body of an NF-e for the gateway, in the fields its documentation gives for a sale, with every amount as the
@@ -1359,7 +1324,7 @@ mod tests {
         };
         let gateway = FocusNfeGateway::new(None, Some(&token), None, &cnpj).unwrap();
         let issuer = fiscal_issuer(&cnpj, FiscalEnvironment::Homologation);
-        let reference = format!("sandbox-{}", Uuid::new_v4().simple());
+        let reference = format!("sandbox-{}", uuid::Uuid::new_v4().simple());
         let mut request = nfe_request(&issuer, &reference);
         // The sandbox refuses a moment far from its clock.
         request.issued_at_unix = std::time::SystemTime::now()
