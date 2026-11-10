@@ -115,9 +115,10 @@ pub use fiscal_event::{
     FiscalEvent, FiscalEventStatus, FiscalEventSubject, MAX_CORRECTION_ATTEMPTS, MAX_CORRECTIONS,
 };
 pub use fiscal_settings::{
-    FiscalEnvironment, FiscalSettings, FiscalSettingsDraft, MAX_NATURES, MAX_RULES_PER_NATURE,
-    MAX_SERIES, MIN_SERIES, NatureKind, OperationNature, OperationNatureDraft, TaxRate, TaxRegime,
-    TaxRule, TaxRuleDraft,
+    FiscalEnvironment, FiscalSettings, FiscalSettingsDraft, IssTaxation, MAX_NATURES,
+    MAX_RULES_PER_NATURE, MAX_SERIES, MIN_SERIES, NatureKind, OperationNature,
+    OperationNatureDraft, ServiceTerms, ServiceTermsDraft, TaxRate, TaxRegime, TaxRule,
+    TaxRuleDraft,
 };
 pub use fiscal_time::{fiscal_day, fiscal_timestamp, state_code, state_utc_offset_minutes};
 pub use ids::{

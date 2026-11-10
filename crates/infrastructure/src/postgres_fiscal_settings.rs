@@ -1,7 +1,8 @@
 use conta_verde_application::{FiscalSettingsRepository, RepositoryError, ensure_audit_describes};
 use conta_verde_domain::{
     AddressDraft, AuditEntity, AuditEntry, AuditRecord, CompanyId, FiscalEnvironment,
-    FiscalSettings, FiscalSettingsDraft, NatureKind, OperationNatureDraft, TaxRegime, TaxRuleDraft,
+    FiscalSettings, FiscalSettingsDraft, IssTaxation, NatureKind, OperationNatureDraft,
+    ServiceTermsDraft, TaxRegime, TaxRuleDraft,
 };
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row};
@@ -39,8 +40,8 @@ impl FiscalSettingsRepository for PostgresFiscalSettingsRepository {
         let row = sqlx::query(
             "SELECT legal_name, cnpj, state_registration, municipal_registration, postal_code, street, \
              street_number, complement, district, city, state, regime, environment, nfe_series, \
-             nfce_series, nfse_series, certificate_valid_until::text AS certificate_valid_until \
-             FROM fiscal_settings WHERE company_id = $1",
+             nfce_series, nfse_series, certificate_valid_until::text AS certificate_valid_until, \
+             city_ibge_code FROM fiscal_settings WHERE company_id = $1",
         )
         .bind(company_id.as_uuid())
         .fetch_optional(&mut *tx)
@@ -50,7 +51,8 @@ impl FiscalSettingsRepository for PostgresFiscalSettingsRepository {
             return Ok(None);
         };
         let nature_rows = sqlx::query(
-            "SELECT position, code, name, kind, cfop_in_state, cfop_interstate, active \
+            "SELECT position, code, name, kind, cfop_in_state, cfop_interstate, active, national_tax_code, \
+             municipal_service_code, iss_taxation, iss_rate::text AS iss_rate \
              FROM fiscal_natures WHERE company_id = $1 ORDER BY position",
         )
         .bind(company_id.as_uuid())
@@ -113,6 +115,7 @@ impl FiscalSettingsRepository for PostgresFiscalSettingsRepository {
             certificate_valid_until: row
                 .try_get("certificate_valid_until")
                 .map_err(storage_error)?,
+            city_ibge_code: row.try_get("city_ibge_code").map_err(storage_error)?,
             natures,
         };
         FiscalSettings::new(company_id, draft)
@@ -133,9 +136,9 @@ impl FiscalSettingsRepository for PostgresFiscalSettingsRepository {
         sqlx::query(
             "INSERT INTO fiscal_settings (company_id, legal_name, cnpj, state_registration, \
              municipal_registration, postal_code, street, street_number, complement, district, city, \
-             state, regime, environment, nfe_series, nfce_series, nfse_series, certificate_valid_until) \
+             state, regime, environment, nfe_series, nfce_series, nfse_series, certificate_valid_until, city_ibge_code) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, \
-             CAST($18 AS DATE)) \
+             CAST($18 AS DATE), $19) \
              ON CONFLICT (company_id) DO UPDATE SET legal_name = EXCLUDED.legal_name, \
              cnpj = EXCLUDED.cnpj, state_registration = EXCLUDED.state_registration, \
              municipal_registration = EXCLUDED.municipal_registration, \
@@ -145,7 +148,8 @@ impl FiscalSettingsRepository for PostgresFiscalSettingsRepository {
              regime = EXCLUDED.regime, environment = EXCLUDED.environment, \
              nfe_series = EXCLUDED.nfe_series, nfce_series = EXCLUDED.nfce_series, \
              nfse_series = EXCLUDED.nfse_series, \
-             certificate_valid_until = EXCLUDED.certificate_valid_until",
+             certificate_valid_until = EXCLUDED.certificate_valid_until, \
+             city_ibge_code = EXCLUDED.city_ibge_code",
         )
         .bind(company_id)
         .bind(settings.legal_name())
@@ -165,6 +169,7 @@ impl FiscalSettingsRepository for PostgresFiscalSettingsRepository {
         .bind(i16::try_from(settings.nfce_series()).map_err(|_| RepositoryError::Storage("series".into()))?)
         .bind(i16::try_from(settings.nfse_series()).map_err(|_| RepositoryError::Storage("series".into()))?)
         .bind(settings.certificate_valid_until().map(|day| day.to_string()))
+        .bind(settings.city_ibge_code())
         .execute(&mut *tx)
         .await
         .map_err(storage_error)?;
@@ -182,7 +187,8 @@ impl FiscalSettingsRepository for PostgresFiscalSettingsRepository {
             let nature_position = position(index, "natures")?;
             sqlx::query(
                 "INSERT INTO fiscal_natures (company_id, position, code, name, kind, cfop_in_state, \
-                 cfop_interstate, active) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                 cfop_interstate, active, national_tax_code, municipal_service_code, iss_taxation, iss_rate) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CAST($12 AS NUMERIC))",
             )
             .bind(company_id)
             .bind(nature_position)
@@ -192,6 +198,10 @@ impl FiscalSettingsRepository for PostgresFiscalSettingsRepository {
             .bind(nature.cfop_in_state())
             .bind(nature.cfop_interstate())
             .bind(nature.is_active())
+            .bind(nature.service().map(|terms| terms.national_tax_code()))
+            .bind(nature.service().and_then(|terms| terms.municipal_service_code()))
+            .bind(nature.service().map(|terms| terms.iss_taxation().key()))
+            .bind(nature.service().and_then(|terms| terms.iss_rate()).map(|rate| rate.to_string()))
             .execute(&mut *tx)
             .await
             .map_err(storage_error)?;
@@ -248,7 +258,28 @@ fn nature_from_row(
         cfop_interstate: row.try_get("cfop_interstate").map_err(storage_error)?,
         active: row.try_get("active").map_err(storage_error)?,
         rules,
+        service: service_from_row(row)?,
     })
+}
+
+fn service_from_row(row: &PgRow) -> Result<Option<ServiceTermsDraft>, RepositoryError> {
+    let national_tax_code: Option<String> =
+        row.try_get("national_tax_code").map_err(storage_error)?;
+    let Some(national_tax_code) = national_tax_code else {
+        return Ok(None);
+    };
+    let taxation: Option<String> = row.try_get("iss_taxation").map_err(storage_error)?;
+    Ok(Some(ServiceTermsDraft {
+        national_tax_code,
+        municipal_service_code: row
+            .try_get("municipal_service_code")
+            .map_err(storage_error)?,
+        iss_taxation: stored(
+            taxation.as_deref().and_then(IssTaxation::parse),
+            "ISS taxation",
+        )?,
+        iss_rate: row.try_get("iss_rate").map_err(storage_error)?,
+    }))
 }
 
 fn rule_from_row(row: &PgRow) -> Result<TaxRuleDraft, RepositoryError> {
@@ -374,6 +405,51 @@ mod tests {
         run(nature("product", "'5102'", "'6102'", "sale"))
             .await
             .unwrap();
+
+        // The ISSQN terms belong to a service, come together, and keep their shapes; the municipality's code is seven digits.
+        let terms = |position: i16, kind: &str, columns: &str| {
+            let cfops = if kind == "product" {
+                "'5102', '6102'"
+            } else {
+                "NULL, NULL"
+            };
+            format!(
+                "INSERT INTO fiscal_natures (company_id, position, code, name, kind, active, \
+                 cfop_in_state, cfop_interstate, \
+                 national_tax_code, iss_taxation, municipal_service_code, iss_rate) \
+                 VALUES ($1, {position}, 'svc{position}', 'Serviço', '{kind}', true, {cfops}, {columns})"
+            )
+        };
+        refused(
+            run(terms(2, "product", "'010701', 'taxable', NULL, NULL")).await,
+            "fiscal_natures_service_terms_valid",
+        );
+        refused(
+            run(terms(2, "service", "'10701', 'taxable', NULL, NULL")).await,
+            "fiscal_natures_service_terms_valid",
+        );
+        refused(
+            run(terms(2, "service", "'010701', 'whatever', NULL, NULL")).await,
+            "fiscal_natures_service_terms_valid",
+        );
+        refused(
+            run(terms(2, "service", "'010701', 'taxable', NULL, 2.555")).await,
+            "fiscal_natures_service_terms_valid",
+        );
+        refused(
+            run(terms(2, "service", "NULL, 'taxable', NULL, NULL")).await,
+            "fiscal_natures_service_terms_valid",
+        );
+        run(terms(2, "service", "'010701', 'taxable', '1.07', 2.5"))
+            .await
+            .unwrap();
+        refused(
+            run(
+                "UPDATE fiscal_settings SET city_ibge_code = '355030' WHERE company_id = $1".into(),
+            )
+            .await,
+            "fiscal_settings_city_ibge_code_valid",
+        );
 
         // The rule's ICMS code follows its regime, and a rate is a percentage with two decimals.
         let rule = |regime: &str, icms: &str, rate: &str| {

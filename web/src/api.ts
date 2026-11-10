@@ -621,6 +621,19 @@ export interface TaxRule {
   cofins_rate: string | null;
 }
 
+export type IssTaxation = "taxable" | "immune" | "export" | "not_incident";
+
+/** What a service says about the ISSQN (ADR 0080): the codes and the rate are the company's and its accountant's. */
+export interface ServiceTerms {
+  /** Six digits: item, sub-item and detail of the national list of services. */
+  national_tax_code: string;
+  /** The municipality's own code for the service, for a gateway whose layout is municipal. */
+  municipal_service_code: string | null;
+  iss_taxation: IssTaxation;
+  /** A percentage as decimal text, never a number. */
+  iss_rate: string | null;
+}
+
 /** What a company calls an operation, with the CFOPs of its goods and its tax rules; a service has neither. */
 export interface OperationNature {
   code: string;
@@ -630,6 +643,8 @@ export interface OperationNature {
   cfop_interstate: string | null;
   active: boolean;
   rules: TaxRule[];
+  /** For a service: what it says about the ISSQN, while the company has not set it `null` (an NFS-e needs it). */
+  service: ServiceTerms | null;
 }
 
 export type FiscalDocumentStatus =
@@ -748,6 +763,8 @@ export interface FiscalSettings {
   nfse_series: number;
   /** The day the A1 certificate expires, as typed: the certificate itself stays at the gateway. */
   certificate_valid_until: string | null;
+  /** The IBGE code (seven digits) of the issuer's municipality, which an NFS-e names as where it is issued. */
+  city_ibge_code: string | null;
   natures: OperationNature[];
 }
 

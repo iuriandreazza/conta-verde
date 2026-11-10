@@ -54,6 +54,7 @@ pub enum DomainError {
     InvalidFiscalDocument(&'static str),
     ServiceNatureHasNoCfop,
     ServiceNatureHasNoRules,
+    ProductNatureHasNoServiceTerms,
     TooManyNatures,
     DuplicateNature,
     TooManyTaxRules,
@@ -239,6 +240,9 @@ impl fmt::Display for DomainError {
             ),
             Self::ServiceNatureHasNoCfop => {
                 f.write_str("a service has no CFOP")
+            }
+            Self::ProductNatureHasNoServiceTerms => {
+                f.write_str("a product has no ISSQN terms: they are for a service")
             }
             Self::ServiceNatureHasNoRules => f.write_str(
                 "tax rules are for the natures of goods; a service's tax is decided with the NFS-e",
