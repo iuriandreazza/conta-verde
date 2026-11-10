@@ -152,6 +152,8 @@ export function FiscalSettingsPage() {
   const [today] = useState(() => todayIso());
   const [loaded, setLoaded] = useState(false);
   const [stored, setStored] = useState<FiscalSettings | null>(null);
+  // Which gateway issues, `null` for none, and unknown (no notice) while it is not read or cannot be.
+  const [gateway, setGateway] = useState<string | null | undefined>(undefined);
   const [form, setForm] = useState<Form>(EMPTY);
   const [edited, setEdited] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -174,6 +176,17 @@ export function FiscalSettingsPage() {
         setLoaded(true);
       })
       .catch((failure: unknown) => current && setError(errorMessage(failure)));
+    return () => {
+      current = false;
+    };
+  }, [companyId]);
+
+  useEffect(() => {
+    let current = true;
+    api
+      .getFiscalGateway(companyId)
+      .then((answer) => current && setGateway(answer.gateway))
+      .catch(() => undefined);
     return () => {
       current = false;
     };
@@ -243,6 +256,18 @@ export function FiscalSettingsPage() {
       ) : (
         loaded && (
           <>
+            {gateway === null && (
+              <Notice
+                tone="warning"
+                message="Nenhum gateway fiscal está configurado nesta instalação (variável FISCAL_GATEWAY): os documentos não podem ser emitidos."
+              />
+            )}
+            {gateway === "fake" && (
+              <Notice
+                tone="warning"
+                message="O gateway é o de teste (fake): os documentos são de mentira e não têm valor fiscal."
+              />
+            )}
             {stored === null && (
               <Notice
                 tone="warning"

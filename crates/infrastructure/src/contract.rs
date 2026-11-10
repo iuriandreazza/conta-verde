@@ -17179,3 +17179,258 @@ pub async fn fiscal_settings_are_replaced_and_audited<
         .collect();
     assert_eq!(fields, ["legal_name", "nfe_series"]);
 }
+
+/// The settings draft of a company that issues from São Paulo in the Simples Nacional, for the tests of the fiscal
+/// gateway.
+pub fn fiscal_settings_draft(
+    cnpj: &str,
+    environment: conta_verde_domain::FiscalEnvironment,
+) -> FiscalSettingsDraft {
+    use conta_verde_domain::{NatureKind, OperationNatureDraft, TaxRegime};
+
+    FiscalSettingsDraft {
+        legal_name: "Verde Comércio Ltda".into(),
+        cnpj: cnpj.into(),
+        state_registration: Some("110042490114".into()),
+        municipal_registration: None,
+        address: AddressDraft {
+            postal_code: "01310100".into(),
+            street: "Avenida Paulista".into(),
+            number: Some("1000".into()),
+            complement: None,
+            district: Some("Bela Vista".into()),
+            city: "São Paulo".into(),
+            state: "SP".into(),
+        },
+        regime: TaxRegime::SimplesNacional,
+        environment,
+        nfe_series: 1,
+        nfce_series: 1,
+        nfse_series: 1,
+        certificate_valid_until: Some("2033-03-31".into()),
+        natures: vec![OperationNatureDraft {
+            code: "sale".into(),
+            name: "Venda".into(),
+            kind: NatureKind::Product,
+            cfop_in_state: Some("5102".into()),
+            cfop_interstate: Some("6102".into()),
+            active: true,
+            rules: vec![],
+        }],
+    }
+}
+
+/// The settings of such a company.
+pub fn fiscal_issuer(
+    cnpj: &str,
+    environment: conta_verde_domain::FiscalEnvironment,
+) -> conta_verde_domain::FiscalSettings {
+    conta_verde_domain::FiscalSettings::new(
+        CompanyId::generate(),
+        fiscal_settings_draft(cnpj, environment),
+    )
+    .unwrap()
+}
+
+/// A sale of goods to a customer in the same state, as an NF-e request: the one every gateway test sends.
+pub fn nfe_request(
+    issuer: &conta_verde_domain::FiscalSettings,
+    reference: &str,
+) -> conta_verde_application::NfeRequest {
+    use conta_verde_application::{
+        BuyerPresence, Destination, NfeItem, NfeRecipient, NfeRequest, PaymentForm,
+    };
+    use conta_verde_domain::Amount;
+
+    let amount = |text: &str| Amount::parse(text).unwrap();
+    NfeRequest {
+        reference: reference.to_owned(),
+        issuer: issuer.clone(),
+        nature: "Venda de mercadoria".into(),
+        // 2026-11-09 17:30:00 UTC.
+        issued_at_unix: 1_794_245_400,
+        destination: Destination::InState,
+        final_consumer: true,
+        presence: BuyerPresence::Internet,
+        recipient: NfeRecipient {
+            name: "Maria Souza".into(),
+            document: Some("52998224725".into()),
+            email: Some("maria@example.com".into()),
+            address: None,
+            state_registration: None,
+        },
+        items: vec![NfeItem {
+            number: 1,
+            code: "SKU-1".into(),
+            description: "Cartões de visita".into(),
+            ncm: "49111090".into(),
+            cfop: "5102".into(),
+            unit: "UN".into(),
+            quantity: "100".parse().unwrap(),
+            unit_price: "0.4723".parse().unwrap(),
+            gross: amount("47.23"),
+            discount: amount("0"),
+            origin: 0,
+            icms_code: "102".into(),
+            pis_code: "07".into(),
+            cofins_code: "07".into(),
+        }],
+        payments: vec![(PaymentForm::Pix, amount("47.23"))],
+        total_products: amount("47.23"),
+        total_discount: amount("0"),
+        total: amount("47.23"),
+    }
+}
+
+/// What every fiscal gateway adapter shares ([ADR 0075]): a document is authorized (at once or after asking again),
+/// asking with the same reference gives the same document, the gateway numbers in order, a correction letter is
+/// numbered, a cancellation is refused for a short reason and for a document that is not authorized, a cancelled
+/// document is told so, and a range of numbers is invalidated. `issuer` is the company the adapter issues for.
+pub async fn a_gateway_authorizes_cancels_and_corrects<
+    G: conta_verde_application::FiscalGateway,
+>(
+    gateway: &G,
+    issuer: &conta_verde_domain::FiscalSettings,
+) {
+    use conta_verde_application::{DocumentOutcome, EventOutcome};
+
+    assert!(gateway.is_enabled());
+    let first = Uuid::new_v4().to_string();
+    let second = Uuid::new_v4().to_string();
+
+    // Nothing is known of a reference that was never sent.
+    assert_eq!(
+        gateway.query_nfe(issuer, &first).await.unwrap(),
+        DocumentOutcome::Unknown
+    );
+
+    // Sent, it is authorized at once or after a few questions, and then it is the same document every time.
+    let authorized = |outcome: DocumentOutcome| match outcome {
+        DocumentOutcome::Authorized(document) => document,
+        other => panic!("authorized was expected, got {other:?}"),
+    };
+    let settle = |reference: String| async move {
+        for _ in 0..6 {
+            match gateway.query_nfe(issuer, &reference).await.unwrap() {
+                DocumentOutcome::Processing => {}
+                other => return other,
+            }
+        }
+        panic!("the document never left processing");
+    };
+    let sent = gateway
+        .submit_nfe(&nfe_request(issuer, &first))
+        .await
+        .unwrap();
+    let one = match sent {
+        DocumentOutcome::Processing => authorized(settle(first.clone()).await),
+        other => authorized(other),
+    };
+    assert_eq!(one.series, issuer.nfe_series());
+    assert!(one.number >= 1);
+    assert!(!one.xml.is_empty());
+    assert!(
+        String::from_utf8_lossy(&one.xml).contains(one.access_key.as_str()),
+        "the XML names its access key"
+    );
+    let again = authorized(
+        gateway
+            .submit_nfe(&nfe_request(issuer, &first))
+            .await
+            .map(|outcome| match outcome {
+                DocumentOutcome::Processing => DocumentOutcome::Authorized(one.clone()),
+                other => other,
+            })
+            .unwrap(),
+    );
+    assert_eq!(again.access_key, one.access_key);
+    assert_eq!(again.number, one.number);
+
+    // The next document takes the next number, and its key is its own.
+    let sent = gateway
+        .submit_nfe(&nfe_request(issuer, &second))
+        .await
+        .unwrap();
+    let two = match sent {
+        DocumentOutcome::Processing => authorized(settle(second.clone()).await),
+        other => authorized(other),
+    };
+    assert_eq!(two.number, one.number + 1);
+    assert_ne!(two.access_key, one.access_key);
+    assert_eq!(
+        authorized(gateway.query_nfe(issuer, &first).await.unwrap()).access_key,
+        one.access_key
+    );
+
+    // A correction letter needs its 15 characters, is numbered from 1 and counts up.
+    let corrected = |outcome: EventOutcome| match outcome {
+        EventOutcome::Accepted(event) => event,
+        other => panic!("accepted was expected, got {other:?}"),
+    };
+    assert!(matches!(
+        gateway.correct_nfe(issuer, &first, "short").await.unwrap(),
+        EventOutcome::Refused(_)
+    ));
+    let text = "Corrigir o endereço de entrega do destinatário";
+    assert_eq!(
+        corrected(gateway.correct_nfe(issuer, &first, text).await.unwrap()).number,
+        Some(1)
+    );
+    assert_eq!(
+        corrected(gateway.correct_nfe(issuer, &first, text).await.unwrap()).number,
+        Some(2)
+    );
+
+    // A cancellation needs its reason, and takes only a document that is authorized.
+    assert!(matches!(
+        gateway.cancel_nfe(issuer, &first, "short").await.unwrap(),
+        EventOutcome::Refused(_)
+    ));
+    let reason = "Venda desfeita a pedido do cliente";
+    let never_sent = Uuid::new_v4().to_string();
+    assert!(matches!(
+        gateway
+            .cancel_nfe(issuer, &never_sent, reason)
+            .await
+            .unwrap(),
+        EventOutcome::Refused(_)
+    ));
+    corrected(gateway.cancel_nfe(issuer, &first, reason).await.unwrap());
+    match gateway.query_nfe(issuer, &first).await.unwrap() {
+        DocumentOutcome::Cancelled {
+            document,
+            cancellation_xml,
+        } => {
+            assert_eq!(document.access_key, one.access_key);
+            assert!(!cancellation_xml.is_empty());
+        }
+        other => panic!("cancelled was expected, got {other:?}"),
+    }
+    assert!(matches!(
+        gateway.cancel_nfe(issuer, &first, reason).await.unwrap(),
+        EventOutcome::Refused(_)
+    ));
+    assert!(matches!(
+        gateway.correct_nfe(issuer, &first, text).await.unwrap(),
+        EventOutcome::Refused(_)
+    ));
+
+    // A range of numbers is invalidated with a reason; the other document is untouched.
+    assert!(matches!(
+        gateway
+            .invalidate_nfe_numbers(issuer, 1, 20, 10, "Numeração pulada por falha")
+            .await
+            .unwrap(),
+        EventOutcome::Refused(_)
+    ));
+    corrected(
+        gateway
+            .invalidate_nfe_numbers(issuer, 1, 100, 105, "Numeração pulada por falha")
+            .await
+            .unwrap(),
+    );
+    assert!(matches!(
+        gateway.query_nfe(issuer, &second).await.unwrap(),
+        DocumentOutcome::Authorized(_)
+    ));
+}

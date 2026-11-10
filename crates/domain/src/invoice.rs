@@ -40,20 +40,62 @@ impl AccessKey {
         Ok(Self(text))
     }
 
+    /// The key of a document an issuer makes, from what it is made of: the state's IBGE code, the month, the issuer's
+    /// CNPJ (14 characters), the model (55 for an NF-e), series, number, the emission type (1 is normal) and an
+    /// eight-digit code the issuer picks. The check digit is worked out, so only a right key is built.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_parts(
+        state_code: u8,
+        issued_on: CalendarDate,
+        issuer: &str,
+        model: u8,
+        series: u16,
+        number: u32,
+        emission_type: u8,
+        numeric_code: u32,
+    ) -> Result<Self, DomainError> {
+        // Every part has its own width: a wider one would shift the others and still make a 43-character body.
+        let fits = state_code < 100
+            && model < 100
+            && series < 1_000
+            && number < 1_000_000_000
+            && emission_type < 10
+            && numeric_code < 100_000_000
+            && issuer.len() == 14
+            && issuer
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || byte.is_ascii_uppercase());
+        if !fits {
+            return Err(DomainError::InvalidAccessKey);
+        }
+        let body = format!(
+            "{state_code:02}{:02}{:02}{issuer}{model:02}{series:03}{number:09}{emission_type}{numeric_code:08}",
+            issued_on.year() % 100,
+            issued_on.month()
+        );
+        let values: Vec<u32> = body
+            .bytes()
+            .map(|byte| u32::from(byte) - u32::from(b'0'))
+            .collect();
+        Self::parse(&format!("{body}{}", check_digit(&values)))
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
-    /// The issuer's registry number as the key holds it: 14 digits (a CPF is padded with zeros on the left).
-    fn issuer_field(&self) -> &str {
+    /// The issuer's registry number as the key holds it: 14 characters (a CPF is padded with zeros on the left).
+    pub fn issuer(&self) -> &str {
         &self.0[6..20]
     }
 
-    fn series_field(&self) -> &str {
+    /// The series, three digits.
+    pub fn series(&self) -> &str {
         &self.0[22..25]
     }
 
-    fn number_field(&self) -> &str {
+    /// The number, nine digits.
+    pub fn number(&self) -> &str {
         &self.0[25..34]
     }
 }
@@ -242,15 +284,15 @@ impl Invoice {
             Document::Cnpj(text) => text.clone(),
             Document::Cpf(text) => format!("000{text}"),
         };
-        if access_key.issuer_field() != key_issuer {
+        if access_key.issuer() != key_issuer {
             return Err(DomainError::InvoiceKeyMismatch("issuer"));
         }
         let number = required_text(&draft.number, 9, DomainError::InvoiceKeyMismatch("number"))?;
         let series = required_text(&draft.series, 3, DomainError::InvoiceKeyMismatch("series"))?;
-        if number.parse::<u64>().ok() != access_key.number_field().parse::<u64>().ok() {
+        if number.parse::<u64>().ok() != access_key.number().parse::<u64>().ok() {
             return Err(DomainError::InvoiceKeyMismatch("number"));
         }
-        if series.parse::<u64>().ok() != access_key.series_field().parse::<u64>().ok() {
+        if series.parse::<u64>().ok() != access_key.series().parse::<u64>().ok() {
             return Err(DomainError::InvoiceKeyMismatch("series"));
         }
         let issued_on =
@@ -497,6 +539,66 @@ pub(crate) mod tests {
     }
 
     const CNPJ: &str = "11222333000181";
+
+    #[test]
+    fn a_key_is_made_from_its_parts_with_the_right_check_digit() {
+        let made = AccessKey::from_parts(
+            35,
+            CalendarDate::parse("2026-11-09").unwrap(),
+            CNPJ,
+            55,
+            1,
+            4321,
+            1,
+            12_345_678,
+        )
+        .unwrap();
+        assert_eq!(made.as_str(), key_for(CNPJ, 1, 4321));
+        assert_eq!(made.number(), "000004321");
+        assert_eq!(made.series(), "001");
+        // An alphanumeric CNPJ counts like its own check digits do, and one of the wrong length is refused.
+        let alphanumeric = AccessKey::from_parts(
+            35,
+            CalendarDate::parse("2026-11-09").unwrap(),
+            "12ABC34501DE35",
+            55,
+            1,
+            1,
+            1,
+            1,
+        )
+        .unwrap();
+        assert_eq!(alphanumeric.issuer(), "12ABC34501DE35");
+        // A part wider than its place would shift the others: refused, not misaligned.
+        for (series, number, code) in [(1000, 1, 1), (1, 1_000_000_000, 1), (1, 1, 100_000_000)] {
+            assert!(
+                AccessKey::from_parts(
+                    35,
+                    CalendarDate::parse("2026-11-09").unwrap(),
+                    CNPJ,
+                    55,
+                    series,
+                    number,
+                    1,
+                    code
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            AccessKey::from_parts(
+                35,
+                CalendarDate::parse("2026-11-09").unwrap(),
+                "123",
+                55,
+                1,
+                1,
+                1,
+                1
+            )
+            .is_err()
+        );
+    }
 
     fn item(code: &str, quantity: &str, value: &str) -> InvoiceItemDraft {
         InvoiceItemDraft {

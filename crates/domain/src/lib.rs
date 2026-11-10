@@ -22,6 +22,7 @@ mod email;
 mod error;
 mod financial_entry;
 mod fiscal_settings;
+mod fiscal_time;
 mod ids;
 mod inventory_count;
 mod invitation;
@@ -107,6 +108,7 @@ pub use fiscal_settings::{
     MAX_SERIES, MIN_SERIES, NatureKind, OperationNature, OperationNatureDraft, TaxRate, TaxRegime,
     TaxRule, TaxRuleDraft,
 };
+pub use fiscal_time::{fiscal_timestamp, state_code, state_utc_offset_minutes};
 pub use ids::{
     AttachmentId, BankAccountId, CategoryId, ChargeId, CommissionRuleId, CompanyId, ContractId,
     CostCenterId, DocumentMailId, EntryId, InventoryCountId, InvitationId, JobId, NotificationId,

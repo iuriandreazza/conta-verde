@@ -1,5 +1,6 @@
 use axum::Json;
 use axum::extract::State;
+use conta_verde_application::FiscalGateway;
 use conta_verde_domain::{
     AddressDraft, FiscalEnvironment, FiscalSettings, FiscalSettingsDraft, NatureKind,
     OperationNature, OperationNatureDraft, TaxRegime, TaxRule, TaxRuleDraft,
@@ -244,4 +245,21 @@ pub(crate) async fn settings_history<X: Ports>(
     Ok(Json(
         history.iter().map(HistoryEntryResponse::from).collect(),
     ))
+}
+
+#[derive(Serialize)]
+pub(crate) struct GatewayResponse {
+    /// The gateway this installation issues through (`focus`, `fake`), or `null` when the operator configured none
+    /// (`FISCAL_GATEWAY`): and then no document can be issued.
+    gateway: Option<String>,
+}
+
+pub(crate) async fn get_gateway<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(_, _): CompanyAccess,
+) -> Json<GatewayResponse> {
+    let gateway = &state.fiscal_gateway;
+    Json(GatewayResponse {
+        gateway: gateway.is_enabled().then(|| gateway.key().to_owned()),
+    })
 }
