@@ -101,6 +101,20 @@ impl WebhookSubscription {
         })
     }
 
+    /// Whether an address could be the one of a subscription, without making one.
+    pub fn check_address(raw: &str, allow_private_targets: bool) -> Result<(), DomainError> {
+        clean_url(raw, allow_private_targets).map(|_| ())
+    }
+
+    /// The same subscription, off. Its address is not looked at again: an address that was fine when it was made (before the
+    /// operator took the development opt-in away) must not keep it from being switched off.
+    pub fn switched_off(&self) -> Self {
+        Self {
+            active: false,
+            ..self.clone()
+        }
+    }
+
     /// The same subscription with its address, its events and whether it is on replaced by the draft's.
     pub fn replaced_with(
         &self,

@@ -13,6 +13,7 @@ import { CompaniesPage } from "./pages/CompaniesPage";
 import { AccountingPage } from "./pages/AccountingPage";
 import { ApiKeysPage } from "./pages/ApiKeysPage";
 import { BankConnectionsPage } from "./pages/BankConnectionsPage";
+import { ConnectorsPage } from "./pages/ConnectorsPage";
 import { WebhooksPage } from "./pages/WebhooksPage";
 import { GatewaySettingsPage } from "./pages/GatewaySettingsPage";
 import { PosPage } from "./pages/PosPage";
@@ -95,6 +96,7 @@ export function App() {
           <Route path="/companies/:companyId/members" element={<MembersPage />} />
           <Route path="/companies/:companyId/api-keys" element={<ApiKeysPage />} />
           <Route path="/companies/:companyId/webhooks" element={<WebhooksPage />} />
+          <Route path="/companies/:companyId/connectors" element={<ConnectorsPage />} />
         </Route>
         <Route path="*" element={<NotFoundPage />} />
       </Route>

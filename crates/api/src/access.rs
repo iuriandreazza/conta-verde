@@ -43,6 +43,7 @@ pub(crate) const SEGMENT_AREAS: &[(&str, Area)] = &[
     ("recurrences", Area::Finance),
     ("statement-lines", Area::Finance),
     ("bank-connections", Area::Finance),
+    ("connectors", Area::Members),
     ("reports", Area::Finance),
     ("collection", Area::Finance),
     ("delinquency", Area::Finance),

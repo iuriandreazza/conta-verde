@@ -88,6 +88,7 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
             | RepositoryError::DuplicateTransferCategory
             | RepositoryError::DuplicateBankAccount
             | RepositoryError::DuplicateBankConnection
+            | RepositoryError::ConnectorChanged
             | RepositoryError::DuplicateMembership
             | RepositoryError::Overpaid
             | RepositoryError::EntrySettled
@@ -150,6 +151,7 @@ fn describe(error: &ApplicationError) -> (StatusCode, String) {
         ApplicationError::ProductNotFound
         | ApplicationError::ApiKeyNotFound
         | ApplicationError::BankConnectionNotFound
+        | ApplicationError::ConnectorNotFound
         | ApplicationError::WebhookNotFound
         | ApplicationError::WebhookDeliveryNotFound
         | ApplicationError::CostCenterNotFound

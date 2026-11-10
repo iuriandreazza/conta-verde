@@ -54,6 +54,7 @@ struct PostgresPorts;
 
 impl Ports for PostgresPorts {
     type BankConnections = PostgresBankConnectionRepository;
+    type Connectors = conta_verde_infrastructure::PostgresConnectorRepository;
     type Aggregator = ConfiguredAggregator;
     type WebhookSubscriptions = PostgresWebhookRepository;
     type Jobs = PostgresJobQueue;
@@ -462,10 +463,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
     tokio::spawn(poll_fiscal_documents(fiscal_documents()));
     let fiscal_documents = fiscal_documents();
-    let api_keys = ApiKeyService::new(
+    let api_keys = std::sync::Arc::new(ApiKeyService::new(
         PostgresApiKeyRepository::new(pool.clone()),
         Argon2SecretService::new()?,
-    );
+    ));
+    let connectors = conta_verde_infrastructure::PostgresConnectorRepository::new(pool.clone());
     let sale_claims = PostgresSaleClaimRepository::new(pool.clone());
     let auth = AuthService::new(
         PostgresIdentityRepository::new(pool),
@@ -481,6 +483,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 bank_sync,
                 webhook_subscriptions,
                 api_keys,
+                connectors,
                 sale_claims,
                 parties,
                 products,

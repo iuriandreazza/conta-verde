@@ -53,3 +53,14 @@ jobs:
       - run: pnpm --filter conta-verde-web typecheck
       - run: pnpm --filter conta-verde-web test
       - run: pnpm --filter conta-verde-web build
+
+  # A connector is a separate package with no dependencies: Node 22 and its test runner, nothing to install.
+  connectors:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --test "test/*.test.js"
+        working-directory: connectors/woocommerce

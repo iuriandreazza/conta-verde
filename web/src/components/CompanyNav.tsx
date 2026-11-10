@@ -134,6 +134,7 @@ const SETTINGS: NavArea = {
     { path: "/gateway", label: "Gateway fiscal", icon: LayersIcon },
     { path: "/api-keys", label: "Chaves de API", icon: SendIcon },
     { path: "/webhooks", label: "Webhooks", icon: SendIcon },
+    { path: "/connectors", label: "Conectores", icon: LayersIcon },
   ],
 };
 

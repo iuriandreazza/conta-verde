@@ -9,6 +9,7 @@ pub enum DomainError {
     /// A bank connection whose provider or aggregator id is not usable; names which.
     InvalidBankConnection(&'static str),
     TooManyBankConnections,
+    TooManyConnectors,
     /// A webhook address that is not `https` with a public host.
     InvalidWebhookUrl,
     InvalidWebhookEvent,
@@ -202,6 +203,7 @@ impl fmt::Display for DomainError {
                 "the {what} of a bank connection is 1 to 100 printable characters with no spaces (the provider is lower case letters)"
             ),
             Self::TooManyBankConnections => f.write_str("a company has at most 50 bank connections"),
+            Self::TooManyConnectors => f.write_str("a company has at most 10 connectors"),
             Self::NoApiScopes => f.write_str("a key needs at least one scope"),
             Self::InvalidApiKeyGrace => {
                 f.write_str("the old key may live on for 0 to 168 hours after a rotation")

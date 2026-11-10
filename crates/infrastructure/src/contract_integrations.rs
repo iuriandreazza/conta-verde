@@ -10,6 +10,7 @@ use conta_verde_application::{
     BankConnectionRepository, BankSyncService, ItemState, ReconciliationService, RepositoryError,
     StatementLineQuery, StatementLineRepository, TransferRepository,
 };
+use conta_verde_application::{ConnectorRepository, ConnectorService};
 use conta_verde_domain::{
     Access, Actor, ApiKeyDraft, ApiKeyId, Area, AuditAction, BankAccountId, CalendarDate,
     CompanyId, ConnectionStatus, DeliveryStatus, DomainError, MAX_API_KEYS,
@@ -1537,4 +1538,276 @@ pub async fn syncs_bank_connections<C, S, E, T, F, Q>(
     assert_eq!(ended_one.last_synced_on(), Some(today));
     sync.disconnect(company, &ana, again.id()).await.unwrap();
     assert_eq!(aggregator.disconnected(), ["item-1", "item-1"]);
+}
+
+/// The connector service over the real key and subscription services, as the API holds them.
+type ConnectorsOver<C, KR, S, WR, CI, Q> = ConnectorService<
+    C,
+    std::sync::Arc<ApiKeyService<KR, S>>,
+    std::sync::Arc<WebhookService<WR, CI, Q, S>>,
+>;
+
+/// Connectors ([ADR 0090]): turned on they make a key with the kind's scopes and a subscription to its events, turned off they
+/// revoke the key and switch the subscription off, and what a failure leaves is taken back. `connectors` is the service over the
+/// real key and subscription services, and `keys` and `hooks` are those same services, to look at what was made.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub async fn runs_connectors<C, KR, S, WR, CI, Q>(
+    connectors: &ConnectorsOver<C, KR, S, WR, CI, Q>,
+    repository: &C,
+    keys: &ApiKeyService<KR, S>,
+    hooks: &WebhookService<WR, CI, Q, S>,
+    company: CompanyId,
+    other_company: CompanyId,
+) where
+    C: ConnectorRepository,
+    KR: ApiKeyRepository,
+    S: SecretService,
+    WR: WebhookRepository,
+    CI: SecretCipher,
+    Q: JobQueue,
+{
+    use conta_verde_domain::{Connector, ConnectorKind, MAX_CONNECTORS};
+
+    let ana = actor();
+    let kind = ConnectorKind::WooCommerce;
+    let shop = connectors
+        .create(company, &ana, kind, "Loja do centro", NOW)
+        .await
+        .unwrap();
+    assert!(!shop.is_active());
+    // A name is the company's once, ignoring case; another company may use it; and there is a limit.
+    assert_eq!(
+        connectors
+            .create(company, &ana, kind, "LOJA DO CENTRO", NOW)
+            .await
+            .unwrap_err(),
+        ApplicationError::Repository(RepositoryError::DuplicateName)
+    );
+    connectors
+        .create(other_company, &ana, kind, "Loja do centro", NOW)
+        .await
+        .unwrap();
+    for number in 1..MAX_CONNECTORS {
+        connectors
+            .create(company, &ana, kind, &format!("Loja {number}"), NOW)
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        connectors
+            .create(company, &ana, kind, "Uma a mais", NOW)
+            .await
+            .unwrap_err(),
+        ApplicationError::Domain(DomainError::TooManyConnectors)
+    );
+
+    // Off, nothing was made for it.
+    let keys_before = keys.list(company).await.unwrap().len();
+    let subscriptions_before = hooks.list(company).await.unwrap().len();
+    let views = connectors.list(company, NOW).await.unwrap();
+    assert_eq!(views.len(), MAX_CONNECTORS);
+    assert!(
+        views
+            .iter()
+            .all(|view| !view.key_usable && !view.subscription_on)
+    );
+
+    // An address the subscription would refuse is refused before anything is made: no key, no subscription, nothing to take back.
+    assert!(
+        connectors
+            .turn_on(company, &ana, shop.id(), "http://localhost/hook", NOW)
+            .await
+            .is_err()
+    );
+    assert_eq!(keys.list(company).await.unwrap().len(), keys_before);
+    assert_eq!(
+        hooks.list(company).await.unwrap().len(),
+        subscriptions_before
+    );
+    assert!(
+        !connectors
+            .list(company, NOW)
+            .await
+            .unwrap()
+            .iter()
+            .any(|v| v.connector.is_active())
+    );
+
+    // Turned on it makes the key with the kind's scopes and the subscription to its events, and gives the two secrets once.
+    let on = connectors
+        .turn_on(company, &ana, shop.id(), WEBHOOK_URL, NOW)
+        .await
+        .unwrap();
+    assert!(on.connector.is_active());
+    assert!(on.api_key_secret.starts_with("cvk_") && on.webhook_secret.starts_with("whsec_"));
+    let key = keys
+        .list(company)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|key| Some(key.id()) == on.connector.api_key_id())
+        .unwrap();
+    assert_eq!(key.scope_keys(), ["products:read", "sales:write"]);
+    assert_eq!(key.name(), "Conector WooCommerce: Loja do centro");
+    let subscription = hooks
+        .list(company)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|subscription| Some(subscription.id()) == on.connector.webhook_subscription_id())
+        .unwrap();
+    assert_eq!(subscription.events_text(), "sale.cancelled,sale.completed");
+    assert!(subscription.is_active());
+    let view = connectors
+        .list(company, NOW)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|view| view.connector.id() == shop.id())
+        .unwrap();
+    assert!(view.key_usable && view.subscription_on);
+    // The key speaks for the company, and it is the person's to revoke: the state is read, not remembered.
+    keys.revoke(company, &ana, key.id()).await.unwrap();
+    let revoked = connectors
+        .list(company, NOW)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|view| view.connector.id() == shop.id())
+        .unwrap();
+    assert!(revoked.connector.is_active() && !revoked.key_usable && revoked.subscription_on);
+
+    // Turned on twice is refused, and makes nothing; and another company's connector is nobody's.
+    let keys_now = keys.list(company).await.unwrap().len();
+    assert_eq!(
+        connectors
+            .turn_on(company, &ana, shop.id(), WEBHOOK_URL, NOW)
+            .await
+            .unwrap_err(),
+        ApplicationError::Repository(RepositoryError::ConnectorChanged)
+    );
+    assert_eq!(keys.list(company).await.unwrap().len(), keys_now);
+    for result in [
+        connectors
+            .turn_on(other_company, &ana, shop.id(), WEBHOOK_URL, NOW)
+            .await
+            .map(|_| ()),
+        connectors
+            .turn_off(other_company, &ana, shop.id())
+            .await
+            .map(|_| ()),
+        connectors
+            .history(other_company, shop.id())
+            .await
+            .map(|_| ()),
+    ] {
+        assert_eq!(result.unwrap_err(), ApplicationError::ConnectorNotFound);
+    }
+
+    // Two at once make one winner: a write that read it off finds it on.
+    let loser: Connector = on.connector.turned_off();
+    let entry = conta_verde_domain::AuditEntry {
+        company_id: company,
+        actor: ana.clone(),
+        entity: conta_verde_domain::AuditEntity::Connector,
+        entity_id: shop.id().as_uuid(),
+        action: AuditAction::Updated,
+        changes: Vec::new(),
+    };
+    assert_eq!(
+        repository.switch(&loser, false, &entry).await.unwrap_err(),
+        RepositoryError::ConnectorChanged
+    );
+
+    // Turned off it revokes the key and switches the subscription off, which it keeps; asking again changes and records nothing.
+    let off = connectors.turn_off(company, &ana, shop.id()).await.unwrap();
+    assert!(!off.is_active() && off.api_key_id().is_none());
+    assert_eq!(
+        off.webhook_subscription_id(),
+        on.connector.webhook_subscription_id()
+    );
+    assert!(
+        keys.list(company)
+            .await
+            .unwrap()
+            .iter()
+            .all(|key| key.is_revoked())
+    );
+    assert!(
+        !hooks
+            .list(company)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|subscription| Some(subscription.id()) == off.webhook_subscription_id())
+            .unwrap()
+            .is_active()
+    );
+    let trail = connectors.history(company, shop.id()).await.unwrap().len();
+    connectors.turn_off(company, &ana, shop.id()).await.unwrap();
+    assert_eq!(
+        connectors.history(company, shop.id()).await.unwrap().len(),
+        trail
+    );
+
+    // Two turning it on again at the same time: one wins and the other takes back its own key and **touches nothing else**, so the
+    // winner's connector, key and subscription (which is shared) stand.
+    let (first, second) = tokio::join!(
+        connectors.turn_on(company, &ana, shop.id(), WEBHOOK_URL, NOW),
+        connectors.turn_on(company, &ana, shop.id(), WEBHOOK_URL, NOW),
+    );
+    let (again, lost) = match (first, second) {
+        (Ok(won), Err(lost)) | (Err(lost), Ok(won)) => (won, lost),
+        other => panic!("exactly one wins: {other:?}"),
+    };
+    assert_eq!(
+        lost,
+        ApplicationError::Repository(RepositoryError::ConnectorChanged)
+    );
+    let live: Vec<_> = keys
+        .list(company)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|key| !key.is_revoked())
+        .collect();
+    assert_eq!(live.len(), 1);
+    assert_eq!(Some(live[0].id()), again.connector.api_key_id());
+    assert!(
+        hooks
+            .list(company)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(
+                |subscription| Some(subscription.id()) == again.connector.webhook_subscription_id()
+            )
+            .unwrap()
+            .is_active()
+    );
+    let view = connectors
+        .list(company, NOW)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|v| v.connector.id() == shop.id())
+        .unwrap();
+    assert!(view.key_usable && view.subscription_on);
+    // Turned on again it makes a new key, switches the same subscription on and gives a new secret.
+    assert_ne!(again.connector.api_key_id(), on.connector.api_key_id());
+    assert_eq!(
+        again.connector.webhook_subscription_id(),
+        on.connector.webhook_subscription_id()
+    );
+    assert_ne!(again.webhook_secret, on.webhook_secret);
+    assert_eq!(
+        hooks.list(company).await.unwrap().len(),
+        subscriptions_before + 1
+    );
+    // The trail says created, on, off, on, with ids and never a secret.
+    let trail = connectors.history(company, shop.id()).await.unwrap();
+    assert_eq!(trail.len(), 4);
+    let written = format!("{trail:?}");
+    assert!(!written.contains(&on.api_key_secret) && !written.contains(&again.webhook_secret));
+    assert!(written.contains("active"));
 }
