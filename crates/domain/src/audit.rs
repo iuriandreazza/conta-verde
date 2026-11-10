@@ -3,7 +3,7 @@ use uuid::Uuid;
 use crate::line::lines_text;
 use crate::{
     AccountOpening, ApiKey, ApiKeyId, Attachment, BankAccount, BankConnection, Category, Charge,
-    CollectionSettings, CommissionRule, CompanyId, Contract, CostCenter, DocumentCheck,
+    CollectionSettings, CommissionRule, CompanyId, Connector, Contract, CostCenter, DocumentCheck,
     DunningPlan, FinancialEntry, FiscalDocument, FiscalEvent, FiscalEventSubject, FiscalSettings,
     GatewaySettings, InventoryCount, LineMatch, PackageSchedule, Party, PaymentMethod, PaymentTerm,
     PeriodLock, PriceList, Product, PurchaseOrder, PurchaseReceipt, Quote, ReceivedInvoice,
@@ -63,6 +63,7 @@ impl Actor {
 pub enum AuditEntity {
     ApiKey,
     BankConnection,
+    Connector,
     WebhookSubscription,
     Party,
     Product,
@@ -115,6 +116,7 @@ impl AuditEntity {
         match self {
             Self::ApiKey => "api_key",
             Self::BankConnection => "bank_connection",
+            Self::Connector => "connector",
             Self::WebhookSubscription => "webhook_subscription",
             Self::Party => "party",
             Self::Product => "product",
@@ -698,6 +700,20 @@ impl Audited for ApiKey {
 impl Audited for WebhookSubscription {
     fn audit_entity(&self) -> AuditEntity {
         AuditEntity::WebhookSubscription
+    }
+
+    fn audit_company(&self) -> CompanyId {
+        self.company_id()
+    }
+
+    fn audit_id(&self) -> Uuid {
+        self.id().as_uuid()
+    }
+}
+
+impl Audited for Connector {
+    fn audit_entity(&self) -> AuditEntity {
+        AuditEntity::Connector
     }
 
     fn audit_company(&self) -> CompanyId {
@@ -1957,6 +1973,34 @@ pub fn bank_connection_changes(
         bank_connection_fields(before),
         bank_connection_fields(after),
     )
+}
+
+/// What the trail says of a connector: which kind, whether it is on, and the key and subscription made for it (their ids, never a
+/// secret).
+fn connector_fields(connector: &Connector) -> Fields {
+    vec![
+        ("kind", Some(connector.kind().as_str().to_owned())),
+        ("name", Some(connector.name().to_owned())),
+        ("active", Some(connector.is_active().to_string())),
+        (
+            "api_key_id",
+            connector.api_key_id().map(|id| id.as_uuid().to_string()),
+        ),
+        (
+            "webhook_subscription_id",
+            connector
+                .webhook_subscription_id()
+                .map(|id| id.as_uuid().to_string()),
+        ),
+    ]
+}
+
+pub fn connector_creation_changes(connector: &Connector) -> Vec<FieldChange> {
+    creation_from(connector_fields(connector))
+}
+
+pub fn connector_changes(before: &Connector, after: &Connector) -> Vec<FieldChange> {
+    changes_between(connector_fields(before), connector_fields(after))
 }
 
 fn cost_center_fields(cost_center: &CostCenter) -> Fields {

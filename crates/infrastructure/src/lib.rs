@@ -28,6 +28,7 @@ mod memory_categories;
 mod memory_charges;
 mod memory_collection;
 mod memory_commission_rules;
+mod memory_connectors;
 mod memory_contracts;
 mod memory_cost_centers;
 mod memory_document_mails;
@@ -71,6 +72,7 @@ mod postgres_categories;
 mod postgres_charges;
 mod postgres_collection;
 mod postgres_commission_rules;
+mod postgres_connectors;
 mod postgres_contracts;
 mod postgres_cost_centers;
 mod postgres_document_mails;
@@ -136,6 +138,7 @@ pub use memory_collection::{
     InMemoryPaymentLinkRepository,
 };
 pub use memory_commission_rules::InMemoryCommissionRuleRepository;
+pub use memory_connectors::InMemoryConnectorRepository;
 pub use memory_contracts::InMemoryContractRepository;
 pub use memory_cost_centers::InMemoryCostCenterRepository;
 pub use memory_document_mails::InMemoryDocumentMailRepository;
@@ -180,6 +183,7 @@ pub use postgres_collection::{
     PostgresPaymentLinkRepository,
 };
 pub use postgres_commission_rules::PostgresCommissionRuleRepository;
+pub use postgres_connectors::PostgresConnectorRepository;
 pub use postgres_contracts::PostgresContractRepository;
 pub use postgres_cost_centers::PostgresCostCenterRepository;
 pub use postgres_document_mails::PostgresDocumentMailRepository;

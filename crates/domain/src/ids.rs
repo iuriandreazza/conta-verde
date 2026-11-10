@@ -25,6 +25,7 @@ uuid_id!(ApiKeyId);
 uuid_id!(AttachmentId);
 uuid_id!(BankAccountId);
 uuid_id!(BankConnectionId);
+uuid_id!(ConnectorId);
 uuid_id!(BlobId);
 uuid_id!(CategoryId);
 uuid_id!(ChargeId);

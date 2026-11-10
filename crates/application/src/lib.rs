@@ -21,6 +21,8 @@ mod collection_service;
 mod collection_settings_repository;
 mod commission_repository;
 mod commission_service;
+mod connector_repository;
+mod connector_service;
 mod contract_repository;
 mod contract_service;
 mod cost_center_repository;
@@ -134,6 +136,10 @@ pub use collection_settings_repository::CollectionSettingsRepository;
 pub use commission_repository::{CommissionRuleQuery, CommissionRuleRepository, RuleCursor};
 pub use commission_service::{
     CommissionRulePage, CommissionService, CommissionStatement, SellerStatement, StatementSale,
+};
+pub use connector_repository::ConnectorRepository;
+pub use connector_service::{
+    ConnectorHooks, ConnectorKeys, ConnectorService, ConnectorView, TurnedOn,
 };
 pub use contract_repository::{ContractQuery, ContractRepository};
 pub use contract_service::{BillingReport, ContractPage, ContractService};

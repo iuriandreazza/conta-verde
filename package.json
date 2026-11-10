@@ -10,7 +10,7 @@
     "api": "set -a && . ./.env.example && cargo run -p conta-verde-api",
     "web": "pnpm --filter conta-verde-web dev",
     "dev": "node scripts/dev.mjs",
-    "check": "cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && pnpm --filter conta-verde-web typecheck && pnpm --filter conta-verde-web test"
+    "check": "cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && pnpm --filter conta-verde-web typecheck && pnpm --filter conta-verde-web test && node --test \"connectors/woocommerce/test/*.test.js\""
   },
   "devDependencies": {
     "husky": "^9.1.7"

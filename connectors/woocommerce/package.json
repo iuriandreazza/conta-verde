@@ -1,0 +1,13 @@
+{
+  "name": "conta-verde-connector-woocommerce",
+  "version": "0.1.0",
+  "private": true,
+  "description": "WooCommerce connector for conta-verde: speaks only the public /v1 API and the signed webhooks.",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node src/main.js",
+    "test": "node --test \"test/*.test.js\""
+  }
+}

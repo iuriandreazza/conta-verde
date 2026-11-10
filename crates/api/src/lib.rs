@@ -10,6 +10,7 @@ mod categories;
 mod charges;
 mod clock;
 mod commissions;
+mod connectors;
 mod contracts;
 mod cost_centers;
 mod csv_import;
@@ -138,6 +139,7 @@ pub use clock::{customer_today, now_millis, now_unix, today};
 pub trait Ports: 'static {
     type ApiKeys: ApiKeyRepository + 'static;
     type BankConnections: BankConnectionRepository + 'static;
+    type Connectors: conta_verde_application::ConnectorRepository + 'static;
     type Aggregator: BankAggregator + 'static;
     type WebhookSubscriptions: WebhookRepository + 'static;
     type Jobs: JobQueue + 'static;
@@ -341,6 +343,16 @@ pub type OutgoingHooksOf<X> = Arc<
     >,
 >;
 
+/// The API keys of the company, shared with the connectors that make them ([ADR 0090]).
+pub type ApiKeysOf<X> = Arc<ApiKeyService<<X as Ports>::ApiKeys, <X as Ports>::Secrets>>;
+
+/// The connectors, over the same key and subscription services as their own pages.
+pub type ConnectorsOf<X> = conta_verde_application::ConnectorService<
+    <X as Ports>::Connectors,
+    ApiKeysOf<X>,
+    OutgoingHooksOf<X>,
+>;
+
 /// The bank connections and the pull of their statements ([ADR 0089]), shared with the worker that pulls.
 pub type BankSyncOf<X> = Arc<
     BankSyncService<
@@ -360,7 +372,8 @@ pub type BankSyncOf<X> = Arc<
 pub struct Services<X: Ports> {
     pub bank_sync: BankSyncOf<X>,
     pub webhook_subscriptions: OutgoingHooksOf<X>,
-    pub api_keys: ApiKeyService<X::ApiKeys, X::Secrets>,
+    pub api_keys: ApiKeysOf<X>,
+    pub connectors: X::Connectors,
     pub sale_claims: X::SaleClaims,
     pub parties: PartyService<X::Parties, X::Registry>,
     pub products: ProductService<X::Products>,
@@ -406,7 +419,8 @@ pub struct Services<X: Ports> {
 pub(crate) struct AppState<X: Ports> {
     bank_sync: BankSyncOf<X>,
     webhook_subscriptions: OutgoingHooksOf<X>,
-    api_keys: ApiKeyService<X::ApiKeys, X::Secrets>,
+    api_keys: ApiKeysOf<X>,
+    connectors: ConnectorsOf<X>,
     sale_claims: X::SaleClaims,
     limiter: v1::RateLimiter,
     parties: PartyService<X::Parties, X::Registry>,
@@ -456,9 +470,15 @@ pub(crate) type SharedState<X> = Arc<AppState<X>>;
 
 pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
     let limiter = v1::RateLimiter::new(config.v1.rate_limit_per_minute);
+    let connectors = conta_verde_application::ConnectorService::new(
+        services.connectors,
+        services.api_keys.clone(),
+        services.webhook_subscriptions.clone(),
+    );
     let state = Arc::new(AppState {
         bank_sync: services.bank_sync,
         webhook_subscriptions: services.webhook_subscriptions,
+        connectors,
         api_keys: services.api_keys,
         sale_claims: services.sale_claims,
         limiter,
@@ -523,6 +543,22 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         .route(
             "/auth/password-reset/confirm",
             post(auth::reset_password::<X>),
+        )
+        .route(
+            "/companies/{company_id}/connectors",
+            get(connectors::list_connectors::<X>).post(connectors::create_connector::<X>),
+        )
+        .route(
+            "/companies/{company_id}/connectors/{connector_id}/activate",
+            post(connectors::activate_connector::<X>),
+        )
+        .route(
+            "/companies/{company_id}/connectors/{connector_id}/deactivate",
+            post(connectors::deactivate_connector::<X>),
+        )
+        .route(
+            "/companies/{company_id}/connectors/{connector_id}/history",
+            get(connectors::connector_history::<X>),
         )
         .route(
             "/companies/{company_id}/bank-connections",
@@ -1306,7 +1342,9 @@ mod tests {
         InMemoryStockSettingsRepository, InMemoryTransferRepository, InMemoryWebhookRepository,
         RegisterDocumentReferences, RegisterReferences, RingSecretCipher,
     };
-    use conta_verde_infrastructure::{FakeBankAggregator, InMemoryBankConnectionRepository};
+    use conta_verde_infrastructure::{
+        FakeBankAggregator, InMemoryBankConnectionRepository, InMemoryConnectorRepository,
+    };
     use http_body_util::BodyExt;
     use serde_json::{Value, json};
     use tower::ServiceExt;
@@ -1376,6 +1414,7 @@ mod tests {
         type PackageSchedules = InMemoryPackageScheduleRepository;
         type ApiKeys = InMemoryApiKeyRepository;
         type BankConnections = InMemoryBankConnectionRepository;
+        type Connectors = InMemoryConnectorRepository;
         type Aggregator = FakeBankAggregator;
         type WebhookSubscriptions = InMemoryWebhookRepository;
         type Jobs = InMemoryJobQueue;
@@ -1435,6 +1474,7 @@ mod tests {
         type PackageSchedules = InMemoryPackageScheduleRepository;
         type ApiKeys = InMemoryApiKeyRepository;
         type BankConnections = InMemoryBankConnectionRepository;
+        type Connectors = InMemoryConnectorRepository;
         type Aggregator = FakeBankAggregator;
         type WebhookSubscriptions = InMemoryWebhookRepository;
         type Jobs = InMemoryJobQueue;
@@ -1725,11 +1765,11 @@ mod tests {
             std::cell::RefCell::new(FakeBankAggregator::default());
     }
 
-    fn standalone_api_keys() -> ApiKeyService<InMemoryApiKeyRepository, Argon2SecretService> {
-        ApiKeyService::new(
+    fn standalone_api_keys() -> Arc<ApiKeyService<InMemoryApiKeyRepository, Argon2SecretService>> {
+        Arc::new(ApiKeyService::new(
             InMemoryApiKeyRepository::default(),
             Argon2SecretService::new().unwrap(),
-        )
+        ))
     }
 
     fn standalone_packages() -> PackagesOf<MemoryPorts> {
@@ -2361,6 +2401,7 @@ mod tests {
                 bank_sync: standalone_bank_sync(),
                 webhook_subscriptions: standalone_hooks(),
                 api_keys: standalone_api_keys(),
+                connectors: InMemoryConnectorRepository::default(),
                 sale_claims: InMemorySaleClaimRepository::default(),
                 parties,
                 products: ProductService::new(InMemoryProductRepository::default()),
@@ -3030,6 +3071,7 @@ mod tests {
                 bank_sync: standalone_bank_sync(),
                 webhook_subscriptions: standalone_hooks(),
                 api_keys: standalone_api_keys(),
+                connectors: InMemoryConnectorRepository::default(),
                 sale_claims: InMemorySaleClaimRepository::default(),
                 parties: PartyService::new(InMemoryPartyRepository::default(), None),
                 products: ProductService::new(InMemoryProductRepository::default()),
@@ -5263,6 +5305,7 @@ mod tests {
                 bank_sync: standalone_bank_sync(),
                 webhook_subscriptions: standalone_hooks(),
                 api_keys: standalone_api_keys(),
+                connectors: InMemoryConnectorRepository::default(),
                 sale_claims: InMemorySaleClaimRepository::default(),
                 parties: PartyService::new(InMemoryPartyRepository::default(), registry),
                 products: ProductService::new(InMemoryProductRepository::default()),
@@ -6888,6 +6931,7 @@ mod tests {
                 )),
                 webhook_subscriptions: hooks.clone(),
                 api_keys: standalone_api_keys(),
+                connectors: InMemoryConnectorRepository::default(),
                 sale_claims: claims.clone(),
                 parties: PartyService::new(parties.clone(), known_companies())
                     .with_recheck_interval(Duration::ZERO),
@@ -15501,4 +15545,5 @@ mod tests {
     include!("v1/tests.rs");
     include!("v1/webhook_tests.rs");
     include!("bank_connection_tests.rs");
+    include!("connector_tests.rs");
 }

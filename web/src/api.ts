@@ -158,6 +158,44 @@ export interface BankConnectionInput {
   account_id: string;
 }
 
+/** A company's use of an e-commerce package for one store. */
+export interface Connector {
+  id: string;
+  kind: string;
+  name: string;
+  active: boolean;
+  /** `off`, `on`, or `attention` when it is on but its key was revoked or its subscription switched off elsewhere. */
+  state: "off" | "on" | "attention";
+  key_usable: boolean;
+  subscription_on: boolean;
+  api_key_id: string | null;
+  webhook_subscription_id: string | null;
+  created_at: number;
+  created_by: string;
+}
+
+export interface ConnectorCatalogueEntry {
+  kind: string;
+  title: string;
+  scopes: string[];
+  events: string[];
+  package_path: string;
+}
+
+export interface ConnectorList {
+  items: Connector[];
+  catalogue: ConnectorCatalogueEntry[];
+  /** Whether the server can seal the subscription's secret; without it nothing is turned on. */
+  available: boolean;
+}
+
+/** What turning a connector on gives: the two secrets, which exist only in this answer. */
+export interface TurnedOnConnector {
+  connector: Connector;
+  api_key_secret: string;
+  webhook_secret: string;
+}
+
 /** What a link leads to, shown before the person accepts. */
 export interface InvitationPreview {
   company_name: string;
@@ -2188,6 +2226,15 @@ export const api = {
     post<BankConnection>(`/companies/${companyId}/bank-connections/${id}/disconnect`, {}),
   bankConnectionHistory: (companyId: string, id: string) =>
     request<HistoryEntry[]>(`/companies/${companyId}/bank-connections/${id}/history`),
+  listConnectors: (companyId: string) => request<ConnectorList>(`/companies/${companyId}/connectors`),
+  createConnector: (companyId: string, input: { kind: string; name: string }) =>
+    post<Connector>(`/companies/${companyId}/connectors`, input),
+  activateConnector: (companyId: string, id: string, address: string) =>
+    post<TurnedOnConnector>(`/companies/${companyId}/connectors/${id}/activate`, { address }),
+  deactivateConnector: (companyId: string, id: string) =>
+    post<Connector>(`/companies/${companyId}/connectors/${id}/deactivate`, {}),
+  connectorHistory: (companyId: string, id: string) =>
+    request<HistoryEntry[]>(`/companies/${companyId}/connectors/${id}/history`),
   listWebhooks: (companyId: string) =>
     request<WebhookSubscriptionList>(`/companies/${companyId}/webhook-subscriptions`),
   createWebhook: (companyId: string, input: WebhookInput) =>

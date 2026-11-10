@@ -20,6 +20,8 @@ pub enum RepositoryError {
     DuplicateBankAccount,
     /// The bank account already has a connection that is not disconnected ([ADR 0089]).
     DuplicateBankConnection,
+    /// A connector was changed by someone else between the read and the write ([ADR 0090]).
+    ConnectorChanged,
     /// An update matched no row.
     NotFound,
     /// A settlement would settle more of an installment than is left of it.
@@ -245,6 +247,8 @@ pub enum ApplicationError {
     ApiKeyNotFound,
     /// No bank connection with this id in the company (another company's looks the same).
     BankConnectionNotFound,
+    /// No connector with this id in the company (another company's looks the same).
+    ConnectorNotFound,
     /// The installation has no bank aggregator configured.
     AggregatorOff,
     /// The aggregator did not answer or refused; the reason is in the log, never what it said.
@@ -339,6 +343,9 @@ impl fmt::Display for RepositoryError {
             Self::DuplicateInvitation => {
                 f.write_str("this e-mail address already has an open invitation to the company")
             }
+            Self::ConnectorChanged => {
+                f.write_str("the connector was changed meanwhile: read it again")
+            }
             Self::DuplicateBankConnection => {
                 f.write_str("that bank account already has a connection: disconnect it first")
             }
@@ -422,6 +429,7 @@ impl fmt::Display for ApplicationError {
             Self::CostCenterNotFound => f.write_str("cost center not found"),
             Self::ApiKeyNotFound => f.write_str("API key not found"),
             Self::BankConnectionNotFound => f.write_str("bank connection not found"),
+            Self::ConnectorNotFound => f.write_str("connector not found"),
             Self::AggregatorOff => f.write_str(
                 "no bank aggregator is configured on the server (BANK_AGGREGATOR): import an OFX statement instead",
             ),
