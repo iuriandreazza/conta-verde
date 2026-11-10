@@ -19,11 +19,11 @@ use conta_verde_application::{
 };
 use conta_verde_domain::FiscalSettings;
 use conta_verde_infrastructure::{
-    Argon2SecretService, BrasilApiCnpjRegistry, BrasilApiPostalCodeDirectory, CachedCnpjRegistry,
-    FakeFiscalGateway, FocusNfeGateway, LocalBlobStore, LogEmailSender, NoFiscalGateway,
-    PostgresAttachmentRepository, PostgresBankAccountRepository, PostgresCategoryRepository,
-    PostgresCommissionRuleRepository, PostgresContractRepository, PostgresCostCenterRepository,
-    PostgresDocumentMailRepository, PostgresFinancialEntryRepository,
+    Argon2SecretService, BrasilApiCityCodes, BrasilApiCnpjRegistry, BrasilApiPostalCodeDirectory,
+    CachedCnpjRegistry, FakeFiscalGateway, FocusNfeGateway, LocalBlobStore, LogEmailSender,
+    NfeIoGateway, NoFiscalGateway, PostgresAttachmentRepository, PostgresBankAccountRepository,
+    PostgresCategoryRepository, PostgresCommissionRuleRepository, PostgresContractRepository,
+    PostgresCostCenterRepository, PostgresDocumentMailRepository, PostgresFinancialEntryRepository,
     PostgresFiscalDocumentRepository, PostgresFiscalSettingsRepository, PostgresIdentityRepository,
     PostgresInventoryCountRepository, PostgresInvitationRepository, PostgresJobQueue,
     PostgresOpeningRepository, PostgresPackageScheduleRepository, PostgresPartyRepository,
@@ -619,6 +619,7 @@ enum ConfiguredFiscalGateway {
     Off(NoFiscalGateway),
     Fake(FakeFiscalGateway),
     Focus(Box<FocusNfeGateway>),
+    NfeIo(Box<NfeIoGateway>),
 }
 
 /// Calls the same method of whichever gateway is configured.
@@ -628,6 +629,7 @@ macro_rules! on_gateway {
             ConfiguredFiscalGateway::Off($gateway) => $call,
             ConfiguredFiscalGateway::Fake($gateway) => $call,
             ConfiguredFiscalGateway::Focus($gateway) => $call,
+            ConfiguredFiscalGateway::NfeIo($gateway) => $call,
         }
     };
 }
@@ -751,6 +753,61 @@ fn fiscal_gateway_from_env()
                     production.as_deref(),
                     &cnpj,
                 )?,
+            )))
+        }
+        Some("nfeio") => {
+            // The key goes to this address in every call: it is the gateway's over TLS, or a stand-in on this machine.
+            let api_url = setting("NFEIO_API_URL");
+            if let Some(url) = &api_url
+                && !(url.starts_with("https://")
+                    || url.starts_with("http://localhost")
+                    || url.starts_with("http://127.0.0.1"))
+            {
+                return Err("NFEIO_API_URL must be an https:// address (or a local one)".into());
+            }
+            let Some(key) = setting("NFEIO_API_KEY") else {
+                return Err("FISCAL_GATEWAY=nfeio needs NFEIO_API_KEY".into());
+            };
+            let (homologation, production) = (
+                setting("NFEIO_COMPANY_ID_HOMOLOGATION"),
+                setting("NFEIO_COMPANY_ID_PRODUCTION"),
+            );
+            if homologation.is_none() && production.is_none() {
+                return Err(
+                    "FISCAL_GATEWAY=nfeio needs NFEIO_COMPANY_ID_HOMOLOGATION or NFEIO_COMPANY_ID_PRODUCTION"
+                        .into(),
+                );
+            }
+            // A company at the gateway has one CNPJ: this is what keeps another company of this installation from
+            // issuing under it.
+            let Some(cnpj) = setting("NFEIO_ISSUER_CNPJ") else {
+                return Err("FISCAL_GATEWAY=nfeio needs NFEIO_ISSUER_CNPJ".into());
+            };
+            let cnpj = match conta_verde_domain::Document::parse(&cnpj) {
+                Ok(conta_verde_domain::Document::Cnpj(cnpj)) => cnpj,
+                _ => return Err("NFEIO_ISSUER_CNPJ is not a valid CNPJ".into()),
+            };
+            let search_confirmed = setting("NFEIO_SEARCH_CONFIRMED").as_deref() == Some("true");
+            if !search_confirmed {
+                tracing::warn!(
+                    "NFEIO_SEARCH_CONFIRMED is not true: issuing in production is refused until the search for a document by our reference is confirmed in the sandbox (ADR 0079)"
+                );
+            }
+            let file_hosts: Vec<String> = setting("NFEIO_FILE_HOSTS")
+                .map(|hosts| hosts.split(',').map(str::to_owned).collect())
+                .unwrap_or_default();
+            tracing::info!("fiscal documents are issued through NFE.io");
+            Ok(ConfiguredFiscalGateway::NfeIo(Box::new(
+                NfeIoGateway::new(
+                    api_url.as_deref(),
+                    &key,
+                    homologation.as_deref(),
+                    production.as_deref(),
+                    &cnpj,
+                    std::sync::Arc::new(BrasilApiCityCodes::new(None)?),
+                )?
+                .with_file_hosts(&file_hosts)
+                .with_search_confirmed(search_confirmed),
             )))
         }
         Some(other) => Err(format!("FISCAL_GATEWAY={other} is not a known gateway").into()),

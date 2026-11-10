@@ -1033,13 +1033,17 @@ where
                 } else {
                     document
                 };
-                self.store_file(
-                    company_id,
-                    document.id(),
-                    FiscalFileKind::CancellationXml,
-                    &cancellation_xml,
-                )
-                .await?;
+                // A gateway that cannot hand over the cancellation's XML says so with no bytes: the document is
+                // cancelled all the same, and there is no file to keep.
+                if !cancellation_xml.is_empty() {
+                    self.store_file(
+                        company_id,
+                        document.id(),
+                        FiscalFileKind::CancellationXml,
+                        &cancellation_xml,
+                    )
+                    .await?;
+                }
                 if document.status() == FiscalDocumentStatus::Authorized {
                     self.move_to(actor, document, |d| d.cancelled()).await
                 } else {
