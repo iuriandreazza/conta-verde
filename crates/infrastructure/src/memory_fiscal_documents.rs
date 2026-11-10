@@ -800,6 +800,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_pass_over_many_companies_asks_each_through_its_own_gateway() {
+        use crate::memory_entries::tests::Registers;
+        use crate::{
+            InMemoryBlobStore, InMemoryFiscalSettingsRepository, InMemoryPaymentTermRepository,
+            InMemoryProductRepository, InMemorySaleRepository,
+        };
+        use conta_verde_application::FiscalDocumentService;
+
+        let registers = Registers::new();
+        let (first, second) = (CompanyId::generate(), CompanyId::generate());
+        let products = InMemoryProductRepository::default();
+        let terms = InMemoryPaymentTermRepository::default();
+        let mut seeds = Vec::new();
+        for company in [first, second] {
+            let entry_seed = registers.seed(company).await;
+            let seed =
+                contract::seed_sales_records(&registers.parties, &products, &terms, company).await;
+            let fiscal = contract::seed_fiscal_customer(&registers.parties, company).await;
+            seeds.push((entry_seed, seed, fiscal));
+        }
+        let gateways = contract::GatewaysByCompany::default();
+        let settings = InMemoryFiscalSettingsRepository::default();
+        let sales = InMemorySaleRepository::default();
+        let service = FiscalDocumentService::new(
+            InMemoryFiscalDocumentRepository::default(),
+            sales.clone(),
+            registers.parties.clone(),
+            products,
+            settings.clone(),
+            gateways.clone(),
+            InMemoryBlobStore::default(),
+            registers.references(),
+        );
+        contract::a_pass_over_many_companies_asks_each_through_its_own_gateway(
+            &service,
+            &gateways,
+            &settings,
+            &sales,
+            contract::IssuingCompany {
+                id: first,
+                entry_seed: &seeds[0].0,
+                seed: &seeds[0].1,
+                fiscal: &seeds[0].2,
+            },
+            contract::IssuingCompany {
+                id: second,
+                entry_seed: &seeds[1].0,
+                seed: &seeds[1].1,
+                fiscal: &seeds[1].2,
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
     async fn issues_an_nfse_from_a_sale() {
         use crate::memory_entries::tests::Registers;
         use crate::{

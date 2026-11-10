@@ -63,11 +63,20 @@ impl<R: GatewaySettingsRepository, C: SecretCipher> GatewaySettingsService<R, C>
         let Some(settings) = self.repository.find(company_id).await? else {
             return Ok(None);
         };
+        self.open_from(&settings, secret)
+    }
+
+    /// The same for settings that were read already, so everything a gateway is built from comes from one read and one version.
+    pub fn open_from(
+        &self,
+        settings: &GatewaySettings,
+        secret: GatewaySecret,
+    ) -> Result<Option<SecretText>, ApplicationError> {
         settings
             .secret(secret)
             .map(|sealed| {
                 self.cipher
-                    .open(company_id, secret.field(), sealed.as_bytes())
+                    .open(settings.company_id(), secret.field(), sealed.as_bytes())
                     .map_err(|_| ApplicationError::SecretUnreadable(secret.field()))
             })
             .transpose()

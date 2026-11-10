@@ -66,26 +66,61 @@ non-ASCII characters (a copy from a page often adds one) are refused at the door
 gateways, and its sealed size (at most 229 bytes) always fits the column. A body of the wrong shape is answered with a **fixed message**,
 never serde's, which quotes the value it found. The key is 64 hexadecimal digits only (no sign) and **not all zeros**.
 
-### What step 2 must do with it
+### How a call finds its gateway (step 2)
 
-"A company's own settings win" means: **the stored settings are usable when they have what the kind needs for the environment in use**
-(Focus NFe: the token of that environment; NFE.io: the key and the company id of it). A row that is not usable is refused with a clear `422`
-naming what is missing (not silently replaced by the server's, and not used half-built); reset is the way back. **The NFE.io search
-confirmation stays the operator's too**: a company's own flag alone does not allow a production issue, because it is what keeps a document
-from being issued twice ([ADR 0079](0079-nfeio-adapter.md)); production needs the environment's `NFEIO_SEARCH_CONFIRMED` as well.
+The use case asks a **`FiscalGatewayResolver`** (a port in `application`) for the gateway **of the issuer in the settings it just
+loaded**, at the moment of the call: `ready_settings` and `settings_of` return the settings **and the gateway resolved for them**, and
+every call of the use case (the capability questions `issues_nfse`/`issues_nfce`/`issues_manifestation`, `submit_*`, `query_*`,
+`cancel_*`, the events, the received invoices) goes through that one handle. "The capability questions take the issuer" is therefore met
+by asking the handle that was resolved for that issuer. A gateway that is the same for everybody (the server's, a fake in a test) is its
+own resolver. **The pass that finishes what is waiting reaches every company and resolves per document**, never once per pass, so one
+company's token can only go out in that company's calls (`contract::a_pass_over_many_companies_asks_each_through_its_own_gateway`; and
+`company_fiscal_gateways::tests` records which token each call carried).
+
+`CompanyFiscalGateways` (in `infrastructure`) reads the company's row on **every** call (no cache: a change or a reset is felt at once and a
+token is never kept past the call that needed it; a client is built per call, which is cheap at this volume):
+
+- **No row**: the server's gateway, with the CNPJ guard it has always had (another company's issue is `WrongIssuer`, nothing sent).
+- **A row that does not open**: `409` `SecretUnreadable`, naming the field; never the server's gateway in its place.
+- **A row that is not usable** (it lacks what the kind needs for the environment of the call: Focus NFe, the token of that environment;
+  NFE.io, the key and the company id of it): a `422` naming what is missing. The settings are never half used and the server's are never
+  put in their place (that would issue under another token); reset is the way back.
+- **A usable row** builds the adapter with the company's secrets and the **issuer's own CNPJ** (the CNPJ guard passes trivially for a
+  company's own token: the token is the company's). The address, the hosts a file may come from and the city codes are the **operator's**
+  (`GatewayEndpoints`, from `FOCUS_NFE_API_URL`, `NFEIO_API_URL`, `NFEIO_FILE_HOSTS`), read whichever gateway the server itself uses.
+- **The NFE.io search confirmation stays the operator's too**: production needs the company's flag **and** the environment's
+  `NFEIO_SEARCH_CONFIRMED` (read on its own, even when `FISCAL_GATEWAY` is something else), because it is what keeps a document from being
+  issued twice ([ADR 0079](0079-nfeio-adapter.md)).
 
 ### The webhook
 
-A company may have its own webhook secret (sealed like the others). The knock is authenticated against the **company's** secret, else the
-environment's. The company is looked up **before** the secret is checked, and an unknown company and a wrong secret are the same `401`, so the
-route is no oracle for which companies exist ([ADR 0083](0083-received-invoices-and-the-fiscal-webhook.md)).
+A company may have its own webhook secret (sealed like the others). **A company that has one is knocked at with that one only**: the
+operator's no longer opens it, and neither does another company's. A company with none is knocked at with the operator's
+(`FISCAL_WEBHOOK_SECRET`); the header's name is the operator's in both cases. The company is looked up **before** the secret is compared:
+a malformed id, a company that does not exist, a wrong secret and a secret that cannot be read all answer the same `401`, so the route is
+no oracle for which companies exist or have a secret ([ADR 0083](0083-received-invoices-and-the-fiscal-webhook.md)); the door being shut
+(no secret to compare with at all) is the same `401`. What is still `404`, for a knock that carries the right secret, is a company with no
+fiscal settings. A storage failure is a `5xx`, so the gateway retries instead of reading it as a wrong secret. The body is still never read.
+
+### What this does not solve (known limits, for a follow-up)
+
+- **Changing a company's gateway while documents are in flight.** A document submitted through one gateway and then asked about through
+  another (the settings were saved or reset meanwhile) gets `Unknown`, and after the grace period is marked `rejected`: sending it again
+  could issue it twice if the first gateway had taken it. The document does not remember which gateway submitted it. Until it does,
+  **do not change or reset the gateway settings while documents are `processing`**.
+- **The pass is global and oldest first.** A company whose gateway cannot be resolved keeps its waiting documents at the front of the
+  50 the minute pass takes, which can starve the others; the webhook's poll also covers every company (the knock is per company, the
+  poll is not). Both want a poll scoped by company and a fair order.
+- **Error precedence.** Fiscal settings are read before the gateway is resolved, so a company with none gets "set the fiscal settings"
+  even on a server with no gateway, where it used to get `Disabled` first.
+- A client is built on every resolve and the row is read and opened every time: cheap at this volume, not measured.
 
 ### In two steps
 
-1. This ADR with the stored, sealed settings, the API and the page under Configurações (the settings are saved and shown; **no document
-   uses them yet**).
-2. The gateway that **resolves** a company's settings at the moment of a call (the capability questions take the issuer), with a test that
-   one company's settings are never used for another's, and the webhook by company.
+1. The stored, sealed settings, the API and the page under Configurações (the settings are saved and shown).
+2. The gateway that **resolves** a company's settings at the moment of a call, with a test that one company's settings are never used for
+   another's, and the webhook by company. **Done.** Nothing here has been tried against a real gateway
+   ([`docs/fiscal/homologation-test-plan.md`](../fiscal/homologation-test-plan.md)).
 
 ## Consequences
 

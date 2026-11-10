@@ -1402,6 +1402,64 @@ mod tests {
         std::fs::remove_dir_all(root).expect("the test's own directory is removed");
     }
 
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn a_pass_over_many_companies_asks_each_through_its_own_gateway() {
+        use crate::{
+            LocalBlobStore, PostgresFiscalSettingsRepository, PostgresPeriodLockRepository,
+            RegisterReferences,
+        };
+        use conta_verde_application::FiscalDocumentService;
+
+        let pool = contract::test_pool().await;
+        let parties = PostgresPartyRepository::new(pool.clone());
+        let mut companies = Vec::new();
+        for _ in 0..2 {
+            let company = contract::create_company(&pool).await;
+            let (entry_seed, seed) = seeds(&pool, company).await;
+            let fiscal = contract::seed_fiscal_customer(&parties, company).await;
+            companies.push((company, entry_seed, seed, fiscal));
+        }
+        let gateways = contract::GatewaysByCompany::default();
+        let settings = PostgresFiscalSettingsRepository::new(pool.clone());
+        let sales = PostgresSaleRepository::new(pool.clone());
+        let root =
+            std::env::temp_dir().join(format!("conta-verde-fiscal-{}", uuid::Uuid::new_v4()));
+        let service = FiscalDocumentService::new(
+            PostgresFiscalDocumentRepository::new(pool.clone()),
+            sales.clone(),
+            parties,
+            PostgresProductRepository::new(pool.clone()),
+            settings.clone(),
+            gateways.clone(),
+            LocalBlobStore::new(&root),
+            RegisterReferences::new(
+                PostgresCategoryRepository::new(pool.clone()),
+                PostgresCostCenterRepository::new(pool.clone()),
+                PostgresPartyRepository::new(pool.clone()),
+                PostgresBankAccountRepository::new(pool.clone()),
+                PostgresPaymentMethodRepository::new(pool.clone()),
+                PostgresPeriodLockRepository::new(pool.clone()),
+            ),
+        );
+        let issuing = |index: usize| contract::IssuingCompany {
+            id: companies[index].0,
+            entry_seed: &companies[index].1,
+            seed: &companies[index].2,
+            fiscal: &companies[index].3,
+        };
+        contract::a_pass_over_many_companies_asks_each_through_its_own_gateway(
+            &service,
+            &gateways,
+            &settings,
+            &sales,
+            issuing(0),
+            issuing(1),
+        )
+        .await;
+        std::fs::remove_dir_all(root).expect("the test's own directory is removed");
+    }
+
     /// What the migration of the NFS-e refuses, as the domain would: each kind keeps what the authority gave in its own
     /// columns, a DPS belongs to an NFS-e, and the identity of an NFS-e is a number and letters and digits.
     #[tokio::test]

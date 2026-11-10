@@ -18646,6 +18646,197 @@ fn issue_request(sale: SaleId) -> conta_verde_application::IssueNfe {
 /// 2026-11-09 17:30 UTC, which is the same day in São Paulo.
 const FISCAL_NOW: i64 = 1_794_245_400;
 
+/// The gateway of each company, as a test arranges it: a fake of its own, so what one company's gateway answers can be told from
+/// another's. A company with none is refused, as a server with no gateway refuses.
+#[derive(Clone, Default)]
+pub struct GatewaysByCompany(
+    std::sync::Arc<
+        std::sync::Mutex<std::collections::HashMap<CompanyId, crate::FakeFiscalGateway>>,
+    >,
+);
+
+impl GatewaysByCompany {
+    pub fn give(&self, company: CompanyId, gateway: crate::FakeFiscalGateway) {
+        self.0.lock().unwrap().insert(company, gateway);
+    }
+
+    pub fn remove(&self, company: CompanyId) {
+        self.0.lock().unwrap().remove(&company);
+    }
+}
+
+impl conta_verde_application::FiscalGatewayResolver for GatewaysByCompany {
+    type Gateway = crate::FakeFiscalGateway;
+
+    async fn resolve(
+        &self,
+        issuer: &conta_verde_domain::FiscalSettings,
+    ) -> Result<crate::FakeFiscalGateway, conta_verde_application::ApplicationError> {
+        self.0
+            .lock()
+            .unwrap()
+            .get(&issuer.company_id())
+            .cloned()
+            .ok_or_else(|| conta_verde_application::GatewayError::Disabled.into())
+    }
+
+    fn server_key(&self) -> Option<String> {
+        None
+    }
+
+    async fn key_for(&self, _company_id: CompanyId) -> Option<String> {
+        None
+    }
+}
+
+/// What one company of the pass needs to issue: its books' seeds.
+pub struct IssuingCompany<'a> {
+    pub id: CompanyId,
+    pub entry_seed: &'a EntrySeed,
+    pub seed: &'a SalesSeed,
+    pub fiscal: &'a FiscalSeed,
+}
+
+/// The pass that finishes what is waiting reaches **every company**, and each document is asked through the gateway of its own
+/// company (ADR 0085): one whose gateway cannot be reached stays waiting while the other's is finished, the answer of one is
+/// never taken for the other's, and nothing one company's gateway was asked is asked by the other's.
+pub async fn a_pass_over_many_companies_asks_each_through_its_own_gateway<D, S, P, Y, F, B, R>(
+    service: &conta_verde_application::FiscalDocumentService<
+        D,
+        S,
+        P,
+        Y,
+        F,
+        GatewaysByCompany,
+        B,
+        R,
+    >,
+    gateways: &GatewaysByCompany,
+    settings: &F,
+    sales: &S,
+    first: IssuingCompany<'_>,
+    second: IssuingCompany<'_>,
+) where
+    D: conta_verde_application::FiscalDocumentRepository,
+    S: conta_verde_application::SaleRepository,
+    P: PartyRepository,
+    Y: conta_verde_application::ProductRepository,
+    F: conta_verde_application::FiscalSettingsRepository,
+    B: BlobStore,
+    R: conta_verde_application::EntryReferences,
+{
+    use conta_verde_domain::{FiscalDocumentStatus, TaxRuleDraft};
+
+    let user = actor();
+    let (first_gateway, second_gateway) = (
+        crate::FakeFiscalGateway::authorizing_after(1),
+        crate::FakeFiscalGateway::authorizing_after(1),
+    );
+    gateways.give(first.id, first_gateway.clone());
+    gateways.give(second.id, second_gateway.clone());
+    let mut documents = Vec::new();
+    for company in [&first, &second] {
+        let mut draft = fiscal_settings_draft(
+            "11222333000181",
+            conta_verde_domain::FiscalEnvironment::Homologation,
+        );
+        draft.natures[0].rules = vec![TaxRuleDraft {
+            regime: conta_verde_domain::TaxRegime::SimplesNacional,
+            ncm_prefix: Some("1905".into()),
+            icms_code: "102".into(),
+            pis_code: "49".into(),
+            cofins_code: "49".into(),
+            icms_rate: None,
+            pis_rate: None,
+            cofins_rate: None,
+        }];
+        settings
+            .save(
+                &conta_verde_domain::FiscalSettings::new(company.id, draft).unwrap(),
+                &AuditEntry {
+                    company_id: company.id,
+                    actor: actor(),
+                    entity: AuditEntity::FiscalSettings,
+                    entity_id: company.id.as_uuid(),
+                    action: AuditAction::Created,
+                    changes: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        let sale = save_a_completed_sale(
+            sales,
+            company.id,
+            company.entry_seed,
+            company.seed,
+            company.fiscal,
+        )
+        .await;
+        let document = service
+            .issue(company.id, &user, issue_request(sale), FISCAL_NOW)
+            .await
+            .unwrap();
+        assert_eq!(document.status(), FiscalDocumentStatus::Processing);
+        documents.push(document.id());
+    }
+    // Each document went out through the gateway of its own company, and only through it.
+    assert_eq!(first_gateway.submitted().len(), 1);
+    assert_eq!(second_gateway.submitted().len(), 1);
+    assert_eq!(
+        first_gateway.submitted()[0].reference,
+        documents[0].as_uuid().to_string()
+    );
+    assert_eq!(
+        second_gateway.submitted()[0].reference,
+        documents[1].as_uuid().to_string()
+    );
+
+    // One pass over both: the second company's gateway cannot be reached, the first's answers.
+    second_gateway.set_unavailable(true);
+    service
+        .poll_pending(0, 1_000, FISCAL_NOW + 1)
+        .await
+        .unwrap();
+    assert_eq!(
+        service.get(first.id, documents[0]).await.unwrap().status(),
+        FiscalDocumentStatus::Authorized
+    );
+    assert_eq!(
+        service.get(second.id, documents[1]).await.unwrap().status(),
+        FiscalDocumentStatus::Processing,
+        "the answer of the first company's gateway is not the second's"
+    );
+
+    // And when the second answers, the pass finishes it.
+    second_gateway.set_unavailable(false);
+    service
+        .poll_pending(0, 1_000, FISCAL_NOW + 2)
+        .await
+        .unwrap();
+    assert_eq!(
+        service.get(second.id, documents[1]).await.unwrap().status(),
+        FiscalDocumentStatus::Authorized
+    );
+    assert_eq!(first_gateway.submitted().len(), 1);
+    assert_eq!(second_gateway.submitted().len(), 1);
+
+    // A company whose gateway is gone is refused, not served by another's.
+    gateways.remove(second.id);
+    assert!(matches!(
+        service
+            .cancel(
+                second.id,
+                &user,
+                documents[1],
+                "Pedido feito em duplicidade"
+            )
+            .await,
+        Err(conta_verde_application::ApplicationError::FiscalGateway(
+            conta_verde_application::GatewayError::Disabled
+        ))
+    ));
+}
+
 fn issue_nfse_request(sale: SaleId) -> conta_verde_application::IssueNfse {
     conta_verde_application::IssueNfse {
         sale_id: sale,

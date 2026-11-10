@@ -61,17 +61,18 @@ use conta_verde_application::{
     ContractRepository, ContractService, CostCenterRepository, CostCenterService,
     DocumentMailRepository, DocumentMailService, DocumentReferences, DreService, EmailSender,
     EntryLookups, EntryReferences, ExportLookups, FinancialEntryRepository, FinancialEntryService,
-    FiscalDocumentRepository, FiscalDocumentService, FiscalGateway, FiscalSettingsRepository,
-    FiscalSettingsService, GatewaySettingsRepository, GatewaySettingsService, IdentityRepository,
-    InventoryCountRepository, InventoryCountService, InvitationRepository, MemberService,
-    OpeningRepository, PackageScheduleRepository, PackageScheduleService, PartyRepository,
-    PartyService, PaymentMethodRepository, PaymentMethodService, PaymentProvider,
-    PaymentTermRepository, PaymentTermService, PostalCodeDirectory, PostalCodeService,
-    PriceListRepository, PriceListService, ProductRepository, ProductService,
-    PurchaseOrderRepository, PurchaseService, QuoteRepository, QuoteService, ReconciliationService,
-    RecurrenceRepository, RecurrenceService, SaleRepository, SaleService, SalesReportService,
-    SecretService, StatementLineRepository, StockMovementRepository, StockService,
-    StockSettingsRepository, TransferRepository, TransferService,
+    FiscalDocumentRepository, FiscalDocumentService, FiscalGatewayResolver,
+    FiscalSettingsRepository, FiscalSettingsService, GatewaySettingsRepository,
+    GatewaySettingsService, IdentityRepository, InventoryCountRepository, InventoryCountService,
+    InvitationRepository, MemberService, OpeningRepository, PackageScheduleRepository,
+    PackageScheduleService, PartyRepository, PartyService, PaymentMethodRepository,
+    PaymentMethodService, PaymentProvider, PaymentTermRepository, PaymentTermService,
+    PostalCodeDirectory, PostalCodeService, PriceListRepository, PriceListService,
+    ProductRepository, ProductService, PurchaseOrderRepository, PurchaseService, QuoteRepository,
+    QuoteService, ReconciliationService, RecurrenceRepository, RecurrenceService, SaleRepository,
+    SaleService, SalesReportService, SecretService, StatementLineRepository,
+    StockMovementRepository, StockService, StockSettingsRepository, TransferRepository,
+    TransferService,
 };
 use conta_verde_application::{
     CollectionService, CollectionSettingsRepository, DunningPlanRepository, DunningService,
@@ -84,24 +85,39 @@ use serde::Serialize;
 pub struct ApiConfig {
     /// Adds the `Secure` flag to the session cookie. Turn it on whenever the API is served over HTTPS.
     pub cookie_secure: bool,
-    /// Where the fiscal gateway may knock to say something happened ([ADR 0083]); without it the door is shut.
-    pub fiscal_webhook: Option<FiscalWebhook>,
+    /// How the fiscal gateway may knock to say something happened ([ADR 0083], [ADR 0085]).
+    pub fiscal_webhook: FiscalWebhook,
 }
 
 /// The secret the fiscal gateway sends in a header of its own choosing: the notice it wakes the server with is believed for
-/// nothing (the server asks the gateway), so this only keeps strangers from making the server ask.
+/// nothing (the server asks the gateway), so this only keeps strangers from making the server ask. The header's name is the
+/// operator's; the secret is the company's own when it set one, and this one (the operator's) otherwise. **Without either, the
+/// door is shut.**
 #[derive(Clone)]
 pub struct FiscalWebhook {
     /// The name of the HTTP header the gateway puts the secret in.
     pub header: String,
-    pub secret: String,
+    /// The operator's secret, for the companies that have set none of their own.
+    pub secret: Option<String>,
 }
+
+impl Default for FiscalWebhook {
+    fn default() -> Self {
+        Self {
+            header: DEFAULT_FISCAL_WEBHOOK_HEADER.to_owned(),
+            secret: None,
+        }
+    }
+}
+
+/// The header the gateway puts the webhook secret in unless the operator chose another name.
+pub const DEFAULT_FISCAL_WEBHOOK_HEADER: &str = "x-fiscal-webhook-token";
 
 impl std::fmt::Debug for FiscalWebhook {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FiscalWebhook")
             .field("header", &self.header)
-            .field("secret", &"<hidden>")
+            .field("secret", &self.secret.as_ref().map(|_| "<hidden>"))
             .finish()
     }
 }
@@ -130,7 +146,7 @@ pub trait Ports: 'static {
     type GatewaySettings: GatewaySettingsRepository + 'static;
     /// What seals the gateway settings' secrets ([ADR 0085]).
     type Cipher: conta_verde_application::SecretCipher + 'static;
-    type Gateway: FiscalGateway + 'static;
+    type Gateway: FiscalGatewayResolver + 'static;
     type FiscalDocuments: FiscalDocumentRepository + 'static;
     type Attachments: AttachmentRepository + 'static;
     type Blobs: BlobStore + 'static;
@@ -6775,10 +6791,10 @@ mod tests {
                 ),
             },
             ApiConfig {
-                fiscal_webhook: Some(FiscalWebhook {
+                fiscal_webhook: FiscalWebhook {
                     header: "x-fiscal-webhook-token".to_owned(),
-                    secret: FISCAL_HOOK_SECRET.to_owned(),
-                }),
+                    secret: Some(FISCAL_HOOK_SECRET.to_owned()),
+                },
                 ..ApiConfig::default()
             },
         );
@@ -10793,7 +10809,8 @@ mod tests {
             )
             .await
             .status,
-            StatusCode::NOT_FOUND
+            StatusCode::UNAUTHORIZED,
+            "an id that is no company's is a knock that is not believed, like a wrong secret"
         );
         fake.receive(received_invoice(9, "2026-11-04"));
         assert_eq!(
@@ -10813,6 +10830,68 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         assert_eq!(found, 4, "the knock made the server ask");
+
+        // A company that set a webhook secret of its own is knocked at with that one **only**: the operator's no longer opens it,
+        // and another company's does not either (ADR 0085).
+        let own_secret = "own_hook_1234567890abcdef";
+        let settings = send(
+            &app,
+            json_request(
+                "PUT",
+                &format!("/companies/{company_id}/gateway-settings"),
+                Some(&owner),
+                json!({
+                    "kind": "focus",
+                    "focus_token_homologation": { "action": "keep" },
+                    "focus_token_production": { "action": "keep" },
+                    "nfeio_api_key": { "action": "keep" },
+                    "webhook_secret": { "action": "set", "value": own_secret },
+                    "nfeio_company_homologation": null,
+                    "nfeio_company_production": null,
+                    "nfeio_search_confirmed": false
+                }),
+            ),
+        )
+        .await;
+        assert_eq!(settings.status, StatusCode::OK, "{:?}", settings.body);
+        assert_eq!(
+            send(&app, knock(Some(FISCAL_HOOK_SECRET), &hook))
+                .await
+                .status,
+            StatusCode::UNAUTHORIZED,
+            "the operator's secret no longer opens a company that has its own"
+        );
+        assert_eq!(
+            send(&app, knock(Some(own_secret), &hook)).await.status,
+            StatusCode::ACCEPTED
+        );
+        let (_, other_company) = sign_up(&app, "vizinha@example.com").await;
+        assert_eq!(
+            send(
+                &app,
+                knock(
+                    Some(own_secret),
+                    &format!("/public/fiscal/{other_company}/webhook")
+                )
+            )
+            .await
+            .status,
+            StatusCode::UNAUTHORIZED,
+            "a company's secret opens no other company"
+        );
+        assert_eq!(
+            send(
+                &app,
+                knock(
+                    Some(own_secret),
+                    &format!("/public/fiscal/{}/webhook", Uuid::new_v4())
+                )
+            )
+            .await
+            .status,
+            StatusCode::UNAUTHORIZED,
+            "and a company that does not exist answers like a wrong secret"
+        );
     }
 
     /// An NFC-e through the API ([ADR 0082]): the product lines of a completed sale at the counter, what is paid adding up to the

@@ -1305,7 +1305,7 @@ impl FiscalGateway for FocusNfeGateway {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::collections::HashMap;
     use std::net::SocketAddr;
     use std::sync::{Arc, Mutex};
@@ -1326,7 +1326,7 @@ mod tests {
     const CNPJ: &str = "11222333000181";
 
     /// The `Authorization` header of HTTP Basic with this token and an empty password.
-    mod base64_header {
+    pub(crate) mod base64_header {
         pub fn basic(token: &str) -> String {
             const TABLE: &[u8; 64] =
                 b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
