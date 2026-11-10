@@ -4,13 +4,13 @@ use axum::http::{HeaderValue, header};
 use axum::response::{IntoResponse, Response};
 use conta_verde_application::{
     ApplicationError, BuyerPresence, FiscalDocumentCursor, FiscalDocumentQuery, FiscalGateway,
-    IssueNfe, PaymentForm,
+    IssueNfe, IssueNfse, PaymentForm, SpecialTaxRegime,
 };
 use conta_verde_domain::{
-    AddressDraft, FiscalDocument, FiscalDocumentId, FiscalEnvironment, FiscalEvent, FiscalEventId,
-    FiscalEventSubject, FiscalFileKind, FiscalSettings, FiscalSettingsDraft, IssTaxation,
-    NatureKind, OperationNature, OperationNatureDraft, SaleId, ServiceTerms, ServiceTermsDraft,
-    TaxRegime, TaxRule, TaxRuleDraft,
+    AddressDraft, CalendarDate, FiscalDocument, FiscalDocumentId, FiscalEnvironment, FiscalEvent,
+    FiscalEventId, FiscalEventSubject, FiscalFileKind, FiscalSettings, FiscalSettingsDraft,
+    IssTaxation, NatureKind, OperationNature, OperationNatureDraft, SaleId, ServiceTerms,
+    ServiceTermsDraft, TaxRegime, TaxRule, TaxRuleDraft,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -348,15 +348,33 @@ pub(crate) struct FiscalDocumentResponse {
     nature_code: String,
     total: String,
     issued_on: String,
+    /// An NF-e's access key, number and series; an NFS-e has none of them (`nfse` has its own).
     access_key: Option<String>,
     number: Option<u32>,
     series: Option<u16>,
     protocol: Option<String>,
+    /// What the authority gave an authorized NFS-e.
+    nfse: Option<NfseResponse>,
+    /// The number the issuer gave the DPS of an NFS-e.
+    dps: Option<DpsResponse>,
     refusal: Option<RefusalResponse>,
     note: Option<String>,
     submitted_by: String,
     /// The files that can be downloaded: `xml`, `pdf`, `cancellation_xml`.
     files: Vec<&'static str>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct NfseResponse {
+    number: u64,
+    key: Option<String>,
+    verification_code: Option<String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct DpsResponse {
+    series: u16,
+    number: u64,
 }
 
 fn document_response(
@@ -383,7 +401,23 @@ fn document_response(
         access_key: authorization.map(|auth| auth.access_key().as_str().to_owned()),
         number: authorization.map(|auth| auth.number()),
         series: authorization.map(|auth| auth.series()),
-        protocol: authorization.and_then(|auth| auth.protocol().map(str::to_owned)),
+        protocol: authorization
+            .and_then(|auth| auth.protocol())
+            .or_else(|| {
+                document
+                    .nfse_authorization()
+                    .and_then(|nfse| nfse.protocol())
+            })
+            .map(str::to_owned),
+        nfse: document.nfse_authorization().map(|nfse| NfseResponse {
+            number: nfse.number(),
+            key: nfse.key().map(str::to_owned),
+            verification_code: nfse.verification_code().map(str::to_owned),
+        }),
+        dps: document.dps().map(|dps| DpsResponse {
+            series: dps.series(),
+            number: dps.number(),
+        }),
         refusal: document.refusal().map(|refusal| RefusalResponse {
             code: refusal.code().to_owned(),
             message: refusal.message().to_owned(),
@@ -514,6 +548,75 @@ pub(crate) async fn resend_document<X: Ports>(
     let document = state
         .fiscal_documents
         .resend(
+            company_id,
+            &actor,
+            parse_document(&id)?,
+            request.into_request()?,
+            crate::now_unix(),
+        )
+        .await?;
+    respond(&state, &document).await
+}
+
+/// What is chosen to issue an NFS-e: what the sale does not say and the product does not know, so none has a default
+/// ([ADR 0081]). The ISSQN terms are the nature's, written in the settings.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct IssueServiceRequest {
+    sale_id: Uuid,
+    nature_code: String,
+    /// The competence day, `YYYY-MM-DD`.
+    competence: String,
+    /// The IBGE code of the municipality where the service was rendered.
+    service_city_code: String,
+    /// `none`, `cooperative_act`, `estimate`, `municipal_microenterprise`, `notary_or_registrar`,
+    /// `autonomous_professional`, `professionals_society` or `other`.
+    special_regime: String,
+}
+
+impl IssueServiceRequest {
+    fn into_request(self) -> Result<IssueNfse, ApiError> {
+        let rule = |text: &str| ApplicationError::FiscalRule(text.to_owned());
+        Ok(IssueNfse {
+            sale_id: SaleId::from_uuid(self.sale_id),
+            nature_code: self.nature_code,
+            competence: CalendarDate::parse(&self.competence)
+                .ok_or_else(|| rule("the competence is a day written YYYY-MM-DD"))?,
+            service_city_code: self.service_city_code,
+            special_regime: SpecialTaxRegime::parse(&self.special_regime)
+                .ok_or_else(|| rule("special_regime is not one of the special tax regimes"))?,
+        })
+    }
+}
+
+/// Issues an NFS-e from a completed sale, or answers with the one the sale already has.
+pub(crate) async fn issue_service_document<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, actor): CompanyAccess,
+    ApiJson(request): ApiJson<IssueServiceRequest>,
+) -> Result<Json<FiscalDocumentResponse>, ApiError> {
+    let document = state
+        .fiscal_documents
+        .issue_nfse(
+            company_id,
+            &actor,
+            request.into_request()?,
+            crate::now_unix(),
+        )
+        .await?;
+    respond(&state, &document).await
+}
+
+/// Sends a rejected NFS-e again under the same id and the same DPS number, with the choices made again.
+pub(crate) async fn resend_service_document<X: Ports>(
+    State(state): State<SharedState<X>>,
+    CompanyAccess(company_id, actor): CompanyAccess,
+    Path((_, id)): Path<(Uuid, String)>,
+    ApiJson(request): ApiJson<IssueServiceRequest>,
+) -> Result<Json<FiscalDocumentResponse>, ApiError> {
+    let document = state
+        .fiscal_documents
+        .resend_nfse(
             company_id,
             &actor,
             parse_document(&id)?,

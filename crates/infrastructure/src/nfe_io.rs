@@ -5,8 +5,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use conta_verde_application::{
-    AcceptedEvent, AuthorizedDocument, Destination, DocumentOutcome, EventOutcome, EventQuery,
-    FiscalGateway, GatewayError, NfeRequest, PaymentForm, Refusal, Submission,
+    AcceptedEvent, AuthorizedDocument, AuthorizedNfse, Destination, DocumentOutcome, EventOutcome,
+    EventQuery, FiscalGateway, GatewayError, NfeRequest, NfseRequest, PaymentForm, Refusal,
+    Submission,
 };
 use conta_verde_domain::{AccessKey, Decimal, FiscalEnvironment, FiscalSettings, TaxRegime};
 use reqwest::{Method, StatusCode};
@@ -23,6 +24,8 @@ const NAMED: &str = "nfeio:";
 /// The text our reference is written into on the document (its complementary information), so that a document the
 /// gateway made for it can be found again without knowing the gateway's own id.
 const MARKER: &str = "cv-";
+/// What the person reads when an NFS-e is asked of this gateway.
+const NFSE_NOT_BUILT: &str = "an NFS-e through NFE.io: its published reference does not say how to find a service invoice by our reference, so none is submitted (use another gateway)";
 
 /// Where the IBGE code of a municipality comes from. The NF-e needs the recipient's, and the registers keep only the name
 /// and the state: asking is the adapter's business, and a name that finds no code, or finds two, is refused.
@@ -1001,6 +1004,36 @@ impl FiscalGateway for NfeIoGateway {
             ))),
         }
     }
+    // NFE.io's service invoices (NFS-e) are **not built**, and not because the gateway lacks them: its published
+    // reference does not give what an adapter needs to promise that a service invoice is never issued twice ([ADR 0078],
+    // [ADR 0081]). The listing takes a period, a page and no filter by our reference or `externalId` that the reference
+    // documents, the authentication header and the answer's fields are not documented, and the ADR 0079 rule is that an
+    // adapter that cannot find what it made before submitting never submits. They are refused with that reason, so no
+    // document is sent: the installation that wants NFS-e uses another gateway until this one is read from a file
+    // that settles those points.
+    async fn submit_nfse(
+        &self,
+        _request: &NfseRequest,
+    ) -> Result<Submission<AuthorizedNfse>, GatewayError> {
+        Err(GatewayError::Unsupported(NFSE_NOT_BUILT))
+    }
+
+    async fn query_nfse(
+        &self,
+        _issuer: &conta_verde_domain::FiscalSettings,
+        _reference: &str,
+    ) -> Result<DocumentOutcome<AuthorizedNfse>, GatewayError> {
+        Err(GatewayError::Unsupported(NFSE_NOT_BUILT))
+    }
+
+    async fn cancel_nfse(
+        &self,
+        _issuer: &conta_verde_domain::FiscalSettings,
+        _reference: &str,
+        _reason: &str,
+    ) -> Result<EventOutcome, GatewayError> {
+        Err(GatewayError::Unsupported(NFSE_NOT_BUILT))
+    }
 }
 
 #[cfg(test)]
@@ -1285,6 +1318,31 @@ mod tests {
             .unwrap(),
         );
         request
+    }
+
+    #[tokio::test]
+    async fn an_nfse_is_refused_with_the_reason_and_nothing_is_sent() {
+        let stand = Shared::default();
+        let addr = serve(stand.clone()).await;
+        let gateway = gateway(addr, true);
+        let issuer = crate::contract::fiscal_service_issuer(CNPJ, FiscalEnvironment::Homologation);
+        let asked = crate::contract::nfse_request(&issuer, "ref-nfse", 1);
+        for answer in [
+            gateway.submit_nfse(&asked).await.map(|_| ()),
+            gateway.query_nfse(&issuer, "ref-nfse").await.map(|_| ()),
+            gateway
+                .cancel_nfse(&issuer, "ref-nfse", "Serviço não prestado")
+                .await
+                .map(|_| ()),
+        ] {
+            assert!(matches!(
+                answer,
+                Err(GatewayError::Unsupported(reason)) if reason.contains("another gateway")
+            ));
+        }
+        let stand = stand.lock().unwrap();
+        assert_eq!(stand.posts, 0);
+        assert!(stand.bodies.is_empty(), "nothing reached the gateway");
     }
 
     #[tokio::test]

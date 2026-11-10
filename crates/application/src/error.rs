@@ -70,6 +70,8 @@ pub enum RepositoryError {
     FiscalDocumentChanged,
     /// The fiscal document already has a file of this kind.
     DuplicateFiscalFile,
+    /// Another document of the issuer already holds this DPS series and number.
+    DuplicateFiscalDps,
     Storage(String),
 }
 
@@ -353,6 +355,9 @@ impl fmt::Display for RepositoryError {
             Self::FiscalDocumentChanged => f.write_str("the fiscal document was changed meanwhile"),
             Self::DuplicateFiscalFile => {
                 f.write_str("the fiscal document already has a file of this kind")
+            }
+            Self::DuplicateFiscalDps => {
+                f.write_str("another fiscal document already holds this DPS number")
             }
             Self::Storage(message) => write!(f, "storage failure: {message}"),
         }

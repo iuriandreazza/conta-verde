@@ -11,11 +11,11 @@ use conta_verde_application::{
     RecurrenceService, SaleService, SalesReportService, StockService, TransferService,
 };
 use conta_verde_application::{
-    BrandedEmailSender, ChargeService, CollectionService, DocumentOutcome, DunningService,
-    EmailError, EmailMessage, EmailSender, EventOutcome, EventQuery, FiscalGateway, GatewayError,
-    MessageError, MessageSender, NfeRequest, PaymentPageService, PaymentProvider,
-    PaymentWebhookService, ProviderCharge, ProviderChargeRequest, ProviderError, ProviderEvent,
-    QueuedEmailSender, Submission, TextMessage, WebhookError, WebhookHeaders,
+    AuthorizedNfse, BrandedEmailSender, ChargeService, CollectionService, DocumentOutcome,
+    DunningService, EmailError, EmailMessage, EmailSender, EventOutcome, EventQuery, FiscalGateway,
+    GatewayError, MessageError, MessageSender, NfeRequest, NfseRequest, PaymentPageService,
+    PaymentProvider, PaymentWebhookService, ProviderCharge, ProviderChargeRequest, ProviderError,
+    ProviderEvent, QueuedEmailSender, Submission, TextMessage, WebhookError, WebhookHeaders,
 };
 use conta_verde_domain::FiscalSettings;
 use conta_verde_infrastructure::{
@@ -693,6 +693,30 @@ impl FiscalGateway for ConfiguredFiscalGateway {
         on_gateway!(self, gateway => gateway
             .invalidate_nfe_numbers(issuer, series, first, last, reason)
             .await)
+    }
+
+    async fn submit_nfse(
+        &self,
+        request: &NfseRequest,
+    ) -> Result<Submission<AuthorizedNfse>, GatewayError> {
+        on_gateway!(self, gateway => gateway.submit_nfse(request).await)
+    }
+
+    async fn query_nfse(
+        &self,
+        issuer: &FiscalSettings,
+        reference: &str,
+    ) -> Result<DocumentOutcome<AuthorizedNfse>, GatewayError> {
+        on_gateway!(self, gateway => gateway.query_nfse(issuer, reference).await)
+    }
+
+    async fn cancel_nfse(
+        &self,
+        issuer: &FiscalSettings,
+        reference: &str,
+        reason: &str,
+    ) -> Result<EventOutcome, GatewayError> {
+        on_gateway!(self, gateway => gateway.cancel_nfse(issuer, reference, reason).await)
     }
 }
 

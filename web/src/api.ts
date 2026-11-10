@@ -661,10 +661,23 @@ export interface FiscalRefusal {
   message: string;
 }
 
-/** An NF-e on its way to, or past, the authority (ADR 0076). */
+/** What the authority gave an authorized NFS-e (ADR 0081): the number, and the national key and verification code when the gateway gives them. */
+export interface NfseIdentity {
+  number: number;
+  key: string | null;
+  verification_code: string | null;
+}
+
+/** The number the issuer gave the DPS of an NFS-e (ADR 0081). */
+export interface Dps {
+  series: number;
+  number: number;
+}
+
+/** An NF-e or an NFS-e on its way to, or past, the authority (ADR 0076, ADR 0081). */
 export interface FiscalDocument {
   id: string;
-  kind: "nfe";
+  kind: "nfe" | "nfse";
   status: FiscalDocumentStatus;
   /** The cancellation waiting for the authority's answer, or accepted (a gateway may answer it later, ADR 0078). */
   cancellation: FiscalEvent | null;
@@ -677,10 +690,13 @@ export interface FiscalDocument {
   nature_code: string;
   total: string;
   issued_on: string;
+  /** An NF-e's access key, number and series; an NFS-e has none of them, `nfse` is its own. */
   access_key: string | null;
   number: number | null;
   series: number | null;
   protocol: string | null;
+  nfse: NfseIdentity | null;
+  dps: Dps | null;
   refusal: FiscalRefusal | null;
   note: string | null;
   submitted_by: string;

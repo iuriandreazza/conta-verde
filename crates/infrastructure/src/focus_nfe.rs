@@ -1,11 +1,12 @@
 use std::time::Duration;
 
 use conta_verde_application::{
-    AcceptedEvent, AuthorizedDocument, Destination, DocumentOutcome, EventOutcome, EventQuery,
-    FiscalGateway, GatewayError, NfeRequest, Refusal, Submission,
+    AcceptedEvent, AuthorizedDocument, AuthorizedNfse, Destination, DocumentOutcome, EventOutcome,
+    EventQuery, FiscalGateway, GatewayError, NfeRequest, NfseRequest, Refusal, Submission,
 };
 use conta_verde_domain::{
-    AccessKey, Amount, Decimal, FiscalEnvironment, FiscalSettings, TaxRegime, fiscal_timestamp,
+    AccessKey, Amount, Decimal, FiscalEnvironment, FiscalSettings, IssTaxation, TaxRegime,
+    fiscal_timestamp,
 };
 use reqwest::{Method, StatusCode};
 use serde_json::{Map, Value, json};
@@ -262,6 +263,7 @@ impl FocusNfeGateway {
         answer: &Answer,
         accepted: &str,
         files: &[&str],
+        refusal_of: fn(&Value) -> Refusal,
     ) -> Result<EventOutcome, GatewayError> {
         match answer.status {
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
@@ -297,6 +299,105 @@ impl FocusNfeGateway {
             xml: downloaded.next().flatten(),
             pdf: downloaded.next().flatten(),
         }))
+    }
+
+    /// What an answer about an NFS-e means, with its files fetched when it is authorized or cancelled.
+    async fn nfse_outcome_of(
+        &self,
+        base: &str,
+        token: &str,
+        answer: &Answer,
+    ) -> Result<DocumentOutcome<AuthorizedNfse>, GatewayError> {
+        let body = &answer.body;
+        match body["status"].as_str() {
+            Some("processando_autorizacao") => Ok(DocumentOutcome::Processing),
+            Some("autorizado") => Ok(DocumentOutcome::Authorized(
+                self.authorized_nfse(base, token, body).await?,
+            )),
+            Some("cancelado") => {
+                let document = self.authorized_nfse(base, token, body).await?;
+                // The cancellation's XML is in the documented example and not in its schema: a document cancelled
+                // without it is cancelled all the same, and there is no file to keep.
+                let cancellation_xml = match text(body, "caminho_xml_cancelamento")
+                    .and_then(|path| own_path(base, &path))
+                {
+                    Some(path) => self.download(base, token, &path).await?,
+                    None => Vec::new(),
+                };
+                Ok(DocumentOutcome::Cancelled {
+                    document,
+                    cancellation_xml,
+                })
+            }
+            Some("erro_autorizacao") => Ok(DocumentOutcome::Rejected(refusal_of_nfse(body))),
+            Some("negado") => Ok(DocumentOutcome::Denied(refusal_of_nfse(body))),
+            other => Err(GatewayError::Unavailable(format!(
+                "an answer with a status this adapter does not know: {}",
+                other
+                    .unwrap_or("none")
+                    .chars()
+                    .filter(|c| !c.is_control())
+                    .take(40)
+                    .collect::<String>()
+            ))),
+        }
+    }
+
+    async fn authorized_nfse(
+        &self,
+        base: &str,
+        token: &str,
+        body: &Value,
+    ) -> Result<AuthorizedNfse, GatewayError> {
+        let missing = |field: &str| GatewayError::Unavailable(format!("the answer has no {field}"));
+        let number = whole(body, "numero").ok_or_else(|| missing("numero"))?;
+        // The XML is the fiscal record: without it the document is not taken as authorized.
+        let xml_path = text(body, "caminho_xml_nota_fiscal")
+            .and_then(|path| own_path(base, &path))
+            .ok_or_else(|| missing("caminho_xml_nota_fiscal"))?;
+        // The printed form may be somewhere the gateway does not host (a storage service): then it is not kept, and the
+        // person has the XML and the authority's portal.
+        let pdf = match text(body, "url_danfse").and_then(|url| own_path(base, &url)) {
+            Some(path) => Some(self.download(base, token, &path).await?),
+            None => None,
+        };
+        Ok(AuthorizedNfse {
+            number,
+            key: None,
+            verification_code: text(body, "codigo_verificacao"),
+            protocol: text(body, "protocolo"),
+            xml: self.download(base, token, &xml_path).await?,
+            pdf,
+        })
+    }
+
+    async fn submit_service(
+        &self,
+        request: &NfseRequest,
+    ) -> Result<DocumentOutcome<AuthorizedNfse>, GatewayError> {
+        let (base, token) = self.target(&request.issuer)?;
+        let reference = path_reference(&request.reference)?;
+        let answer = self
+            .call(
+                Method::POST,
+                &format!("{base}/v2/nfsen?ref={reference}"),
+                token,
+                Some(nfse_body(request)?),
+            )
+            .await?;
+        match answer.status {
+            StatusCode::ACCEPTED => Ok(DocumentOutcome::Processing),
+            status if status.is_success() => self.nfse_outcome_of(&base, token, &answer).await,
+            // A refusal of the request is told apart from "this reference is already known" by asking: the gateway's
+            // own words for a duplicate are not documented, and a duplicate is the document it made, not a refusal.
+            StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY => {
+                match self.query_nfse(&request.issuer, reference).await? {
+                    DocumentOutcome::Unknown => failure(&answer).map(DocumentOutcome::Rejected),
+                    known => Ok(known),
+                }
+            }
+            _ => failure(&answer).map(DocumentOutcome::Rejected),
+        }
     }
 
     async fn submit(&self, request: &NfeRequest) -> Result<DocumentOutcome, GatewayError> {
@@ -374,6 +475,147 @@ fn refusal_of_error(body: &Value) -> Refusal {
     let mut refusal = refusal_of(body);
     refusal.code = Refusal::new(&code, "").code;
     refusal
+}
+
+/// The reason of an NFS-e that was not authorized or of a cancellation that was refused: each of the `erros` has a
+/// `codigo`, a `mensagem` and a `correcao` that says how to fix it.
+fn refusal_of_nfse(body: &Value) -> Refusal {
+    let errors = body["erros"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+    let code = errors
+        .first()
+        .and_then(|error| text(error, "codigo"))
+        .or_else(|| text(body, "codigo"))
+        .unwrap_or_else(|| "recusado".to_owned());
+    let mut message = errors
+        .iter()
+        .take(5)
+        .map(|error| {
+            let reason = error["mensagem"].as_str().unwrap_or("");
+            match error["correcao"].as_str().filter(|fix| !fix.is_empty()) {
+                Some(fix) => format!("{reason} ({fix})"),
+                None => reason.to_owned(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    if message.is_empty() {
+        message = text(body, "mensagem").unwrap_or_default();
+    }
+    Refusal::new(&code, &message)
+}
+
+/// The path of a file the gateway says it holds, when it is on the gateway's own host: a path as it is, or a whole address
+/// that starts with the gateway's own. Anything else (another host) is not followed.
+fn own_path(base: &str, value: &str) -> Option<String> {
+    if value.starts_with('/') {
+        return Some(value.to_owned());
+    }
+    value
+        .strip_prefix(base)
+        .filter(|rest| rest.starts_with('/'))
+        .map(str::to_owned)
+}
+
+/// The DPS of an NFS-e for the gateway's national endpoint, in the fields its documentation lists as required and the
+/// ones the nature says. **None of the reform's fields is sent**, and none is invented: what the sandbox asks for beyond
+/// this is for the ignored sandbox test to settle ([ADR 0081]).
+fn nfse_body(request: &NfseRequest) -> Result<String, GatewayError> {
+    let issuer = &request.issuer;
+    let city = issuer.city_ibge_code().ok_or(GatewayError::Unsupported(
+        "an NFS-e whose issuer has no municipality code",
+    ))?;
+    let issued_at =
+        fiscal_timestamp(request.issued_at_unix, issuer.address().state()).ok_or_else(|| {
+            GatewayError::Unavailable("the moment of issue is out of range".to_owned())
+        })?;
+    let numbers = Numbers::new();
+    let mut body = Map::new();
+    let mut put = |key: &str, value: Value| {
+        body.insert(key.to_owned(), value);
+    };
+    let number = |text: &str, field: &'static str| {
+        text.parse::<u64>().map_err(|_| {
+            GatewayError::Unavailable(format!("{field} is not a number of the national layout"))
+        })
+    };
+    put("data_emissao", json!(issued_at));
+    put("serie_dps", json!(request.dps_series));
+    put("numero_dps", json!(request.dps_number));
+    put("data_competencia", json!(request.competence.to_string()));
+    // The provider issues it (1), the layout's default.
+    put("emitente_dps", json!(1));
+    put(
+        "codigo_municipio_emissora",
+        json!(number(city, "codigo_municipio_emissora")?),
+    );
+    put("cnpj_prestador", json!(issuer.cnpj()));
+    if let Some(registration) = issuer.municipal_registration() {
+        put("inscricao_municipal_prestador", json!(registration));
+    }
+    // Only the Simples Nacional issues for now ([ADR 0073]): an optant that is not a MEI is ME/EPP (3), because the
+    // settings refuse a MEI. The other regimes wait for the tax calculation.
+    if issuer.regime() != TaxRegime::SimplesNacional {
+        return Err(GatewayError::Unsupported(
+            "an NFS-e for Lucro Presumido, which needs the tax calculation",
+        ));
+    }
+    put("codigo_opcao_simples_nacional", json!(3));
+    put(
+        "regime_especial_tributacao",
+        json!(request.special_regime.code()),
+    );
+
+    let recipient = &request.recipient;
+    let key = if recipient.document.len() == 14 {
+        "cnpj_tomador"
+    } else {
+        "cpf_tomador"
+    };
+    put(key, json!(recipient.document));
+    if let Some(email) = &recipient.email {
+        put("email_tomador", json!(email));
+    }
+    if let Some(address) = &recipient.address {
+        put("cep_tomador", json!(address.postal_code()));
+        put("logradouro_tomador", json!(address.street()));
+        put("numero_tomador", json!(address.number().unwrap_or("S/N")));
+        if let Some(complement) = address.complement() {
+            put("complemento_tomador", json!(complement));
+        }
+        if let Some(district) = address.district() {
+            put("bairro_tomador", json!(district));
+        }
+    }
+
+    put(
+        "codigo_municipio_prestacao",
+        json!(request.service_city_code),
+    );
+    put(
+        "codigo_tributacao_nacional_iss",
+        json!(request.national_tax_code),
+    );
+    if let Some(code) = &request.municipal_service_code {
+        put("codigo_tributacao_municipal_iss", json!(code));
+    }
+    put("descricao_servico", json!(request.description));
+    put("valor_servico", numbers.of(request.gross));
+    if request.discount.as_decimal() > Decimal::ZERO {
+        put("desconto_incondicionado", numbers.of(request.discount));
+    }
+    put(
+        "tributacao_iss",
+        json!(match request.taxation {
+            IssTaxation::Taxable => 1,
+            IssTaxation::Immune => 2,
+            IssTaxation::Export => 3,
+            IssTaxation::NotIncident => 4,
+        }),
+    );
+    if let Some(rate) = request.iss_rate {
+        put("percentual_aliquota_relativa_municipio", numbers.of(rate));
+    }
+    Ok(numbers.render(&Value::Object(body)))
 }
 
 /// The body of an NF-e for the gateway, in the fields its documentation gives for a sale, with every amount as the
@@ -606,6 +848,7 @@ impl FiscalGateway for FocusNfeGateway {
             &answer,
             "cancelado",
             &["caminho_xml_cancelamento"],
+            refusal_of,
         )
         .await
     }
@@ -632,6 +875,7 @@ impl FiscalGateway for FocusNfeGateway {
             &answer,
             "autorizado",
             &["caminho_xml_carta_correcao", "caminho_pdf_carta_correcao"],
+            refusal_of,
         )
         .await
     }
@@ -672,8 +916,72 @@ impl FiscalGateway for FocusNfeGateway {
                 ),
             )
             .await?;
-        self.event_of(&base, token, &answer, "autorizado", &["caminho_xml"])
-            .await
+        self.event_of(
+            &base,
+            token,
+            &answer,
+            "autorizado",
+            &["caminho_xml"],
+            refusal_of,
+        )
+        .await
+    }
+
+    async fn submit_nfse(
+        &self,
+        request: &NfseRequest,
+    ) -> Result<Submission<AuthorizedNfse>, GatewayError> {
+        // Focus NFe keeps our reference, so it names nothing of its own.
+        self.submit_service(request).await.map(Submission::of)
+    }
+
+    async fn query_nfse(
+        &self,
+        issuer: &FiscalSettings,
+        reference: &str,
+    ) -> Result<DocumentOutcome<AuthorizedNfse>, GatewayError> {
+        let (base, token) = self.target(issuer)?;
+        let reference = path_reference(reference)?;
+        let answer = self
+            .call(
+                Method::GET,
+                &format!("{base}/v2/nfsen/{reference}"),
+                token,
+                None,
+            )
+            .await?;
+        match answer.status {
+            StatusCode::NOT_FOUND => Ok(DocumentOutcome::Unknown),
+            status if status.is_success() => self.nfse_outcome_of(&base, token, &answer).await,
+            status => Err(GatewayError::Unavailable(format!("{status}"))),
+        }
+    }
+
+    async fn cancel_nfse(
+        &self,
+        issuer: &FiscalSettings,
+        reference: &str,
+        reason: &str,
+    ) -> Result<EventOutcome, GatewayError> {
+        let (base, token) = self.target(issuer)?;
+        let reference = path_reference(reference)?;
+        let answer = self
+            .call(
+                Method::DELETE,
+                &format!("{base}/v2/nfsen/{reference}"),
+                token,
+                Some(json!({ "justificativa": reason }).to_string()),
+            )
+            .await?;
+        self.event_of(
+            &base,
+            token,
+            &answer,
+            "cancelado",
+            &["caminho_xml_cancelamento"],
+            refusal_of_nfse,
+        )
+        .await
     }
 }
 
@@ -743,6 +1051,11 @@ mod tests {
         schema_error: bool,
         unknown_status: bool,
         server_error: bool,
+        nfse: HashMap<String, Stored>,
+        /// The DPS (series, number) each issuer used, and under which reference.
+        dps_used: HashMap<(String, u64, u64), String>,
+        nfse_bodies: Vec<String>,
+        danfse_on_gateway: bool,
     }
 
     type Shared = Arc<Mutex<Fake>>;
@@ -1009,6 +1322,125 @@ mod tests {
                                 StatusCode::BAD_REQUEST,
                                 json!({"codigo": "requisicao_invalida", "mensagem": "A nota não está autorizada"}),
                             ),
+                        }
+                    },
+                ),
+            )
+            .route(
+                "/v2/nfsen",
+                post(
+                    |State(fake): State<Shared>,
+                     headers: HeaderMap,
+                     Query(query): Query<HashMap<String, String>>,
+                     body: String| async move {
+                        if !authorized(&headers, HOMOLOGATION_TOKEN) {
+                            return json_reply(StatusCode::UNAUTHORIZED, json!({"codigo": "nao_autorizado"}));
+                        }
+                        let mut fake = fake.lock().unwrap();
+                        let Some(reference) = query.get("ref").cloned() else {
+                            return json_reply(
+                                StatusCode::BAD_REQUEST,
+                                json!({"codigo": "requisicao_invalida", "mensagem": "ref"}),
+                            );
+                        };
+                        fake.nfse_bodies.push(body.clone());
+                        let sent: Value = serde_json::from_str(&body).unwrap();
+                        if fake.nfse.contains_key(&reference) {
+                            return json_reply(
+                                StatusCode::UNPROCESSABLE_ENTITY,
+                                json!({"codigo": "erro_validacao", "mensagem": "referência duplicada"}),
+                            );
+                        }
+                        let cnpj = sent["cnpj_prestador"].as_str().unwrap().to_owned();
+                        let dps = (
+                            cnpj.clone(),
+                            sent["serie_dps"].as_u64().unwrap(),
+                            sent["numero_dps"].as_u64().unwrap(),
+                        );
+                        if fake.dps_used.contains_key(&dps) {
+                            return json_reply(
+                                StatusCode::UNPROCESSABLE_ENTITY,
+                                json!({"codigo": "erro_validacao", "mensagem": "DPS já recebida"}),
+                            );
+                        }
+                        fake.dps_used.insert(dps, reference.clone());
+                        let number = fake.nfse.len() as u32 + 1;
+                        fake.nfse.insert(
+                            reference.clone(),
+                            Stored {
+                                stage: "processando_autorizacao",
+                                asked: 0,
+                                number,
+                                key: format!("nfse{number}"),
+                                corrections: 0,
+                            },
+                        );
+                        json_reply(
+                            StatusCode::ACCEPTED,
+                            json!({"status": "processando_autorizacao", "ref": reference, "protocolo": "P1"}),
+                        )
+                    },
+                ),
+            )
+            .route(
+                "/v2/nfsen/{reference}",
+                get(|State(fake): State<Shared>, headers: HeaderMap, Path(reference): Path<String>| async move {
+                    if !authorized(&headers, HOMOLOGATION_TOKEN) {
+                        return json_reply(StatusCode::UNAUTHORIZED, json!({}));
+                    }
+                    let mut fake = fake.lock().unwrap();
+                    let on_gateway = fake.danfse_on_gateway;
+                    let Some(stored) = fake.nfse.get_mut(&reference) else {
+                        return json_reply(StatusCode::NOT_FOUND, json!({"codigo": "nao_encontrado"}));
+                    };
+                    if stored.stage == "processando_autorizacao" {
+                        stored.asked += 1;
+                        if stored.asked >= 2 {
+                            stored.stage = "autorizado";
+                        }
+                    }
+                    if stored.stage == "processando_autorizacao" {
+                        return json_reply(StatusCode::OK, json!({"status": "processando_autorizacao", "ref": reference}));
+                    }
+                    let mut body = json!({
+                        "status": stored.stage,
+                        "numero": stored.number.to_string(),
+                        "codigo_verificacao": format!("V{}", stored.number),
+                        "caminho_xml_nota_fiscal": format!("/arquivos/{}-nfse.xml", stored.key),
+                        "url_danfse": if on_gateway {
+                            format!("/arquivos/{}-danfse.pdf", stored.key)
+                        } else {
+                            "https://storage.example.com/danfse.pdf".to_owned()
+                        },
+                    });
+                    if stored.stage == "cancelado" {
+                        body["caminho_xml_cancelamento"] = json!(format!("/arquivos/{}-cancel.xml", stored.key));
+                    }
+                    json_reply(StatusCode::OK, body)
+                })
+                .delete(
+                    |State(fake): State<Shared>,
+                     headers: HeaderMap,
+                     Path(reference): Path<String>,
+                     body: String| async move {
+                        if !authorized(&headers, HOMOLOGATION_TOKEN) {
+                            return json_reply(StatusCode::UNAUTHORIZED, json!({}));
+                        }
+                        let sent: Value = serde_json::from_str(&body).unwrap();
+                        let reason = sent["justificativa"].as_str().unwrap_or("");
+                        let mut fake = fake.lock().unwrap();
+                        match fake.nfse.get_mut(&reference) {
+                            Some(stored) if stored.stage == "autorizado" && reason.chars().count() >= 15 => {
+                                stored.stage = "cancelado";
+                                json_reply(StatusCode::OK, json!({"status": "cancelado"}))
+                            }
+                            Some(_) => json_reply(
+                                StatusCode::OK,
+                                json!({"status": "erro_cancelamento", "erros": [
+                                    {"codigo": "V999", "mensagem": "NFSe fora do prazo de cancelamento permitido", "correcao": null}
+                                ]}),
+                            ),
+                            None => json_reply(StatusCode::NOT_FOUND, json!({"codigo": "nao_encontrado"})),
                         }
                     },
                 ),
@@ -1313,6 +1745,151 @@ mod tests {
     /// homologation**). CI runs the ignored tests without them and this one does nothing. It issues one NF-e from a
     /// sale of goods and asks for it, which settles what this adapter's documentation reading left open: the fields,
     /// contingency, and where the files are. Fill in the issuer's data of that company before running.
+    #[tokio::test]
+    async fn an_nfse_is_authorized_and_cancelled_through_the_stand_in() {
+        let fake = Shared::default();
+        let addr = serve(fake.clone()).await;
+        let issuer = contract::fiscal_service_issuer(CNPJ, FiscalEnvironment::Homologation);
+        contract::a_gateway_authorizes_and_cancels_an_nfse(
+            &gateway(addr, Some(HOMOLOGATION_TOKEN), None),
+            &issuer,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn the_dps_goes_out_in_the_fields_of_the_national_layout_with_exact_amounts() {
+        let fake = Shared::default();
+        let addr = serve(fake.clone()).await;
+        let issuer = contract::fiscal_service_issuer(CNPJ, FiscalEnvironment::Homologation);
+        let mut request = contract::nfse_request(&issuer, "dps-ref", 42);
+        request.gross = Amount::parse("1234567.89").unwrap();
+        request.discount = Amount::parse("0.10").unwrap();
+        gateway(addr, Some(HOMOLOGATION_TOKEN), None)
+            .submit_nfse(&request)
+            .await
+            .unwrap();
+        let sent: Value = serde_json::from_str(&fake.lock().unwrap().nfse_bodies[0]).unwrap();
+        assert_eq!(sent["numero_dps"], 42);
+        assert_eq!(sent["serie_dps"], 1);
+        assert_eq!(sent["data_competencia"], "2026-11-09");
+        assert_eq!(sent["emitente_dps"], 1);
+        assert_eq!(sent["codigo_municipio_emissora"], 3_550_308);
+        assert_eq!(sent["codigo_municipio_prestacao"], "3550308");
+        assert_eq!(sent["codigo_opcao_simples_nacional"], 3);
+        assert_eq!(sent["regime_especial_tributacao"], 0);
+        assert_eq!(sent["codigo_tributacao_nacional_iss"], "171001");
+        assert_eq!(sent["codigo_tributacao_municipal_iss"], "1701");
+        assert_eq!(sent["tributacao_iss"], 1);
+        assert_eq!(sent["cpf_tomador"], "52998224725");
+        assert!(sent.get("cnpj_tomador").is_none());
+        // Amounts are the exact decimals, never a float that would round them.
+        let raw = fake.lock().unwrap().nfse_bodies[0].clone();
+        assert!(raw.contains("\"valor_servico\":1234567.89"), "{raw}");
+        assert!(
+            raw.contains("\"desconto_incondicionado\":0.10")
+                || raw.contains("\"desconto_incondicionado\":0.1"),
+            "{raw}"
+        );
+        assert!(
+            raw.contains("\"percentual_aliquota_relativa_municipio\":2.5"),
+            "{raw}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_duplicate_reference_is_the_document_it_made_and_a_refusal_is_one_the_person_can_read()
+     {
+        let fake = Shared::default();
+        let addr = serve(fake.clone()).await;
+        let issuer = contract::fiscal_service_issuer(CNPJ, FiscalEnvironment::Homologation);
+        let gateway = gateway(addr, Some(HOMOLOGATION_TOKEN), None);
+        let first = gateway
+            .submit_nfse(&contract::nfse_request(&issuer, "dup", 1))
+            .await
+            .unwrap();
+        assert_eq!(first.outcome, DocumentOutcome::Processing);
+        // The same reference again: the gateway says "duplicate" (422), and asking tells it is the one it holds.
+        let again = gateway
+            .submit_nfse(&contract::nfse_request(&issuer, "dup", 1))
+            .await
+            .unwrap();
+        assert_eq!(again.outcome, DocumentOutcome::Processing);
+        // Another reference with the same DPS number: nothing of that reference exists, so it is a refusal.
+        let refused = gateway
+            .submit_nfse(&contract::nfse_request(&issuer, "other", 1))
+            .await
+            .unwrap();
+        assert!(matches!(
+            refused.outcome,
+            DocumentOutcome::Rejected(refusal) if refusal.code == "erro_validacao"
+        ));
+    }
+
+    #[tokio::test]
+    async fn the_xml_is_required_and_the_pdf_is_kept_only_when_the_gateway_hosts_it() {
+        let fake = Shared::default();
+        let addr = serve(fake.clone()).await;
+        let issuer = contract::fiscal_service_issuer(CNPJ, FiscalEnvironment::Homologation);
+        let gateway = gateway(addr, Some(HOMOLOGATION_TOKEN), None);
+        let authorize = |reference: &'static str, dps: u64| {
+            let gateway = gateway.clone();
+            let issuer = issuer.clone();
+            async move {
+                gateway
+                    .submit_nfse(&contract::nfse_request(&issuer, reference, dps))
+                    .await
+                    .unwrap();
+                gateway.query_nfse(&issuer, reference).await.unwrap();
+                match gateway.query_nfse(&issuer, reference).await.unwrap() {
+                    DocumentOutcome::Authorized(document) => document,
+                    other => panic!("authorized was expected, got {other:?}"),
+                }
+            }
+        };
+        let elsewhere = authorize("pdf-elsewhere", 1).await;
+        assert!(!elsewhere.xml.is_empty());
+        assert_eq!(
+            elsewhere.pdf, None,
+            "a file on another host is never followed"
+        );
+        assert_eq!(elsewhere.verification_code.as_deref(), Some("V1"));
+        assert_eq!(elsewhere.key, None);
+        fake.lock().unwrap().danfse_on_gateway = true;
+        let hosted = authorize("pdf-hosted", 2).await;
+        assert!(hosted.pdf.is_some());
+    }
+
+    #[tokio::test]
+    async fn an_nfse_the_gateway_cannot_describe_is_unavailable_and_the_other_regimes_wait() {
+        let fake = Shared::default();
+        let addr = serve(fake.clone()).await;
+        let gateway = gateway(addr, Some(HOMOLOGATION_TOKEN), None);
+        // An issuer without the municipality code cannot be told to the national system.
+        let mut without_city =
+            contract::fiscal_settings_draft(CNPJ, FiscalEnvironment::Homologation);
+        without_city.city_ibge_code = None;
+        let without_city =
+            FiscalSettings::new(conta_verde_domain::CompanyId::generate(), without_city).unwrap();
+        assert!(matches!(
+            gateway
+                .submit_nfse(&contract::nfse_request(&without_city, "x", 1))
+                .await,
+            Err(GatewayError::Unsupported(reason)) if reason.contains("municipality")
+        ));
+        // A document of another company's token is never sent.
+        let other =
+            contract::fiscal_service_issuer("11444777000161", FiscalEnvironment::Homologation);
+        assert_eq!(
+            gateway
+                .submit_nfse(&contract::nfse_request(&other, "y", 1))
+                .await
+                .unwrap_err(),
+            GatewayError::WrongIssuer
+        );
+        assert!(fake.lock().unwrap().nfse_bodies.is_empty());
+    }
+
     #[tokio::test]
     #[ignore = "needs FOCUS_NFE_SANDBOX_TOKEN, FOCUS_NFE_SANDBOX_CNPJ, a real certificate and the network"]
     async fn the_sandbox_authorizes_an_nfe() {

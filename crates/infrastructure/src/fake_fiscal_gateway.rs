@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use conta_verde_application::{
-    AcceptedEvent, AuthorizedDocument, DocumentOutcome, EventOutcome, EventQuery, FiscalGateway,
-    GatewayError, NfeRequest, Refusal, Submission,
+    AcceptedEvent, AuthorizedDocument, AuthorizedNfse, DocumentOutcome, EventOutcome, EventQuery,
+    FiscalGateway, GatewayError, NfeRequest, NfseRequest, Refusal, Submission,
 };
 use conta_verde_domain::{
     AccessKey, CalendarDate, FiscalSettings, state_code, state_utc_offset_minutes,
@@ -77,6 +77,30 @@ impl FiscalGateway for NoFiscalGateway {
     ) -> Result<EventOutcome, GatewayError> {
         Err(GatewayError::Disabled)
     }
+
+    async fn submit_nfse(
+        &self,
+        _request: &NfseRequest,
+    ) -> Result<Submission<AuthorizedNfse>, GatewayError> {
+        Err(GatewayError::Disabled)
+    }
+
+    async fn query_nfse(
+        &self,
+        _issuer: &FiscalSettings,
+        _reference: &str,
+    ) -> Result<DocumentOutcome<AuthorizedNfse>, GatewayError> {
+        Err(GatewayError::Disabled)
+    }
+
+    async fn cancel_nfse(
+        &self,
+        _issuer: &FiscalSettings,
+        _reference: &str,
+        _reason: &str,
+    ) -> Result<EventOutcome, GatewayError> {
+        Err(GatewayError::Disabled)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,9 +123,25 @@ struct FakeDocument {
     corrections: u32,
 }
 
+/// An NFS-e as the fake keeps it: the number the system gave it and the DPS it came from.
+#[derive(Debug, Clone)]
+struct FakeNfse {
+    stage: Stage,
+    number: u64,
+    issuer_cnpj: String,
+    /// Homologation and production are two systems: a DPS number of one is not the other's.
+    environment: &'static str,
+    total: String,
+    dps: (u16, u64),
+}
+
 #[derive(Debug, Default)]
 struct FakeState {
     documents: HashMap<String, FakeDocument>,
+    nfse_documents: HashMap<String, FakeNfse>,
+    /// The last NFS-e number given per issuer and environment: the national system's own counter.
+    nfse_counters: HashMap<(String, &'static str), u64>,
+    submitted_nfse: Vec<NfseRequest>,
     /// The last number given, per issuer, environment and series: the gateway's own counter, like the real one's.
     counters: HashMap<(String, &'static str, u16), u32>,
     submitted: Vec<NfeRequest>,
@@ -193,6 +233,51 @@ impl FakeFiscalGateway {
     /// The ranges of numbers invalidated, in order.
     pub fn invalidated(&self) -> Vec<(u16, u32, u32)> {
         self.lock().invalidated.clone()
+    }
+
+    /// The NFS-e submitted, in order, repeats included.
+    pub fn submitted_nfse(&self) -> Vec<NfseRequest> {
+        self.lock().submitted_nfse.clone()
+    }
+}
+
+fn nfse_files(document: &FakeNfse) -> AuthorizedNfse {
+    let xml = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><!-- fake gateway: no fiscal value --><NFSe>\
+         <infNFSe><nNFSe>{number}</nNFSe><emit><CNPJ>{cnpj}</CNPJ></emit>\
+         <DPS><nDPS>{dps_number}</nDPS><serie>{dps_series}</serie></DPS>\
+         <valores><vLiq>{total}</vLiq></valores></infNFSe></NFSe>",
+        number = document.number,
+        cnpj = document.issuer_cnpj,
+        dps_number = document.dps.1,
+        dps_series = document.dps.0,
+        total = document.total,
+    );
+    AuthorizedNfse {
+        number: document.number,
+        key: Some(format!("NFS{:047}", document.number)),
+        verification_code: Some(format!("FAKE{:08}", document.number)),
+        protocol: Some(format!("FAKENFSE{:07}", document.number)),
+        xml: xml.into_bytes(),
+        pdf: Some(b"%PDF-1.4\n% fake DANFSe, no fiscal value\n%%EOF\n".to_vec()),
+    }
+}
+
+fn nfse_outcome(document: &FakeNfse) -> DocumentOutcome<AuthorizedNfse> {
+    match &document.stage {
+        Stage::Processing { .. } => DocumentOutcome::Processing,
+        Stage::Authorized => DocumentOutcome::Authorized(nfse_files(document)),
+        Stage::Rejected(refusal) => DocumentOutcome::Rejected(refusal.clone()),
+        Stage::Denied(refusal) => DocumentOutcome::Denied(refusal.clone()),
+        Stage::Cancelled => DocumentOutcome::Cancelled {
+            document: nfse_files(document),
+            cancellation_xml: format!(
+                "<?xml version=\"1.0\"?><!-- fake gateway: no fiscal value --><evento>\
+                 <nNFSe>{}</nNFSe><tpEvento>101101</tpEvento></evento>",
+                document.number
+            )
+            .into_bytes(),
+        },
     }
 }
 
@@ -547,6 +632,140 @@ impl FiscalGateway for FakeFiscalGateway {
             pdf: None,
         }))
     }
+
+    async fn submit_nfse(
+        &self,
+        request: &NfseRequest,
+    ) -> Result<Submission<AuthorizedNfse>, GatewayError> {
+        let mut state = self.lock();
+        if state.unavailable {
+            return Err(GatewayError::Unavailable("the fake is switched off".into()));
+        }
+        state.submitted_nfse.push(request.clone());
+        let dps = (request.dps_series, request.dps_number);
+        // The same reference again is the same document, unless it was refused: then it is another try.
+        if let Some(known) = state.nfse_documents.get(&request.reference)
+            && !matches!(known.stage, Stage::Rejected(_))
+        {
+            return Ok(Submission::of(nfse_outcome(known)));
+        }
+        // The national system refuses a DPS number that another reference already used, which is why the issuer never
+        // gives one twice.
+        let used_by_another = state.nfse_documents.iter().any(|(reference, known)| {
+            *reference != request.reference
+                && known.issuer_cnpj == request.issuer.cnpj()
+                && known.environment == request.issuer.environment().key()
+                && known.dps == dps
+        });
+        let refusal = if used_by_another {
+            Some(Refusal::new(
+                "dps_duplicada",
+                "a DPS with this series and number was already received",
+            ))
+        } else {
+            state.rejection.clone()
+        };
+        let issuer_cnpj = request.issuer.cnpj().to_owned();
+        let total = request.total.to_string();
+        if let Some(refusal) = refusal {
+            let document = FakeNfse {
+                stage: Stage::Rejected(refusal),
+                number: 0,
+                issuer_cnpj,
+                environment: request.issuer.environment().key(),
+                total,
+                dps,
+            };
+            let answer = nfse_outcome(&document);
+            state
+                .nfse_documents
+                .insert(request.reference.clone(), document);
+            return Ok(Submission::of(answer));
+        }
+        let counter = state
+            .nfse_counters
+            .entry((issuer_cnpj.clone(), request.issuer.environment().key()))
+            .or_insert(0);
+        *counter += 1;
+        let number = *counter;
+        let stage = match state.denial.clone() {
+            Some(refusal) => Stage::Denied(refusal),
+            None if state.queries_before_authorized == 0 => Stage::Authorized,
+            None => Stage::Processing {
+                queries_left: state.queries_before_authorized,
+            },
+        };
+        let document = FakeNfse {
+            stage,
+            number,
+            issuer_cnpj,
+            environment: request.issuer.environment().key(),
+            total,
+            dps,
+        };
+        let answer = nfse_outcome(&document);
+        state
+            .nfse_documents
+            .insert(request.reference.clone(), document);
+        Ok(Submission::of(answer))
+    }
+
+    async fn query_nfse(
+        &self,
+        _issuer: &FiscalSettings,
+        reference: &str,
+    ) -> Result<DocumentOutcome<AuthorizedNfse>, GatewayError> {
+        let mut state = self.lock();
+        if state.unavailable {
+            return Err(GatewayError::Unavailable("the fake is switched off".into()));
+        }
+        let Some(document) = state.nfse_documents.get_mut(reference) else {
+            return Ok(DocumentOutcome::Unknown);
+        };
+        if let Stage::Processing { queries_left } = &mut document.stage {
+            *queries_left -= 1;
+            if *queries_left == 0 {
+                document.stage = Stage::Authorized;
+            }
+        }
+        Ok(nfse_outcome(document))
+    }
+
+    async fn cancel_nfse(
+        &self,
+        _issuer: &FiscalSettings,
+        reference: &str,
+        reason: &str,
+    ) -> Result<EventOutcome, GatewayError> {
+        let mut state = self.lock();
+        if state.unavailable {
+            return Err(GatewayError::Unavailable("the fake is switched off".into()));
+        }
+        if let Some(refusal) = state.refuse_events.clone() {
+            return Ok(EventOutcome::Refused(refusal));
+        }
+        if reason.trim().chars().count() < MIN_REASON_CHARS {
+            return Ok(EventOutcome::Refused(Refusal::new(
+                "justificativa",
+                "the reason has at least 15 characters",
+            )));
+        }
+        // Answered at once, never queued: the port's NFS-e cancellation is synchronous.
+        Ok(match state.nfse_documents.get_mut(reference) {
+            Some(document) if document.stage == Stage::Authorized => {
+                document.stage = Stage::Cancelled;
+                let number = document.number;
+                event(format!(
+                    "<?xml version=\"1.0\"?><!-- fake gateway: no fiscal value --><evento>\
+                     <nNFSe>{number}</nNFSe><tpEvento>101101</tpEvento></evento>"
+                ))
+            }
+            _ => EventOutcome::Refused(Refusal::new(
+                "nao_autorizada",
+                "only an authorized document can be cancelled",
+            )),
+        })
+    }
 }
 
 /// A document the gateway refused: it keeps no number, since a refusal before authorization consumes none.
@@ -592,6 +811,43 @@ mod tests {
             &issuer(),
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn authorizes_and_cancels_an_nfse() {
+        let issuer =
+            contract::fiscal_service_issuer(contract::ACTIVE_CNPJ, FiscalEnvironment::Homologation);
+        contract::a_gateway_authorizes_and_cancels_an_nfse(&FakeFiscalGateway::default(), &issuer)
+            .await;
+        contract::a_gateway_authorizes_and_cancels_an_nfse(
+            &FakeFiscalGateway::authorizing_after(2),
+            &issuer,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn an_nfse_numbers_are_its_own_and_not_the_nfes() {
+        let gateway = FakeFiscalGateway::default();
+        let issuer =
+            contract::fiscal_service_issuer(contract::ACTIVE_CNPJ, FiscalEnvironment::Homologation);
+        gateway
+            .submit_nfe(&nfe_request(&issuer, &Uuid::new_v4().to_string()))
+            .await
+            .unwrap();
+        let sent = gateway
+            .submit_nfse(&contract::nfse_request(
+                &issuer,
+                &Uuid::new_v4().to_string(),
+                1,
+            ))
+            .await
+            .unwrap();
+        let DocumentOutcome::Authorized(nfse) = sent.outcome else {
+            panic!("authorized was expected");
+        };
+        assert_eq!(nfse.number, 1);
+        assert_eq!(gateway.submitted_nfse().len(), 1);
     }
 
     #[tokio::test]
@@ -739,6 +995,25 @@ mod tests {
         );
         assert_eq!(
             gateway.query_nfe(&issuer(), "x").await,
+            Err(GatewayError::Disabled)
+        );
+        let service =
+            contract::fiscal_service_issuer(contract::ACTIVE_CNPJ, FiscalEnvironment::Homologation);
+        assert_eq!(
+            gateway
+                .submit_nfse(&contract::nfse_request(&service, "x", 1))
+                .await
+                .map(|submission| submission.outcome),
+            Err(GatewayError::Disabled)
+        );
+        assert_eq!(
+            gateway.query_nfse(&service, "x").await,
+            Err(GatewayError::Disabled)
+        );
+        assert_eq!(
+            gateway
+                .cancel_nfse(&service, "x", "Serviço não prestado, engano")
+                .await,
             Err(GatewayError::Disabled)
         );
     }

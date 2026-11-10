@@ -3,11 +3,11 @@ use conta_verde_application::{
     ensure_audit_describes,
 };
 use conta_verde_domain::{
-    AccessKey, Amount, AuditEntity, AuditEntry, AuditRecord, BlobId, CalendarDate, CompanyId,
+    AccessKey, Amount, AuditEntity, AuditEntry, AuditRecord, BlobId, CalendarDate, CompanyId, Dps,
     FiscalAuthorization, FiscalDocument, FiscalDocumentDraft, FiscalDocumentId, FiscalDocumentKind,
     FiscalDocumentStatus, FiscalEnvironment, FiscalEvent, FiscalEventId, FiscalEventStatus,
-    FiscalEventSubject, FiscalFile, FiscalFileKind, FiscalOrigin, FiscalRefusal, SaleId, TaxRegime,
-    UserId,
+    FiscalEventSubject, FiscalFile, FiscalFileKind, FiscalOrigin, FiscalRefusal, NfseAuthorization,
+    SaleId, TaxRegime, UserId,
 };
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row};
@@ -16,6 +16,7 @@ use crate::postgres::storage_error;
 use crate::postgres_audit;
 
 const ONE_LIVE_PER_SALE: &str = "fiscal_documents_one_live_per_sale_key";
+const ONE_DOCUMENT_PER_DPS: &str = "fiscal_documents_dps_key";
 const ONE_FILE_PER_KIND: &str = "fiscal_files_one_per_kind_key";
 const ONE_LETTER_PER_PLACE: &str = "fiscal_events_sequence_key";
 const ONE_OPEN_CANCELLATION: &str = "fiscal_events_one_open_cancellation_key";
@@ -38,7 +39,8 @@ impl PostgresFiscalDocumentRepository {
 const COLUMNS: &str = "id, company_id, kind, sale_id, issuer_cnpj, issuer_name, regime, environment, \
      recipient_name, recipient_document, nature_code, total::text AS total, issued_at, \
      issued_on::text AS issued_on, submitted_by_user_id, submitted_by_name, status, refusal_code, \
-     refusal_message, access_key, number, series, protocol, note, gateway_reference";
+     refusal_message, access_key, number, series, protocol, note, gateway_reference, nfse_number, nfse_key, \
+     nfse_verification_code, dps_series, dps_number";
 
 fn stored<T>(value: Option<T>, what: &str) -> Result<T, RepositoryError> {
     value.ok_or_else(|| RepositoryError::Storage(format!("stored {what} is not known")))
@@ -52,7 +54,6 @@ fn document_from_row(row: &PgRow) -> Result<FiscalDocument, RepositoryError> {
         FiscalDocumentKind::parse(&text("kind")?),
         "fiscal document kind",
     )?;
-    debug_assert_eq!(kind, FiscalDocumentKind::Nfe);
     let draft = FiscalDocumentDraft {
         origin: FiscalOrigin::Sale(SaleId::from_uuid(
             row.try_get("sale_id").map_err(storage_error)?,
@@ -111,14 +112,58 @@ fn document_from_row(row: &PgRow) -> Result<FiscalDocument, RepositoryError> {
         }
         None => None,
     };
+    let storage =
+        |error: conta_verde_domain::DomainError| RepositoryError::Storage(error.to_string());
+    let nfse = match row
+        .try_get::<Option<i64>, _>("nfse_number")
+        .map_err(storage_error)?
+    {
+        Some(number) => {
+            let key: Option<String> = row.try_get("nfse_key").map_err(storage_error)?;
+            let code: Option<String> = row
+                .try_get("nfse_verification_code")
+                .map_err(storage_error)?;
+            let protocol: Option<String> = row.try_get("protocol").map_err(storage_error)?;
+            Some(
+                NfseAuthorization::new(
+                    u64::try_from(number)
+                        .map_err(|_| RepositoryError::Storage("stored number".to_owned()))?,
+                    key.as_deref(),
+                    code.as_deref(),
+                    protocol.as_deref(),
+                )
+                .map_err(storage)?,
+            )
+        }
+        None => None,
+    };
+    let dps = match (
+        row.try_get::<Option<i32>, _>("dps_series")
+            .map_err(storage_error)?,
+        row.try_get::<Option<i64>, _>("dps_number")
+            .map_err(storage_error)?,
+    ) {
+        (Some(series), Some(number)) => Some(
+            Dps::new(
+                u16::try_from(series)
+                    .map_err(|_| RepositoryError::Storage("stored series".to_owned()))?,
+                u64::try_from(number)
+                    .map_err(|_| RepositoryError::Storage("stored number".to_owned()))?,
+            )
+            .map_err(storage)?,
+        ),
+        _ => None,
+    };
     let note: Option<String> = row.try_get("note").map_err(storage_error)?;
-    Ok(FiscalDocument::new(
+    Ok(FiscalDocument::new_of_kind(
+        kind,
         FiscalDocumentId::from_uuid(row.try_get("id").map_err(storage_error)?),
         CompanyId::from_uuid(row.try_get("company_id").map_err(storage_error)?),
         draft,
     )
-    .map_err(|error| RepositoryError::Storage(error.to_string()))?
+    .map_err(storage)?
     .restored(status, refusal, authorization, note)
+    .with_nfse(nfse, dps)
     .with_gateway_reference(row.try_get("gateway_reference").map_err(storage_error)?))
 }
 
@@ -222,6 +267,8 @@ fn bind_values<'q>(
 ) -> Result<sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>, RepositoryError> {
     let FiscalOrigin::Sale(sale) = document.origin();
     let authorization = document.authorization();
+    let nfse = document.nfse_authorization();
+    let dps = document.dps();
     let number = authorization.map(|auth| i64::from(auth.number()));
     let series = authorization
         .map(|auth| i16::try_from(auth.series()))
@@ -254,9 +301,27 @@ fn bind_values<'q>(
         .bind(authorization.map(|auth| auth.access_key().as_str().to_owned()))
         .bind(number)
         .bind(series)
-        .bind(authorization.and_then(|auth| auth.protocol().map(str::to_owned)))
+        .bind(
+            authorization
+                .and_then(|auth| auth.protocol())
+                .or_else(|| nfse.and_then(|nfse| nfse.protocol()))
+                .map(str::to_owned),
+        )
         .bind(document.note())
-        .bind(document.gateway_reference()))
+        .bind(document.gateway_reference())
+        .bind(
+            nfse.map(|nfse| i64::try_from(nfse.number()))
+                .transpose()
+                .map_err(|_| RepositoryError::Storage("number".to_owned()))?,
+        )
+        .bind(nfse.and_then(|nfse| nfse.key().map(str::to_owned)))
+        .bind(nfse.and_then(|nfse| nfse.verification_code().map(str::to_owned)))
+        .bind(dps.map(|dps| i32::from(dps.series())))
+        .bind(
+            dps.map(|dps| i64::try_from(dps.number()))
+                .transpose()
+                .map_err(|_| RepositoryError::Storage("number".to_owned()))?,
+        ))
 }
 
 impl FiscalDocumentRepository for PostgresFiscalDocumentRepository {
@@ -272,9 +337,11 @@ impl FiscalDocumentRepository for PostgresFiscalDocumentRepository {
                 "INSERT INTO fiscal_documents (id, company_id, kind, sale_id, issuer_cnpj, issuer_name, \
                  regime, environment, recipient_name, recipient_document, nature_code, total, issued_at, \
                  issued_on, submitted_by_user_id, submitted_by_name, status, refusal_code, refusal_message, \
-                 access_key, number, series, protocol, note, gateway_reference) \
+                 access_key, number, series, protocol, note, gateway_reference, nfse_number, nfse_key, \
+                 nfse_verification_code, dps_series, dps_number) \
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CAST($12 AS numeric), $13, \
-                 CAST($14 AS date), $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)",
+                 CAST($14 AS date), $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, \
+                 $28, $29, $30)",
             ),
             document,
         )?
@@ -283,6 +350,9 @@ impl FiscalDocumentRepository for PostgresFiscalDocumentRepository {
         .map_err(|error| match &error {
             sqlx::Error::Database(db) if db.constraint() == Some(ONE_LIVE_PER_SALE) => {
                 RepositoryError::FiscalDocumentAlreadyLive
+            }
+            sqlx::Error::Database(db) if db.constraint() == Some(ONE_DOCUMENT_PER_DPS) => {
+                RepositoryError::DuplicateFiscalDps
             }
             _ => storage_error(error),
         })?;
@@ -321,7 +391,9 @@ impl FiscalDocumentRepository for PostgresFiscalDocumentRepository {
                  recipient_document = $10, nature_code = $11, total = CAST($12 AS numeric), \
                  issued_at = $13, issued_on = CAST($14 AS date), submitted_by_user_id = $15, \
                  submitted_by_name = $16, status = $17, refusal_code = $18, refusal_message = $19, \
-                 access_key = $20, number = $21, series = $22, protocol = $23, note = $24, gateway_reference = $25 \
+                 access_key = $20, number = $21, series = $22, protocol = $23, note = $24, \
+                 gateway_reference = $25, nfse_number = $26, nfse_key = $27, nfse_verification_code = $28, \
+                 dps_series = $29, dps_number = $30 \
                  WHERE id = $1",
             ),
             document,
@@ -331,6 +403,9 @@ impl FiscalDocumentRepository for PostgresFiscalDocumentRepository {
         .map_err(|error| match &error {
             sqlx::Error::Database(db) if db.constraint() == Some(ONE_LIVE_PER_SALE) => {
                 RepositoryError::FiscalDocumentAlreadyLive
+            }
+            sqlx::Error::Database(db) if db.constraint() == Some(ONE_DOCUMENT_PER_DPS) => {
+                RepositoryError::DuplicateFiscalDps
             }
             _ => storage_error(error),
         })?;
@@ -712,6 +787,26 @@ impl FiscalDocumentRepository for PostgresFiscalDocumentRepository {
         .map_err(storage_error)
     }
 
+    async fn next_dps_number(
+        &self,
+        company_id: CompanyId,
+        environment: FiscalEnvironment,
+        series: u16,
+    ) -> Result<u64, RepositoryError> {
+        let last: Option<i64> = sqlx::query_scalar(
+            "SELECT MAX(dps_number) FROM fiscal_documents \
+             WHERE company_id = $1 AND environment = $2 AND dps_series = $3",
+        )
+        .bind(company_id.as_uuid())
+        .bind(environment.key())
+        .bind(i32::from(series))
+        .fetch_one(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        u64::try_from(last.unwrap_or(0) + 1)
+            .map_err(|_| RepositoryError::Storage("stored number".to_owned()))
+    }
+
     async fn save_file(&self, file: &FiscalFile) -> Result<(), RepositoryError> {
         let size = i64::try_from(file.size())
             .map_err(|_| RepositoryError::Storage("file size".to_owned()))?;
@@ -839,6 +934,29 @@ mod tests {
             other_company,
             sale,
             other_sale,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn keeps_nfse_documents() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let other_company = contract::create_company(&pool).await;
+        let (entry_seed, seed) = seeds(&pool, company).await;
+        let sales = PostgresSaleRepository::new(pool.clone());
+        let sale = contract::save_a_sale(&sales, company, &entry_seed, &seed).await;
+        let others = [
+            contract::save_a_sale(&sales, company, &entry_seed, &seed).await,
+            contract::save_a_sale(&sales, company, &entry_seed, &seed).await,
+        ];
+        contract::fiscal_nfse_documents_are_kept(
+            &PostgresFiscalDocumentRepository::new(pool.clone()),
+            company,
+            other_company,
+            sale,
+            others,
         )
         .await;
     }
@@ -1051,6 +1169,175 @@ mod tests {
             ),
         );
         contract::issues_an_nfe_from_a_sale(
+            &service,
+            &gateway,
+            &settings,
+            &sales,
+            company,
+            other_company,
+            &entry_seed,
+            &seed,
+            &fiscal,
+        )
+        .await;
+        std::fs::remove_dir_all(root).expect("the test's own directory is removed");
+    }
+
+    /// What the migration of the NFS-e refuses, as the domain would: each kind keeps what the authority gave in its own
+    /// columns, a DPS belongs to an NFS-e, and the identity of an NFS-e is a number and letters and digits.
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn the_database_keeps_an_nfse_to_its_own_shape() {
+        use conta_verde_domain::{FiscalDocument, FiscalDocumentKind};
+
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let (entry_seed, seed) = seeds(&pool, company).await;
+        let sales = PostgresSaleRepository::new(pool.clone());
+        let nfse_sale = contract::save_a_sale(&sales, company, &entry_seed, &seed).await;
+        let nfe_sale = contract::save_a_sale(&sales, company, &entry_seed, &seed).await;
+        let repository = PostgresFiscalDocumentRepository::new(pool.clone());
+        let nfse = FiscalDocument::new_of_kind(
+            FiscalDocumentKind::Nfse,
+            conta_verde_domain::FiscalDocumentId::generate(),
+            company,
+            contract::fiscal_document_draft(nfse_sale, "250.00"),
+        )
+        .unwrap();
+        let nfe = contract::a_fiscal_document(company, nfe_sale, "10");
+        for document in [&nfse, &nfe] {
+            repository
+                .create(
+                    document,
+                    &contract::fiscal_document_audit(
+                        document,
+                        conta_verde_domain::AuditAction::Created,
+                        conta_verde_domain::fiscal_document_creation_changes(document),
+                    ),
+                )
+                .await
+                .unwrap();
+        }
+        let refused = |result: Result<_, sqlx::Error>, constraint: &str| match result {
+            Err(sqlx::Error::Database(error)) => assert_eq!(
+                error.constraint(),
+                Some(constraint),
+                "{constraint} was expected, got {}",
+                error.message()
+            ),
+            other => panic!("{constraint} was expected, got {other:?}"),
+        };
+        let update = |sql: &'static str, id: conta_verde_domain::FiscalDocumentId| {
+            let pool = pool.clone();
+            async move { sqlx::query(sql).bind(id.as_uuid()).execute(&pool).await }
+        };
+        // A DPS is an NFS-e's, in the series an API may use.
+        refused(
+            update(
+                "UPDATE fiscal_documents SET dps_series = 1, dps_number = 1 WHERE id = $1",
+                nfe.id(),
+            )
+            .await,
+            "fiscal_documents_authorization_follows_status",
+        );
+        refused(
+            update(
+                "UPDATE fiscal_documents SET dps_series = 50000, dps_number = 1 WHERE id = $1",
+                nfse.id(),
+            )
+            .await,
+            "fiscal_documents_dps_valid",
+        );
+        refused(
+            update(
+                "UPDATE fiscal_documents SET dps_series = 1 WHERE id = $1",
+                nfse.id(),
+            )
+            .await,
+            "fiscal_documents_dps_valid",
+        );
+        // An NFS-e has an NFS-e's identity and not an NF-e's; one that is authorized has its number and its DPS.
+        refused(
+            update(
+                "UPDATE fiscal_documents SET status = 'authorized', nfse_number = 1 WHERE id = $1",
+                nfse.id(),
+            )
+            .await,
+            "fiscal_documents_authorization_follows_status",
+        );
+        refused(
+            update("UPDATE fiscal_documents SET dps_series = 1, dps_number = 1, status = 'authorized', nfse_number = 1, number = 1 WHERE id = $1", nfse.id()).await,
+            "fiscal_documents_authorization_follows_status",
+        );
+        refused(
+            update(
+                "UPDATE fiscal_documents SET nfse_number = 1 WHERE id = $1",
+                nfse.id(),
+            )
+            .await,
+            "fiscal_documents_authorization_follows_status",
+        );
+        refused(
+            update("UPDATE fiscal_documents SET dps_series = 1, dps_number = 1, status = 'authorized', nfse_number = 0 WHERE id = $1", nfse.id()).await,
+            "fiscal_documents_authorization_follows_status",
+        );
+        refused(
+            update("UPDATE fiscal_documents SET dps_series = 1, dps_number = 1, status = 'authorized', nfse_number = 1, nfse_key = 'a/b' WHERE id = $1", nfse.id()).await,
+            "fiscal_documents_nfse_identity_valid",
+        );
+        refused(
+            update("UPDATE fiscal_documents SET dps_series = 1, dps_number = 1, status = 'authorized', nfse_number = 1, nfse_verification_code = '' WHERE id = $1", nfse.id()).await,
+            "fiscal_documents_nfse_identity_valid",
+        );
+        // The kind is one of the two: a third fails both checks, and the database names the first by name.
+        refused(
+            update(
+                "UPDATE fiscal_documents SET kind = 'nfce' WHERE id = $1",
+                nfse.id(),
+            )
+            .await,
+            "fiscal_documents_authorization_follows_status",
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn issues_an_nfse_from_a_sale() {
+        use crate::{
+            FakeFiscalGateway, LocalBlobStore, PostgresFiscalSettingsRepository,
+            PostgresPeriodLockRepository, RegisterReferences,
+        };
+        use conta_verde_application::FiscalDocumentService;
+
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let other_company = contract::create_company(&pool).await;
+        let (entry_seed, seed) = seeds(&pool, company).await;
+        let parties = PostgresPartyRepository::new(pool.clone());
+        let fiscal = contract::seed_fiscal_customer(&parties, company).await;
+        let gateway = FakeFiscalGateway::authorizing_after(1);
+        let settings = PostgresFiscalSettingsRepository::new(pool.clone());
+        let sales = PostgresSaleRepository::new(pool.clone());
+        let root =
+            std::env::temp_dir().join(format!("conta-verde-fiscal-{}", uuid::Uuid::new_v4()));
+        let service = FiscalDocumentService::new(
+            PostgresFiscalDocumentRepository::new(pool.clone()),
+            sales.clone(),
+            parties,
+            PostgresProductRepository::new(pool.clone()),
+            settings.clone(),
+            gateway.clone(),
+            LocalBlobStore::new(&root),
+            RegisterReferences::new(
+                PostgresCategoryRepository::new(pool.clone()),
+                PostgresCostCenterRepository::new(pool.clone()),
+                PostgresPartyRepository::new(pool.clone()),
+                PostgresBankAccountRepository::new(pool.clone()),
+                PostgresPaymentMethodRepository::new(pool.clone()),
+                PostgresPeriodLockRepository::new(pool.clone()),
+            ),
+        );
+        contract::issues_an_nfse_from_a_sale(
             &service,
             &gateway,
             &settings,

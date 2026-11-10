@@ -1,10 +1,10 @@
 use conta_verde_domain::{
-    Actor, Amount, AuditAction, AuditRecord, BlobId, CalendarDate, CompanyId, FiscalAuthorization,
-    FiscalDocument, FiscalDocumentDraft, FiscalDocumentId, FiscalDocumentKind,
+    Actor, Amount, AuditAction, AuditRecord, BlobId, CalendarDate, CompanyId, Dps,
+    FiscalAuthorization, FiscalDocument, FiscalDocumentDraft, FiscalDocumentId, FiscalDocumentKind,
     FiscalDocumentStatus, FiscalEvent, FiscalEventId, FiscalEventStatus, FiscalEventSubject,
     FiscalFile, FiscalFileKind, FiscalOrigin, FiscalRefusal, FiscalSettings,
-    MAX_CORRECTION_ATTEMPTS, MAX_CORRECTIONS, NatureKind, Party, Product, ProductKind, Sale,
-    SaleId, SaleStatus, TaxRegime, fiscal_day, fiscal_document_changes,
+    MAX_CORRECTION_ATTEMPTS, MAX_CORRECTIONS, NatureKind, NfseAuthorization, Party, Product,
+    ProductKind, Sale, SaleId, SaleStatus, TaxRegime, fiscal_day, fiscal_document_changes,
     fiscal_document_creation_changes, fiscal_event_changes, fiscal_event_creation_changes,
 };
 
@@ -14,11 +14,11 @@ use crate::accounting_export_service::{
 use crate::audit::audit_entry;
 use crate::list_query::{clamp_limit, split_page};
 use crate::{
-    ApplicationError, AuthorizedDocument, BlobStore, BuyerPresence, Destination, DocumentOutcome,
-    EntryReferences, EventOutcome, EventQuery, FiscalDocumentCursor, FiscalDocumentQuery,
-    FiscalDocumentRepository, FiscalGateway, FiscalSettingsRepository, GatewayError, NfeItem,
-    NfeRecipient, NfeRequest, PartyRepository, PaymentForm, ProductRepository, RepositoryError,
-    SaleRepository,
+    ApplicationError, AuthorizedDocument, AuthorizedNfse, BlobStore, BuyerPresence, Destination,
+    DocumentOutcome, EntryReferences, EventOutcome, EventQuery, FiscalDocumentCursor,
+    FiscalDocumentQuery, FiscalDocumentRepository, FiscalGateway, FiscalSettingsRepository,
+    GatewayError, NfeItem, NfeRecipient, NfeRequest, NfseRecipient, NfseRequest, PartyRepository,
+    PaymentForm, ProductRepository, RepositoryError, SaleRepository, SpecialTaxRegime,
 };
 
 const MIN_REASON_CHARS: usize = 15;
@@ -26,6 +26,10 @@ const MAX_CANCEL_REASON_CHARS: usize = 255;
 /// How long a document is given before "the gateway has no document with this reference" is believed: a submission
 /// that is still on its way would otherwise be refused under the feet of the call that is making it.
 const UNKNOWN_GRACE_SECONDS: i64 = 10 * 60;
+/// How many times a DPS number that another writer took first is asked for again.
+const MAX_DPS_ATTEMPTS: u32 = 5;
+/// What the national layout takes for the description of the services.
+const MAX_SERVICE_DESCRIPTION_CHARS: usize = 1000;
 
 /// A page of fiscal documents and where the next one starts.
 #[derive(Debug, Clone)]
@@ -57,7 +61,90 @@ pub struct IssueNfe {
     pub final_consumer: bool,
 }
 
-/// Issues NF-e documents from sales and follows them to the authority through a gateway ([ADR 0073], [ADR 0076]).
+/// What the person chooses to issue an NFS-e from a completed sale ([ADR 0081]). The tax **terms** are the nature's, which
+/// the company and its accountant wrote in the settings; what is chosen here is what the sale does not say and the product
+/// does not know, so none has a default: the nature, the day the service is of, the municipality where it was rendered
+/// (which decides whose ISSQN it is, and is often not the issuer's) and the special tax regime.
+#[derive(Debug, Clone)]
+pub struct IssueNfse {
+    pub sale_id: SaleId,
+    pub nature_code: String,
+    pub competence: CalendarDate,
+    /// The IBGE code of the municipality where the service was rendered: seven digits.
+    pub service_city_code: String,
+    pub special_regime: SpecialTaxRegime,
+}
+
+/// What a gateway hands over once it authorizes a document: the files to keep and the record of what the authority gave.
+trait Handover {
+    fn xml(&self) -> &[u8];
+    fn pdf(&self) -> Option<&[u8]>;
+    /// The document, authorized with what the authority gave.
+    fn authorize(
+        &self,
+        document: &FiscalDocument,
+        note: Option<&str>,
+    ) -> Result<FiscalDocument, conta_verde_domain::DomainError>;
+}
+
+impl Handover for AuthorizedDocument {
+    fn xml(&self) -> &[u8] {
+        &self.xml
+    }
+
+    fn pdf(&self) -> Option<&[u8]> {
+        self.pdf.as_deref()
+    }
+
+    fn authorize(
+        &self,
+        document: &FiscalDocument,
+        note: Option<&str>,
+    ) -> Result<FiscalDocument, conta_verde_domain::DomainError> {
+        let authorization = FiscalAuthorization::new(
+            self.access_key.clone(),
+            self.number,
+            self.series,
+            self.protocol.as_deref(),
+        )?;
+        document.authorized(authorization, note)
+    }
+}
+
+impl Handover for AuthorizedNfse {
+    fn xml(&self) -> &[u8] {
+        &self.xml
+    }
+
+    fn pdf(&self) -> Option<&[u8]> {
+        self.pdf.as_deref()
+    }
+
+    fn authorize(
+        &self,
+        document: &FiscalDocument,
+        note: Option<&str>,
+    ) -> Result<FiscalDocument, conta_verde_domain::DomainError> {
+        let authorization = NfseAuthorization::new(
+            self.number,
+            self.key.as_deref(),
+            self.verification_code.as_deref(),
+            self.protocol.as_deref(),
+        )?;
+        document.authorized_nfse(authorization, note)
+    }
+}
+
+/// A draft written, or the document that was already there.
+enum Persisted {
+    /// A document the issue made or found as a draft and goes on to send.
+    Fresh(FiscalDocument),
+    /// Another writer's live document: the answer to asking twice.
+    Existing(FiscalDocument),
+}
+
+/// Issues NF-e and NFS-e documents from sales and follows them to the authority through a gateway ([ADR 0073], [ADR 0076],
+/// [ADR 0081]).
 ///
 /// Every step can be repeated: asking again finishes what a failure left. The moment is the caller's, in Unix seconds,
 /// so a test moves it; the server's clock is read only to make it.
@@ -249,7 +336,38 @@ where
                 company_id, actor, &settings, &sale, &request, issued_on, now_unix, id,
             )
             .await?;
-        let document = match live {
+        match self
+            .persist_draft(
+                company_id,
+                actor,
+                live,
+                id,
+                FiscalDocumentKind::Nfe,
+                draft,
+                now_unix,
+            )
+            .await?
+        {
+            Persisted::Fresh(document) => self.send(company_id, actor, document, &nfe).await,
+            Persisted::Existing(document) => Ok(document),
+        }
+    }
+
+    /// Writes the draft of a new document, or builds the draft a failure left again, and tells when another writer got
+    /// there first: theirs is then the answer.
+    #[allow(clippy::too_many_arguments)]
+    async fn persist_draft(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        live: Option<FiscalDocument>,
+        id: FiscalDocumentId,
+        kind: FiscalDocumentKind,
+        draft: FiscalDocumentDraft,
+        now_unix: i64,
+    ) -> Result<Persisted, ApplicationError> {
+        let origin = draft.origin;
+        match live {
             Some(stored) => {
                 let rebuilt = stored.rebuilt_with(draft)?;
                 let audit = audit_entry(
@@ -261,10 +379,10 @@ where
                 self.documents
                     .replace(&rebuilt, FiscalDocumentStatus::Draft, &audit)
                     .await?;
-                rebuilt
+                Ok(Persisted::Fresh(rebuilt))
             }
             None => {
-                let document = FiscalDocument::new(id, company_id, draft)?;
+                let document = FiscalDocument::new_of_kind(kind, id, company_id, draft)?;
                 let audit = audit_entry(
                     &document,
                     actor,
@@ -272,21 +390,119 @@ where
                     fiscal_document_creation_changes(&document),
                 );
                 match self.documents.create(&document, &audit).await {
-                    Ok(()) => document,
+                    Ok(()) => Ok(Persisted::Fresh(document)),
                     // Someone else made it between the look and the write: theirs is the answer.
                     Err(RepositoryError::FiscalDocumentAlreadyLive) => {
                         let live = self
                             .documents
-                            .find_live(company_id, origin, FiscalDocumentKind::Nfe)
+                            .find_live(company_id, origin, kind)
                             .await?
                             .ok_or(RepositoryError::FiscalDocumentAlreadyLive)?;
-                        return self.refresh_or_return(company_id, live, now_unix).await;
+                        Ok(Persisted::Existing(
+                            self.refresh_or_return(company_id, live, now_unix).await?,
+                        ))
                     }
-                    Err(error) => return Err(error.into()),
+                    Err(error) => Err(error.into()),
                 }
             }
-        };
-        self.send(company_id, actor, document, &nfe).await
+        }
+    }
+
+    /// Issues an NFS-e of the national standard from a completed sale, or finishes the one the sale already has. The DPS is
+    /// numbered here, once ([ADR 0081]): the number is taken **before** the document is sent and kept through every new
+    /// attempt, so a lost answer never leads to a second DPS with another number.
+    pub async fn issue_nfse(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        request: IssueNfse,
+        now_unix: i64,
+    ) -> Result<FiscalDocument, ApplicationError> {
+        let settings = self.ready_settings(company_id).await?;
+        let sale = self.completed_sale(company_id, request.sale_id).await?;
+        let origin = FiscalOrigin::Sale(sale.id());
+        let live = self
+            .documents
+            .find_live(company_id, origin, FiscalDocumentKind::Nfse)
+            .await?;
+        if let Some(live) = live
+            .as_ref()
+            .filter(|live| live.status() != FiscalDocumentStatus::Draft)
+        {
+            return self
+                .refresh_or_return(company_id, live.clone(), now_unix)
+                .await;
+        }
+        let issued_on = issue_day(&settings, now_unix)?;
+        ensure_certificate(&settings, issued_on)?;
+        self.references.ensure_open(company_id, issued_on).await?;
+        let id = live
+            .as_ref()
+            .map_or_else(FiscalDocumentId::generate, FiscalDocument::id);
+        let (draft, nfse) = self
+            .build_nfse(
+                company_id, actor, &settings, &sale, &request, issued_on, now_unix, id,
+            )
+            .await?;
+        match self
+            .persist_draft(
+                company_id,
+                actor,
+                live,
+                id,
+                FiscalDocumentKind::Nfse,
+                draft,
+                now_unix,
+            )
+            .await?
+        {
+            Persisted::Fresh(document) => {
+                self.number_and_send(company_id, actor, document, nfse)
+                    .await
+            }
+            Persisted::Existing(document) => Ok(document),
+        }
+    }
+
+    /// Takes the DPS number the document does not have yet and sends it. A number another writer took in the meantime is
+    /// refused by the unique index and a new one is asked for.
+    async fn number_and_send(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        document: FiscalDocument,
+        mut nfse: NfseRequest,
+    ) -> Result<FiscalDocument, ApplicationError> {
+        let mut document = document;
+        if document.dps().is_none() {
+            let series = nfse.dps_series;
+            let mut attempts = 0;
+            document = loop {
+                let number = self
+                    .documents
+                    .next_dps_number(company_id, document.environment(), series)
+                    .await?;
+                let dps = Dps::new(series, number)?;
+                match self
+                    .move_to(actor, document.clone(), |document| document.numbered(dps))
+                    .await
+                {
+                    Ok(numbered) => break numbered,
+                    Err(ApplicationError::Repository(RepositoryError::DuplicateFiscalDps))
+                        if attempts < MAX_DPS_ATTEMPTS =>
+                    {
+                        attempts += 1;
+                    }
+                    Err(error) => return Err(error),
+                }
+            };
+        }
+        let dps = document
+            .dps()
+            .expect("a document that was just numbered has its DPS");
+        nfse.dps_series = dps.series();
+        nfse.dps_number = dps.number();
+        self.send_nfse(company_id, actor, document, &nfse).await
     }
 
     /// Sends a rejected document again under the same id, built again from the sale as it is now: the person fixed
@@ -299,15 +515,9 @@ where
         request: IssueNfe,
         now_unix: i64,
     ) -> Result<FiscalDocument, ApplicationError> {
-        let stored = self.get(company_id, id).await?;
-        if stored.status() != FiscalDocumentStatus::Rejected {
-            return Err(conta_verde_domain::DomainError::InvalidFiscalTransition.into());
-        }
-        if stored.origin() != FiscalOrigin::Sale(request.sale_id) {
-            return Err(ApplicationError::FiscalRule(
-                "the document was made from another sale".to_owned(),
-            ));
-        }
+        let stored = self
+            .rejected_of(company_id, id, FiscalDocumentKind::Nfe, request.sale_id)
+            .await?;
         let settings = self.ready_settings(company_id).await?;
         let issued_on = issue_day(&settings, now_unix)?;
         ensure_certificate(&settings, issued_on)?;
@@ -331,6 +541,61 @@ where
         self.send(company_id, actor, rebuilt, &nfe).await
     }
 
+    /// Sends a rejected NFS-e again under the same id and the **same DPS number**, built again from the sale as it is now.
+    pub async fn resend_nfse(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        id: FiscalDocumentId,
+        request: IssueNfse,
+        now_unix: i64,
+    ) -> Result<FiscalDocument, ApplicationError> {
+        let stored = self
+            .rejected_of(company_id, id, FiscalDocumentKind::Nfse, request.sale_id)
+            .await?;
+        let settings = self.ready_settings(company_id).await?;
+        let issued_on = issue_day(&settings, now_unix)?;
+        ensure_certificate(&settings, issued_on)?;
+        self.references.ensure_open(company_id, issued_on).await?;
+        let sale = self.completed_sale(company_id, request.sale_id).await?;
+        let (draft, nfse) = self
+            .build_nfse(
+                company_id, actor, &settings, &sale, &request, issued_on, now_unix, id,
+            )
+            .await?;
+        let rebuilt = stored.rebuilt_with(draft)?;
+        let audit = audit_entry(
+            &rebuilt,
+            actor,
+            AuditAction::Updated,
+            fiscal_document_changes(&stored, &rebuilt),
+        );
+        self.documents
+            .replace(&rebuilt, FiscalDocumentStatus::Rejected, &audit)
+            .await?;
+        self.number_and_send(company_id, actor, rebuilt, nfse).await
+    }
+
+    /// A rejected document of this kind that was made from this sale: the one a person may send again.
+    async fn rejected_of(
+        &self,
+        company_id: CompanyId,
+        id: FiscalDocumentId,
+        kind: FiscalDocumentKind,
+        sale: SaleId,
+    ) -> Result<FiscalDocument, ApplicationError> {
+        let stored = self.get(company_id, id).await?;
+        if stored.kind() != kind || stored.status() != FiscalDocumentStatus::Rejected {
+            return Err(conta_verde_domain::DomainError::InvalidFiscalTransition.into());
+        }
+        if stored.origin() != FiscalOrigin::Sale(sale) {
+            return Err(ApplicationError::FiscalRule(
+                "the document was made from another sale".to_owned(),
+            ));
+        }
+        Ok(stored)
+    }
+
     /// Asks the gateway about a document that is still waiting and records the answer. What the poll does too, in the
     /// name of whoever submitted the document. A document that is not waiting is returned as it is.
     pub async fn refresh(
@@ -345,14 +610,26 @@ where
         }
         let settings = self.settings_of(company_id, &document).await?;
         let actor = submitter(&document);
-        let outcome = self
-            .gateway
-            .query_nfe(&settings, &reference(&document))
-            .await?;
         // "No such document" is believed only once the submission has had time to arrive.
         let unknown_is_final = now_unix - document.issued_at_unix() >= UNKNOWN_GRACE_SECONDS;
-        self.apply(company_id, &actor, document, outcome, unknown_is_final)
-            .await
+        match document.kind() {
+            FiscalDocumentKind::Nfe => {
+                let outcome = self
+                    .gateway
+                    .query_nfe(&settings, &reference(&document))
+                    .await?;
+                self.apply(company_id, &actor, document, outcome, unknown_is_final)
+                    .await
+            }
+            FiscalDocumentKind::Nfse => {
+                let outcome = self
+                    .gateway
+                    .query_nfse(&settings, &reference(&document))
+                    .await?;
+                self.apply(company_id, &actor, document, outcome, unknown_is_final)
+                    .await
+            }
+        }
     }
 
     /// Cancels an authorized NF-e with a reason of 15 to 255 characters. The deadline is the authority's. It asks the
@@ -382,14 +659,30 @@ where
             .ensure_open(company_id, document.issued_on())
             .await?;
         let settings = self.settings_of(company_id, &document).await?;
-        let state = self
-            .gateway
-            .query_nfe(&settings, &reference(&document))
-            .await?;
-        if let DocumentOutcome::Cancelled { .. } = state {
-            let cancelled = self.apply(company_id, actor, document, state, true).await?;
-            self.accept_open_cancellation(company_id, id).await?;
-            return Ok(cancelled);
+        // A document the gateway already cancelled is followed, not cancelled twice.
+        match document.kind() {
+            FiscalDocumentKind::Nfe => {
+                let state = self
+                    .gateway
+                    .query_nfe(&settings, &reference(&document))
+                    .await?;
+                if let DocumentOutcome::Cancelled { .. } = state {
+                    return self
+                        .follow_cancellation(company_id, actor, document, state)
+                        .await;
+                }
+            }
+            FiscalDocumentKind::Nfse => {
+                let state = self
+                    .gateway
+                    .query_nfse(&settings, &reference(&document))
+                    .await?;
+                if let DocumentOutcome::Cancelled { .. } = state {
+                    return self
+                        .follow_cancellation(company_id, actor, document, state)
+                        .await;
+                }
+            }
         }
         // One cancellation at a time: a refused one does not count, so the person may ask again.
         if self
@@ -407,13 +700,36 @@ where
         // found by the poll and the cancellation is never sent twice ([ADR 0078]).
         let subject = FiscalEventSubject::cancellation(id, reason)?;
         let event = self.record_event(company_id, actor, subject).await?;
-        let answer = self
-            .gateway
-            .cancel_nfe(&settings, &reference(&document), reason)
-            .await;
+        let answer = match document.kind() {
+            FiscalDocumentKind::Nfe => {
+                self.gateway
+                    .cancel_nfe(&settings, &reference(&document), reason)
+                    .await
+            }
+            FiscalDocumentKind::Nfse => {
+                self.gateway
+                    .cancel_nfse(&settings, &reference(&document), reason)
+                    .await
+            }
+        };
         self.settle_event(company_id, actor, event, answer, "cancellation")
             .await?;
         self.get(company_id, id).await
+    }
+
+    /// The gateway says the document is cancelled: it is recorded as such, and a cancellation of ours that was still
+    /// waiting is the one that was done.
+    async fn follow_cancellation<A: Handover>(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        document: FiscalDocument,
+        state: DocumentOutcome<A>,
+    ) -> Result<FiscalDocument, ApplicationError> {
+        let id = document.id();
+        let cancelled = self.apply(company_id, actor, document, state, true).await?;
+        self.accept_open_cancellation(company_id, id).await?;
+        Ok(cancelled)
     }
 
     /// Sends a correction letter (CC-e) for an authorized document. The letter is **recorded as sent before the gateway
@@ -430,6 +746,12 @@ where
         let document = self.get(company_id, id).await?;
         if document.status() != FiscalDocumentStatus::Authorized {
             return Err(conta_verde_domain::DomainError::InvalidFiscalTransition.into());
+        }
+        if document.kind() != FiscalDocumentKind::Nfe {
+            return Err(ApplicationError::FiscalRule(
+                "the national NFS-e has no correction letter: cancel it and issue it again"
+                    .to_owned(),
+            ));
         }
         let settings = self.settings_of(company_id, &document).await?;
         let letters = self.documents.corrections_of(company_id, id).await?;
@@ -536,11 +858,32 @@ where
         let mut planned: Vec<(String, BlobId, u64)> = Vec::new();
         let mut rows = Vec::with_capacity(documents.len());
         for document in &documents {
-            let Some(authorization) = document.authorization() else {
-                continue;
-            };
-            let key = authorization.access_key().as_str();
-            let base = format!("fiscal/{}/{key}", document.kind().key());
+            // What the authority gave: an NF-e's key and series, or an NFS-e's number and, when there is one, its key. The
+            // file names carry the key, or the number of an NFS-e that has none ([ADR 0081]).
+            let (number, series, key, name) =
+                match (document.authorization(), document.nfse_authorization()) {
+                    (Some(authorization), _) => {
+                        let key = authorization.access_key().as_str().to_owned();
+                        (
+                            authorization.number().to_string(),
+                            authorization.series().to_string(),
+                            key.clone(),
+                            key,
+                        )
+                    }
+                    (None, Some(nfse)) => (
+                        nfse.number().to_string(),
+                        document
+                            .dps()
+                            .map(|dps| dps.series().to_string())
+                            .unwrap_or_default(),
+                        nfse.key().unwrap_or_default().to_owned(),
+                        nfse.key()
+                            .map_or_else(|| nfse.number().to_string(), str::to_owned),
+                    ),
+                    (None, None) => continue,
+                };
+            let base = format!("fiscal/{}/{name}", document.kind().key());
             let files = self.documents.files_of(company_id, document.id()).await?;
             let mut path_of = |kind: FiscalFileKind, suffix: &str| -> String {
                 files
@@ -572,9 +915,9 @@ where
                 text(document.id().as_uuid().to_string()),
                 text(document.kind().key().to_owned()),
                 text(document.status().key().to_owned()),
-                ExportCell::Amount(authorization.number().to_string()),
-                ExportCell::Amount(authorization.series().to_string()),
-                text(key.to_owned()),
+                ExportCell::Amount(number),
+                ExportCell::Amount(series),
+                text(key),
                 text(document.issued_on().to_string()),
                 text(document.recipient_name().to_owned()),
                 text(document.recipient_document().unwrap_or_default().to_owned()),
@@ -840,6 +1183,10 @@ where
             };
             let outcome = async {
                 let document = self.get(company_id, document_id).await?;
+                // Only an NF-e's event is ever queued: an NFS-e's cancellation is answered at once.
+                if document.kind() != FiscalDocumentKind::Nfe {
+                    return Ok(false);
+                }
                 let settings = self.settings_of(company_id, &document).await?;
                 let actor = Actor::User {
                     id: event.requested_by(),
@@ -993,13 +1340,48 @@ where
         }
     }
 
-    /// Records what the gateway says about a document that is waiting. Every step can be repeated.
-    async fn apply(
+    /// The same as [`send`](Self::send) for an NFS-e.
+    async fn send_nfse(
         &self,
         company_id: CompanyId,
         actor: &Actor,
         document: FiscalDocument,
-        outcome: DocumentOutcome,
+        nfse: &NfseRequest,
+    ) -> Result<FiscalDocument, ApplicationError> {
+        let processing = self
+            .move_to(actor, document, |document| document.submitted())
+            .await?;
+        match self.gateway.submit_nfse(nfse).await {
+            Ok(submission) => {
+                let processing = match submission.reference {
+                    Some(name) => {
+                        self.move_to(actor, processing, |document| document.referenced(&name))
+                            .await?
+                    }
+                    None => processing,
+                };
+                self.apply(company_id, actor, processing, submission.outcome, true)
+                    .await
+            }
+            Err(GatewayError::Unavailable(detail)) => {
+                tracing::warn!(%detail, "the fiscal gateway did not answer a submission");
+                Ok(processing)
+            }
+            Err(error) => {
+                let refusal = FiscalRefusal::new("gateway", &error.to_string());
+                self.move_to(actor, processing, |document| document.rejected(refusal))
+                    .await
+            }
+        }
+    }
+
+    /// Records what the gateway says about a document that is waiting. Every step can be repeated.
+    async fn apply<A: Handover>(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        document: FiscalDocument,
+        outcome: DocumentOutcome<A>,
         unknown_is_final: bool,
     ) -> Result<FiscalDocument, ApplicationError> {
         match outcome {
@@ -1065,26 +1447,20 @@ where
 
     /// The files are written before the record that says the document is authorized, so an authorized document
     /// always has its XML. Authorizing late into a closed month is written with a note, never refused.
-    async fn authorize(
+    async fn authorize<A: Handover>(
         &self,
         company_id: CompanyId,
         actor: &Actor,
         document: FiscalDocument,
-        authorized: &AuthorizedDocument,
+        authorized: &A,
     ) -> Result<FiscalDocument, ApplicationError> {
         let id = document.id();
-        self.store_file(company_id, id, FiscalFileKind::Xml, &authorized.xml)
+        self.store_file(company_id, id, FiscalFileKind::Xml, authorized.xml())
             .await?;
-        if let Some(pdf) = &authorized.pdf {
+        if let Some(pdf) = authorized.pdf() {
             self.store_file(company_id, id, FiscalFileKind::Pdf, pdf)
                 .await?;
         }
-        let authorization = FiscalAuthorization::new(
-            authorized.access_key.clone(),
-            authorized.number,
-            authorized.series,
-            authorized.protocol.as_deref(),
-        )?;
         let late = matches!(
             self.references
                 .ensure_open(company_id, document.issued_on())
@@ -1092,7 +1468,7 @@ where
             Err(ApplicationError::PeriodLocked { .. })
         );
         let note = late.then_some("authorized after the period of its issue day was closed");
-        self.move_to(actor, document, |d| d.authorized(authorization, note))
+        self.move_to(actor, document, |d| authorized.authorize(d, note))
             .await
     }
 
@@ -1183,18 +1559,23 @@ where
                 rule("the customer has no address: the destination of the goods is not known")
             })?;
         let in_state = recipient_state == settings.address().state();
+        // The NF-e is the products' document: a service line of the same sale goes into its NFS-e ([ADR 0081]).
         let mut items = Vec::new();
         let mut total_products = conta_verde_domain::Decimal::ZERO;
         let mut total_discount = conta_verde_domain::Decimal::ZERO;
-        for (index, line) in sale.lines().iter().enumerate() {
-            let number =
-                u16::try_from(index + 1).map_err(|_| rule("the sale has too many lines"))?;
+        let mut total = conta_verde_domain::Decimal::ZERO;
+        for line in sale.lines() {
             let product = self
                 .products
                 .find(company_id, line.product_id())
                 .await?
                 .ok_or_else(|| rule("a product of the sale does not exist"))?;
-            let item = item_of(
+            if product.kind() != ProductKind::Product {
+                continue;
+            }
+            let number =
+                u16::try_from(items.len() + 1).map_err(|_| rule("the sale has too many lines"))?;
+            items.push(item_of(
                 number,
                 line,
                 &product,
@@ -1202,12 +1583,17 @@ where
                 settings,
                 in_state,
                 request.origin,
-            )?;
+            )?);
             total_products += line.gross();
             total_discount += line.discount().as_decimal();
-            items.push(item);
+            total += line.total();
         }
-        let total = amount(sale.total())?;
+        if items.is_empty() {
+            return Err(rule(
+                "the sale has no product line: an NF-e is the document of products",
+            ));
+        }
+        let total = amount(total)?;
         let nfe = NfeRequest {
             reference: id.as_uuid().to_string(),
             issuer: settings.clone(),
@@ -1227,23 +1613,174 @@ where
             total_discount: amount(total_discount)?,
             total,
         };
-        let Actor::User { id: user, name } = actor;
-        let draft = FiscalDocumentDraft {
-            origin: FiscalOrigin::Sale(sale.id()),
-            issuer_cnpj: settings.cnpj().to_owned(),
-            issuer_name: settings.legal_name().to_owned(),
-            regime: settings.regime(),
-            environment: settings.environment(),
-            recipient_name: recipient.name,
-            recipient_document: recipient.document,
-            nature_code: nature.code().to_owned(),
+        let draft = document_draft(
+            settings,
+            actor,
+            sale.id(),
+            nature.code(),
+            &recipient.name,
+            recipient.document.clone(),
             total,
-            issued_at_unix: now_unix,
             issued_on,
-            submitted_by: *user,
-            submitted_by_name: name.clone(),
-        };
+            now_unix,
+        );
         Ok((draft, nfe))
+    }
+
+    /// What the document and the gateway's request are made of for an NFS-e: the sale's **service** lines under a service
+    /// nature whose ISSQN terms the company wrote. Nothing is calculated and nothing is defaulted ([ADR 0081]).
+    #[allow(clippy::too_many_arguments)]
+    async fn build_nfse(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        settings: &FiscalSettings,
+        sale: &Sale,
+        request: &IssueNfse,
+        issued_on: CalendarDate,
+        now_unix: i64,
+        id: FiscalDocumentId,
+    ) -> Result<(FiscalDocumentDraft, NfseRequest), ApplicationError> {
+        let rule = |text: &str| ApplicationError::FiscalRule(text.to_owned());
+        if settings.regime() != TaxRegime::SimplesNacional {
+            return Err(rule(
+                "only the Simples Nacional regime can issue for now: the tax calculation of the other regimes is not built",
+            ));
+        }
+        if settings.city_ibge_code().is_none() {
+            return Err(rule(
+                "set the municipality code of the issuer in the fiscal settings before issuing an NFS-e",
+            ));
+        }
+        let service_city_code = request.service_city_code.trim();
+        if service_city_code.len() != 7
+            || !service_city_code.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return Err(rule(
+                "the municipality where the service was rendered is its IBGE code, seven digits",
+            ));
+        }
+        let nature = settings
+            .natures()
+            .iter()
+            .find(|nature| nature.code() == request.nature_code.trim().to_ascii_lowercase())
+            .filter(|nature| nature.is_active() && nature.kind() == NatureKind::Service)
+            .ok_or_else(|| rule("choose an active operation nature for services"))?;
+        let terms = nature.service().ok_or_else(|| {
+            rule(&format!(
+                "the operation nature {} has no ISSQN terms: the company and its accountant write them in the fiscal settings",
+                nature.name()
+            ))
+        })?;
+        let customer = self
+            .parties
+            .find(company_id, sale.customer_id())
+            .await?
+            .ok_or_else(|| rule("the customer of the sale does not exist"))?;
+        let document = customer
+            .document()
+            .ok_or_else(|| rule("the customer has no CPF or CNPJ"))?
+            .as_str()
+            .to_owned();
+        let mut descriptions: Vec<&str> = Vec::new();
+        let mut gross = conta_verde_domain::Decimal::ZERO;
+        let mut discount = conta_verde_domain::Decimal::ZERO;
+        let mut total = conta_verde_domain::Decimal::ZERO;
+        for line in sale.lines() {
+            let product = self
+                .products
+                .find(company_id, line.product_id())
+                .await?
+                .ok_or_else(|| rule("a product of the sale does not exist"))?;
+            if product.kind() != ProductKind::Service {
+                continue;
+            }
+            descriptions.push(line.description());
+            gross += line.gross();
+            discount += line.discount().as_decimal();
+            total += line.total();
+        }
+        if descriptions.is_empty() {
+            return Err(rule(
+                "the sale has no service line: an NFS-e is the document of services",
+            ));
+        }
+        let description = descriptions.join("; ");
+        if description.chars().count() > MAX_SERVICE_DESCRIPTION_CHARS {
+            return Err(rule(
+                "the descriptions of the service lines are longer than the 1000 characters an NFS-e takes: shorten them",
+            ));
+        }
+        let total = amount(total)?;
+        let nfse = NfseRequest {
+            reference: id.as_uuid().to_string(),
+            issuer: settings.clone(),
+            issued_at_unix: now_unix,
+            dps_series: settings.nfse_series(),
+            // Taken when the document is sent: the request is built before the number is.
+            dps_number: 0,
+            competence: request.competence,
+            service_city_code: service_city_code.to_owned(),
+            special_regime: request.special_regime,
+            recipient: NfseRecipient {
+                name: customer.name().to_owned(),
+                document: document.clone(),
+                email: customer.email().map(|email| email.as_str().to_owned()),
+                address: customer.address().cloned(),
+            },
+            description,
+            national_tax_code: terms.national_tax_code().to_owned(),
+            municipal_service_code: terms.municipal_service_code().map(str::to_owned),
+            taxation: terms.iss_taxation(),
+            iss_rate: terms.iss_rate().map(|rate| rate.as_decimal()),
+            gross: amount(gross)?,
+            discount: amount(discount)?,
+            total,
+        };
+        let draft = document_draft(
+            settings,
+            actor,
+            sale.id(),
+            nature.code(),
+            customer.name(),
+            Some(document),
+            total,
+            issued_on,
+            now_unix,
+        );
+        Ok((draft, nfse))
+    }
+}
+
+/// What a document of either kind keeps of what it was made from: the issuer as the settings are now, who is served, how
+/// much, and who sent it.
+#[allow(clippy::too_many_arguments)]
+fn document_draft(
+    settings: &FiscalSettings,
+    actor: &Actor,
+    sale: SaleId,
+    nature_code: &str,
+    recipient_name: &str,
+    recipient_document: Option<String>,
+    total: Amount,
+    issued_on: CalendarDate,
+    now_unix: i64,
+) -> FiscalDocumentDraft {
+    let Actor::User { id: user, name } = actor;
+    FiscalDocumentDraft {
+        origin: FiscalOrigin::Sale(sale),
+        issuer_cnpj: settings.cnpj().to_owned(),
+        issuer_name: settings.legal_name().to_owned(),
+        regime: settings.regime(),
+        environment: settings.environment(),
+        recipient_name: recipient_name.to_owned(),
+        recipient_document,
+        nature_code: nature_code.to_owned(),
+        total,
+        issued_at_unix: now_unix,
+        issued_on,
+        submitted_by: *user,
+        submitted_by_name: name.clone(),
     }
 }
 
@@ -1324,9 +1861,6 @@ fn item_of(
     let named = |what: &str| {
         ApplicationError::FiscalRule(format!("item {number} ({}): {what}", product.name()))
     };
-    if product.kind() != ProductKind::Product {
-        return Err(named("a service has no NF-e: it is a product's document"));
-    }
     let ncm = product
         .ncm()
         .ok_or_else(|| named("the product has no NCM"))?;

@@ -27,6 +27,18 @@ struct DocumentState {
     audit: AuditLog,
 }
 
+/// The index of the migration: a DPS series and number name one document of a company in an environment.
+fn dps_is_taken(documents: &[FiscalDocument], document: &FiscalDocument) -> bool {
+    document.dps().is_some_and(|dps| {
+        documents.iter().any(|stored| {
+            stored.company_id() == document.company_id()
+                && stored.id() != document.id()
+                && stored.environment() == document.environment()
+                && stored.dps() == Some(dps)
+        })
+    })
+}
+
 impl FiscalDocumentRepository for InMemoryFiscalDocumentRepository {
     async fn create(
         &self,
@@ -53,6 +65,9 @@ impl FiscalDocumentRepository for InMemoryFiscalDocumentRepository {
             });
         if taken {
             return Err(RepositoryError::FiscalDocumentAlreadyLive);
+        }
+        if dps_is_taken(&state.documents, document) {
+            return Err(RepositoryError::DuplicateFiscalDps);
         }
         state.documents.push(document.clone());
         state.audit.record(audit);
@@ -86,6 +101,20 @@ impl FiscalDocumentRepository for InMemoryFiscalDocumentRepository {
                         .is_some_and(|other| other.access_key() == authorization.access_key())
             })
         });
+        let key_taken = key_taken
+            || document.nfse_authorization().is_some_and(|authorization| {
+                authorization.key().is_some_and(|key| {
+                    state.documents.iter().any(|stored| {
+                        stored.company_id() == document.company_id()
+                            && stored.id() != document.id()
+                            && stored.environment() == document.environment()
+                            && stored
+                                .nfse_authorization()
+                                .is_some_and(|other| other.key() == Some(key))
+                    })
+                })
+            });
+        let dps_taken = dps_is_taken(&state.documents, document);
         let stored = state
             .documents
             .iter_mut()
@@ -95,6 +124,15 @@ impl FiscalDocumentRepository for InMemoryFiscalDocumentRepository {
             .ok_or(RepositoryError::NotFound)?;
         if stored.status() != expected {
             return Err(RepositoryError::FiscalDocumentChanged);
+        }
+        // What the migration's trigger holds: the DPS number of a document never changes once it is set.
+        if stored.dps().is_some() && stored.dps() != document.dps() {
+            return Err(RepositoryError::Storage(
+                "the DPS number of a fiscal document never changes".to_owned(),
+            ));
+        }
+        if dps_taken {
+            return Err(RepositoryError::DuplicateFiscalDps);
         }
         let frozen = matches!(
             stored.status(),
@@ -447,6 +485,26 @@ impl FiscalDocumentRepository for InMemoryFiscalDocumentRepository {
         }))
     }
 
+    async fn next_dps_number(
+        &self,
+        company_id: CompanyId,
+        environment: FiscalEnvironment,
+        series: u16,
+    ) -> Result<u64, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        Ok(state
+            .documents
+            .iter()
+            .filter(|stored| {
+                stored.company_id() == company_id && stored.environment() == environment
+            })
+            .filter_map(|stored| stored.dps())
+            .filter(|dps| dps.series() == series)
+            .map(|dps| dps.number())
+            .max()
+            .map_or(1, |last| last + 1))
+    }
+
     async fn save_file(&self, file: &FiscalFile) -> Result<(), RepositoryError> {
         let mut state = self.state.lock().expect("repository lock poisoned");
         if !state.documents.iter().any(|stored| {
@@ -520,6 +578,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn keeps_nfse_documents() {
+        contract::fiscal_nfse_documents_are_kept(
+            &InMemoryFiscalDocumentRepository::default(),
+            CompanyId::generate(),
+            CompanyId::generate(),
+            SaleId::generate(),
+            [SaleId::generate(), SaleId::generate()],
+        )
+        .await;
+    }
+
+    #[tokio::test]
     async fn issues_an_nfe_from_a_sale() {
         use crate::memory_entries::tests::Registers;
         use crate::{
@@ -554,6 +624,54 @@ mod tests {
             registers.references(),
         );
         contract::issues_an_nfe_from_a_sale(
+            &service,
+            &gateway,
+            &settings,
+            &sales,
+            company,
+            other_company,
+            &entry_seed,
+            &seed,
+            &fiscal,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn issues_an_nfse_from_a_sale() {
+        use crate::memory_entries::tests::Registers;
+        use crate::{
+            FakeFiscalGateway, InMemoryBlobStore, InMemoryFiscalSettingsRepository,
+            InMemoryPaymentTermRepository, InMemoryProductRepository, InMemorySaleRepository,
+        };
+        use conta_verde_application::FiscalDocumentService;
+
+        let registers = Registers::new();
+        let (company, other_company) = (CompanyId::generate(), CompanyId::generate());
+        let entry_seed = registers.seed(company).await;
+        let products = InMemoryProductRepository::default();
+        let seed = contract::seed_sales_records(
+            &registers.parties,
+            &products,
+            &InMemoryPaymentTermRepository::default(),
+            company,
+        )
+        .await;
+        let fiscal = contract::seed_fiscal_customer(&registers.parties, company).await;
+        let gateway = FakeFiscalGateway::authorizing_after(1);
+        let settings = InMemoryFiscalSettingsRepository::default();
+        let sales = InMemorySaleRepository::default();
+        let service = FiscalDocumentService::new(
+            InMemoryFiscalDocumentRepository::default(),
+            sales.clone(),
+            registers.parties.clone(),
+            products,
+            settings.clone(),
+            gateway.clone(),
+            InMemoryBlobStore::default(),
+            registers.references(),
+        );
+        contract::issues_an_nfse_from_a_sale(
             &service,
             &gateway,
             &settings,
