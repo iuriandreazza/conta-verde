@@ -64,6 +64,8 @@ pub struct ExportPackage {
     pub settlements: ExportTable,
     pub transfers: ExportTable,
     pub attachments: ExportTable,
+    /// The fiscal documents issued in the span ([ADR 0073], [ADR 0076]): empty here, filled in by whoever has them.
+    pub fiscal: ExportTable,
     pub files: Vec<ExportFile>,
 }
 
@@ -198,6 +200,7 @@ where
             settlements: settlements_table(&books.settlements, &books.settled, &names)?,
             transfers: transfers_table(&books.transfers, &names),
             attachments,
+            fiscal: fiscal_table(Vec::new()),
             files,
         })
     }
@@ -382,6 +385,32 @@ where
             .names
             .export_names(company_id, &distinct(parties))
             .await?)
+    }
+}
+
+/// The table of the fiscal documents of a package ([ADR 0076]): its columns are fixed in the ADR and do not change without a
+/// new one.
+pub fn fiscal_table(rows: Vec<Vec<ExportCell>>) -> ExportTable {
+    ExportTable {
+        name: "fiscal",
+        header: &[
+            "document_id",
+            "kind",
+            "status",
+            "number",
+            "series",
+            "access_key",
+            "issued_on",
+            "recipient_name",
+            "recipient_document",
+            "total",
+            "environment",
+            "nature",
+            "xml_path",
+            "pdf_path",
+            "cancellation_path",
+        ],
+        rows,
     }
 }
 

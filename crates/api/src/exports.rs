@@ -133,10 +133,32 @@ pub(crate) async fn package_file<X: Ports>(
     ApiQuery(params): ApiQuery<ExportParams>,
 ) -> Result<Response, ApiError> {
     let span = params.read()?;
-    let package = state
+    let mut package = state
         .exports
         .package(company_id, span.from, span.to)
         .await?;
+    // The fiscal documents count toward the same limits as the attachments: what they leave is what they may take.
+    let limits = conta_verde_application::ExportLimits::default();
+    let used: u64 = package
+        .files
+        .iter()
+        .map(|file| file.bytes.len() as u64)
+        .sum();
+    let (fiscal, fiscal_files) = state
+        .fiscal_documents
+        .package(
+            company_id,
+            span.from,
+            span.to,
+            conta_verde_application::ExportLimits {
+                rows: limits.rows,
+                attached_files: limits.attached_files.saturating_sub(package.files.len()),
+                attached_bytes: limits.attached_bytes.saturating_sub(used),
+            },
+        )
+        .await?;
+    package.fiscal = fiscal;
+    package.files.extend(fiscal_files);
     // Built off the executor: it copies up to 200 MiB and sums them.
     let format = span.format;
     let bytes = tokio::task::spawn_blocking(move || package_zip(package, format))

@@ -2,9 +2,9 @@ use std::sync::{Arc, Mutex};
 
 use conta_verde_application::{FiscalDocumentRepository, RepositoryError, ensure_audit_describes};
 use conta_verde_domain::{
-    AuditEntity, AuditEntry, AuditRecord, CompanyId, FiscalDocument, FiscalDocumentId,
-    FiscalDocumentKind, FiscalDocumentStatus, FiscalEnvironment, FiscalEvent, FiscalEventId,
-    FiscalEventStatus, FiscalEventSubject, FiscalFile, FiscalFileKind, FiscalOrigin,
+    AuditEntity, AuditEntry, AuditRecord, CalendarDate, CompanyId, FiscalDocument,
+    FiscalDocumentId, FiscalDocumentKind, FiscalDocumentStatus, FiscalEnvironment, FiscalEvent,
+    FiscalEventId, FiscalEventStatus, FiscalEventSubject, FiscalFile, FiscalFileKind, FiscalOrigin,
 };
 
 use crate::memory_audit::AuditLog;
@@ -77,6 +77,7 @@ impl FiscalDocumentRepository for InMemoryFiscalDocumentRepository {
             state.documents.iter().any(|stored| {
                 stored.company_id() == document.company_id()
                     && stored.id() != document.id()
+                    && stored.environment() == document.environment()
                     && stored
                         .authorization()
                         .is_some_and(|other| other.access_key() == authorization.access_key())
@@ -182,6 +183,33 @@ impl FiscalDocumentRepository for InMemoryFiscalDocumentRepository {
         Ok(state
             .audit
             .history(company_id, AuditEntity::FiscalDocument, id.as_uuid()))
+    }
+
+    async fn issued_between(
+        &self,
+        company_id: CompanyId,
+        from: CalendarDate,
+        to: CalendarDate,
+        limit: usize,
+    ) -> Result<Vec<FiscalDocument>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        let mut found: Vec<FiscalDocument> = state
+            .documents
+            .iter()
+            .filter(|stored| {
+                stored.company_id() == company_id
+                    && stored.environment() == FiscalEnvironment::Production
+                    && matches!(
+                        stored.status(),
+                        FiscalDocumentStatus::Authorized | FiscalDocumentStatus::Cancelled
+                    )
+                    && (from..=to).contains(&stored.issued_on())
+            })
+            .cloned()
+            .collect();
+        found.sort_by_key(|stored| (stored.issued_at_unix(), stored.id().as_uuid()));
+        found.truncate(limit);
+        Ok(found)
     }
 
     async fn record_event(

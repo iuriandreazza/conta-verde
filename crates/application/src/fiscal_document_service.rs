@@ -8,6 +8,9 @@ use conta_verde_domain::{
     fiscal_document_creation_changes, fiscal_event_changes, fiscal_event_creation_changes,
 };
 
+use crate::accounting_export_service::{
+    ExportCell, ExportFile, ExportLimits, ExportTable, fiscal_table,
+};
 use crate::audit::audit_entry;
 use crate::{
     ApplicationError, AuthorizedDocument, BlobStore, BuyerPresence, Destination, DocumentOutcome,
@@ -471,6 +474,102 @@ where
             .await;
         self.settle_event(company_id, actor, event, answer, "invalidation")
             .await
+    }
+
+    /// The fiscal documents issued from `from` through `to` in production, as the accountant's package takes them
+    /// ([ADR 0073], [ADR 0076]): one row each, and the files under `fiscal/nfe/`: the XML, the DANFE, the cancellation's
+    /// XML and each correction letter's. `limits` is what the package has left (rows, files, bytes), checked from the
+    /// records **before any file is read**: a span that does not fit is refused, never cut.
+    pub async fn package(
+        &self,
+        company_id: CompanyId,
+        from: CalendarDate,
+        to: CalendarDate,
+        limits: ExportLimits,
+    ) -> Result<(ExportTable, Vec<ExportFile>), ApplicationError> {
+        let documents = self
+            .documents
+            .issued_between(company_id, from, to, limits.rows + 1)
+            .await?;
+        if documents.len() > limits.rows {
+            return Err(ApplicationError::ExportTooLarge(
+                "too many fiscal documents",
+            ));
+        }
+        // What each document brings, by the records: the files are read only when they are known to fit.
+        let mut planned: Vec<(String, BlobId, u64)> = Vec::new();
+        let mut rows = Vec::with_capacity(documents.len());
+        for document in &documents {
+            let Some(authorization) = document.authorization() else {
+                continue;
+            };
+            let key = authorization.access_key().as_str();
+            let base = format!("fiscal/{}/{key}", document.kind().key());
+            let files = self.documents.files_of(company_id, document.id()).await?;
+            let mut path_of = |kind: FiscalFileKind, suffix: &str| -> String {
+                files
+                    .iter()
+                    .find(|file| file.kind() == kind)
+                    .map(|file| {
+                        let path = format!("{base}{suffix}");
+                        planned.push((path.clone(), file.blob_id(), file.size()));
+                        path
+                    })
+                    .unwrap_or_default()
+            };
+            let xml = path_of(FiscalFileKind::Xml, ".xml");
+            let pdf = path_of(FiscalFileKind::Pdf, ".pdf");
+            let cancellation = path_of(FiscalFileKind::CancellationXml, "-cancel.xml");
+            for letter in self
+                .documents
+                .corrections_of(company_id, document.id())
+                .await?
+            {
+                if let (FiscalEventSubject::Correction { sequence, .. }, Some((blob, size))) =
+                    (letter.subject(), letter.xml())
+                {
+                    planned.push((format!("{base}-cce-{sequence}.xml"), blob, size));
+                }
+            }
+            let text = |value: String| ExportCell::Text(value);
+            rows.push(vec![
+                text(document.id().as_uuid().to_string()),
+                text(document.kind().key().to_owned()),
+                text(document.status().key().to_owned()),
+                ExportCell::Amount(authorization.number().to_string()),
+                ExportCell::Amount(authorization.series().to_string()),
+                text(key.to_owned()),
+                text(document.issued_on().to_string()),
+                text(document.recipient_name().to_owned()),
+                text(document.recipient_document().unwrap_or_default().to_owned()),
+                ExportCell::Amount(document.total().as_decimal().to_string()),
+                text(document.environment().key().to_owned()),
+                text(document.nature_code().to_owned()),
+                text(xml),
+                text(pdf),
+                text(cancellation),
+            ]);
+        }
+        if planned.len() > limits.attached_files {
+            return Err(ApplicationError::ExportTooLarge(
+                "more than 500 files with the fiscal documents",
+            ));
+        }
+        if planned.iter().map(|(_, _, size)| *size).sum::<u64>() > limits.attached_bytes {
+            return Err(ApplicationError::ExportTooLarge(
+                "more than 200 MiB of files with the fiscal documents",
+            ));
+        }
+        let mut files = Vec::with_capacity(planned.len());
+        for (path, blob, _) in planned {
+            let bytes = self.blobs.get(company_id, blob).await?.ok_or_else(|| {
+                ApplicationError::Repository(RepositoryError::Storage(format!(
+                    "the fiscal file {path} is missing"
+                )))
+            })?;
+            files.push(ExportFile { path, bytes });
+        }
+        Ok((fiscal_table(rows), files))
     }
 
     /// Gives up on an event that was sent and never answered: the person has checked at the gateway that the authority did

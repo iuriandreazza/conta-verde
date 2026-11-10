@@ -1,9 +1,9 @@
 use std::future::Future;
 
 use conta_verde_domain::{
-    AuditEntry, AuditRecord, CompanyId, FiscalDocument, FiscalDocumentId, FiscalDocumentKind,
-    FiscalDocumentStatus, FiscalEnvironment, FiscalEvent, FiscalEventId, FiscalFile,
-    FiscalFileKind, FiscalOrigin,
+    AuditEntry, AuditRecord, CalendarDate, CompanyId, FiscalDocument, FiscalDocumentId,
+    FiscalDocumentKind, FiscalDocumentStatus, FiscalEnvironment, FiscalEvent, FiscalEventId,
+    FiscalFile, FiscalFileKind, FiscalOrigin,
 };
 
 use crate::RepositoryError;
@@ -83,6 +83,17 @@ pub trait FiscalDocumentRepository: Send + Sync {
         id: FiscalDocumentId,
         kind: FiscalFileKind,
     ) -> impl Future<Output = Result<Option<FiscalFile>, RepositoryError>> + Send;
+
+    /// The documents of the company issued from `from` through `to` (their issue day, both included) in the production
+    /// environment that were authorized and are authorized or cancelled now, oldest first, at most `limit`: what the
+    /// accountant's package holds ([ADR 0073]). A test document is not a fiscal document.
+    fn issued_between(
+        &self,
+        company_id: CompanyId,
+        from: CalendarDate,
+        to: CalendarDate,
+        limit: usize,
+    ) -> impl Future<Output = Result<Vec<FiscalDocument>, RepositoryError>> + Send;
 
     /// Records an event **before** the gateway is asked, as `sent`. `FiscalDocumentChanged` when the document already
     /// has a letter in that place of its sequence (someone else took the number): the caller reads again.

@@ -19,7 +19,8 @@ its own, and the roadmap item "NF-e" is ticked only when the third lands:
 | **4a, the store** (merged) | `FiscalDocument` and its state machine in `domain`, the `FiscalDocumentRepository` port, both adapters, the migration, files in the `BlobStore` (`BlobId`), contract tests |
 | **4b, issuing** | `FiscalDocumentService`: issue from a sale, refresh, send again, cancel (with the period lock), download the files; the poll; the routes under `/fiscal/documents`; the certificate and Simples-only checks |
 | **4c, events** | the correction letter and the invalidation of numbers: `fiscal_events`, `FiscalEvent`, record-before-send, the routes |
-| **4d, the package and the screens** | `fiscal.csv` and the XML/PDF files in the accountant's package, the documents page and its actions |
+| **4d, the package** | `fiscal.csv` and the XML/PDF/event files in the accountant's package, within its limits |
+| **4e, the screens** | the list endpoint, the documents page and its actions |
 
 This ADR records the decisions of all four so that each pull request can be read against it; the sections say which pull request
 carries what. (It was three pull requests when this was first written; the events were split from issuing because each is a
@@ -149,12 +150,25 @@ already recorded does not write it again.
   (**Verify with an accountant** whether a closed month should also refuse an invalidation of numbers the company never used.)
   The company's invalidations are listed newest first, by the order they were recorded in (the latest 100). **Limit:** a number held by a document still `processing`, in `contingency` or `denied` is not stored, so it is not seen as used; asking the authority is the check that holds.
 
-### The package and the screens (4d)
+### The package (4d)
 
-As ADR 0073 amended ADR 0071: `fiscal.csv` and the files under `fiscal/nfe/` for documents issued in the span, production
-documents only, the 500-file and 200 MiB limits counted before any file is read. The columns of `fiscal.csv` are fixed in 4c's section of
-this ADR and do not change without a new ADR. The **Documentos** page lists the documents with their status and number and, by the
-person's role, issues from a sale, refreshes, cancels, sends a correction letter and downloads the XML and the DANFE.
+As ADR 0073 amended ADR 0071, the package also holds **`fiscal.csv`** (always a CSV, with its header when nothing was issued) and
+the files under **`fiscal/nfe/`** for the documents **issued in the span** (the issue day, both ends in) in **production**
+that are authorized or cancelled: `{access_key}.xml`, `{access_key}.pdf` when the gateway made one, `{access_key}-cancel.xml`
+and `{access_key}-cce-{n}.xml` for each accepted letter, `n` being the letter's place among our attempts. **A document of
+homologation is never in the package** (a test document is not a fiscal document), and a rejected or denied one has no files.
+The columns of `fiscal.csv` are fixed and do not change without a new ADR: `document_id`, `kind`, `status`, `number`,
+`series`, `access_key`, `issued_on`, `recipient_name`, `recipient_document`, `total`, `environment`, `nature`, `xml_path`,
+`pdf_path`, `cancellation_path` (a path is empty when that file does not exist; the letters are files, not columns).
+The files **count toward the package's limits** (500 files and 200 MiB with the attachments, 50,000 rows), judged from the
+records **before any file is read**, and a span that does not fit is `422`, never cut. `GET .../accounting/exports/package` makes
+the fiscal part from `FiscalDocumentService::package`, given what the attachments left of the limits, and the Contador page
+says so.
+
+### The documents page (4e)
+
+The list endpoint and the **Documentos** page (list, issue from a sale, detail with the files, cancel, correction letters and
+invalidations) are the last slice of the NF-e, with their own pull request.
 
 ## What this cannot prove
 
