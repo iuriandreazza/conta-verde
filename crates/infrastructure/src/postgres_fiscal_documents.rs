@@ -1,4 +1,7 @@
-use conta_verde_application::{FiscalDocumentRepository, RepositoryError, ensure_audit_describes};
+use conta_verde_application::{
+    FiscalDocumentCursor, FiscalDocumentQuery, FiscalDocumentRepository, RepositoryError,
+    ensure_audit_describes,
+};
 use conta_verde_domain::{
     AccessKey, Amount, AuditEntity, AuditEntry, AuditRecord, BlobId, CalendarDate, CompanyId,
     FiscalAuthorization, FiscalDocument, FiscalDocumentDraft, FiscalDocumentId, FiscalDocumentKind,
@@ -341,6 +344,32 @@ impl FiscalDocumentRepository for PostgresFiscalDocumentRepository {
         .await
         .map_err(storage_error)?;
         row.as_ref().map(document_from_row).transpose()
+    }
+
+    async fn list_by_company(
+        &self,
+        company_id: CompanyId,
+        query: &FiscalDocumentQuery,
+        after: Option<&FiscalDocumentCursor>,
+        limit: usize,
+    ) -> Result<Vec<FiscalDocument>, RepositoryError> {
+        // Every filter is optional: a NULL parameter does not narrow.
+        let rows = sqlx::query(&format!(
+            "SELECT {COLUMNS} FROM fiscal_documents WHERE company_id = $1 \
+             AND ($2::text IS NULL OR status = $2) AND ($3::uuid IS NULL OR sale_id = $3) \
+             AND ($4::bigint IS NULL OR (issued_at, id) < ($4, $5)) \
+             ORDER BY issued_at DESC, id DESC LIMIT $6"
+        ))
+        .bind(company_id.as_uuid())
+        .bind(query.status.map(|status| status.key()))
+        .bind(query.sale.map(|sale| sale.as_uuid()))
+        .bind(after.map(|cursor| cursor.issued_at_unix))
+        .bind(after.map(|cursor| cursor.id.as_uuid()))
+        .bind(i64::try_from(limit).unwrap_or(i64::MAX))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(storage_error)?;
+        rows.iter().map(document_from_row).collect()
     }
 
     async fn find_live(

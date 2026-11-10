@@ -632,6 +632,106 @@ export interface OperationNature {
   rules: TaxRule[];
 }
 
+export type FiscalDocumentStatus =
+  | "draft"
+  | "processing"
+  | "authorized"
+  | "contingency"
+  | "rejected"
+  | "denied"
+  | "cancelled";
+
+export interface FiscalRefusal {
+  code: string;
+  message: string;
+}
+
+/** An NF-e on its way to, or past, the authority (ADR 0076). */
+export interface FiscalDocument {
+  id: string;
+  kind: "nfe";
+  status: FiscalDocumentStatus;
+  sale_id: string;
+  issuer_cnpj: string;
+  issuer_name: string;
+  environment: FiscalEnvironment;
+  recipient_name: string;
+  recipient_document: string | null;
+  nature_code: string;
+  total: string;
+  issued_on: string;
+  access_key: string | null;
+  number: number | null;
+  series: number | null;
+  protocol: string | null;
+  refusal: FiscalRefusal | null;
+  note: string | null;
+  submitted_by: string;
+  /** The files that can be downloaded: `xml`, `pdf`, `cancellation_xml`. */
+  files: FiscalFileKind[];
+}
+
+export type FiscalFileKind = "xml" | "pdf" | "cancellation_xml";
+
+export interface FiscalDocumentPage {
+  items: FiscalDocument[];
+  next_cursor: string | null;
+}
+
+export type BuyerPresence =
+  | "not_applicable"
+  | "in_person"
+  | "internet"
+  | "telephone"
+  | "home_delivery"
+  | "outside_the_establishment"
+  | "other";
+
+export type PaymentForm =
+  | "cash"
+  | "cheque"
+  | "credit_card"
+  | "debit_card"
+  | "store_credit"
+  | "bank_slip"
+  | "bank_deposit"
+  | "pix"
+  | "transfer"
+  | "no_payment"
+  | "other";
+
+/** Every tax choice is the person's: nothing has a default (ADR 0076). */
+export interface IssueChoices {
+  sale_id: string;
+  nature_code: string;
+  origin: number;
+  presence: BuyerPresence;
+  payment: PaymentForm;
+  final_consumer: boolean;
+}
+
+export type FiscalEventStatus = "sent" | "accepted" | "refused";
+
+/** A correction letter or an invalidation of numbers (ADR 0076). */
+export interface FiscalEvent {
+  id: string;
+  kind: "correction" | "invalidation";
+  status: FiscalEventStatus;
+  text: string;
+  sequence: number | null;
+  series: number | null;
+  first: number | null;
+  last: number | null;
+  protocol: string | null;
+  refusal: FiscalRefusal | null;
+  requested_by: string;
+  has_file: boolean;
+}
+
+export interface FiscalDocumentFilters {
+  status: FiscalDocumentStatus | "";
+}
+
 /** How the company issues fiscal documents (ADR 0073): the whole settings are replaced by one `PUT`. */
 export interface FiscalSettings {
   legal_name: string;
@@ -2048,6 +2148,39 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(settings),
     }),
+  listFiscalDocuments: (companyId: string, filters: FiscalDocumentFilters, after?: string) => {
+    const params = new URLSearchParams();
+    if (filters.status) params.set("status", filters.status);
+    if (after) params.set("after", after);
+    const query = params.size > 0 ? `?${params}` : "";
+    return request<FiscalDocumentPage>(`/companies/${companyId}/fiscal/documents${query}`);
+  },
+  getFiscalDocument: (companyId: string, id: string) =>
+    request<FiscalDocument>(`/companies/${companyId}/fiscal/documents/${id}`),
+  issueFiscalDocument: (companyId: string, choices: IssueChoices) =>
+    post<FiscalDocument>(`/companies/${companyId}/fiscal/documents`, choices),
+  resendFiscalDocument: (companyId: string, id: string, choices: IssueChoices) =>
+    post<FiscalDocument>(`/companies/${companyId}/fiscal/documents/${id}/resend`, choices),
+  refreshFiscalDocument: (companyId: string, id: string) =>
+    post<FiscalDocument>(`/companies/${companyId}/fiscal/documents/${id}/refresh`),
+  cancelFiscalDocument: (companyId: string, id: string, reason: string) =>
+    post<FiscalDocument>(`/companies/${companyId}/fiscal/documents/${id}/cancel`, { reason }),
+  fiscalDocumentHistory: (companyId: string, id: string) =>
+    request<HistoryEntry[]>(`/companies/${companyId}/fiscal/documents/${id}/history`),
+  fiscalDocumentFile: (companyId: string, id: string, kind: FiscalFileKind) =>
+    fetchFile(`/companies/${companyId}/fiscal/documents/${id}/files/${kind}`, `${kind}-${id}.${kind === "pdf" ? "pdf" : "xml"}`),
+  listCorrections: (companyId: string, id: string) =>
+    request<FiscalEvent[]>(`/companies/${companyId}/fiscal/documents/${id}/corrections`),
+  sendCorrection: (companyId: string, id: string, text: string) =>
+    post<FiscalEvent>(`/companies/${companyId}/fiscal/documents/${id}/corrections`, { text }),
+  listInvalidations: (companyId: string) =>
+    request<FiscalEvent[]>(`/companies/${companyId}/fiscal/invalidations`),
+  invalidateNumbers: (companyId: string, input: { series: number; first: number; last: number; reason: string }) =>
+    post<FiscalEvent>(`/companies/${companyId}/fiscal/invalidations`, input),
+  abandonFiscalEvent: (companyId: string, id: string) =>
+    post<FiscalEvent>(`/companies/${companyId}/fiscal/events/${id}/abandon`),
+  fiscalEventFile: (companyId: string, id: string) =>
+    fetchFile(`/companies/${companyId}/fiscal/events/${id}/file`, `event-${id}.xml`),
   fiscalSettingsHistory: (companyId: string) =>
     request<HistoryEntry[]>(`/companies/${companyId}/fiscal/settings/history`),
   getCollection: (companyId: string) =>

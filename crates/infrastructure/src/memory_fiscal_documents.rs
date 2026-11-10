@@ -1,6 +1,9 @@
 use std::sync::{Arc, Mutex};
 
-use conta_verde_application::{FiscalDocumentRepository, RepositoryError, ensure_audit_describes};
+use conta_verde_application::{
+    FiscalDocumentCursor, FiscalDocumentQuery, FiscalDocumentRepository, RepositoryError,
+    ensure_audit_describes,
+};
 use conta_verde_domain::{
     AuditEntity, AuditEntry, AuditRecord, CalendarDate, CompanyId, FiscalDocument,
     FiscalDocumentId, FiscalDocumentKind, FiscalDocumentStatus, FiscalEnvironment, FiscalEvent,
@@ -136,6 +139,35 @@ impl FiscalDocumentRepository for InMemoryFiscalDocumentRepository {
             .iter()
             .find(|stored| stored.company_id() == company_id && stored.id() == id)
             .cloned())
+    }
+
+    async fn list_by_company(
+        &self,
+        company_id: CompanyId,
+        query: &FiscalDocumentQuery,
+        after: Option<&FiscalDocumentCursor>,
+        limit: usize,
+    ) -> Result<Vec<FiscalDocument>, RepositoryError> {
+        let state = self.state.lock().expect("repository lock poisoned");
+        let mut found: Vec<&FiscalDocument> = state
+            .documents
+            .iter()
+            .filter(|stored| stored.company_id() == company_id && query.matches(stored))
+            .collect();
+        found.sort_by_key(|stored| {
+            std::cmp::Reverse((stored.issued_at_unix(), stored.id().as_uuid()))
+        });
+        Ok(found
+            .into_iter()
+            .filter(|stored| {
+                after.is_none_or(|cursor| {
+                    (stored.issued_at_unix(), stored.id().as_uuid())
+                        < (cursor.issued_at_unix, cursor.id.as_uuid())
+                })
+            })
+            .take(limit)
+            .cloned()
+            .collect())
     }
 
     async fn find_live(

@@ -11,6 +11,7 @@ import { CashFlowPage } from "./pages/CashFlowPage";
 import { CategoriesPage } from "./pages/CategoriesPage";
 import { CompaniesPage } from "./pages/CompaniesPage";
 import { AccountingPage } from "./pages/AccountingPage";
+import { FiscalDocumentsPage } from "./pages/FiscalDocumentsPage";
 import { FiscalSettingsPage } from "./pages/FiscalSettingsPage";
 import { CollectionPage } from "./pages/CollectionPage";
 import { CommissionsPage } from "./pages/CommissionsPage";
@@ -67,6 +68,7 @@ export function App() {
           <Route path="/companies/:companyId/price-lists" element={<PriceListsPage />} />
           <Route path="/companies/:companyId/entries" element={<EntriesPage />} />
           <Route path="/companies/:companyId/accounting" element={<AccountingPage />} />
+          <Route path="/companies/:companyId/fiscal/documents" element={<FiscalDocumentsPage />} />
           <Route path="/companies/:companyId/fiscal/settings" element={<FiscalSettingsPage />} />
           <Route path="/companies/:companyId/collection" element={<CollectionPage />} />
           <Route path="/companies/:companyId/delinquency" element={<DelinquencyPage />} />

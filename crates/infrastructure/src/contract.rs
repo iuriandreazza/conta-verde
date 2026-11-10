@@ -17864,6 +17864,62 @@ pub async fn fiscal_documents_are_kept<R: conta_verde_application::FiscalDocumen
         Err(RepositoryError::FiscalDocumentAlreadyLive),
         "the sale has a live document again, so the old one cannot be sent again"
     );
+    // The list: newest first, a page at a time by a cursor, narrowed by status and sale, the company's own.
+    use conta_verde_application::{FiscalDocumentCursor, FiscalDocumentQuery};
+    let everything = FiscalDocumentQuery::default();
+    let all = repository
+        .list_by_company(company, &everything, None, 100)
+        .await
+        .unwrap();
+    assert!(all.len() >= 3);
+    assert!(all.windows(2).all(|pair| {
+        (pair[0].issued_at_unix(), pair[0].id().as_uuid())
+            > (pair[1].issued_at_unix(), pair[1].id().as_uuid())
+    }));
+    let mut paged = Vec::new();
+    let mut cursor: Option<FiscalDocumentCursor> = None;
+    loop {
+        let page = repository
+            .list_by_company(company, &everything, cursor.as_ref(), 2)
+            .await
+            .unwrap();
+        let Some(last) = page.last() else { break };
+        cursor = Some(FiscalDocumentCursor {
+            issued_at_unix: last.issued_at_unix(),
+            id: last.id(),
+        });
+        paged.extend(page);
+    }
+    assert_eq!(paged, all, "the pages add up to the whole list");
+    let cancelled_only = FiscalDocumentQuery {
+        status: Some(FiscalDocumentStatus::Cancelled),
+        sale: None,
+    };
+    let cancelled_list = repository
+        .list_by_company(company, &cancelled_only, None, 100)
+        .await
+        .unwrap();
+    assert_eq!(cancelled_list.len(), 1);
+    assert_eq!(cancelled_list[0].id(), draft.id());
+    let of_the_sale = FiscalDocumentQuery {
+        status: None,
+        sale: Some(sale),
+    };
+    assert_eq!(
+        repository
+            .list_by_company(company, &of_the_sale, None, 100)
+            .await
+            .unwrap()
+            .len(),
+        all.len()
+    );
+    assert!(
+        repository
+            .list_by_company(other_company, &everything, None, 100)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     let trail = repository.history(company, draft.id()).await.unwrap();
     assert_eq!(trail.len(), 4);
     assert_eq!(trail[0].entry.action, AuditAction::Created);

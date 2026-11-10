@@ -104,7 +104,10 @@ const AREAS: NavArea[] = [
     key: "fiscal",
     label: "Fiscal",
     icon: FileTextIcon,
-    items: [{ path: "/fiscal/settings", label: "Configurações fiscais", icon: LayersIcon }],
+    items: [
+      { path: "/fiscal/documents", label: "Documentos", icon: FileTextIcon },
+      { path: "/fiscal/settings", label: "Configurações fiscais", icon: LayersIcon },
+    ],
   },
   {
     key: "registers",

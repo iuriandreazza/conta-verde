@@ -165,10 +165,18 @@ records **before any file is read**, and a span that does not fit is `422`, neve
 the fiscal part from `FiscalDocumentService::package`, given what the attachments left of the limits, and the Contador page
 says so.
 
-### The documents page (4e)
+### The list and the documents page (4e)
 
-The list endpoint and the **Documentos** page (list, issue from a sale, detail with the files, cancel, correction letters and
-invalidations) are the last slice of the NF-e, with their own pull request.
+`GET .../fiscal/documents` lists the company's documents **newest first** (by the moment of issue, then the id: the keyset
+cursor `{id}|{moment}` stays valid), a page at a time (`limit`, `after`), narrowed by `status` and `sale`; an unknown status or a
+cursor that is not ours is `400`. It offers no `q` and no `sort`: there is one order, and the list does not carry the files (the
+detail does). The **Documentos** page (a **Fiscal** menu item beside the settings) lists them with their number and series,
+recipient, issue day, total and situation; the sheet to issue asks the six choices with **no option preselected** (sale, nature
+of operation, origin, buyer presence, payment form, final consumer); a document opens in a sheet with what the authority said
+(the refusal in its words, the note), its files, **Atualizar situação** while it waits, **Reenviar** when it was rejected, the
+cancellation and the correction letters (with **Desistir** for a letter that never got an answer), the trail and the warning that a
+homologation document has no fiscal value. The invalidation form and the company's invalidations are on the same page. What a
+person who only reads may do (see, download) stays; the buttons that write follow `useCanWrite("fiscal")`.
 
 ## What this cannot prove
 

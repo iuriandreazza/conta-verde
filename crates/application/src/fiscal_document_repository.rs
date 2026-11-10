@@ -3,10 +3,42 @@ use std::future::Future;
 use conta_verde_domain::{
     AuditEntry, AuditRecord, CalendarDate, CompanyId, FiscalDocument, FiscalDocumentId,
     FiscalDocumentKind, FiscalDocumentStatus, FiscalEnvironment, FiscalEvent, FiscalEventId,
-    FiscalFile, FiscalFileKind, FiscalOrigin,
+    FiscalFile, FiscalFileKind, FiscalOrigin, SaleId,
 };
 
 use crate::RepositoryError;
+
+/// What a list of fiscal documents is narrowed by: a status, a sale. Newest first (by the moment of issue, then the id,
+/// so the keyset cursor stays valid), which is the only order ([ADR 0076]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FiscalDocumentQuery {
+    pub status: Option<FiscalDocumentStatus>,
+    pub sale: Option<SaleId>,
+}
+
+/// Where the next page of a list of fiscal documents starts: after the document issued at this moment with this id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FiscalDocumentCursor {
+    pub issued_at_unix: i64,
+    pub id: FiscalDocumentId,
+}
+
+impl From<&FiscalDocument> for FiscalDocumentCursor {
+    fn from(document: &FiscalDocument) -> Self {
+        Self {
+            issued_at_unix: document.issued_at_unix(),
+            id: document.id(),
+        }
+    }
+}
+
+impl FiscalDocumentQuery {
+    pub fn matches(&self, document: &FiscalDocument) -> bool {
+        let FiscalOrigin::Sale(sale) = document.origin();
+        self.status.is_none_or(|status| status == document.status())
+            && self.sale.is_none_or(|wanted| wanted == sale)
+    }
+}
 
 /// Port for fiscal documents and the records of their files ([ADR 0073], [ADR 0076]).
 ///
@@ -37,6 +69,15 @@ pub trait FiscalDocumentRepository: Send + Sync {
         company_id: CompanyId,
         id: FiscalDocumentId,
     ) -> impl Future<Output = Result<Option<FiscalDocument>, RepositoryError>> + Send;
+
+    /// At most `limit` documents of the company that match `query`, newest first, starting right after `after`.
+    fn list_by_company(
+        &self,
+        company_id: CompanyId,
+        query: &FiscalDocumentQuery,
+        after: Option<&FiscalDocumentCursor>,
+        limit: usize,
+    ) -> impl Future<Output = Result<Vec<FiscalDocument>, RepositoryError>> + Send;
 
     /// The live document of this origin and kind, if there is one.
     fn find_live(

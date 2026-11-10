@@ -680,7 +680,7 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         )
         .route(
             "/companies/{company_id}/fiscal/documents",
-            post(fiscal::issue_document::<X>),
+            get(fiscal::list_documents::<X>).post(fiscal::issue_document::<X>),
         )
         .route(
             "/companies/{company_id}/fiscal/documents/{id}",
@@ -10290,6 +10290,47 @@ mod tests {
         assert_eq!(issued.body["total"], "35");
         let id = issued.body["id"].as_str().unwrap().to_owned();
         let one = format!("{documents}/{id}");
+        // The list: the company's documents, newest first, narrowed by status and sale, never another company's.
+        let listed = send(&app, get_request(&documents, Some(&seller))).await;
+        assert_eq!(listed.status, StatusCode::OK, "{}", listed.body);
+        assert_eq!(listed.body["items"].as_array().unwrap().len(), 1);
+        assert_eq!(listed.body["items"][0]["id"], issued.body["id"]);
+        assert_eq!(listed.body["next_cursor"], Value::Null);
+        for (query, count) in [
+            ("status=processing", 1),
+            ("status=cancelled", 0),
+            (format!("sale={sale_id}").as_str(), 1),
+            (format!("sale={}", Uuid::new_v4()).as_str(), 0),
+        ] {
+            let found = send(
+                &app,
+                get_request(&format!("{documents}?{query}"), Some(&owner)),
+            )
+            .await;
+            assert_eq!(
+                found.body["items"].as_array().unwrap().len(),
+                count,
+                "{query}"
+            );
+        }
+        for bad in ["status=nonsense", "after=garbage"] {
+            assert_eq!(
+                send(
+                    &app,
+                    get_request(&format!("{documents}?{bad}"), Some(&owner))
+                )
+                .await
+                .status,
+                StatusCode::BAD_REQUEST,
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            send(&app, get_request(&documents, Some(&stranger)))
+                .await
+                .status,
+            StatusCode::NOT_FOUND
+        );
         let again = send(
             &app,
             json_request("POST", &documents, Some(&owner), choices.clone()),

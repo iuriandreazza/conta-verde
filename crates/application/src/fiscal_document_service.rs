@@ -12,11 +12,13 @@ use crate::accounting_export_service::{
     ExportCell, ExportFile, ExportLimits, ExportTable, fiscal_table,
 };
 use crate::audit::audit_entry;
+use crate::list_query::{clamp_limit, split_page};
 use crate::{
     ApplicationError, AuthorizedDocument, BlobStore, BuyerPresence, Destination, DocumentOutcome,
-    EntryReferences, EventOutcome, FiscalDocumentRepository, FiscalGateway,
-    FiscalSettingsRepository, GatewayError, NfeItem, NfeRecipient, NfeRequest, PartyRepository,
-    PaymentForm, ProductRepository, RepositoryError, SaleRepository,
+    EntryReferences, EventOutcome, FiscalDocumentCursor, FiscalDocumentQuery,
+    FiscalDocumentRepository, FiscalGateway, FiscalSettingsRepository, GatewayError, NfeItem,
+    NfeRecipient, NfeRequest, PartyRepository, PaymentForm, ProductRepository, RepositoryError,
+    SaleRepository,
 };
 
 const MIN_REASON_CHARS: usize = 15;
@@ -24,6 +26,13 @@ const MAX_CANCEL_REASON_CHARS: usize = 255;
 /// How long a document is given before "the gateway has no document with this reference" is believed: a submission
 /// that is still on its way would otherwise be refused under the feet of the call that is making it.
 const UNKNOWN_GRACE_SECONDS: i64 = 10 * 60;
+
+/// A page of fiscal documents and where the next one starts.
+#[derive(Debug, Clone)]
+pub struct FiscalDocumentPage {
+    pub items: Vec<FiscalDocument>,
+    pub next: Option<FiscalDocumentCursor>,
+}
 
 /// What one pass of the poll did.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -128,6 +137,23 @@ where
             }
         }
         Ok(report)
+    }
+
+    /// The company's documents, newest first, a page at a time.
+    pub async fn list(
+        &self,
+        company_id: CompanyId,
+        query: &FiscalDocumentQuery,
+        after: Option<&FiscalDocumentCursor>,
+        limit: Option<usize>,
+    ) -> Result<FiscalDocumentPage, ApplicationError> {
+        let limit = clamp_limit(limit);
+        let rows = self
+            .documents
+            .list_by_company(company_id, query, after, limit + 1)
+            .await?;
+        let (items, next) = split_page(rows, limit);
+        Ok(FiscalDocumentPage { items, next })
     }
 
     pub async fn get(

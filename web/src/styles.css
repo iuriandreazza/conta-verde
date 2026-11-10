@@ -2760,3 +2760,10 @@ tr.subtotal + tr.below-the-line td {
   display: grid;
   gap: 0.75rem;
 }
+
+/* The 44 digits of an access key: no spaces to break at, so it breaks anywhere rather than run off the sheet. */
+.access-key {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
