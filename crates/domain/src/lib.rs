@@ -53,6 +53,7 @@ mod statement_line;
 mod stock;
 mod stock_settings;
 mod tag;
+mod tax_calculation;
 mod transfer;
 
 pub use account::{Account, AccountDraft, Company, User, validate_password};
@@ -180,4 +181,5 @@ pub use stock::{
 };
 pub use stock_settings::StockSettings;
 pub use tag::{MAX_TAGS, Tag};
+pub use tax_calculation::{DocumentTax, ItemTax, TaxAmount, document_tax, item_tax};
 pub use transfer::{AccountOpening, Transfer, TransferDraft};
