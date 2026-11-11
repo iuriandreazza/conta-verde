@@ -79,6 +79,7 @@ export const BankAccountCreator = registerCreator<BankAccountInput, { id: string
 
 /** The form of a new price table, with the products read first to choose from. */
 export function PriceListCreator({ companyId, onBusyChange, onCreated, onCancel }: CreatorProps) {
+  const t = useT();
   const [products, setProducts] = useState<Product[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -103,7 +104,7 @@ export function PriceListCreator({ companyId, onBusyChange, onCreated, onCancel 
     setError(null);
     try {
       const created = await api.createPriceList(companyId, input);
-      onCreated({ id: created.id, message: `${created.name} cadastrada.` });
+      onCreated({ id: created.id, message: t("Price list {name} registered.", { name: created.name }) });
     } catch (failure) {
       setError(errorMessage(failure));
       setSaving(false);
@@ -113,7 +114,7 @@ export function PriceListCreator({ companyId, onBusyChange, onCreated, onCancel 
   if (products === null) {
     return loadError === null ? (
       <p role="status" className="status">
-        <Spinner /> Carregando…
+        <Spinner /> {t("Loading…")}
       </p>
     ) : (
       <p role="alert">{loadError}</p>
@@ -124,6 +125,7 @@ export function PriceListCreator({ companyId, onBusyChange, onCreated, onCancel 
 
 /** The form of a new commission rule, with the parties and products read first to choose from. */
 export function CommissionRuleCreator({ companyId, onBusyChange, onCreated, onCancel }: CreatorProps) {
+  const t = useT();
   const [targets, setTargets] = useState<{ parties: Party[]; products: Product[] } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -151,7 +153,7 @@ export function CommissionRuleCreator({ companyId, onBusyChange, onCreated, onCa
     setError(null);
     try {
       const created = await api.createCommissionRule(companyId, input);
-      onCreated({ id: created.id, message: `Regra de ${formatDecimal(created.rate)}% cadastrada.` });
+      onCreated({ id: created.id, message: t("Rule of {rate}% registered.", { rate: formatDecimal(created.rate) }) });
     } catch (failure) {
       setError(errorMessage(failure));
       setSaving(false);
@@ -161,7 +163,7 @@ export function CommissionRuleCreator({ companyId, onBusyChange, onCreated, onCa
   if (targets === null) {
     return loadError === null ? (
       <p role="status" className="status">
-        <Spinner /> Carregando…
+        <Spinner /> {t("Loading…")}
       </p>
     ) : (
       <p role="alert">{loadError}</p>

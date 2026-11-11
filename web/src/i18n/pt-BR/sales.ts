@@ -330,4 +330,30 @@ export const sales: Record<string, string> = {
   "Copy the digitable line": "Copiar a linha digitável",
   "Open the boleto (PDF)": "Abrir o boleto (PDF)",
   "Pay by card": "Pagar com cartão",
+
+  // Sales report
+  "No seller": "Sem vendedor",
+  "A: up to 80% of the total sold; B: up to 95%; C: the rest. Each row falls in the class where it starts.": "A: até 80% do total vendido; B: até 95%; C: o resto. Cada linha entra na classe em que começa.",
+  "From {from} to {to}, less what was returned.": "De {from} a {to}, menos o que foi devolvido.",
+  "Completed sales": "Vendas concluídas",
+  "Orders and cancelled sales do not count.": "Pedidos e vendas canceladas não entram.",
+  "Largest values, by {group}": "Maiores valores, por {group}",
+  "The {count} largest of the period; the table below has all of them.": "Os {count} maiores do período; a tabela abaixo tem todos.",
+  "Largest values sold by {group}": "Maiores valores vendidos por {group}",
+  "ABC curve. {hint}": "Curva ABC. {hint}",
+  "Cumulative %": "% acumulado",
+  "Class": "Classe",
+
+  // Creators of a price list and a commission rule
+  "Price list {name} registered.": "{name} cadastrada.",
+  "Rule of {rate}% registered.": "Regra de {rate}% cadastrada.",
+
+  // The panel that sends a document by e-mail
+  "Sent to {to}.": "Enviado para {to}.",
+  "Nothing was sent: the mail server is not set up.": "Nada foi enviado: o servidor de e-mail não está configurado.",
+  "Already sent: {sent}.": "Já enviado: {sent}.",
+  "{moment} to {to}": "{moment} para {to}",
+  "Send to": "Enviar para",
+  "Leave empty to use the e-mail on the record": "Deixe vazio para usar o e-mail do cadastro",
+  "Send {what} by e-mail": "Enviar {what} por e-mail",
 };
