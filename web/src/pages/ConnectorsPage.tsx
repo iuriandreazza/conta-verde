@@ -208,7 +208,7 @@ export function ConnectorsPage() {
               <thead>
                 <tr>
                   <th>{t("Store")}</th>
-                  <th>{t("Status")}</th>
+                  <th>{t("Current state")}</th>
                   <th>
                     <span className="visually-hidden">{t("Actions")}</span>
                   </th>

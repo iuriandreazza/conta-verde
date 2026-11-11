@@ -86,7 +86,7 @@ function DeliveryLog({ companyId, subscription, canWrite, refresh }: { companyId
             <thead>
               <tr>
                 <th>{t("Event")}</th>
-                <th>{t("Status")}</th>
+                <th>{t("Current state")}</th>
                 <th>{t("Attempts")}</th>
                 <th>{t("Last response")}</th>
                 <th>{t("When")}</th>
@@ -347,7 +347,7 @@ export function WebhooksPage() {
                 <tr>
                   <th>{t("Address")}</th>
                   <th>{t("Events")}</th>
-                  <th>{t("Status")}</th>
+                  <th>{t("Current state")}</th>
                   <th>
                     <span className="visually-hidden">{t("Actions")}</span>
                   </th>

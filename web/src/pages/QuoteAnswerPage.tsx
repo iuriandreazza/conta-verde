@@ -7,6 +7,7 @@ import { FileTextIcon } from "../components/icons/file-text";
 import { Notice } from "../components/Notice";
 import { PageHeader } from "../components/PageHeader";
 import { Spinner } from "../components/Spinner";
+import { useT } from "../i18n";
 import { formatDecimal, formatMoney } from "../lib/decimal";
 import { formatDate } from "../lib/entryInstallments";
 import { QUOTE_STATUS_LABELS } from "../lib/quoteStatus";
@@ -21,6 +22,7 @@ type Loaded =
  * once (ADR 0038). The token in the link is the only secret.
  */
 export function QuoteAnswerPage() {
+  const t = useT();
   const { token = "" } = useParams();
   const [loaded, setLoaded] = useState<Loaded>({ status: "loading" });
   const [answering, setAnswering] = useState<"approve" | "decline" | null>(null);
@@ -37,7 +39,7 @@ export function QuoteAnswerPage() {
             status: "failed",
             message:
               failure instanceof ApiError && failure.status === 404
-                ? "Este link não leva a nenhum orçamento: pode ter sido trocado por outro mais novo. Peça um novo a quem enviou."
+                ? t("This link does not lead to any quote: it may have been replaced by a newer one. Ask whoever sent it for a new one.")
                 : errorMessage(failure),
           });
         }
@@ -63,14 +65,14 @@ export function QuoteAnswerPage() {
   if (loaded.status === "loading") {
     return (
       <p role="status" className="status">
-        <Spinner /> Carregando…
+        <Spinner /> {t("Loading…")}
       </p>
     );
   }
   if (loaded.status === "failed") {
     return (
       <>
-        <PageHeader title="Orçamento" />
+        <PageHeader title={t("Quote")} />
         <Notice message={loaded.message} />
       </>
     );
@@ -80,23 +82,23 @@ export function QuoteAnswerPage() {
   return (
     <>
       <PageHeader
-        title={`Orçamento nº ${quote.number}`}
-        subtitle={`${quote.company_name} para ${quote.customer_name}`}
+        title={t("Quote no. {number}", { number: quote.number })}
+        subtitle={t("{company} for {customer}", { company: quote.company_name, customer: quote.customer_name })}
       />
       <section className="card">
         <p>
-          Emitido em {formatDate(quote.issued_on)} · válido até {formatDate(quote.valid_until)}
-          {quote.payment_term !== null && ` · pagamento: ${quote.payment_term}`}
+          {t("Issued on {issued} · valid until {valid}", { issued: formatDate(quote.issued_on), valid: formatDate(quote.valid_until) })}
+          {quote.payment_term !== null && ` · ${t("payment: {term}", { term: quote.payment_term })}`}
         </p>
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Item</th>
-                <th className="num">Quantidade</th>
-                <th className="num">Preço</th>
-                <th className="num">Desconto</th>
-                <th className="num">Valor</th>
+                <th>{t("Item")}</th>
+                <th className="num">{t("Quantity")}</th>
+                <th className="num">{t("Price")}</th>
+                <th className="num">{t("Discount")}</th>
+                <th className="num">{t("Value")}</th>
               </tr>
             </thead>
             <tbody>
@@ -112,7 +114,7 @@ export function QuoteAnswerPage() {
             </tbody>
             <tfoot>
               <tr>
-                <th colSpan={4}>Total</th>
+                <th colSpan={4}>{t("Total")}</th>
                 <th className="num">{formatMoney(quote.total)}</th>
               </tr>
             </tfoot>
@@ -121,20 +123,20 @@ export function QuoteAnswerPage() {
         {quote.notes !== null && <p className="muted">{quote.notes}</p>}
         <p>
           <a className="btn btn-ghost" href={api.publicQuotePdfUrl(token)} target="_blank" rel="noreferrer">
-            <FileTextIcon size={16} aria-hidden /> Baixar em PDF
+            <FileTextIcon size={16} aria-hidden /> {t("Download as PDF")}
           </a>
         </p>
         {waiting ? (
           <div className="form-actions">
             {quote.expired ? (
-              <Notice tone="warning" message="A validade deste orçamento acabou: ele já não pode ser aprovado. Peça um novo a quem enviou." />
+              <Notice tone="warning" message={t("This quote has expired: it can no longer be approved. Ask whoever sent it for a new one.")} />
             ) : (
               <Button icon={CheckIcon} pending={answering === "approve"} disabled={answering !== null} onClick={() => void answer("approve")}>
-                Aprovar orçamento
+                {t("Approve quote")}
               </Button>
             )}
             <Button variant="ghost" pending={answering === "decline"} disabled={answering !== null} onClick={() => void answer("decline")}>
-              Recusar
+              {t("Decline")}
             </Button>
           </div>
         ) : (
@@ -142,8 +144,8 @@ export function QuoteAnswerPage() {
             tone="success"
             message={
               quote.status === "approved" || quote.status === "converted"
-                ? "Orçamento aprovado. Obrigado!"
-                : `Situação: ${QUOTE_STATUS_LABELS[quote.status]}.`
+                ? t("Quote approved. Thank you!")
+                : t("Status: {status}.", { status: t(QUOTE_STATUS_LABELS[quote.status]) })
             }
           />
         )}

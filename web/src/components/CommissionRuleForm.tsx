@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import type { CommissionRule, CommissionRuleInput, Party, Product } from "../api";
+import { useT } from "../i18n";
 import { isAmbiguousDecimal, toApiDecimal, toInputDecimal } from "../lib/decimal";
 import { isIsoDate } from "../lib/entryInstallments";
 import { todayIso } from "../lib/settlement";
@@ -23,6 +24,7 @@ interface CommissionRuleFormProps {
 
 /** Registers a commission rule, or changes one. Remount it (a `key`) to start over. */
 export function CommissionRuleForm({ rule, parties, products, pending, error, onSubmit, onCancel }: CommissionRuleFormProps) {
+  const t = useT();
   const [fieldError, setFieldError] = useState<string | null>(null);
   const productChoices = products.filter((product) => product.active || product.id === rule?.product_id);
   // A rule keeps naming a seller who stopped being one; dropping it from the choices would widen the rule to everybody.
@@ -34,15 +36,15 @@ export function CommissionRuleForm({ rule, parties, products, pending, error, on
     const form = new FormData(event.currentTarget);
     const field = (name: string) => String(form.get(name) ?? "").trim();
     if (isAmbiguousDecimal(field("rate")) || toApiDecimal(field("rate")) === undefined) {
-      setFieldError("Informe o percentual, por exemplo 5 ou 7,5.");
+      setFieldError(t("Enter the percentage, for example 5 or 7,5."));
       return;
     }
     if (!isIsoDate(field("starts_on"))) {
-      setFieldError("Informe o primeiro dia de venda que a regra cobre.");
+      setFieldError(t("Enter the first sale day the rule covers."));
       return;
     }
     if (field("ends_on") !== "" && (!isIsoDate(field("ends_on")) || field("ends_on") < field("starts_on"))) {
-      setFieldError("O último dia precisa ser uma data que não venha antes do primeiro.");
+      setFieldError(t("The last day must be a date that is not before the first."));
       return;
     }
     setFieldError(null);
@@ -59,17 +61,16 @@ export function CommissionRuleForm({ rule, parties, products, pending, error, on
   return (
     <form className="record-form" onSubmit={handleSubmit}>
       <section className="form-section" aria-labelledby="rule-who">
-        <HelpTitle id="rule-who" title="A quem e a quê vale">
+        <HelpTitle id="rule-who" title={t("Who and what it applies to")}>
           <p>
-            Vale a regra mais específica: vendedor e produto, depois só o vendedor, depois só o produto, depois a geral.
-            O dia que conta é o da venda.
+            {t("The most specific rule applies: seller and product, then only the seller, then only the product, then the general one. The day that counts is the sale day.")}
           </p>
         </HelpTitle>
         <div className="field-grid">
           <label>
-            Vendedor
+            {t("Seller")}
             <select name="seller_id" defaultValue={rule?.seller_id ?? ""}>
-              <option value="">Todos os vendedores</option>
+              <option value="">{t("All sellers")}</option>
               {sellerChoices.map((party) => (
                 <option key={party.id} value={party.id}>
                   {party.name}
@@ -78,9 +79,9 @@ export function CommissionRuleForm({ rule, parties, products, pending, error, on
             </select>
           </label>
           <label>
-            Produto
+            {t("Product")}
             <select name="product_id" defaultValue={rule?.product_id ?? ""}>
-              <option value="">Todos os produtos</option>
+              <option value="">{t("All products")}</option>
               {productChoices.map((product) => (
                 <option key={product.id} value={product.id}>
                   {product.name}
@@ -91,22 +92,22 @@ export function CommissionRuleForm({ rule, parties, products, pending, error, on
         </div>
       </section>
       <section className="form-section" aria-labelledby="rule-how">
-        <h3 id="rule-how">Percentual e período</h3>
+        <h3 id="rule-how">{t("Percentage and period")}</h3>
         <div className="field-grid">
           <label>
-            Percentual (%)
+            {t("Percentage (%)")}
             <input name="rate" inputMode="decimal" autoComplete="off" required placeholder="5" defaultValue={toInputDecimal(rule?.rate ?? null)} />
           </label>
           <label>
-            Vale a partir de
+            {t("Valid from")}
             <input name="starts_on" type="date" required defaultValue={rule?.starts_on ?? todayIso()} />
           </label>
           <label>
-            Vale até (opcional)
+            {t("Valid until (optional)")}
             <input name="ends_on" type="date" defaultValue={rule?.ends_on ?? ""} />
           </label>
           <label className="inline">
-            <input name="active" type="checkbox" defaultChecked={rule?.active ?? true} /> Ativa
+            <input name="active" type="checkbox" defaultChecked={rule?.active ?? true} /> {t("Enabled")}
           </label>
         </div>
       </section>
@@ -114,7 +115,7 @@ export function CommissionRuleForm({ rule, parties, products, pending, error, on
       <div className="form-footer">
         <BackButton disabled={pending} onClick={onCancel} />
         <Button type="submit" icon={rule === null ? PlusIcon : CheckIcon} pending={pending}>
-          {rule === null ? "Cadastrar regra" : "Salvar alterações"}
+          {rule === null ? t("Register rule") : t("Save changes")}
         </Button>
       </div>
     </form>

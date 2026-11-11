@@ -99,7 +99,7 @@ export function ApiKeysPage() {
                 <tr>
                   <th>{t("Name")}</th>
                   <th>{t("What it can do")}</th>
-                  <th>{t("Status")}</th>
+                  <th>{t("Current state")}</th>
                   <th>{t("Use")}</th>
                   <th>
                     <span className="visually-hidden">{t("Actions")}</span>

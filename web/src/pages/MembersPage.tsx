@@ -224,7 +224,7 @@ export function MembersPage() {
                     <tr>
                       <th>{t("E-mail")}</th>
                       <th>{t("Role")}</th>
-                      <th>{t("Valid until")}</th>
+                      <th>{t("Invitation valid until")}</th>
                       <th>
                         <span className="visually-hidden">{t("Actions")}</span>
                       </th>
