@@ -23,11 +23,13 @@ import { formatDate } from "../lib/entryInstallments";
 import { readUpTo } from "../lib/readUpTo";
 import { useCanWrite } from "../lib/useCanWrite";
 import { usePagedList } from "../lib/usePagedList";
+import { useT } from "../i18n";
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one
 // instance: the old list is dropped and a reply still in flight for another company lands on an
 // unmounted component.
 export function TransfersPage() {
+  const t = useT();
   const { companyId = "" } = useParams();
   const canWrite = useCanWrite("finance");
   const [filters, setFilters] = useState<TransferFilters>(NO_TRANSFER_FILTERS);
@@ -83,27 +85,27 @@ export function TransfersPage() {
   return (
     <>
       <PageHeader
-        title="Transferências"
-        description="Dinheiro que muda de uma conta da empresa para outra, como um depósito ou o pagamento da fatura do cartão. Não entra no resultado."
+        title={t("Transfers")}
+        description={t("Money that moves from one company account to another, like a deposit or paying the card bill. It does not enter the result.")}
       />
       {canWrite && (
         <div className="list-actions">
           <Button type="button" icon={PlusIcon} onClick={() => openCreate("transfer")}>
-            Nova transferência
+            {t("New transfer")}
           </Button>
         </div>
       )}
       <div>
         <section className="card list-card">
-          <h2>Registradas</h2>
+          <h2>{t("Registered")}</h2>
           <div className="filters" role="search">
             <label>
-              Conta
+              {t("Account")}
               <select
                 value={filters.account}
                 onChange={(event) => setFilters({ account: event.target.value })}
               >
-                <option value="">Todas as contas</option>
+                <option value="">{t("All accounts")}</option>
                 {accounts.map((account) => (
                   <option key={account.id} value={account.id}>
                     {account.name}
@@ -117,22 +119,22 @@ export function TransfersPage() {
           <Notice message={listNotice} />
           {loading ? (
             <p role="status" className="status">
-              <Spinner /> Carregando…
+              <Spinner /> {t("Loading…")}
             </p>
           ) : items.length === 0 && error ? (
             <Button type="button" variant="ghost" onClick={() => void reload()}>
-              Tentar de novo
+              {t("Try again")}
             </Button>
           ) : items.length === 0 ? (
             <div className="empty">
               <SendIcon size={40} aria-hidden />
-              <p role="status">{isFiltered ? "Nenhuma transferência nessa conta." : "Nenhuma transferência ainda."}</p>
+              <p role="status">{isFiltered ? t("No transfer in this account.") : t("No transfers yet.")}</p>
               {isFiltered ? (
                 <Button type="button" variant="ghost" onClick={() => setFilters(NO_TRANSFER_FILTERS)}>
-                  Limpar filtro
+                  {t("Clear filter")}
                 </Button>
               ) : (
-                <p className="muted">Use o formulário para mover dinheiro entre duas contas.</p>
+                <p className="muted">{t("Use the form to move money between two accounts.")}</p>
               )}
             </div>
           ) : (
@@ -140,14 +142,14 @@ export function TransfersPage() {
               <table>
                 <thead>
                   <tr>
-                    <th>Data</th>
-                    <th>De</th>
-                    <th>Para</th>
-                    <th className="num">Valor</th>
-                    <th>Observação</th>
-                    <th>Situação</th>
+                    <th>{t("Date")}</th>
+                    <th>{t("From")}</th>
+                    <th>{t("To")}</th>
+                    <th className="num">{t("Amount")}</th>
+                    <th>{t("Note")}</th>
+                    <th>{t("Status")}</th>
                     <th>
-                      <span className="visually-hidden">Ações</span>
+                      <span className="visually-hidden">{t("Actions")}</span>
                     </th>
                   </tr>
                 </thead>
@@ -167,9 +169,9 @@ export function TransfersPage() {
                       <td>{transfer.note ?? "—"}</td>
                       <td>
                         {transfer.reversed ? (
-                          <span className="badge badge-muted">Estornada</span>
+                          <span className="badge badge-muted">{t("Reversed")}</span>
                         ) : (
-                          <span className="badge badge-dot badge-ok">Válida</span>
+                          <span className="badge badge-dot badge-ok">{t("Valid")}</span>
                         )}
                       </td>
                       <td className="row-actions">
@@ -179,12 +181,12 @@ export function TransfersPage() {
                             icon={RotateCCWIcon}
                             type="button"
                             variant="ghost"
-                            aria-label={`Estornar a transferência de ${formatMoney(transfer.amount)} em ${formatDate(transfer.occurred_on)}`}
+                            aria-label={t("Reverse the transfer of {amount} on {date}", { amount: formatMoney(transfer.amount), date: formatDate(transfer.occurred_on) })}
                             pending={reversingId === transfer.id}
                             disabled={reversingId !== null}
                             onClick={() => void reverse(transfer)}
                           >
-                            Estornar
+                            {t("Reverse")}
                           </Button>
                         )}
                       </td>
@@ -202,7 +204,7 @@ export function TransfersPage() {
               pending={loadingMore}
               onClick={() => void loadMore()}
             >
-              Carregar mais
+              {t("Load more")}
             </Button>
           )}
         </section>

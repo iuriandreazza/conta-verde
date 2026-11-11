@@ -4,10 +4,12 @@ import { Spinner } from "../components/Spinner";
 import { TransferForm } from "../components/TransferForm";
 import { formatMoney } from "../lib/decimal";
 import { readUpTo } from "../lib/readUpTo";
+import { useT } from "../i18n";
 import type { CreatorProps } from "./CreationProvider";
 
 /** The form of a new transfer, with the company's accounts read first, and the call that saves it. */
 export function TransferCreator({ companyId, onBusyChange, onCreated, onCancel }: CreatorProps) {
+  const t = useT();
   const [accounts, setAccounts] = useState<BankAccount[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -32,7 +34,7 @@ export function TransferCreator({ companyId, onBusyChange, onCreated, onCancel }
     setError(null);
     try {
       const created = await api.createTransfer(companyId, input);
-      onCreated({ id: created.id, message: `Transferência de ${formatMoney(created.amount)} registrada.` });
+      onCreated({ id: created.id, message: t("Transfer of {amount} recorded.", { amount: formatMoney(created.amount) }) });
     } catch (failure) {
       setError(errorMessage(failure));
       setSaving(false);
@@ -42,7 +44,7 @@ export function TransferCreator({ companyId, onBusyChange, onCreated, onCancel }
   if (accounts === null) {
     return loadError === null ? (
       <p role="status" className="status">
-        <Spinner /> Carregando…
+        <Spinner /> {t("Loading…")}
       </p>
     ) : (
       <p role="alert">{loadError}</p>

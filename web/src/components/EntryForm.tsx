@@ -15,6 +15,7 @@ import { BackButton } from "./BackButton";
 import { CheckIcon } from "./icons/check";
 import { PlusIcon } from "./icons/plus";
 import { Notice } from "./Notice";
+import { useT } from "../i18n";
 import { useSheetDirty } from "./Sheet";
 
 /** An installment being typed: both fields are text until the form is sent. */
@@ -60,6 +61,7 @@ export function EntryForm({
   onSubmit,
   onCancel,
 }: EntryFormProps) {
+  const t = useT();
   const nextKey = useRef(0);
   const newRow = (due: string, amount: string): Row => ({ key: nextKey.current++, due, amount });
   const [rows, setRows] = useState<Row[]>(() =>
@@ -89,14 +91,14 @@ export function EntryForm({
   // and a form that did not list it would silently remove it on save.
   const parties =
     entry?.party_id && !targets.parties.some((party) => party.id === entry.party_id)
-      ? [...targets.parties, { id: entry.party_id, name: "Cliente ou fornecedor atual" }]
+      ? [...targets.parties, { id: entry.party_id, name: t("Current customer or supplier") }]
       : targets.parties;
 
   const total = sumCents(rows.map((row) => row.amount));
   const sumMessage =
     total === null
-      ? "Preencha o valor de cada parcela, por exemplo 100,50."
-      : `Total: ${formatMoney(centsToApi(total))}`;
+      ? t("Fill in the amount of each installment, for example 100,50.")
+      : t("Total: {amount}", { amount: formatMoney(centsToApi(total)) });
 
   function update(key: number, change: Partial<Row>) {
     setFieldError(null);
@@ -107,14 +109,14 @@ export function EntryForm({
     const count = Number(generator.count);
     // `1.000` could be a thousand or one: the person says which, as in every amount field.
     if (isAmbiguousDecimal(generator.total)) {
-      setFieldError("O valor total precisa estar em reais e centavos, por exemplo 1.000,00.");
+      setFieldError(t("The total amount must be in reais and cents, for example 1.000,00."));
       return;
     }
     const shares = splitAmount(generator.total, count);
     const dates = monthlyDates(generator.first, count);
     if (shares === null || dates === null || count > MAX_INSTALLMENTS) {
       setFieldError(
-        "Para gerar as parcelas, informe o valor total, quantas parcelas (até 120) e o primeiro vencimento.",
+        t("To generate the installments, give the total amount, how many installments (up to 120) and the first due date."),
       );
       return;
     }
@@ -137,13 +139,13 @@ export function EntryForm({
     }
     for (const [index, row] of rows.entries()) {
       if (!isIsoDate(row.due)) {
-        setFieldError(`Informe o vencimento da parcela ${index + 1}.`);
+        setFieldError(t("Give the due date of installment {number}.", { number: index + 1 }));
         return;
       }
       // `1.234` could be a thousand or a little over one: the person says which.
       if (toCents(row.amount) === null || isAmbiguousDecimal(row.amount)) {
         setFieldError(
-          `O valor da parcela ${index + 1} precisa estar em reais e centavos, por exemplo 1.234,50.`,
+          t("The amount of installment {number} must be in reais and cents, for example 1.234,50.", { number: index + 1 }),
         );
         return;
       }
@@ -168,17 +170,17 @@ export function EntryForm({
   return (
     <form className="record-form" onSubmit={handleSubmit}>
       <section className="form-section" aria-labelledby="entry-info">
-        <h3 id="entry-info">Informações do lançamento</h3>
+        <h3 id="entry-info">{t("Entry details")}</h3>
         <div className="field-grid">
       <label>
-        Tipo
+        {t("Type")}
         <select name="kind" defaultValue={entry?.kind ?? defaultKind ?? "receivable"}>
-          <option value="receivable">A receber</option>
-          <option value="payable">A pagar</option>
+          <option value="receivable">{t("Receivable")}</option>
+          <option value="payable">{t("Payable")}</option>
         </select>
       </label>
       <label>
-        Descrição
+        {t("Description")}
         <input
           name="description"
           required
@@ -188,10 +190,10 @@ export function EntryForm({
         />
       </label>
       <label>
-        Categoria
+        {t("Category")}
         <select name="category_id" required defaultValue={entry?.category_id ?? ""}>
           <option value="" disabled>
-            Escolha uma categoria
+            {t("Choose a category")}
           </option>
           {categories.map(({ category, depth }) => (
             <option key={category.id} value={category.id}>
@@ -202,9 +204,9 @@ export function EntryForm({
         </select>
       </label>
       <label>
-        Centro de custo
+        {t("Cost center")}
         <select name="cost_center_id" defaultValue={entry?.cost_center_id ?? ""}>
-          <option value="">Nenhum</option>
+          <option value="">{t("None")}</option>
           {costCenters.map((center) => (
             <option key={center.id} value={center.id}>
               {center.name}
@@ -213,9 +215,9 @@ export function EntryForm({
         </select>
       </label>
       <label>
-        Cliente ou fornecedor
+        {t("Customer or supplier")}
         <select name="party_id" defaultValue={entry?.party_id ?? ""}>
-          <option value="">Nenhum</option>
+          <option value="">{t("None")}</option>
           {parties.map((party) => (
             <option key={party.id} value={party.id}>
               {party.name}
@@ -224,19 +226,19 @@ export function EntryForm({
         </select>
       </label>
       <label>
-        Competência
+        {t("Accrual date")}
         <input name="competence_date" type="date" required defaultValue={entry?.competence_date} />
       </label>
         </div>
       </section>
 
       <section className="form-section" aria-labelledby="entry-payment">
-        <h3 id="entry-payment">Condição de pagamento</h3>
+        <h3 id="entry-payment">{t("Payment condition")}</h3>
       <fieldset className="installments">
-        <legend>Parcelas</legend>
+        <legend>{t("Installments")}</legend>
         <div className="installment-row">
           <label>
-            Valor total
+            {t("Total amount")}
             <input
               inputMode="decimal"
               autoComplete="off"
@@ -247,7 +249,7 @@ export function EntryForm({
             />
           </label>
           <label>
-            Parcelas
+            {t("Installments")}
             <input
               inputMode="numeric"
               autoComplete="off"
@@ -257,7 +259,7 @@ export function EntryForm({
             />
           </label>
           <label>
-            Primeiro vencimento
+            {t("First due date")}
             <input
               type="date"
               value={generator.first}
@@ -268,26 +270,26 @@ export function EntryForm({
         </div>
         <div className="form-actions">
           <Button type="button" variant="ghost" className="btn-small" onClick={generate}>
-            Gerar parcelas
+            {t("Generate installments")}
           </Button>
         </div>
         {rows.map((row, index) => (
           <div className="installment-row" key={row.key}>
             <label>
-              Vencimento
+              {t("Due date")}
               <input
                 type="date"
-                aria-label={`Vencimento da parcela ${index + 1}`}
+                aria-label={t("Due date of installment {number}", { number: index + 1 })}
                 value={row.due}
                 onChange={(event) => update(row.key, { due: event.target.value })}
               />
             </label>
             <label>
-              Valor
+              {t("Amount")}
               <input
                 inputMode="decimal"
                 autoComplete="off"
-                aria-label={`Valor da parcela ${index + 1}`}
+                aria-label={t("Amount of installment {number}", { number: index + 1 })}
                 placeholder="0,00"
                 value={row.amount}
                 onChange={(event) => update(row.key, { amount: event.target.value })}
@@ -297,11 +299,11 @@ export function EntryForm({
               type="button"
               variant="ghost"
               className="btn-small"
-              aria-label={`Remover parcela ${index + 1}`}
+              aria-label={t("Remove installment {number}", { number: index + 1 })}
               disabled={rows.length === 1}
               onClick={() => editRows((current) => current.filter((item) => item.key !== row.key))}
             >
-              Remover
+              {t("Remove")}
             </Button>
           </div>
         ))}
@@ -314,7 +316,7 @@ export function EntryForm({
             disabled={rows.length >= MAX_INSTALLMENTS}
             onClick={() => editRows((current) => [...current, newRow("", "")])}
           >
-            Adicionar parcela
+            {t("Add installment")}
           </Button>
         </div>
         <p role="status" className={total === null ? "installments-sum installments-off" : "muted"}>
@@ -327,7 +329,7 @@ export function EntryForm({
       <div className="form-footer">
         <BackButton disabled={pending} onClick={onCancel} />
         <Button type="submit" icon={entry === null ? PlusIcon : CheckIcon} pending={pending}>
-          {entry === null ? "Adicionar" : "Salvar alterações"}
+          {entry === null ? t("Add") : t("Save changes")}
         </Button>
       </div>
     </form>

@@ -15,9 +15,10 @@ import { formatDate, isIsoDate } from "../lib/entryInstallments";
 import { readUpTo } from "../lib/readUpTo";
 import { difference } from "../lib/signedAmount";
 import { todayIso } from "../lib/settlement";
+import { msg, useT } from "../i18n";
 
-const REALIZED = "Saldo realizado";
-const PROJECTED = "Saldo previsto";
+const REALIZED = msg("Realized balance");
+const PROJECTED = msg("Projected balance");
 const SERIES: LegendItem[] = [
   { name: REALIZED, color: "var(--series-1)" },
   { name: PROJECTED, color: "var(--chart-muted)", dashed: true },
@@ -28,6 +29,7 @@ const negative = (amount: string) => (amount.startsWith("-") ? "num negative" : 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one
 // instance: a reply still in flight for another company lands on an unmounted component.
 export function CashFlowPage() {
+  const t = useT();
   const { companyId = "" } = useParams();
   const [filters, setFilters] = useState<CashFlowFilters>(() => ({
     ...defaultSpan(todayIso()),
@@ -55,9 +57,9 @@ export function CashFlowPage() {
   }, [companyId]);
 
   const spanError = !isIsoDate(filters.from) || !isIsoDate(filters.to)
-    ? "Informe o primeiro e o último dia."
+    ? t("Give the first and the last day.")
     : filters.from > filters.to
-      ? "O primeiro dia não pode ser depois do último."
+      ? t("The first day cannot be after the last.")
       : null;
 
   useEffect(() => {
@@ -92,9 +94,9 @@ export function CashFlowPage() {
   const forecasting = periods.length > 0 && periods[0].projected_balance !== null;
   const totals = useMemo(() => totalsOf(periods), [periods]);
   const last = periods[periods.length - 1];
-  const series = forecasting ? SERIES : SERIES.slice(0, 1);
+  const series = (forecasting ? SERIES : SERIES.slice(0, 1)).map((item) => ({ ...item, name: t(item.name) }));
   const labelOf = (index: number) => periodLabel(periods[index], flow?.granularity ?? "month");
-  const unit = flow?.granularity === "day" ? "dia" : "mês";
+  const unit = flow?.granularity === "day" ? t("day") : t("month");
   // The forecast counts what is open now, so a period that is over would be missing what was settled
   // after it ended: it is only shown from the period that has not ended yet (ADR 0032).
   const projectedOf = (period: CashFlowPeriod): string | null => (period.end < today ? null : period.projected_balance);
@@ -102,28 +104,28 @@ export function CashFlowPage() {
   return (
     <>
       <PageHeader
-        title="Fluxo de caixa"
-        description="O que entrou e saiu das contas, pelo dia em que aconteceu, e o que ainda está em aberto, pelo vencimento."
+        title={t("Cash flow")}
+        description={t("What came in and went out of the accounts, by the day it happened, and what is still open, by due date.")}
       />
       <section className="card filters-card">
         <PeriodFilter value={filters} onChange={(span) => setFilters({ ...filters, ...span })} today={today} />
         <div className="filters" role="search">
           <label>
-            Agrupar por
+            {t("Group by")}
             <select
               value={filters.granularity}
               onChange={(event) =>
                 setFilters({ ...filters, granularity: event.target.value as CashFlowFilters["granularity"] })
               }
             >
-              <option value="month">Mês</option>
-              <option value="day">Dia</option>
+              <option value="month">{t("Month")}</option>
+              <option value="day">{t("Day")}</option>
             </select>
           </label>
           <label>
-            Conta
+            {t("Account")}
             <select value={filters.account} onChange={(event) => setFilters({ ...filters, account: event.target.value })}>
-              <option value="">Todas as contas</option>
+              <option value="">{t("All accounts")}</option>
               {accounts.map((account) => (
                 <option key={account.id} value={account.id}>
                   {account.name}
@@ -140,41 +142,45 @@ export function CashFlowPage() {
         spanError === null &&
         loading && (
           <p role="status" className="status">
-            <Spinner /> Carregando…
+            <Spinner /> {t("Loading…")}
           </p>
         )
       ) : (
         <>
           <div className="kpi-row">
-            <StatTile label={`Saldo em ${formatDate(flow.from)}`} value={formatMoney(flow.opening_balance)} note="No começo do primeiro dia." />
-            <StatTile label="Entradas realizadas" value={formatMoney(totals.received)} note="Baixas de contas a receber." />
-            <StatTile label="Saídas realizadas" value={formatMoney(totals.paid)} note="Baixas de contas a pagar." />
+            <StatTile label={t("Balance on {date}", { date: formatDate(flow.from) })} value={formatMoney(flow.opening_balance)} note={t("At the start of the first day.")} />
+            <StatTile label={t("Realized inflows")} value={formatMoney(totals.received)} note={t("Settlements of receivables.")} />
+            <StatTile label={t("Realized outflows")} value={formatMoney(totals.paid)} note={t("Settlements of payables.")} />
             <StatTile
-              label={`Saldo em ${formatDate(flow.to)}`}
+              label={t("Balance on {date}", { date: formatDate(flow.to) })}
               value={formatMoney(last.closing_balance)}
               note={
                 forecasting && projectedOf(last) !== null
-                  ? `Previsto: ${formatMoney(projectedOf(last))}`
-                  : "Só o que já aconteceu."
+                  ? t("Projected: {amount}", { amount: formatMoney(projectedOf(last)) })
+                  : t("Only what has already happened.")
               }
             />
           </div>
           {flow.past_due !== null && (flow.past_due.to_receive !== "0" || flow.past_due.to_pay !== "0") && (
             <Notice
               tone="warning"
-              message={`Em aberto e vencido antes de ${formatDate(flow.from)}: ${formatMoney(flow.past_due.to_receive)} a receber e ${formatMoney(flow.past_due.to_pay)} a pagar. O saldo previsto já conta com isso.`}
+              message={t("Open and overdue before {date}: {receivable} to receive and {payable} to pay. The projected balance already counts on this.", {
+                date: formatDate(flow.from),
+                receivable: formatMoney(flow.past_due.to_receive),
+                payable: formatMoney(flow.past_due.to_pay),
+              })}
             />
           )}
           <ChartCard
-            title="Saldo ao longo do período"
+            title={t("Balance over the period")}
             description={
               forecasting
-                ? "O saldo realizado e o previsto, se tudo o que está em aberto for pago no vencimento."
-                : "O saldo da conta ao fim de cada período. A previsão vale para todas as contas juntas."
+                ? t("The realized and the projected balance, if everything that is open is paid on its due date.")
+                : t("The account balance at the end of each period. The forecast applies to all accounts together.")
             }
             legend={<Legend items={series} kind="line" />}
             table={{
-              columns: ["Período", ...series.map((item) => item.name)],
+              columns: [t("Period"), ...series.map((item) => item.name)],
               rows: periods.map((period, index) => [
                 labelOf(index),
                 formatMoney(period.closing_balance),
@@ -183,7 +189,7 @@ export function CashFlowPage() {
             }}
           >
             <LineChart
-              label="Saldo ao longo do período"
+              label={t("Balance over the period")}
               unit={unit}
               series={series}
               points={periods.map((period, index) => ({
@@ -195,26 +201,26 @@ export function CashFlowPage() {
             />
           </ChartCard>
           <section className="card list-card">
-            <h2>Período a período</h2>
+            <h2>{t("Period by period")}</h2>
             {loading && (
               <p role="status" className="status">
-                <Spinner /> Atualizando…
+                <Spinner /> {t("Updating…")}
               </p>
             )}
             <div className="table-wrap">
               <table>
                 <thead>
                   <tr>
-                    <th>Período</th>
-                    <th className="num">Entradas</th>
-                    <th className="num">Saídas</th>
-                    <th className="num">Transferências</th>
-                    <th className="num">Saldo final</th>
+                    <th>{t("Period")}</th>
+                    <th className="num">{t("Inflows")}</th>
+                    <th className="num">{t("Outflows")}</th>
+                    <th className="num">{t("Transfers")}</th>
+                    <th className="num">{t("Closing balance")}</th>
                     {forecasting && (
                       <>
-                        <th className="num">A receber</th>
-                        <th className="num">A pagar</th>
-                        <th className="num">Saldo previsto</th>
+                        <th className="num">{t("To receive")}</th>
+                        <th className="num">{t("To pay")}</th>
+                        <th className="num">{t("Projected balance")}</th>
                       </>
                     )}
                   </tr>
@@ -225,7 +231,7 @@ export function CashFlowPage() {
                       <td className="tabular">{labelOf(index)}</td>
                       <td className="num">{formatMoney(period.received)}</td>
                       <td className="num">{formatMoney(period.paid)}</td>
-                      <td className="num" title="O que entrou menos o que saiu da conta">
+                      <td className="num" title={t("What came in minus what went out of the account")}>
                         {flow.account_id === null ? "—" : formatMoney(difference(period.transfers_in, period.transfers_out))}
                       </td>
                       <td className={negative(period.closing_balance)}>{formatMoney(period.closing_balance)}</td>
