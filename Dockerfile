@@ -15,6 +15,8 @@ FROM rust:1-slim-bookworm AS api
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates crates
+# The API embeds the document of /v1 (ADR 0087) at compile time.
+COPY docs/api docs/api
 RUN cargo build --release -p conta-verde-api
 
 FROM debian:bookworm-slim
