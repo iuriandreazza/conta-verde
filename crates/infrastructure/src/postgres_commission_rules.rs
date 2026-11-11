@@ -134,7 +134,8 @@ impl CommissionRuleRepository for PostgresCommissionRuleRepository {
                 .push_bind(cursor.id)
                 .push(")");
         }
-        sql.push(" ORDER BY starts_on DESC, id DESC LIMIT ")
+        // The table's own column: the SELECT outputs `starts_on` as text and an unqualified ORDER BY would sort by that (ADR 0097).
+        sql.push(" ORDER BY commission_rules.starts_on DESC, id DESC LIMIT ")
             .push_bind(i64::try_from(limit).unwrap_or(i64::MAX));
         let rows = sql
             .build()

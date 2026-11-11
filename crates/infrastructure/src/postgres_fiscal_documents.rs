@@ -930,7 +930,7 @@ impl FiscalDocumentRepository for PostgresFiscalDocumentRepository {
             "SELECT {RECEIVED_COLUMNS} FROM received_invoices WHERE company_id = $1 \
              AND ($2::text IS NULL OR manifestation = $2) \
              AND ($3::text IS NULL OR (issued_on, id) < (CAST($3 AS date), $4)) \
-             ORDER BY issued_on DESC, id DESC LIMIT $5"
+             ORDER BY received_invoices.issued_on DESC, id DESC LIMIT $5"
         ))
         .bind(company_id.as_uuid())
         .bind(query.manifestation.map(|word| word.key()))

@@ -328,7 +328,8 @@ impl StockMovementRepository for PostgresStockMovementRepository {
                 .push_bind(cursor.id)
                 .push(")");
         }
-        sql.push(" ORDER BY occurred_on DESC, id DESC LIMIT ")
+        // The table's own column: the SELECT outputs `occurred_on` as text and an unqualified ORDER BY would sort by that (ADR 0097).
+        sql.push(" ORDER BY stock_movements.occurred_on DESC, id DESC LIMIT ")
             .push_bind(i64::try_from(limit).unwrap_or(i64::MAX));
         let mut tx = snapshot(&self.pool).await?;
         let rows = sql
