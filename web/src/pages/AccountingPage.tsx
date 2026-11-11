@@ -14,9 +14,11 @@ import { formatDate } from "../lib/entryInstallments";
 import { todayIso } from "../lib/settlement";
 import { useCanWrite } from "../lib/useCanWrite";
 import { HelpTitle } from "../components/HelpTitle";
+import { useT } from "../i18n";
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one instance.
 export function AccountingPage() {
+  const t = useT();
   const { companyId = "" } = useParams();
   const canWrite = useCanWrite("accounting");
   // The server reads no clock, so the month to suggest is told with the day where the person is.
@@ -63,15 +65,15 @@ export function AccountingPage() {
     }
     const month = String(new FormData(event.currentTarget).get("month") ?? "");
     if (!MONTH.test(month)) {
-      setError("Escolha o mês que será fechado, escrito como 2026-10.");
+      setError(t("Choose the month to close, written as 2026-10."));
       return;
     }
     const through = lastDayOfMonth(month);
     if (lock.locked_through !== null && through <= lock.locked_through) {
-      setError(`Esse mês já está fechado: o fechamento vai até ${formatDate(lock.locked_through)}.`);
+      setError(t("That month is already closed: the closing goes through {date}.", { date: formatDate(lock.locked_through) }));
       return;
     }
-    void change(through, undefined, `Período fechado até ${formatDate(through)}.`);
+    void change(through, undefined, t("Period closed through {date}.", { date: formatDate(through) }));
   }
 
   function reopen(event: FormEvent<HTMLFormElement>) {
@@ -84,23 +86,25 @@ export function AccountingPage() {
     const month = String(form.get("month") ?? "");
     const reason = String(form.get("reason") ?? "").trim();
     if (reason === "") {
-      setError("Diga o motivo de reabrir o período: ele fica no histórico.");
+      setError(t("Give the reason for reopening the period: it is kept in the history."));
       return;
     }
     if (month !== "" && !MONTH.test(month)) {
-      setError("Escreva o mês como 2026-10, ou deixe vazio para reabrir tudo.");
+      setError(t("Write the month as 2026-10, or leave it empty to reopen everything."));
       return;
     }
     const through = month === "" ? null : lastDayOfMonth(month);
     if (through !== null && through >= lock.locked_through) {
-      setError("Para reabrir, escolha um mês anterior ao último mês fechado.");
+      setError(t("To reopen, choose a month before the last closed month."));
       return;
     }
     // The reason is kept in the form when the server refuses, so it need not be typed again.
     void change(
       through,
       reason,
-      through === null ? "Período reaberto: nenhum mês está fechado." : `Período reaberto: fechado até ${formatDate(through)}.`,
+      through === null
+        ? t("Period reopened: no month is closed.")
+        : t("Period reopened: closed through {date}.", { date: formatDate(through) }),
     ).then((done) => done && target.reset());
   }
 
@@ -108,73 +112,72 @@ export function AccountingPage() {
   return (
     <>
       <PageHeader
-        title="Contador"
-        description="Feche os meses já conferidos: nada datado neles muda sem reabrir o período."
+        title={t("Accountant")}
+        description={t("Close the months already checked: nothing dated in them changes without reopening the period.")}
       />
       <Notice message={error} />
       <Notice message={saved} tone="success" />
       {lock === null && error === null ? (
         <p role="status" className="status">
-          <Spinner /> Carregando…
+          <Spinner /> {t("Loading…")}
         </p>
       ) : (
         lock !== null && (
           <>
             <section className="card lock-status">
-              <HelpTitle level={2} title="Fechamento de período">
+              <HelpTitle level={2} title={t("Period closing")}>
                 <p>
-                  Lançamentos, baixas, transferências, saldos iniciais, movimentos de estoque, vendas concluídas e
-                  recebimentos de compra com data dentro dos meses fechados não podem ser criados, alterados nem
-                  desfeitos.
+                  {t(
+                    "Entries, settlements, transfers, opening balances, stock movements, completed sales and purchase receipts dated within the closed months cannot be created, changed or undone.",
+                  )}
                 </p>
               </HelpTitle>
               {through === null ? (
                 <p className="lock-through">
-                  <span className="badge badge-dot badge-muted">Aberto</span>
-                  <span>Nenhum mês está fechado.</span>
+                  <span className="badge badge-dot badge-muted">{t("Open")}</span>
+                  <span>{t("No month is closed.")}</span>
                 </p>
               ) : (
                 <p className="lock-through">
-                  <span className="badge badge-dot badge-ok">Fechado</span>
-                  <span>Fechado até</span>
+                  <span className="badge badge-dot badge-ok">{t("Closed")}</span>
+                  <span>{t("Closed through")}</span>
                   <strong className="lock-date">{formatDate(through)}</strong>
-                  <span className="muted">{monthLabel(through)} inclusive</span>
+                  <span className="muted">{t("{month} inclusive", { month: monthLabel(through) })}</span>
                 </p>
               )}
-              <p className="muted">Nada datado nos meses fechados pode ser criado, alterado ou desfeito.</p>
+              <p className="muted">{t("Nothing dated in the closed months can be created, changed or undone.")}</p>
             </section>
             {canWrite && (
               <div className="lock-actions">
                 <form onSubmit={close} className="card lock-form" key={`close-${through}`}>
-                  <HelpTitle title="Fechar um mês">
-                    <p>O período fica fechado até o último dia do mês escolhido, e os meses anteriores com ele.</p>
+                  <HelpTitle title={t("Close a month")}>
+                    <p>{t("The period is closed through the last day of the chosen month, and the months before it with it.")}</p>
                   </HelpTitle>
                   <label>
-                    Fechar até o fim de
+                    {t("Close through the end of")}
                     <input type="month" name="month" defaultValue={suggestedMonthToClose(through, today)} />
                   </label>
                   <Button type="submit" icon={CheckIcon} pending={saving}>
-                    Fechar período
+                    {t("Close period")}
                   </Button>
                 </form>
                 {through !== null && (
                   <form onSubmit={reopen} className="card lock-form">
-                    <HelpTitle title="Reabrir">
+                    <HelpTitle title={t("Reopen")}>
                       <p>
-                        Escolha até que mês continua fechado, ou deixe vazio para reabrir tudo. O motivo fica no
-                        histórico.
+                        {t("Choose through which month it stays closed, or leave it empty to reopen everything. The reason is kept in the history.")}
                       </p>
                     </HelpTitle>
                     <label>
-                      Manter fechado até o fim de
+                      {t("Keep closed through the end of")}
                       <input type="month" name="month" />
                     </label>
                     <label>
-                      Motivo
+                      {t("Reason")}
                       <input name="reason" maxLength={200} />
                     </label>
                     <Button type="submit" variant="ghost" pending={saving}>
-                      Reabrir período
+                      {t("Reopen period")}
                     </Button>
                   </form>
                 )}
@@ -183,7 +186,7 @@ export function AccountingPage() {
             <AccountantDownloads companyId={companyId} lockedThrough={through} />
             <PackageScheduleCard companyId={companyId} />
             <section className="card">
-              <h2>Histórico</h2>
+              <h2>{t("History")}</h2>
               <PeriodLockHistory key={trail} companyId={companyId} />
             </section>
           </>

@@ -13,6 +13,7 @@ import { HelpTitle } from "../components/HelpTitle";
 import { LinesEditor, linesProblem, linesToInput, newLine, type LineRow } from "../components/LinesEditor";
 import { Notice } from "../components/Notice";
 import { PageHeader } from "../components/PageHeader";
+import { useT } from "../i18n";
 import { treeRows } from "../lib/categoryTree";
 import { formatMoney } from "../lib/decimal";
 import { centsToApi, toCents } from "../lib/entryInstallments";
@@ -38,6 +39,7 @@ const newPayment = (): PaymentRow => ({ key: ++lastPayment, form: "", amount: ""
  * invoice fails, the person tries the invoice again.
  */
 export function PosPage() {
+  const t = useT();
   const { companyId = "" } = useParams();
   const canWrite = useCanWrite("fiscal") && useCanWrite("sales");
   const targets = useSalesTargets(companyId);
@@ -164,7 +166,7 @@ export function PosPage() {
         <PageHeader title="Caixa" />
         <div className="record-detail">
           <p role="status">
-            NFC-e: <span className="badge">{STATUS_LABELS[made.status]}</span> · {formatMoney(made.total)}
+            NFC-e: <span className="badge">{t(STATUS_LABELS[made.status])}</span> · {formatMoney(made.total)}
           </p>
           {made.access_key && <p className="access-key">{made.access_key}</p>}
           {made.refusal && <Notice message={`Recusada (${made.refusal.code}): ${made.refusal.message}`} tone="warning" />}
@@ -239,7 +241,7 @@ export function PosPage() {
                   <option value="">Escolha a forma</option>
                   {Object.entries(PAYMENT_LABELS).map(([key, label]) => (
                     <option key={key} value={key}>
-                      {label}
+                      {t(label)}
                     </option>
                   ))}
                 </select>
@@ -296,7 +298,7 @@ export function PosPage() {
                 <option value="">Escolha a presença</option>
                 {counterPresences.map(([key, label]) => (
                   <option key={key} value={key}>
-                    {label}
+                    {t(label)}
                   </option>
                 ))}
               </select>

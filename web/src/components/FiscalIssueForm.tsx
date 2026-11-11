@@ -8,6 +8,7 @@ import {
   type PaymentForm,
   type Sale,
 } from "../api";
+import { useT } from "../i18n";
 import { formatMoney } from "../lib/decimal";
 import { PAYMENT_LABELS, PRESENCE_LABELS } from "../lib/fiscalDocuments";
 import { Button } from "./Button";
@@ -28,6 +29,7 @@ interface Props {
  * option of each says so. Nothing is sent until the button.
  */
 export function IssueForm({ companyId, natures, fixedSale, submitLabel, onSubmit }: Props) {
+  const t = useT();
   const [sales, setSales] = useState<Sale[]>([]);
   const [sale, setSale] = useState(fixedSale ?? "");
   const [nature, setNature] = useState("");
@@ -74,32 +76,32 @@ export function IssueForm({ companyId, natures, fixedSale, submitLabel, onSubmit
 
   return (
     <form className="record-form" onSubmit={(event) => void submit(event)}>
-      <HelpTitle title="Como emitir" level={3}>
+      <HelpTitle title={t("How to issue")} level={3}>
         <p>
-          São escolhas fiscais que o sistema não sabe: a natureza de operação, a origem da mercadoria (um valor para a nota
-          inteira), como o comprador estava presente, a forma de pagamento e se é consumidor final. Confirme com o seu contador
-          antes de emitir. Só clientes com CPF recebem NF-e por enquanto.
+          {t(
+            "These are fiscal choices the system does not know: the operation nature, the origin of the goods (one value for the whole invoice), how the buyer was present, the payment form and whether the buyer is a final consumer. Confirm with your accountant before issuing. Only customers with a CPF get an NF-e for now.",
+          )}
         </p>
       </HelpTitle>
       <Notice message={error} />
       <div className="field-grid">
         {!fixedSale && (
           <label>
-            Venda
+            {t("Sale")}
             <select required value={sale} onChange={(event) => setSale(event.target.value)}>
-              <option value="">Escolha a venda</option>
+              <option value="">{t("Choose the sale")}</option>
               {sales.map((item) => (
                 <option key={item.id} value={item.id}>
-                  {`Venda ${item.number} · ${formatMoney(item.total)}`}
+                  {t("Sale {number} · {total}", { number: item.number, total: formatMoney(item.total) })}
                 </option>
               ))}
             </select>
           </label>
         )}
         <label>
-          Natureza de operação
+          {t("Operation nature")}
           <select required value={nature} onChange={(event) => setNature(event.target.value)}>
-            <option value="">Escolha a natureza</option>
+            <option value="">{t("Choose the nature")}</option>
             {productNatures.map((item) => (
               <option key={item.code} value={item.code}>
                 {item.name}
@@ -108,9 +110,9 @@ export function IssueForm({ companyId, natures, fixedSale, submitLabel, onSubmit
           </select>
         </label>
         <label>
-          Origem da mercadoria
+          {t("Origin of the goods")}
           <select required value={origin} onChange={(event) => setOrigin(event.target.value)}>
-            <option value="">Escolha a origem</option>
+            <option value="">{t("Choose the origin")}</option>
             {[0, 1, 2, 3, 4, 5, 6, 7, 8].map((code) => (
               <option key={code} value={code}>
                 {code}
@@ -119,33 +121,33 @@ export function IssueForm({ companyId, natures, fixedSale, submitLabel, onSubmit
           </select>
         </label>
         <label>
-          Presença do comprador
+          {t("Buyer presence")}
           <select required value={presence} onChange={(event) => setPresence(event.target.value)}>
-            <option value="">Escolha a presença</option>
+            <option value="">{t("Choose the presence")}</option>
             {Object.entries(PRESENCE_LABELS).map(([key, label]) => (
               <option key={key} value={key}>
-                {label}
+                {t(label)}
               </option>
             ))}
           </select>
         </label>
         <label>
-          Forma de pagamento
+          {t("Payment form")}
           <select required value={payment} onChange={(event) => setPayment(event.target.value)}>
-            <option value="">Escolha a forma</option>
+            <option value="">{t("Choose the form")}</option>
             {Object.entries(PAYMENT_LABELS).map(([key, label]) => (
               <option key={key} value={key}>
-                {label}
+                {t(label)}
               </option>
             ))}
           </select>
         </label>
         <label>
-          Consumidor final
+          {t("Final consumer")}
           <select required value={finalConsumer} onChange={(event) => setFinalConsumer(event.target.value)}>
-            <option value="">Escolha</option>
-            <option value="yes">Sim</option>
-            <option value="no">Não</option>
+            <option value="">{t("Choose")}</option>
+            <option value="yes">{t("Yes")}</option>
+            <option value="no">{t("No")}</option>
           </select>
         </label>
       </div>

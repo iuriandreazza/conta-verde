@@ -1,5 +1,6 @@
 import { useRef, useState, type FormEvent } from "react";
 import type { IssTaxation, NatureKind, OperationNature, TaxRegime, TaxRule } from "../api";
+import { msg, useT } from "../i18n";
 import { toApiDecimal, toInputDecimal } from "../lib/decimal";
 import { BackButton } from "./BackButton";
 import { Button } from "./Button";
@@ -8,6 +9,7 @@ import { CheckIcon } from "./icons/check";
 import { PlusIcon } from "./icons/plus";
 import { useSheetDirty } from "./Sheet";
 
+// The names of the tax regimes are the law's own words and are written the same in both languages.
 export const REGIME_LABELS: Record<TaxRegime, string> = {
   simples_nacional: "Simples Nacional",
   lucro_presumido: "Lucro Presumido",
@@ -56,10 +58,10 @@ const rowOf = (key: number, rule: TaxRule): RuleRow => ({
 const rateOf = (text: string): string | null => toApiDecimal(text) ?? null;
 
 const ISS_TAXATION_LABELS: Record<IssTaxation, string> = {
-  taxable: "Tributável",
-  immune: "Imune",
-  export: "Exportação",
-  not_incident: "Não incidente",
+  taxable: msg("Taxable"),
+  immune: msg("Immune"),
+  export: msg("Export"),
+  not_incident: msg("Not incident"),
 };
 
 /** The ISSQN terms of a service as they are typed. */
@@ -92,6 +94,7 @@ interface NatureFormProps {
  * saved. Nothing is sent from here: the nature goes back to the page, and the page's Salvar sends everything.
  */
 export function NatureForm({ nature, regime, onSubmit, onCancel }: NatureFormProps) {
+  const t = useT();
   const nextKey = useRef(0);
   const [kind, setKind] = useState<NatureKind>(nature?.kind ?? "product");
   const [rows, setRows] = useState<RuleRow[]>(() => (nature?.rules ?? []).map((rule) => rowOf(nextKey.current++, rule)));
@@ -144,32 +147,33 @@ export function NatureForm({ nature, regime, onSubmit, onCancel }: NatureFormPro
   return (
     <form className="record-form" onSubmit={handleSubmit}>
       <section className="form-section" aria-labelledby="nature-info">
-        <HelpTitle id="nature-info" title="Dados da natureza">
+        <HelpTitle id="nature-info" title={t("Nature details")}>
           <p>
-            O nome é o que a pessoa lê; o código é a chave estável que o documento fiscal guarda e não muda depois de
-            salvo. Mercadoria leva CFOP e regras de tributação; serviço leva o ISSQN, mais abaixo.
+            {t(
+              "The name is what the person reads; the code is the stable key the fiscal document keeps and it does not change once saved. Goods take a CFOP and tax rules; a service takes the ISSQN, further down.",
+            )}
           </p>
         </HelpTitle>
         <div className="field-grid">
           <label>
-            Nome
-            <input name="name" required maxLength={60} autoComplete="off" placeholder="Venda de mercadoria" defaultValue={nature?.name} />
+            {t("Name")}
+            <input name="name" required maxLength={60} autoComplete="off" placeholder={t("Sale of goods")} defaultValue={nature?.name} />
           </label>
           <label>
-            Código
+            {t("Code")}
             <input
               name="code"
               required
               maxLength={30}
               pattern="[A-Za-z0-9_\-]+"
               autoComplete="off"
-              placeholder="venda"
+              placeholder={t("sale")}
               readOnly={nature !== null}
               defaultValue={nature?.code}
             />
           </label>
           <label>
-            Tipo
+            {t("Type")}
             <select
               name="kind"
               value={kind}
@@ -178,12 +182,12 @@ export function NatureForm({ nature, regime, onSubmit, onCancel }: NatureFormPro
                 setKind(event.target.value as NatureKind);
               }}
             >
-              <option value="product">Mercadoria (NF-e / NFC-e)</option>
-              <option value="service">Serviço (NFS-e)</option>
+              <option value="product">{t("Goods (NF-e / NFC-e)")}</option>
+              <option value="service">{t("Service (NFS-e)")}</option>
             </select>
           </label>
           <label className="inline">
-            <input name="active" type="checkbox" defaultChecked={nature?.active ?? true} /> Ativa
+            <input name="active" type="checkbox" defaultChecked={nature?.active ?? true} /> {t("Active nature")}
           </label>
         </div>
       </section>
@@ -193,40 +197,40 @@ export function NatureForm({ nature, regime, onSubmit, onCancel }: NatureFormPro
           <section className="form-section" aria-labelledby="nature-cfop">
             <HelpTitle id="nature-cfop" title="CFOP">
               <p>
-                Quatro dígitos. O CFOP de dentro do estado começa com 5 e o de outro estado, com 6. O produto não traz
-                tabela de CFOP: confirme o código certo da operação com o seu contador.
+                {t(
+                  "Four digits. The in-state CFOP starts with 5 and the one for another state with 6. The product has no CFOP table: confirm the right operation code with your accountant.",
+                )}
               </p>
             </HelpTitle>
             <div className="field-grid">
               <label>
-                CFOP dentro do estado
+                {t("CFOP within the state")}
                 <input name="cfop_in_state" required inputMode="numeric" maxLength={4} autoComplete="off" placeholder="5102" defaultValue={nature?.cfop_in_state ?? ""} />
               </label>
               <label>
-                CFOP interestadual
+                {t("Interstate CFOP")}
                 <input name="cfop_interstate" required inputMode="numeric" maxLength={4} autoComplete="off" placeholder="6102" defaultValue={nature?.cfop_interstate ?? ""} />
               </label>
             </div>
           </section>
 
           <section className="form-section" aria-labelledby="nature-rules">
-            <HelpTitle id="nature-rules" title="Regras de tributação">
+            <HelpTitle id="nature-rules" title={t("Tax rules")}>
               <p>
-                Os códigos e as alíquotas que vão nos itens desta natureza, por regime e, se quiser, por início do NCM
-                do produto (a regra com o prefixo mais longo vale). ICMS: CSOSN de 3 dígitos no Simples Nacional, CST de
-                2 dígitos no Lucro Presumido; PIS e COFINS: CST de 2 dígitos. Alíquotas em %, com até duas casas, e em
-                branco quando não se aplicam. Só o formato é conferido aqui: os valores são do contador.
+                {t(
+                  "The codes and rates that go on the items of this nature, by regime and, if you want, by the start of the product's NCM (the rule with the longest prefix wins). ICMS: 3-digit CSOSN in the Simples Nacional, 2-digit CST in the Lucro Presumido; PIS and COFINS: 2-digit CST. Rates in %, with up to two decimals, and blank when they do not apply. Only the format is checked here: the values are the accountant's.",
+                )}
               </p>
             </HelpTitle>
-            {rows.length === 0 && <p className="muted">Nenhuma regra ainda.</p>}
+            {rows.length === 0 && <p className="muted">{t("No rules yet.")}</p>}
             {rows.map((row, index) => (
               <fieldset key={row.key} className="tax-rule">
-                <legend>Regra {index + 1}</legend>
+                <legend>{t("Rule {number}", { number: index + 1 })}</legend>
                 <div className="field-grid">
                   <label>
-                    Regime
+                    {t("Regime")}
                     <select
-                      aria-label={`Regime da regra ${index + 1}`}
+                      aria-label={t("Regime of rule {number}", { number: index + 1 })}
                       value={row.regime}
                       onChange={(event) => change(row.key, { regime: event.target.value as TaxRegime })}
                     >
@@ -238,21 +242,21 @@ export function NatureForm({ nature, regime, onSubmit, onCancel }: NatureFormPro
                     </select>
                   </label>
                   <label>
-                    Início do NCM
+                    {t("NCM prefix")}
                     <input
-                      aria-label={`Início do NCM da regra ${index + 1}`}
+                      aria-label={t("NCM prefix of rule {number}", { number: index + 1 })}
                       inputMode="numeric"
                       maxLength={8}
                       autoComplete="off"
-                      placeholder="Todos os produtos"
+                      placeholder={t("All products")}
                       value={row.ncm_prefix}
                       onChange={(event) => change(row.key, { ncm_prefix: event.target.value })}
                     />
                   </label>
                   <label>
-                    {row.regime === "simples_nacional" ? "CSOSN do ICMS" : "CST do ICMS"}
+                    {row.regime === "simples_nacional" ? t("ICMS CSOSN") : t("ICMS CST")}
                     <input
-                      aria-label={`ICMS da regra ${index + 1}`}
+                      aria-label={t("ICMS of rule {number}", { number: index + 1 })}
                       inputMode="numeric"
                       maxLength={3}
                       autoComplete="off"
@@ -261,9 +265,9 @@ export function NatureForm({ nature, regime, onSubmit, onCancel }: NatureFormPro
                     />
                   </label>
                   <label>
-                    Alíquota do ICMS (%)
+                    {t("ICMS rate (%)")}
                     <input
-                      aria-label={`Alíquota do ICMS da regra ${index + 1}`}
+                      aria-label={t("ICMS rate of rule {number}", { number: index + 1 })}
                       inputMode="decimal"
                       autoComplete="off"
                       value={row.icms_rate}
@@ -271,9 +275,9 @@ export function NatureForm({ nature, regime, onSubmit, onCancel }: NatureFormPro
                     />
                   </label>
                   <label>
-                    CST do PIS
+                    {t("PIS CST")}
                     <input
-                      aria-label={`PIS da regra ${index + 1}`}
+                      aria-label={t("PIS of rule {number}", { number: index + 1 })}
                       inputMode="numeric"
                       maxLength={2}
                       autoComplete="off"
@@ -282,9 +286,9 @@ export function NatureForm({ nature, regime, onSubmit, onCancel }: NatureFormPro
                     />
                   </label>
                   <label>
-                    Alíquota do PIS (%)
+                    {t("PIS rate (%)")}
                     <input
-                      aria-label={`Alíquota do PIS da regra ${index + 1}`}
+                      aria-label={t("PIS rate of rule {number}", { number: index + 1 })}
                       inputMode="decimal"
                       autoComplete="off"
                       value={row.pis_rate}
@@ -292,9 +296,9 @@ export function NatureForm({ nature, regime, onSubmit, onCancel }: NatureFormPro
                     />
                   </label>
                   <label>
-                    CST da COFINS
+                    {t("COFINS CST")}
                     <input
-                      aria-label={`COFINS da regra ${index + 1}`}
+                      aria-label={t("COFINS of rule {number}", { number: index + 1 })}
                       inputMode="numeric"
                       maxLength={2}
                       autoComplete="off"
@@ -303,9 +307,9 @@ export function NatureForm({ nature, regime, onSubmit, onCancel }: NatureFormPro
                     />
                   </label>
                   <label>
-                    Alíquota da COFINS (%)
+                    {t("COFINS rate (%)")}
                     <input
-                      aria-label={`Alíquota da COFINS da regra ${index + 1}`}
+                      aria-label={t("COFINS rate of rule {number}", { number: index + 1 })}
                       inputMode="decimal"
                       autoComplete="off"
                       value={row.cofins_rate}
@@ -318,13 +322,13 @@ export function NatureForm({ nature, regime, onSubmit, onCancel }: NatureFormPro
                     type="button"
                     variant="ghost"
                     className="btn-small"
-                    aria-label={`Remover regra ${index + 1}`}
+                    aria-label={t("Remove rule {number}", { number: index + 1 })}
                     onClick={() => {
                       markDirty();
                       setRows((current) => current.filter((item) => item.key !== row.key));
                     }}
                   >
-                    Remover
+                    {t("Remove")}
                   </Button>
                 </div>
               </fieldset>
@@ -341,7 +345,7 @@ export function NatureForm({ nature, regime, onSubmit, onCancel }: NatureFormPro
                   setRows((current) => [...current, blankRule(nextKey.current++, regime)]);
                 }}
               >
-                Adicionar regra
+                {t("Add rule")}
               </Button>
             </div>
           </section>
@@ -350,18 +354,16 @@ export function NatureForm({ nature, regime, onSubmit, onCancel }: NatureFormPro
 
       {!isProduct && (
         <section className="form-section" aria-labelledby="nature-iss">
-          <HelpTitle id="nature-iss" title="ISSQN do serviço">
+          <HelpTitle id="nature-iss" title={t("Service ISSQN")}>
             <p>
-              O que a NFS-e diz sobre o imposto deste serviço: o código nacional (seis dígitos: item, subitem e
-              desdobro da lista nacional de serviços), o código do próprio município quando o gateway pede, como o ISS
-              é cobrado e, se a empresa define, a alíquota em %, com até duas casas. Sem o código nacional e a forma de
-              cobrança nenhuma NFS-e sai com esta natureza. O produto não traz tabela de serviços nem escolhe a
-              tributação: confirme com o seu contador.
+              {t(
+                "What the NFS-e says about the tax on this service: the national code (six digits: item, subitem and breakdown of the national list of services), the municipality's own code when the gateway asks for it, how the ISS is charged and, if the company defines it, the rate in %, with up to two decimals. Without the national code and the way it is charged no NFS-e is issued with this nature. The product has no table of services and does not choose the taxation: confirm with your accountant.",
+              )}
             </p>
           </HelpTitle>
           <div className="field-grid">
             <label>
-              Código nacional do serviço
+              {t("National service code")}
               <input
                 inputMode="numeric"
                 maxLength={6}
@@ -377,7 +379,7 @@ export function NatureForm({ nature, regime, onSubmit, onCancel }: NatureFormPro
               />
             </label>
             <label>
-              Código municipal do serviço
+              {t("Municipal service code")}
               <input
                 maxLength={20}
                 autoComplete="off"
@@ -389,7 +391,7 @@ export function NatureForm({ nature, regime, onSubmit, onCancel }: NatureFormPro
               />
             </label>
             <label>
-              Cobrança do ISS
+              {t("ISS taxation")}
               <select
                 required={termsStarted}
                 value={terms.iss_taxation}
@@ -398,16 +400,16 @@ export function NatureForm({ nature, regime, onSubmit, onCancel }: NatureFormPro
                   setTerms({ ...terms, iss_taxation: event.target.value as IssTaxation | "" });
                 }}
               >
-                <option value="">Ainda não definida</option>
+                <option value="">{t("Not defined yet")}</option>
                 {(Object.keys(ISS_TAXATION_LABELS) as IssTaxation[]).map((key) => (
                   <option key={key} value={key}>
-                    {ISS_TAXATION_LABELS[key]}
+                    {t(ISS_TAXATION_LABELS[key])}
                   </option>
                 ))}
               </select>
             </label>
             <label>
-              Alíquota do ISS (%)
+              {t("ISS rate (%)")}
               <input
                 inputMode="decimal"
                 autoComplete="off"
@@ -425,7 +427,7 @@ export function NatureForm({ nature, regime, onSubmit, onCancel }: NatureFormPro
       <div className="form-footer">
         <BackButton onClick={onCancel} />
         <Button type="submit" icon={nature === null ? PlusIcon : CheckIcon}>
-          {nature === null ? "Adicionar natureza" : "Concluir natureza"}
+          {nature === null ? t("Add nature") : t("Finish nature")}
         </Button>
       </div>
     </form>

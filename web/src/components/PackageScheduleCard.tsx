@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { api, errorMessage, type PackageSchedule } from "../api";
+import { useT, type Translate } from "../i18n";
 import { useCanWrite } from "../lib/useCanWrite";
 import { Button } from "./Button";
 import { HelpTitle } from "./HelpTitle";
@@ -11,9 +12,9 @@ import { Spinner } from "./Spinner";
 const DAYS = Array.from({ length: 28 }, (_, index) => index + 1);
 
 /** Who the announcement reaches, said in words: with no accountant nothing is sent, and the page says so. */
-function reach(accountants: number): string {
-  if (accountants === 0) return "Nenhum contador foi convidado: nada será enviado.";
-  return accountants === 1 ? "O aviso vai para 1 contador." : `O aviso vai para ${accountants} contadores.`;
+function reach(t: Translate, accountants: number): string {
+  if (accountants === 0) return t("No accountant was invited: nothing will be sent.");
+  return accountants === 1 ? t("The notice goes to 1 accountant.") : t("The notice goes to {count} accountants.", { count: accountants });
 }
 
 /**
@@ -21,6 +22,7 @@ function reach(accountants: number): string {
  * (ADR 0072). The e-mail carries a link to this page and nothing else: the files are downloaded after signing in.
  */
 export function PackageScheduleCard({ companyId }: { companyId: string }) {
+  const t = useT();
   const canWrite = useCanWrite("accounting");
   const [schedule, setSchedule] = useState<PackageSchedule | null>(null);
   const [enabled, setEnabled] = useState(false);
@@ -54,7 +56,7 @@ export function PackageScheduleCard({ companyId }: { companyId: string }) {
     try {
       const stored = await api.replacePackageSchedule(companyId, { enabled, day });
       setSchedule(stored);
-      setSaved(stored.enabled ? `Aviso ligado: todo mês, a partir do dia ${stored.day}.` : "Aviso desligado.");
+      setSaved(stored.enabled ? t("Notice on: every month, from day {day}.", { day: stored.day }) : t("Notice off."));
     } catch (failure) {
       setError(errorMessage(failure));
     } finally {
@@ -64,11 +66,11 @@ export function PackageScheduleCard({ companyId }: { companyId: string }) {
 
   return (
     <section className="card">
-      <HelpTitle level={2} title="Aviso mensal aos contadores">
+      <HelpTitle level={2} title={t("Monthly notice to accountants")}>
         <p>
-          Do dia escolhido em diante, uma vez por mês, os contadores da empresa recebem um e-mail avisando que o pacote do
-          mês anterior está pronto. O e-mail leva um link para esta página, onde é preciso entrar com a própria conta para
-          baixar os arquivos: ele não traz dados da empresa nem anexos.
+          {t(
+            "From the chosen day on, once a month, the company's accountants get an e-mail saying the previous month's package is ready. The e-mail carries a link to this page, where signing in with their own account is needed to download the files: it brings no company data or attachments.",
+          )}
         </p>
       </HelpTitle>
       <Notice message={error} />
@@ -76,17 +78,17 @@ export function PackageScheduleCard({ companyId }: { companyId: string }) {
       {schedule === null ? (
         error === null && (
           <p role="status" className="status">
-            <Spinner /> Carregando…
+            <Spinner /> {t("Loading…")}
           </p>
         )
       ) : (
         <>
           <p className="muted">
-            {reach(schedule.accountants)}
+            {reach(t, schedule.accountants)}
             {schedule.accountants === 0 && canWrite && (
               <>
                 {" "}
-                <Link to={`/companies/${companyId}/members`}>Convidar um contador</Link>
+                <Link to={`/companies/${companyId}/members`}>{t("Invite an accountant")}</Link>
               </>
             )}
           </p>
@@ -94,10 +96,10 @@ export function PackageScheduleCard({ companyId }: { companyId: string }) {
             <form onSubmit={(event) => void save(event)} className="settle-form">
               <label className="inline-check">
                 <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
-                Avisar todo mês
+                {t("Notify every month")}
               </label>
               <label>
-                A partir do dia
+                {t("From day")}
                 <select value={day} onChange={(event) => setDay(Number(event.target.value))}>
                   {DAYS.map((option) => (
                     <option key={option} value={option}>
@@ -107,11 +109,11 @@ export function PackageScheduleCard({ companyId }: { companyId: string }) {
                 </select>
               </label>
               <Button type="submit" variant="ghost" pending={saving}>
-                Salvar aviso
+                {t("Save notice")}
               </Button>
             </form>
           ) : (
-            <p>{schedule.enabled ? `Ligado: todo mês, a partir do dia ${schedule.day}.` : "Desligado."}</p>
+            <p>{schedule.enabled ? t("On: every month, from day {day}.", { day: schedule.day }) : t("Off.")}</p>
           )}
         </>
       )}

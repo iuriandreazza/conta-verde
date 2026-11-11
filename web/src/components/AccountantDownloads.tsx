@@ -4,14 +4,15 @@ import { api, errorMessage, type ExportFile, type ExportFormat } from "../api";
 import { saveFile } from "../lib/csv";
 import { MONTH, lastDayOfMonth, monthToExport } from "../lib/closing";
 import { todayIso } from "../lib/settlement";
+import { msg, useT } from "../i18n";
 import { Button } from "./Button";
 import { HelpTitle } from "./HelpTitle";
 import { Notice } from "./Notice";
 
 const FILES: { file: ExportFile; label: string }[] = [
-  { file: "entries", label: "Lançamentos" },
-  { file: "settlements", label: "Baixas" },
-  { file: "transfers", label: "Transferências" },
+  { file: "entries", label: msg("Entries") },
+  { file: "settlements", label: msg("Settlements") },
+  { file: "transfers", label: msg("Transfers") },
 ];
 
 /**
@@ -19,6 +20,7 @@ const FILES: { file: ExportFile; label: string }[] = [
  * transfers, or all of them with the attached files in one zip. It says what the package does not hold.
  */
 export function AccountantDownloads({ companyId, lockedThrough }: { companyId: string; lockedThrough: string | null }) {
+  const t = useT();
   // The e-mail that says a package is ready links here with the month in the address (ADR 0072).
   const [params] = useSearchParams();
   const linked = params.get("month") ?? "";
@@ -38,7 +40,7 @@ export function AccountantDownloads({ companyId, lockedThrough }: { companyId: s
 
   async function download(file: ExportFile) {
     if (!MONTH.test(month)) {
-      setError("Escolha o mês, escrito como 2026-10.");
+      setError(t("Choose the month, written as 2026-10."));
       return;
     }
     setPending(file);
@@ -55,29 +57,29 @@ export function AccountantDownloads({ companyId, lockedThrough }: { companyId: s
 
   return (
     <section className="card">
-      <HelpTitle level={2} title="Arquivos para o contador">
+      <HelpTitle level={2} title={t("Files for the accountant")}>
         <p>
-          Lançamentos por data de competência (uma linha por parcela), baixas pela data em que foram feitas e
-          transferências do mês. O pacote junta tudo e leva os arquivos anexados aos lançamentos. O que foi cancelado ou
-          estornado fica de fora.
+          {t(
+            "Entries by competence date (one row per installment), settlements by the day they were made and the month's transfers. The package gathers everything and carries the files attached to the entries. What was cancelled or reversed is left out.",
+          )}
         </p>
       </HelpTitle>
       <p className="muted">
-        O sistema não guarda o XML das notas de compra: do que entra, o pacote leva só o que foi anexado aos lançamentos.
-        Das notas emitidas em produção no período, leva a lista (fiscal.csv) e os arquivos delas: XML, DANFE, cancelamentos
-        e cartas de correção.
+        {t(
+          "The system does not keep the XML of purchase invoices: of what comes in, the package carries only what was attached to the entries. Of the invoices issued in production in the period, it carries the list (fiscal.csv) and their files: XML, DANFE, cancellations and correction letters.",
+        )}
       </p>
       <Notice message={error} />
       <div className="settle-form">
         <label>
-          Mês
+          {t("Month")}
           <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} />
         </label>
         <label>
-          Formato
+          {t("Format")}
           <select value={format} onChange={(event) => setFormat(event.target.value as ExportFormat)}>
-            <option value="csv">CSV (abre no Excel)</option>
-            <option value="xlsx">Planilha (.xlsx)</option>
+            <option value="csv">{t("CSV (opens in Excel)")}</option>
+            <option value="xlsx">{t("Spreadsheet (.xlsx)")}</option>
           </select>
         </label>
       </div>
@@ -91,11 +93,11 @@ export function AccountantDownloads({ companyId, lockedThrough }: { companyId: s
             disabled={pending !== null}
             onClick={() => void download(file)}
           >
-            {label}
+            {t(label)}
           </Button>
         ))}
         <Button type="button" pending={pending === "package"} disabled={pending !== null} onClick={() => void download("package")}>
-          Pacote completo (.zip)
+          {t("Complete package (.zip)")}
         </Button>
       </div>
     </section>

@@ -21,6 +21,7 @@ import { PageHeader } from "../components/PageHeader";
 import { Sheet } from "../components/Sheet";
 import { Spinner } from "../components/Spinner";
 import { StatusBadge } from "../components/StatusBadge";
+import { useT } from "../i18n";
 import { formatDate } from "../lib/entryInstallments";
 import { certificateStatus } from "../lib/fiscalCertificate";
 import { todayIso } from "../lib/settlement";
@@ -128,28 +129,34 @@ function settingsOf(form: Form): FiscalSettings {
   };
 }
 
-const kindLabel = (nature: OperationNature) => (nature.kind === "product" ? "Mercadoria" : "Serviço");
-
 /** The certificate's standing, in words: what the product knows is only the day the person typed. */
 function CertificateStatusNotice({ validUntil, today }: { validUntil: string; today: string }) {
+  const t = useT();
   if (validUntil === "") return null;
   const status = certificateStatus(validUntil, today);
   const day = formatDate(validUntil);
   if (status.kind === "expired") {
-    return <Notice message={`Certificado vencido em ${day}: nenhum documento pode ser emitido até renová-lo.`} />;
+    return <Notice message={t("Certificate expired on {day}: no document can be issued until it is renewed.", { day })} />;
   }
   if (status.kind === "expiring") {
-    const when = status.daysLeft === 0 ? "vence hoje" : status.daysLeft === 1 ? "vence amanhã" : `vence em ${status.daysLeft} dias`;
-    return <Notice tone="warning" message={`Certificado ${when} (${day}). Renove-o no painel do gateway.`} />;
+    const message =
+      status.daysLeft === 0
+        ? t("Certificate expires today ({day}). Renew it in the gateway's panel.", { day })
+        : status.daysLeft === 1
+          ? t("Certificate expires tomorrow ({day}). Renew it in the gateway's panel.", { day })
+          : t("Certificate expires in {days} days ({day}). Renew it in the gateway's panel.", { days: status.daysLeft, day });
+    return <Notice tone="warning" message={message} />;
   }
   if (status.kind === "valid") {
-    return <p className="muted">{`Vence em ${status.daysLeft} dias (${day}).`}</p>;
+    return <p className="muted">{t("Expires in {days} days ({day}).", { days: status.daysLeft, day })}</p>;
   }
   return null;
 }
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one instance.
 export function FiscalSettingsPage() {
+  const t = useT();
+  const kindLabel = (nature: OperationNature) => (nature.kind === "product" ? t("Goods") : t("Service"));
   const { companyId = "" } = useParams();
   const canWrite = useCanWrite("fiscal");
   // The server reads no clock, so how close the certificate is to expiring is told with the day where the person is.
@@ -223,7 +230,7 @@ export function FiscalSettingsPage() {
     event.preventDefault();
     if (saving) return;
     if (![form.nfe_series, form.nfce_series, form.nfse_series].every((series) => SERIES.test(series.trim()))) {
-      setError("Informe as séries como números, de 1 a 999.");
+      setError(t("Give the series as numbers, from 1 to 999."));
       return;
     }
     setSaving(true);
@@ -235,7 +242,7 @@ export function FiscalSettingsPage() {
       setForm(formOf(settings));
       setEdited(false);
       setTrail((count) => count + 1);
-      setSaved("Configurações fiscais salvas.");
+      setSaved(t("Fiscal settings saved."));
     } catch (failure) {
       setError(errorMessage(failure));
     } finally {
@@ -248,14 +255,16 @@ export function FiscalSettingsPage() {
   return (
     <>
       <PageHeader
-        title="Configurações fiscais"
-        description="Quem emite os documentos fiscais, o regime tributário, o ambiente do gateway, as séries, o dia em que o certificado A1 vence e as naturezas de operação com os códigos de imposto de cada uma."
+        title={t("Fiscal settings")}
+        description={t(
+          "Who issues the fiscal documents, the tax regime, the gateway environment, the series, the day the A1 certificate expires and the operation natures with the tax codes of each.",
+        )}
       />
       <Notice message={error} />
       <Notice message={saved} tone="success" />
       {!loaded && error === null ? (
         <p role="status" className="status">
-          <Spinner /> Carregando…
+          <Spinner /> {t("Loading…")}
         </p>
       ) : (
         loaded && (
@@ -263,34 +272,34 @@ export function FiscalSettingsPage() {
             {gateway === null && (
               <Notice
                 tone="warning"
-                message="Nenhum gateway fiscal está configurado nesta instalação (variável FISCAL_GATEWAY): os documentos não podem ser emitidos."
+                message={t("No fiscal gateway is configured in this installation (variable FISCAL_GATEWAY): documents cannot be issued.")}
               />
             )}
             {gateway === "fake" && (
               <Notice
                 tone="warning"
-                message="O gateway é o de teste (fake): os documentos são de mentira e não têm valor fiscal."
+                message={t("The gateway is the test one (fake): documents are fake and have no fiscal value.")}
               />
             )}
             {stored === null && (
               <Notice
                 tone="warning"
-                message="Estas configurações ainda não foram salvas: sem elas nenhum documento fiscal pode ser emitido."
+                message={t("These settings have not been saved yet: without them no fiscal document can be issued.")}
               />
             )}
             <form className="record-form" onSubmit={(event) => void save(event)}>
               <fieldset className="fieldset-plain" disabled={!canWrite}>
                 <section className="form-section" aria-labelledby="fiscal-issuer">
-                  <HelpTitle id="fiscal-issuer" title="Emitente">
+                  <HelpTitle id="fiscal-issuer" title={t("Issuer")}>
                     <p>
-                      Os dados da empresa que emite as notas, como constam no cadastro do CNPJ. Só o formato é conferido
-                      aqui; a inscrição estadual pode ser ISENTO. O código IBGE do município (sete dígitos, tabela do IBGE) é o que a
-                      NFS-e diz sobre onde foi emitida: sem ele nenhuma NFS-e pode ser emitida.
+                      {t(
+                        "The data of the company that issues the invoices, as in the CNPJ registry. Only the format is checked here; the state registration can be ISENTO. The municipality's IBGE code (seven digits, IBGE table) is what the NFS-e says about where it was issued: without it no NFS-e can be issued.",
+                      )}
                     </p>
                   </HelpTitle>
                   <div className="field-grid">
                     <label>
-                      Razão social
+                      {t("Legal name")}
                       <input required maxLength={150} autoComplete="off" value={form.legal_name} onChange={(event) => set("legal_name", event.target.value)} />
                     </label>
                     <label>
@@ -298,42 +307,42 @@ export function FiscalSettingsPage() {
                       <input required inputMode="text" maxLength={18} autoComplete="off" placeholder="00.000.000/0000-00" value={form.cnpj} onChange={(event) => set("cnpj", event.target.value)} />
                     </label>
                     <label>
-                      Inscrição estadual
-                      <input maxLength={20} autoComplete="off" placeholder="Números ou ISENTO" value={form.state_registration} onChange={(event) => set("state_registration", event.target.value)} />
+                      {t("State registration")}
+                      <input maxLength={20} autoComplete="off" placeholder={t("Numbers or ISENTO")} value={form.state_registration} onChange={(event) => set("state_registration", event.target.value)} />
                     </label>
                     <label>
-                      Inscrição municipal
+                      {t("Municipal registration")}
                       <input maxLength={20} autoComplete="off" value={form.municipal_registration} onChange={(event) => set("municipal_registration", event.target.value)} />
                     </label>
                   </div>
                   <fieldset className="address-fields">
-                    <legend>Endereço</legend>
+                    <legend>{t("Address")}</legend>
                     <label className="span-6">
-                      CEP
+                      {t("Postal code")}
                       <input required inputMode="numeric" autoComplete="off" placeholder="00000-000" maxLength={9} value={form.postal_code} onChange={(event) => set("postal_code", event.target.value)} />
                     </label>
                     <label className="span-4">
-                      Logradouro
+                      {t("Street")}
                       <input required maxLength={150} autoComplete="off" value={form.street} onChange={(event) => set("street", event.target.value)} />
                     </label>
                     <label className="span-2">
-                      Número
+                      {t("Number")}
                       <input maxLength={20} autoComplete="off" value={form.number} onChange={(event) => set("number", event.target.value)} />
                     </label>
                     <label className="span-3">
-                      Complemento
+                      {t("Complement")}
                       <input maxLength={80} autoComplete="off" value={form.complement} onChange={(event) => set("complement", event.target.value)} />
                     </label>
                     <label className="span-3">
-                      Bairro
+                      {t("District")}
                       <input maxLength={80} autoComplete="off" value={form.district} onChange={(event) => set("district", event.target.value)} />
                     </label>
                     <label className="span-4">
-                      Cidade
+                      {t("City")}
                       <input required maxLength={80} autoComplete="off" value={form.city} onChange={(event) => set("city", event.target.value)} />
                     </label>
                     <label className="span-2">
-                      UF
+                      {t("State")}
                       <select required value={form.state} onChange={(event) => set("state", event.target.value)}>
                         <option value=""></option>
                         {STATES.map((state) => (
@@ -346,7 +355,7 @@ export function FiscalSettingsPage() {
                   </fieldset>
                   <div className="field-grid">
                     <label>
-                      Código IBGE do município
+                      {t("Municipality IBGE code")}
                       <input
                         inputMode="numeric"
                         maxLength={7}
@@ -361,16 +370,16 @@ export function FiscalSettingsPage() {
                 </section>
 
                 <section className="form-section" aria-labelledby="fiscal-regime">
-                  <HelpTitle id="fiscal-regime" title="Regime e ambiente">
+                  <HelpTitle id="fiscal-regime" title={t("Regime and environment")}>
                     <p>
-                      O regime decide quais códigos de imposto as regras usam (MEI, Simples com excesso de sublimite e
-                      Lucro Real ainda não são aceitos). Em homologação os documentos são de teste e não têm validade
-                      fiscal; a produção exige o dia em que o certificado vence.
+                      {t(
+                        "The regime decides which tax codes the rules use (MEI, Simples with sublimit excess and Lucro Real are not accepted yet). In the test environment the documents are test ones and have no fiscal validity; production requires the day the certificate expires.",
+                      )}
                     </p>
                   </HelpTitle>
                   <div className="field-grid">
                     <label>
-                      Regime tributário
+                      {t("Tax regime")}
                       <select value={form.regime} onChange={(event) => set("regime", event.target.value as TaxRegime)}>
                         {(Object.keys(REGIME_LABELS) as TaxRegime[]).map((key) => (
                           <option key={key} value={key}>
@@ -380,49 +389,48 @@ export function FiscalSettingsPage() {
                       </select>
                     </label>
                     <label>
-                      Ambiente
+                      {t("Environment")}
                       <select value={form.environment} onChange={(event) => set("environment", event.target.value as FiscalEnvironment)}>
-                        <option value="homologation">Homologação (teste)</option>
-                        <option value="production">Produção</option>
+                        <option value="homologation">{t("Test (sandbox)")}</option>
+                        <option value="production">{t("Production")}</option>
                       </select>
                     </label>
                   </div>
                 </section>
 
                 <section className="form-section" aria-labelledby="fiscal-series">
-                  <HelpTitle id="fiscal-series" title="Séries">
+                  <HelpTitle id="fiscal-series" title={t("Series")}>
                     <p>
-                      A série de cada tipo de documento, de 1 a 999. O número de cada nota é do gateway: o produto não
-                      guarda contador.
+                      {t("The series of each kind of document, from 1 to 999. The number of each invoice is the gateway's: the product keeps no counter.")}
                     </p>
                   </HelpTitle>
                   <div className="field-grid">
                     <label>
-                      Série da NF-e
+                      {t("NF-e series")}
                       <input required inputMode="numeric" maxLength={3} autoComplete="off" value={form.nfe_series} onChange={(event) => set("nfe_series", event.target.value)} />
                     </label>
                     <label>
-                      Série da NFC-e
+                      {t("NFC-e series")}
                       <input required inputMode="numeric" maxLength={3} autoComplete="off" value={form.nfce_series} onChange={(event) => set("nfce_series", event.target.value)} />
                     </label>
                     <label>
-                      Série da NFS-e
+                      {t("NFS-e series")}
                       <input required inputMode="numeric" maxLength={3} autoComplete="off" value={form.nfse_series} onChange={(event) => set("nfse_series", event.target.value)} />
                     </label>
                   </div>
                 </section>
 
                 <section className="form-section" aria-labelledby="fiscal-certificate">
-                  <HelpTitle id="fiscal-certificate" title="Certificado A1">
+                  <HelpTitle id="fiscal-certificate" title={t("A1 certificate")}>
                     <p>
-                      O certificado e a senha dele não são enviados a este produto: eles são enviados no painel do
-                      gateway de emissão. Aqui fica só o dia em que ele vence, que você lê no próprio certificado, para
-                      avisar antes e impedir emissões depois dele.
+                      {t(
+                        "The certificate and its password are not sent to this product: they are sent in the issuing gateway's panel. Only the day it expires is kept here, which you read from the certificate itself, to warn beforehand and prevent issuing after it.",
+                      )}
                     </p>
                   </HelpTitle>
                   <div className="field-grid">
                     <label>
-                      O certificado vence em
+                      {t("The certificate expires on")}
                       <input type="date" value={form.certificate_valid_until} onChange={(event) => set("certificate_valid_until", event.target.value)} />
                     </label>
                   </div>
@@ -430,28 +438,28 @@ export function FiscalSettingsPage() {
                 </section>
 
                 <section className="form-section" aria-labelledby="fiscal-natures">
-                  <HelpTitle id="fiscal-natures" title="Naturezas de operação">
+                  <HelpTitle id="fiscal-natures" title={t("Operation natures")}>
                     <p>
-                      O que a empresa chama de cada operação (venda, venda para entrega, serviço), com o CFOP das
-                      mercadorias e as regras de imposto dos itens. O produto não traz tabela de imposto: os códigos e as
-                      alíquotas são seus e do seu contador.
+                      {t(
+                        "What the company calls each operation (sale, sale for delivery, service), with the CFOP of the goods and the tax rules of the items. The product has no tax table: the codes and rates are yours and your accountant's.",
+                      )}
                     </p>
                   </HelpTitle>
                   {form.natures.length === 0 ? (
-                    <p className="muted">Nenhuma natureza ainda: sem uma, não há o que escolher ao emitir.</p>
+                    <p className="muted">{t("No natures yet: without one there is nothing to choose when issuing.")}</p>
                   ) : (
                     <div className="table-wrap">
                       <table>
                         <thead>
                           <tr>
-                            <th>Nome</th>
-                            <th>Código</th>
-                            <th>Tipo</th>
+                            <th>{t("Name")}</th>
+                            <th>{t("Code")}</th>
+                            <th>{t("Type")}</th>
                             <th>CFOP</th>
-                            <th>Regras</th>
-                            <th>Situação</th>
+                            <th>{t("Rules")}</th>
+                            <th>{t("Status")}</th>
                             <th>
-                              <span className="visually-hidden">Ações</span>
+                              <span className="visually-hidden">{t("Actions")}</span>
                             </th>
                           </tr>
                         </thead>
@@ -469,21 +477,21 @@ export function FiscalSettingsPage() {
                               <td className="row-actions">
                                 {canWrite && (
                                   <>
-                                    <Button iconOnly icon={SquarePenIcon} type="button" variant="ghost" aria-label={`Alterar ${item.name}`} onClick={() => setEditing(index)}>
-                                      Alterar
+                                    <Button iconOnly icon={SquarePenIcon} type="button" variant="ghost" aria-label={t("Edit {name}", { name: item.name })} onClick={() => setEditing(index)}>
+                                      {t("Edit")}
                                     </Button>
                                     <Button
                                       type="button"
                                       variant="ghost"
                                       className="btn-small"
-                                      aria-label={`Remover ${item.name}`}
+                                      aria-label={t("Remove {name}", { name: item.name })}
                                       onClick={() => {
                                         setForm((current) => ({ ...current, natures: current.natures.filter((_, at) => at !== index) }));
                                         setEdited(true);
                                         setSaved(null);
                                       }}
                                     >
-                                      Remover
+                                      {t("Remove")}
                                     </Button>
                                   </>
                                 )}
@@ -497,7 +505,7 @@ export function FiscalSettingsPage() {
                   {canWrite && (
                     <div className="form-actions">
                       <Button type="button" variant="ghost" icon={PlusIcon} onClick={() => setEditing("new")}>
-                        Adicionar natureza
+                        {t("Add nature")}
                       </Button>
                     </div>
                   )}
@@ -507,18 +515,18 @@ export function FiscalSettingsPage() {
               {canWrite && (
                 <div className="form-footer">
                   <span className="muted" role="status">
-                    {edited ? "Há alterações ainda não salvas." : ""}
+                    {edited ? t("There are changes not saved yet.") : ""}
                   </span>
                   <Button type="submit" icon={CheckIcon} pending={saving}>
-                    Salvar
+                    {t("Save")}
                   </Button>
                 </div>
               )}
             </form>
 
             <section className="card">
-              <HelpTitle level={2} title="Histórico">
-                <p>O que mudou nestas configurações, por quem e quando, do mais recente ao mais antigo.</p>
+              <HelpTitle level={2} title={t("History")}>
+                <p>{t("What changed in these settings, by whom and when, from the most recent to the oldest.")}</p>
               </HelpTitle>
               <FiscalSettingsHistory key={trail} companyId={companyId} />
             </section>
@@ -529,7 +537,7 @@ export function FiscalSettingsPage() {
       {canWrite && (
         <Sheet
           open={editing !== null}
-          title={editing === "new" ? "Nova natureza" : `Alterar ${nature?.name ?? ""}`}
+          title={editing === "new" ? t("New nature") : t("Edit {name}", { name: nature?.name ?? "" })}
           onClose={closeSheet}
         >
           {shown !== null && (
