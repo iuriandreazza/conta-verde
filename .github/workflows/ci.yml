@@ -10,7 +10,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  DATABASE_URL: postgres://conta_verde:conta_verde@localhost:5432/conta_verde
+  # The server serves requests as a role that owns nothing, so the row-level policies apply to the tests too (ADR 0093).
+  DATABASE_URL: postgres://conta_verde_app:conta_verde_app@localhost:5432/conta_verde
+  DATABASE_MIGRATE_URL: postgres://conta_verde:conta_verde@localhost:5432/conta_verde
 
 jobs:
   rust:
@@ -35,6 +37,7 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      - run: psql postgres://conta_verde:conta_verde@localhost:5432/conta_verde -f deploy/postgres/create-app-role.sql
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace

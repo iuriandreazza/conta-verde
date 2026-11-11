@@ -274,6 +274,8 @@ pub(crate) async fn receive_payment_webhook<X: Ports>(
     let company_id = Uuid::parse_str(&company_id)
         .map(CompanyId::from_uuid)
         .map_err(|_| ApplicationError::ChargeNotFound)?;
+    // Only a claim until the signature is checked, but it can only ever show the company that is named.
+    conta_verde_infrastructure::tenant::set_company(company_id);
     if body.len() > MAX_EVENT_BYTES {
         return Err(ApiError::FileTooLarge("the notice is too large"));
     }

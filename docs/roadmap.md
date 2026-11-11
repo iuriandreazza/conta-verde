@@ -194,7 +194,7 @@ private endpoint.
 
 ## Phase 9 — 1.0 hardening
 
-- [ ] PostgreSQL row-level security policies as a second barrier to the application checks ([ADR 0004](adr/0004-company-scoped-tenancy.md))
+- [x] PostgreSQL row-level security policies as a second barrier to the application checks ([ADR 0004](adr/0004-company-scoped-tenancy.md), [ADR 0093](adr/0093-row-level-security.md)) — a policy on every table with a `company_id` (a test fails when one has none), the company set per request from what was verified (the membership, the key, the token), the server serving requests as a role that owns nothing and bypasses nothing (it refuses to start otherwise) and the owner migrating; a test proves that with the application's check skipped another company's rows are not found and a write into them is refused; background work runs in a system scope and is **not** protected by it
 - [ ] Backup and restore procedure, upgrade guide, published Docker image
 - [ ] Migration importers: entries, open or paid, from CSV (done, [ADR 0064](adr/0064-entry-import-from-a-file.md), with `scripts/export-to-entries-csv.py` to convert a reference product's export); stock balances from CSV; guidance for leaving the reference product
 - [ ] Performance baseline on a 5-year dataset; indexes reviewed

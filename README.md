@@ -24,6 +24,11 @@ export $(cat .env | xargs)
 cargo run -p conta-verde-api
 ```
 
+The server serves requests as a database role that owns nothing (`DATABASE_URL`, `conta_verde_app`) and migrates as the owner
+(`DATABASE_MIGRATE_URL`), so that the row-level security policies apply to it ([ADR 0093](docs/adr/0093-row-level-security.md)).
+`docker compose` creates that role when the database is first made; on a database volume that predates it, run
+`deploy/postgres/create-app-role.sql` as the owner once, or `docker compose down -v` to start over.
+
 In another terminal, start the web app (it proxies `/api` to the API) and open http://localhost:5173:
 
 ```bash

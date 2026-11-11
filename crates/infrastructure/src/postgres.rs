@@ -9,18 +9,134 @@ use conta_verde_domain::{
     AddressDraft, AuditEntity, AuditEntry, AuditRecord, CompanyId, ContactDraft, DocumentCheck,
     Party, PartyDraft, PartyId,
 };
-use sqlx::postgres::PgRow;
+use std::str::FromStr;
+
+use crate::tenant;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgRow};
 use sqlx::{PgConnection, PgPool, Postgres, QueryBuilder, Row};
 use uuid::Uuid;
 
+/// An arbitrary key for the advisory lock that serializes migrating and granting.
+const MIGRATION_LOCK: i64 = 0x636f_6e74_6176_6572;
+
 const DOCUMENT_UNIQUE_INDEX: &str = "parties_company_document_key";
 
+/// Opens the pool the server runs on, after bringing the schema up to date. Two roles are involved (ADR 0093):
+/// `DATABASE_MIGRATE_URL` (optional, defaults to `database_url`) owns the tables and migrates; `database_url` is the
+/// role that serves requests, which must own nothing and bypass nothing or the row-level policies would not apply to it.
 pub async fn connect_and_migrate(
     database_url: &str,
 ) -> Result<PgPool, Box<dyn std::error::Error + Send + Sync>> {
-    let pool = PgPool::connect(database_url).await?;
-    sqlx::migrate!("./migrations").run(&pool).await?;
+    connect(database_url, tenant::Unscoped::Refuse).await
+}
+
+pub(crate) async fn connect(
+    database_url: &str,
+    unscoped: tenant::Unscoped,
+) -> Result<PgPool, Box<dyn std::error::Error + Send + Sync>> {
+    let migrate_url = std::env::var("DATABASE_MIGRATE_URL")
+        .ok()
+        .filter(|url| !url.trim().is_empty());
+    let runtime_role = PgConnectOptions::from_str(database_url)?
+        .get_username()
+        .to_owned();
+    migrate(
+        migrate_url.as_deref().unwrap_or(database_url),
+        &runtime_role,
+    )
+    .await?;
+    let pool = runtime_options(unscoped).connect(database_url).await?;
+    ensure_the_barrier_applies(&pool).await?;
     Ok(pool)
+}
+
+/// What makes a connection carry the scope of the task that acquires it: a new one is given it when it is opened, and
+/// an idle one again each time it is handed out, so no connection keeps the company of whoever used it before.
+pub(crate) fn runtime_options(unscoped: tenant::Unscoped) -> PgPoolOptions {
+    PgPoolOptions::new()
+        .after_connect(move |conn, _| Box::pin(async move { tenant::apply(conn, unscoped).await }))
+        .before_acquire(move |conn, _| {
+            Box::pin(async move { tenant::apply(conn, unscoped).await.map(|()| true) })
+        })
+}
+
+/// Brings the schema up to date as the role that owns it, and lets the role that serves requests use what it made.
+async fn migrate(
+    migrate_url: &str,
+    runtime_role: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .max_lifetime(None)
+        .idle_timeout(None)
+        .connect(migrate_url)
+        .await?;
+    // Two servers starting together (or the tests' many pools) would run the grants at once and fail with
+    // "tuple concurrently updated"; the lock is the session's, so it goes with the connection.
+    sqlx::query("SELECT pg_advisory_lock($1)")
+        .bind(MIGRATION_LOCK)
+        .execute(&pool)
+        .await?;
+    sqlx::migrate!("./migrations").run(&pool).await?;
+    let migrating_role: String = sqlx::query_scalar("SELECT current_user::text")
+        .fetch_one(&pool)
+        .await?;
+    // Granted again at every start, so a table a later migration adds needs no grant of its own. Whoever runs the
+    // server as its own owner has nothing to grant (and is refused below).
+    if migrating_role != runtime_role {
+        let role = format!("\"{}\"", runtime_role.replace('"', "\"\""));
+        for statement in [
+            format!("GRANT USAGE ON SCHEMA public TO {role}"),
+            format!(
+                "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {role}"
+            ),
+            format!("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {role}"),
+            // The trail is append-only; a trigger says so too, this is the second lock on it.
+            format!("REVOKE UPDATE, DELETE ON audit_log FROM {role}"),
+            format!("REVOKE ALL ON _sqlx_migrations FROM {role}"),
+        ] {
+            sqlx::query(&statement).execute(&pool).await?;
+        }
+    }
+    pool.close().await;
+    Ok(())
+}
+
+/// A role that owns the tables, is a superuser or has `BYPASSRLS` is not held to the policies, so serving requests
+/// as one would leave the second barrier standing in name only. `ALLOW_PRIVILEGED_DATABASE_ROLE=true` is the
+/// operator's explicit choice to run that way anyway.
+async fn ensure_the_barrier_applies(
+    pool: &PgPool,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let (role, bypasses, owns): (String, bool, bool) = sqlx::query_as(
+        "SELECT current_user::text, r.rolsuper OR r.rolbypassrls, \
+                EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
+                        WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') \
+                          AND pg_has_role(current_user, c.relowner, 'USAGE')) \
+         FROM pg_roles r WHERE r.rolname = current_user",
+    )
+    .fetch_one(pool)
+    .await?;
+    if !bypasses && !owns {
+        return Ok(());
+    }
+    let reason = if bypasses {
+        "is a superuser or has BYPASSRLS"
+    } else {
+        "owns the tables"
+    };
+    if std::env::var("ALLOW_PRIVILEGED_DATABASE_ROLE").is_ok_and(|value| value == "true") {
+        tracing::warn!(
+            "DATABASE_URL's role {role} {reason}: row-level security does not apply to it (ALLOW_PRIVILEGED_DATABASE_ROLE=true)"
+        );
+        return Ok(());
+    }
+    Err(format!(
+        "DATABASE_URL's role {role} {reason}, so row-level security would not apply to it. Serve requests as a role \
+         that owns nothing and has no BYPASSRLS, and set DATABASE_MIGRATE_URL to the role that owns the schema \
+         (docs/adr/0093-row-level-security.md); ALLOW_PRIVILEGED_DATABASE_ROLE=true runs without the barrier anyway"
+    )
+    .into())
 }
 
 pub(crate) fn storage_error(error: sqlx::Error) -> RepositoryError {
@@ -579,7 +695,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires DATABASE_URL"]
     async fn the_database_refuses_what_the_domain_would_in_contacts_and_tags() {
-        let pool = contract::test_pool().await;
+        let pool = contract::owner_pool().await;
         let company = contract::create_company(&pool).await;
         let party = Uuid::new_v4();
         sqlx::query(
@@ -1023,7 +1139,10 @@ mod tests {
             "CREATE TRIGGER refuse_boom_contact BEFORE INSERT ON party_contacts \
              FOR EACH ROW EXECUTE FUNCTION refuse_boom_contact()",
         ] {
-            sqlx::query(statement).execute(&pool).await.unwrap();
+            sqlx::query(statement)
+                .execute(&contract::owner_pool().await)
+                .await
+                .unwrap();
         }
         let service = PartyService::new(
             PostgresPartyRepository::new(pool.clone()),
@@ -1058,7 +1177,7 @@ mod tests {
             )
             .await;
         sqlx::query("DROP TRIGGER refuse_boom_contact ON party_contacts")
-            .execute(&pool)
+            .execute(&contract::owner_pool().await)
             .await
             .unwrap();
         assert!(refused.is_err());

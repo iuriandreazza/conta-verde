@@ -78,6 +78,7 @@ const children = [
       ...process.env,
       ...exampleEnv,
       DATABASE_URL: exampleEnv.DATABASE_URL.replace(":5432/", `:${dbPort}/`),
+      DATABASE_MIGRATE_URL: exampleEnv.DATABASE_MIGRATE_URL.replace(":5432/", `:${dbPort}/`),
       BIND_ADDR: `127.0.0.1:${apiPort}`,
       PUBLIC_URL: `http://localhost:${webPort}`,
       // Everything the app mails lands in Mailpit, never in a real mailbox.

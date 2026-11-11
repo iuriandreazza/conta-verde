@@ -118,6 +118,8 @@ impl<X: Ports> FromRequestParts<SharedState<X>> for CompanyAccess {
             .ok_or_else(forbidden)?;
         let company_id = CompanyId::from_uuid(raw_id);
         let member = state.auth.authorize(&token, company_id).await?;
+        // From here the database shows this request this company and no other ([ADR 0093]).
+        conta_verde_infrastructure::tenant::set_company(company_id);
         // A member, but of a route no area claims: nobody's, until someone gives it an area.
         let not_allowed = || ApiError::Application(AuthError::NotAllowed.into());
         let (area, access) = needed.ok_or_else(not_allowed)?;
