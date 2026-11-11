@@ -25,11 +25,21 @@ Everything is configured by environment variables, read once at start. A name, i
 | `SOURCE_URL` | The link to the source in the footer of e-mails (AGPL section 13): a fork running modified code points it at its own | upstream repository |
 | `RUST_LOG` | Log level (`info`, `debug`, or a filter) | `info` |
 
+## Changing the application role's password
+
+The role `conta_verde_app` is made once, when the database is first created, with `APP_DB_PASSWORD`. Changing the variable later changes nothing in the database: run
+```bash
+docker compose --env-file production.env exec -T -e APP_DB_PASSWORD=the-new-one -e FORCE_APP_DB_PASSWORD=1 db \
+    bash /docker-entrypoint-initdb.d/10-app-role.sh
+```
+
+then put the new password in `production.env` and restart `app`.
+
 ## Sealed secrets
 
 | Variable | Meaning |
 |----------|---------|
-| `FISCAL_SECRETS_KEY` | 64 hexadecimal characters. Seals a company's gateway settings and webhook secrets. **Without it those features are off, and if it is lost what it sealed cannot be opened.** Keep it apart from the backups |
+| `FISCAL_SECRETS_KEY` | 64 hexadecimal characters (empty is the same as unset). Seals a company's gateway settings and webhook secrets. **Without it those features are off, and if it is lost what it sealed cannot be opened.** Keep it apart from the backups |
 
 ## E-mail and messages
 

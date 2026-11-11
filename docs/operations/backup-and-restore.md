@@ -17,50 +17,54 @@ password manager, apart from the backups.
 
 ## Taking a backup
 
+With the compose installation of [README.md](README.md) (run from `deploy/production`; this is the sequence the rehearsal in the repository runs):
+
 ```bash
-BACKUP_DATABASE_URL=postgres://conta_verde:OWNER_PASSWORD@localhost:5432/conta_verde \
-ATTACHMENTS_DIR=/path/to/the/attachments/volume \
+COMPOSE="docker compose --env-file production.env"
 BACKUP_DIR=/backups \
-PAUSE_CMD="docker compose stop app" RESUME_CMD="docker compose start app" \
-scripts/ops/backup.sh
+PG_DUMP="$COMPOSE exec -T db pg_dump -U conta_verde conta_verde" \
+PSQL="$COMPOSE exec -T db psql -U conta_verde -d conta_verde -A -t -q" \
+ATTACHMENTS_TAR_CMD="$COMPOSE run --rm -T --no-deps --entrypoint tar app -C /data/attachments -cf - ." \
+PAUSE_CMD="$COMPOSE stop app" RESUME_CMD="$COMPOSE start app" \
+../../scripts/ops/backup.sh
 ```
 
-It writes `/backups/conta-verde-<UTC time>/` with `db.dump` (a `pg_dump` in custom format), `attachments.tar` and `manifest.txt` (the
-schema version, and a checksum of each file). Notes:
+It writes `/backups/conta-verde-<UTC time>/` with `db.dump` (a `pg_dump` in custom format), `attachments.tar` and `manifest.txt` (the schema version, and a checksum of
+each file). For a database and a directory that are not in containers, give `BACKUP_DATABASE_URL` (the owner's) and `ATTACHMENTS_DIR` instead of the commands. Notes:
 
-- **It must run as the schema's owner** (`conta_verde`), not as the role the application uses. The row-level policies hide every row from the
-  application's role, so a dump taken as it would be empty ([ADR 0093](../adr/0093-row-level-security.md)).
-- **`PAUSE_CMD` and `RESUME_CMD`** stop the application for the seconds the copy takes, which is what makes every file exactly the one its record
-  names. Without them the dump is taken first and the files after: the worst that can happen is a record whose file was removed in between,
-  which the entry then shows as unavailable. Everything else about taking it online is safe.
-- You need `pg_dump` of PostgreSQL **17 or newer** (the server's version). If the host has none, `scripts/ops/docker-pg-tools.sh DIR` makes
-  wrappers that run the tools of the `postgres:17` image on the host's network. Or set `PG_DUMP` and `PSQL` to your own commands, for example
-  `PG_DUMP="docker compose exec -T db pg_dump -U conta_verde conta_verde"`.
-- Schedule it (cron, a systemd timer) and **copy the result off the host** (another machine, object storage): a backup on the same disk is
-  not one. Keep several, and delete old ones by your own rule; the tool deletes nothing.
+- **It must run as the schema's owner** (`conta_verde`), not as the role the application uses. The row-level policies hide every row from the application's role,
+  so a dump taken as it would be empty ([ADR 0093](../adr/0093-row-level-security.md)).
+- **`PAUSE_CMD` and `RESUME_CMD`** stop the application for the seconds the copy takes, which is what makes every file exactly the one its record names. (The files are
+  read by a throwaway container that mounts the same volume as the application's user, so this works with the application stopped.) Without them the dump is taken
+  first and the files after: the worst that can happen is a record whose file was removed in between, which the entry then shows as unavailable.
+- You need `pg_dump` of PostgreSQL **17 or newer**: with the commands above it is the database container's. For a host-installed client without a 17, `scripts/ops/docker-pg-tools.sh DIR`
+  makes wrappers that run the image's tools on the host's network.
+- Schedule it (cron, a systemd timer) and **copy the result off the host** (another machine, object storage): a backup on the same disk is not one. Keep several, and delete old ones
+  by your own rule; the tool deletes nothing.
 
 ## Restoring
 
-A restore goes into an **empty** database and an empty directory; it refuses anything else and checks the checksums of the backup first.
+A restore goes into an **empty** database and an empty directory; it refuses anything else and checks the checksums of the backup first. With compose the simplest empty place is a
+**new project**: a different project name makes new volumes, so nothing of the running installation is touched.
 
 ```bash
-# 1. an empty database, reachable as the role that will own the schema
-docker compose exec db createdb -U conta_verde conta_verde_restored       # or create it as you do
-
-# 2. restore
-RESTORE_DATABASE_URL=postgres://conta_verde:OWNER_PASSWORD@localhost:5432/conta_verde_restored \
-ATTACHMENTS_DIR=/path/to/an/empty/directory \
-scripts/ops/restore.sh /backups/conta-verde-20270101T030000Z
-
-# 3. point the application at them (DATABASE_URL, DATABASE_MIGRATE_URL, ATTACHMENTS_DIR) and start it
+COMPOSE="docker compose --env-file production.env -p conta-verde-restored"
+$COMPOSE up -d db                                   # a new, empty database; the first start makes the roles too
+PG_RESTORE="$COMPOSE exec -T db pg_restore --no-owner --no-acl --exit-on-error -U conta_verde -d conta_verde" \
+PSQL="$COMPOSE exec -T db psql -U conta_verde -d conta_verde -A -t -q" \
+ATTACHMENTS_UNTAR_CMD="$COMPOSE run --rm -T --no-deps --entrypoint tar app -C /data/attachments -xf -" \
+../../scripts/ops/restore.sh /backups/conta-verde-20270101T030000Z
+$COMPOSE up -d app                                  # it migrates at start if the release is newer than the backup
 ```
 
-- The role the application serves requests as (`conta_verde_app`) must exist in the cluster: it is not in a dump. On a new cluster, run
-  `deploy/postgres/create-app-role.sh` first. The application gives it its rights again at start, so a restore needs no `GRANT`s.
-- **Start the release the backup was made with, or a later one.** A later release migrates the restored database at start. An earlier one
-  refuses it ([upgrade.md](upgrade.md)).
+- The files are unpacked by a container running as the application's user, so the application can read them. (Unpacking as another user would leave files it cannot open.)
+- To look at the copy without taking over, leave the proxy out (as above). To **make it the installation** (a move to another host, or going back), stop the old one with
+  `docker compose --env-file production.env down` (not `down -v`: that deletes the volumes), start the restored project **with its proxy** (`$COMPOSE up -d`), and from then on
+  use `-p conta-verde-restored` for every command, or move the project name into `COMPOSE_PROJECT_NAME` in `production.env`.
+- Without containers: `RESTORE_DATABASE_URL` (the owner's, an empty database) and `ATTACHMENTS_DIR` (an empty directory) instead. The role the application serves requests as
+  (`conta_verde_app`) must exist in the cluster: it is not in a dump (`deploy/postgres/create-app-role.sh`). The application gives it its rights again at start, so a restore needs no `GRANT`s.
+- **Start the release the backup was made with, or a later one.** A later release migrates the restored database at start. An earlier one refuses it ([upgrade.md](upgrade.md)).
 - Put `FISCAL_SECRETS_KEY` back in the environment, the same one.
-- To move to another host this is all there is: back up, restore there, start.
 
 ## Proving it works
 

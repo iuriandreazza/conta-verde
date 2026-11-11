@@ -49,15 +49,12 @@ It grants the role its rights itself. The upgrade rehearsal below runs exactly t
 
 ## Going back
 
-You cannot start an older release on the upgraded database. Instead:
+You cannot start an older release on the upgraded database. Instead restore the backup from step 3 into a **new project** and start the release you came from there, as
+[backup-and-restore.md](backup-and-restore.md) describes (`docker compose -p conta-verde-restored ...`): stop the upgraded installation (`down`, not `down -v`), restore, and
+start the restored project with `CONTA_VERDE_VERSION` set to the release you came from.
 
-1. Stop the application (`docker compose stop app`).
-2. Restore the backup from step 3 into a **new, empty** database and directory ([backup-and-restore.md](backup-and-restore.md)).
-3. Set `CONTA_VERDE_VERSION` to the release you came from, point `DATABASE_URL` and `DATABASE_MIGRATE_URL` at the restored database and
-   `ATTACHMENTS_DIR` at the restored directory, and start it.
-
-**Everything entered after the backup is lost.** That is the price of having no down migrations; it is why the backup comes first and why you look at the
-result before people start working again after an upgrade.
+**Everything entered after the backup is lost.** That is the price of having no down migrations; it is why the backup comes first and why you look at the result before people
+start working again after an upgrade. Keep the upgraded project's volumes until you are sure: they are what you would look at to recover what was entered meanwhile.
 
 ## Rehearsing an upgrade
 

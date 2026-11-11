@@ -27,7 +27,9 @@ ON = "2026-12-31"
 class Client:
     def __init__(self, base):
         self.base = base.rstrip("/")
-        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+        # A server behind TLS sets a Secure cookie (COOKIE_SECURE=true); a check run on the machine itself over http must still send it.
+        policy = http.cookiejar.DefaultCookiePolicy(secure_protocols=("https", "http"))
+        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar(policy)))
 
     def call(self, method, path, body=None, raw=None, content_type="application/json"):
         data = raw if raw is not None else (None if body is None else json.dumps(body).encode())

@@ -40,6 +40,9 @@ What starts:
   `X-Forwarded-For` and `X-Forwarded-Proto`. The image's own web server limits sign-in, sign-up, password-reset and invitation routes to 30 a
   minute per client with a burst of 10, because the API has no rate limiting of its own.
 
+The image is published to `ghcr.io/iuriandreazza/conta-verde`. The first time a package is pushed to ghcr it is **private**: the owner of the repository makes it public in the package's
+settings (or the host logs in with `docker login ghcr.io`) before `docker compose pull` works.
+
 Open `https://your-name`, create the first account (it creates the first company) and invite the people who will use it. Without `SMTP_URL`
 and `SMTP_FROM` no e-mail is sent: invitation links are shown on the screen to pass on yourself.
 
