@@ -74,6 +74,8 @@ These hold for every phase. Each one is justified in an ADR.
 
 A release is cut when a phase reaches its exit criteria in the roadmap. Versions below 1.0
 may break the API and the database schema between minors; migrations are still provided.
+The versions 0.1 to 0.9 below are the **names of phases**: nothing was ever tagged, so the first tag (1.0) is the first
+version an operator can upgrade from, and what it promises is written in [ADR 0092](adr/0092-one-point-zero-hardening-plan.md).
 
 | Version | Name | A user can… | Phase |
 |---------|------|-------------|-------|
