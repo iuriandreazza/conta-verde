@@ -401,7 +401,7 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
         let rows = sqlx::query(&format!(
             "{SELECT_SETTLEMENTS} WHERE company_id = $1 AND NOT reversed \
              AND settled_on >= CAST($2 AS DATE) AND settled_on <= CAST($3 AS DATE) \
-             ORDER BY settled_on, id LIMIT $4"
+             ORDER BY entry_settlements.settled_on, id LIMIT $4"
         ))
         .bind(company_id.as_uuid())
         .bind(since.to_string())

@@ -22,11 +22,11 @@ along the list it is, which nothing had ever checked.
 `scripts/perf/seed.sql` makes, **directly in SQL as the schema's owner** and deterministically (every id is an md5 of what the row is, nothing is
 random), one large company and three small ones (so the planner sees other tenants and the policies have something to hide): per large company
 3,000 parties, 800 products, 120,000 entries with 1 to 3 installments (about 250,000), 190,000 settlements, 70,000 sales with three lines, 240,000 stock
-movements, 1,000,000 audit rows and 8 bank accounts (a parameter), spread over five years; 640 MB. It runs in 25 seconds, which is why it is SQL and not a
+movements, 1,000,000 audit rows and 8 bank accounts (a parameter), spread over five years; 640 MB. Every sale has a seller and every product moves in and out. It runs in 25 seconds, which is why it is SQL and not a
 generator through the API (a five-year history cannot be made through the API in a reasonable time) and why it lives in `scripts/`, not in the application.
 `scripts/perf/prepare.sh` makes the database the way a real one is made (migrated by the server itself, as the owner, with the runtime role and the
 policies), registers the user that owns the large company, and seeds. `scripts/perf/bench.py` signs in and times 30 endpoints (the lists, one record,
-the reports, the DRE, the cash flow, the dashboard's sources, the stock reports) 20 times each after a warm-up, and the depth of a keyset list.
+the reports, the DRE, the cash flow, the dashboard's sources, the stock reports) 20 times each after a warm-up, and the depth of a keyset list ("p95" is the nearest rank: the second slowest of 20).
 
 ### The budget
 
@@ -36,33 +36,30 @@ machine, one PostgreSQL version, synthetic data, one request at a time (no load)
 
 ### What it found
 
-1. **The entries list read and sorted the whole company** (67 ms), and the stock movements list too (81 ms), the transfers and the commission rules' lists likewise.
-   Their `SELECT` outputs the date as text under the column's own name (`to_char(competence_date, ...) AS competence_date`), and in PostgreSQL an unqualified
-   `ORDER BY competence_date` resolves to the **output column**, so the planner sorted by an expression no index serves: a parallel sequential scan of every entry of the
-   company, then a top-N sort. The keyset's `WHERE (competence_date, id) < ...` was right (a `WHERE` cannot see output names); the `ORDER BY` was not. The fix is to order by the
-   table's own column (`financial_entries.competence_date`), in the five lists that had the pattern, with a comment saying why. The entries first page is now **5 ms**, the movements **2 ms**, and
-   the 30th page of the entries list costs what the first does. No index was needed: the index that existed was never used.
-2. **Two indexes**, each for the queries named in its migration (`20270112000000_performance_indexes.sql`):
-   - `financial_entry_installments (company_id, due_date) INCLUDE (entry_id, number, amount)`: the cash flow's forecast, the overdue list, the delinquency report and the reports on the
-     due basis all read "this company's installments due between two days", and the table's only index was its primary key, so each read every installment of every company.
-   - `entry_settlements (company_id, bank_account_id, settled_on) WHERE NOT reversed`: the balance of an account and the cash flow's realized part read one account's settlements by day;
-     the existing indexes start with `(company_id, settled_on)` or `(company_id, entry_id)`.
-3. **Tried and not kept**: a covering `financial_entries (company_id, id) INCLUDE (kind, voided)` for the settlement join. It made the cash flow 10 to 15 % faster, which does not pay for a third
-   index on the biggest table written on every entry.
+1. **The entries list read and sorted the whole company** (67.4 ms), and the stock movements list too (83.4 ms); the transfers, commission rules, received invoices and statement lines lists and
+   the accountant's settlements export have the same pattern. Their `SELECT` outputs the date as text under the column's own name (`to_char(competence_date, ...) AS competence_date`), and in PostgreSQL an
+   unqualified `ORDER BY competence_date` resolves to the **output column**, so the planner sorted by an expression no index serves: a parallel sequential scan of every entry of the company, then a top-N sort. The
+   keyset's `WHERE (competence_date, id) < ...` was right (a `WHERE` cannot see output names); the `ORDER BY` was not. The fix is to order by the table's own column (`financial_entries.competence_date`), with a comment
+   saying why. **Measured** for the two the benchmark's data reaches: the entries first page is now **5.2 ms**, the movements **2.8 ms**, and the 30th page of the entries list costs what the first does. The
+   other lists were fixed by inspection and **not measured** (no such rows are seeded). No index was needed: the index that existed was never used. The pattern was found with `auto_explain`, because the same statement
+   run in `psql` with a constant used the index.
+2. **One index**, for the queries named in its migration (`20270112000000_performance_indexes.sql`): `financial_entry_installments (company_id, due_date) INCLUDE (entry_id, number, amount)`. The DRE, the reports and the
+   overdue list read "this company's installments", and the table's only index was its primary key, so each read the heap of every installment of every company.
+3. **Tried and not kept**, measured at no gain: an index on the settlements by bank account (the join to the entries dominates the balance query), and a covering `financial_entries (company_id, id) INCLUDE (kind, voided)`
+   (10 to 15 % on the cash flow, which does not pay for a third index on the biggest table written on every entry).
 
 ### Where it stands
 
-The tables are in [`docs/performance/baseline.md`](../performance/baseline.md): before and after, for 8 bank accounts and for a 24-account stress. **Everything is inside its budget except the cash flow of a
-year by month** (p95 about 1.6 s against 1.5 s; the 90-day view is at the line). It is made of two queries that recompute, for every installment ever due, what is left of it: the balance of an installment is
-**derived on every read** and never stored ([ADR 0030](0030-settlements.md)), so the cost is the history, and no index shrinks it. The number of bank accounts does not matter (8 and 24 cost the same). One
-rewrite (aggregating the settlements once instead of a lookup per installment) was measured at 246 ms against 417 ms for the heaviest query and **not made**: the same pattern is in the overdue list and the
-delinquency report, and it deserves its own change. The baseline records the cash flow as over budget instead of moving the budget.
+The tables are in [`docs/performance/baseline.md`](../performance/baseline.md), before and after on the same data. **Everything is inside its budget except the cash flow** (p95 1593.9 ms for a year by month and
+1444.6 ms for 90 days by day, against 1,500; the index did not improve it: it was 1,523 and 1,224 before, and the difference is inside the noise between runs). It is made of two queries that recompute, for every installment ever due, what is left of it: the balance of an installment is
+**derived on every read** and never stored ([ADR 0030](0030-settlements.md)), so the cost is the history, and no index shrinks it. One rewrite (aggregating the settlements once instead of a lookup per installment) was measured at
+246 ms against 417 ms for the heaviest query and **not made**: the same pattern is in the overdue list and the delinquency report, and it deserves its own change. The baseline records the cash flow as over budget instead of moving the budget.
 
 ## Consequences
 
 - A new keyset list must order by the table's own column whenever its `SELECT` outputs that column under the same name (the comment at each of the five places says it). Nothing automatic catches it:
   a plan test would need a big table. The baseline does: `bench.py` shows a first page above a few milliseconds on 120,000 rows at once.
-- The two indexes add write cost to installments and settlements (an insert maintains one more index each) and a few percent of their size. A migration that builds an index locks the table against writes for
+- The index adds write cost to installments (an insert maintains one more index) and a few percent of their size. A migration that builds an index locks the table against writes for
   the seconds it takes on a big installation (the build runs inside the migration's transaction), which the upgrade notes of the release that carries it say.
 - The policy's cost ([ADR 0093](0093-row-level-security.md): 0.04 to 0.1 ms a statement) is inside every number here: the baseline is measured as the runtime role, with the policies on.
 - The sales report and the commissions refuse a span with more than 2,000 sales ([ADR 0043](0043-sales-reports-and-dashboard.md), [ADR 0041](0041-commissions.md)); the benchmark asks them for a month. A company that sells 70,000 times in five years

@@ -14,6 +14,7 @@ Budgets (ADR 0097): a keyset page of a list <= 200 ms; a report, the DRE, the ca
 import argparse
 import http.cookiejar
 import json
+import math
 import statistics
 import sys
 import time
@@ -104,7 +105,7 @@ def keyset_depth(client, company, depth=30):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("api")
-    parser.add_argument("--runs", type=int, default=15)
+    parser.add_argument("--runs", type=int, default=20)
     parser.add_argument("--json")
     arguments = parser.parse_args()
 
@@ -123,7 +124,7 @@ def main():
             continue
         times = sorted(client.get(path)[2] for _ in range(arguments.runs))
         p50 = statistics.median(times)
-        p95 = times[min(len(times) - 1, int(len(times) * 0.95))]
+        p95 = times[max(0, math.ceil(len(times) * 0.95) - 1)]  # nearest rank: of 20 runs, the second slowest
         verdict = "ok" if p95 <= budget else "OVER"
         over += verdict != "ok"
         rows.append((name, p50, p95, times[-1], budget, verdict))

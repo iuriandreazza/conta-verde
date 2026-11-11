@@ -7,7 +7,7 @@
 -- five-year history cannot be made through the API in a reasonable time). The same input always makes the same rows: every id is
 -- an md5 of what the row is, and nothing is random. `scale` multiplies the sizes of the large company (1 = the table below; 0.01 is a quick trial).
 --
---   per large company, scale 1:  3,000 parties, 800 products, 120,000 entries (1 to 3 installments, about 190,000), 130,000
+--   per large company, scale 1:  3,000 parties, 800 products, 120,000 entries (1 to 3 installments, about 250,000), 190,000
 --   settlements, 70,000 sales with 3 lines each, 240,000 stock movements, 1,000,000 audit rows, `accounts` bank accounts (8 by default; the cash flow does its work once for each), 5 years of days.
 \set ON_ERROR_STOP on
 \if :{?accounts}
@@ -18,12 +18,12 @@
 
 BEGIN;
 
-CREATE TEMP TABLE plan (slug text, name text, entries int, parties int, products int, sales int, moves int, audits int);
+CREATE TEMP TABLE plan (slug text, name text, entries int, parties int, products int, sales int, moves int, audits int, accts int);
 INSERT INTO plan VALUES
-    ('large', 'Large company', (120000 * :scale)::int, 3000, 800, (70000 * :scale)::int, (240000 * :scale)::int, (1000000 * :scale)::int),
-    ('small1', 'Small company 1', 2000, 60, 30, 800, 2000, 8000),
-    ('small2', 'Small company 2', 2000, 60, 30, 800, 2000, 8000),
-    ('small3', 'Small company 3', 2000, 60, 30, 800, 2000, 8000);
+    ('large', 'Large company', (120000 * :scale)::int, 3000, 800, (70000 * :scale)::int, (240000 * :scale)::int, (1000000 * :scale)::int, :accounts),
+    ('small1', 'Small company 1', 2000, 60, 30, 800, 2000, 8000, 3),
+    ('small2', 'Small company 2', 2000, 60, 30, 800, 2000, 8000, 3),
+    ('small3', 'Small company 3', 2000, 60, 30, 800, 2000, 8000, 3);
 
 CREATE TEMP TABLE co AS SELECT md5('company-' || slug)::uuid AS id, p.* FROM plan p;
 
@@ -43,11 +43,11 @@ SELECT md5('cc-' || co.slug || '-' || n)::uuid, co.id, 'Cost center ' || n, true
 
 INSERT INTO bank_accounts (id, company_id, kind, name, active)
 SELECT md5('account-' || co.slug || '-' || n)::uuid, co.id, 'checking', 'Account ' || n, true
-FROM co, generate_series(1, :accounts) n WHERE n <= CASE WHEN co.slug = 'large' THEN :accounts ELSE 3 END;
+FROM co, LATERAL generate_series(1, co.accts) n;
 
 INSERT INTO account_openings (account_id, company_id, balance, on_date)
 SELECT md5('account-' || co.slug || '-' || n)::uuid, co.id, 1000 * n, DATE '2021-11-01'
-FROM co, generate_series(1, :accounts) n WHERE n <= CASE WHEN co.slug = 'large' THEN :accounts ELSE 3 END;
+FROM co, LATERAL generate_series(1, co.accts) n;
 
 INSERT INTO payment_terms (id, company_id, name, active)
 SELECT md5('term-' || co.slug)::uuid, co.id, '30 days', true FROM co;
@@ -83,15 +83,16 @@ ANALYZE financial_entry_installments;
 -- Settlements: most installments due before the end of the history are paid on their due day -------------------------------
 INSERT INTO entry_settlements (id, company_id, entry_id, installment, settled_on, applied, interest, fine, discount, bank_account_id)
 SELECT md5('settlement-' || i.entry_id || '-' || i.number)::uuid, i.company_id, i.entry_id, i.number, i.due_date, i.amount, 0, 0, 0,
-       md5('account-' || co.slug || '-' || (1 + (hashtext(i.entry_id::text) % LEAST(:accounts, 3) + LEAST(:accounts, 3)) % LEAST(:accounts, 3)))::uuid
+       md5('account-' || co.slug || '-' || (1 + (hashtext(i.entry_id::text) % co.accts + co.accts) % co.accts))::uuid
 FROM financial_entry_installments i
 JOIN co ON co.id = i.company_id
 WHERE i.due_date < DATE '2026-10-01' AND (hashtext(i.entry_id::text) % 10 + 10) % 10 < 8;
 
 -- Sales with three lines each ---------------------------------------------------------------------------------------------
-INSERT INTO sales (id, company_id, number, customer_id, sold_on, payment_term_id, category_id, status)
+INSERT INTO sales (id, company_id, number, customer_id, seller_id, sold_on, payment_term_id, category_id, status)
 SELECT md5('sale-' || co.slug || '-' || n)::uuid, co.id, n,
        md5('party-' || co.slug || '-' || (1 + n % co.parties))::uuid,
+       md5('party-' || co.slug || '-' || (50 * (1 + n % LEAST(50, co.parties / 50))))::uuid,
        DATE '2021-11-11' + (n % 1826), md5('term-' || co.slug)::uuid,
        md5('category-' || co.slug || '-' || (2 * (1 + n % 10)))::uuid,
        CASE WHEN n % 20 = 0 THEN 'cancelled' WHEN n % 10 = 0 THEN 'open' ELSE 'completed' END
@@ -106,7 +107,7 @@ FROM co, LATERAL generate_series(1, co.sales) n, generate_series(1, 3) p;
 
 -- Stock: half goods in, half out ----------------------------------------------------------------------------------------
 INSERT INTO stock_movements (id, company_id, product_id, kind, quantity, value, occurred_on)
-SELECT md5('move-' || co.slug || '-' || n)::uuid, co.id, md5('product-' || co.slug || '-' || (1 + n % co.products))::uuid,
+SELECT md5('move-' || co.slug || '-' || n)::uuid, co.id, md5('product-' || co.slug || '-' || (1 + (n / 2) % co.products))::uuid,
        CASE WHEN n % 2 = 0 THEN 'in' ELSE 'out' END,
        CASE WHEN n % 2 = 0 THEN 1 + n % 9 ELSE -(1 + n % 5) END,
        CASE WHEN n % 2 = 0 THEN (1 + n % 9) * 4 ELSE -(1 + n % 5) * 4 END,
