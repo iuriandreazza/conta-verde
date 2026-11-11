@@ -150,7 +150,7 @@ Rules that are easy to break:
 
 ## Compatibility promises (ADR 0092)
 
-What 1.0 keeps, so a change that would break one needs its own ADR first: the `/v1` API only grows (a break is a `/v2` served beside it for 12 months), the webhook body and signature are part of `v1`; migrations are forward-only and applied at start, and the way back is restoring the backup taken before the upgrade; an env name in `.env.example` keeps its meaning (deprecate for one minor with a startup warning, then remove) and a safer default is never loosened; the layouts of the accountant's exports, the fiscal package and the importers' headers change only by a new ADR. The SPA's routes, the crates' APIs and the schema as an integration surface are **not** promises.
+What 1.0 keeps, so a change that would break one needs its own ADR first: the `/v1` API only grows (a break is a `/v2` served beside it for 12 months), the webhook body and signature are part of `v1`; migrations are forward-only and applied at start, and the way back is restoring the backup taken before the upgrade; an env name the server reads keeps its meaning (deprecate in a minor with a startup warning, remove only in the next major) and a default is never made less safe; the layouts of the accountant's exports, the fiscal package and the importers' headers change only by a new ADR. The SPA's routes, the crates' APIs and the schema as an integration surface are **not** promises.
 
 ## Conventions
 

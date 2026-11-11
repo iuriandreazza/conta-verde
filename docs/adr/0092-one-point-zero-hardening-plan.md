@@ -29,6 +29,15 @@ Principle 3 of the [macro plan](../macro-plan.md) and [ADR 0004](0004-company-sc
 item ("Phase 9: PostgreSQL row-level security … as a second barrier"). This ADR plans the phase; each slice that follows
 writes its own ADR with the design it settles (numbers are taken when they are written, from a fresh `main`).
 
+## Options considered
+
+| Question | Options | Chosen, and why |
+|----------|---------|-----------------|
+| When is "1.0" | Tag the current `main` as 1.0 now; tag release candidates and 1.0 after the hardening; keep 0.x indefinitely | Release candidates are allowed along the way, **1.0 only after the five items**: its whole value is the promise below, and the promise needs the backup, the upgrade path and the barrier to be true |
+| How far the compatibility promise reaches | The SPA's API too; `/v1` only; nothing until 2.0 | `/v1`, migrations, configuration and file layouts. The SPA's API is built in the open and ADR 0086 chose not to freeze it |
+| The way back from a bad upgrade | Down migrations; an expand/contract rule so the old binary runs on the new schema; restore the backup | Restore the backup: down migrations are never tested as hard as up ones, and expand/contract is a standing tax on every migration of a one-person project; revisit below |
+| The second barrier for tenancy | Row-level security; one database per company; nothing more than the application checks | Row-level security, as [ADR 0004](0004-company-scoped-tenancy.md) planned: it needs no new deployment shape for the operator to run, a database per company is still open for a tenant that needs physical isolation |
+
 ## Decision
 
 ### What 1.0 promises
@@ -49,19 +58,21 @@ without `/v1`) are **not** a contract and may change in any release; the cookie 
   down migrations and none will be written.
 - A database made by any `1.x.y` is upgraded by starting any later `1.x'.y'` against it: the server applies the pending
   migrations at start, in order, in a transaction each (sqlx), and refuses to start if the database holds a migration it
-  does not know (a newer database than the binary) or one whose checksum changed.
+  does not know (a newer database than the binary) or one whose checksum changed. That is sqlx's behaviour, relied upon
+  and **proved by a step of the rehearsal** in slice 3 (an older binary against a newer database must refuse).
 - **The only supported way back is to restore the backup taken before the upgrade.** The guide says so first. A release may
   not promise that an older binary runs on a newer schema.
 - Because no version was ever tagged, **databases from before the first tag are not supported**: they were development
   databases, and some were reset with `docker compose down -v` more than once. The first tagged release is the first
   boundary the promise protects. (The importers of slice 4 are how data from *another product* comes in.)
 
-**3. Configuration names keep their meaning.** Every variable in `.env.example` (and the ones the API reads in `main.rs`)
-keeps its name, its accepted values and its default meaning through 1.x. New variables may be added (off or inert unless
-set). A variable may be **deprecated** in one minor (the server logs a warning at start naming the replacement) and removed
-in the next. A default that makes the server safer is never loosened: the default bind address stays `127.0.0.1` (the image
-sets its own inside the container), `COOKIE_SECURE`, `CNPJ_LOOKUP` and the others behave as documented. The secrets that seal
-stored data (`FISCAL_SECRETS_KEY`) keep their format; a key that must change gets a documented rotation, never a silent one.
+**3. Configuration names keep their meaning.** Every variable the server reads (the ones in `.env.example` and the others
+`main.rs` reads, which the operations guide of slice 3 lists in one table) keeps its name, its accepted values and its
+meaning through 1.x. New variables may be added (off or inert unless set). A variable may be **deprecated** in a minor (the
+server logs a warning at start naming the replacement) and is **removed only in the next major**. A default is never changed to
+a less safe value: the bind address stays `127.0.0.1` (the image sets its own inside the container) and a sign-up, a lookup or
+a webhook that is off by default stays off. The secret that seals stored data (`FISCAL_SECRETS_KEY`) keeps its format; a key
+that must change gets a documented rotation, never a silent one.
 
 **4. File layouts that other software reads are fixed.** The accountant's exports ([ADR 0071](0071-accountant-exports.md)),
 the fiscal files in the package ([ADR 0076](0076-nfe-documents.md)), and the headers the importers accept
@@ -84,10 +95,15 @@ it matters.
 |---|-------|-----------|-----------------------------------|
 | 1 | This ADR, the roadmap's stale phase titles, the README status | Review (documentation only) | — |
 | 2 | **Row-level security** | A test with the application's company check deliberately skipped (a test-only repository call that names another company) finds no rows and has a write refused; a CI guard that lists every table with a `company_id` from `information_schema` and fails when one has no policy or has RLS off; the whole existing suite runs as the non-owner runtime role; the cost is **measured** and reported | A table added later without a policy is caught by the guard only if it has a `company_id` column; a bug in the policy expression itself is covered by the barrier test on the tables it names, not on all |
-| 3 | **Operations**: image, proxy example, backup, restore, upgrade guide | A script that dumps a seeded database and its blobs, restores them into a fresh database and directory, runs a smoke check (the API starts, signs in, reads the seeded records and the files); a rehearsal script that builds data with an older ref, upgrades to the newer one in place, compares counts and a fingerprint of the books, then restores the pre-upgrade backup and compares again; a CI job that builds the image without pushing it; a workflow that publishes only on `v*` tags and needs only `GITHUB_TOKEN` | The **publishing** workflow cannot be run before a tag exists, and no secret-free test can push to a registry: it is reviewed, not run. The rehearsal needs two refs with different schemas; until a tag exists it uses commits (documented). Real hosts, TLS certificates and a managed Postgres are not rehearsed |
+| 3 | **Operations**: image, proxy example, backup, restore, upgrade guide | A script that dumps a seeded database and its blobs, restores them into a fresh database and directory, runs a smoke check (the API starts, signs in, reads the seeded records and the files), **run in CI**; a rehearsal script that builds data with an older ref, upgrades to the newer one in place, compares counts and a fingerprint of the books, checks that the older binary refuses the newer database, then restores the pre-upgrade backup and compares again (it builds two binaries, so it is **run by hand before every tag** and its output kept with the release notes, and in CI only if its time allows); a CI job that builds the image without pushing it; a workflow that publishes only on `v*` tags and needs only `GITHUB_TOKEN` | The **publishing** workflow cannot be run before a tag exists, and no secret-free test can push to a registry: it is reviewed, not run. The rehearsal needs two refs with different schemas; until a tag exists it uses commits (documented). Real hosts, TLS certificates and a managed Postgres are not rehearsed |
 | 4 | **Importers** for stock balances and the guide for leaving a reference product | The pipeline contract of [ADR 0025](0025-csv-import.md): every row checked before any write, a refused row refuses the file, audited writes, sending twice adds nothing (idempotent by SKU and a movement reference); contract tests on both adapters and the stock tests of [ADR 0054](0054-stock-movements.md) still hold (balance and average cost after an import equal the worked example) | The guide describes the steps from a reference product's export as the maintainers understand them; it is not tested against a real account of any vendor |
 | 5 | **Performance baseline** and the index review | A deterministic seeding tool (a script, never in the app binary) and a benchmark script that run against Postgres with row-level security **on**; `EXPLAIN (ANALYZE, BUFFERS)` kept for the slow queries; a migration only for an index a recorded plan justifies, with the query beside it | One machine, one Postgres version, synthetic data: a baseline to compare against, not a service level. It does not measure concurrent load |
 | 6 | **User documentation and the Portuguese UI**, in several pull requests | A test that every key exists in both catalogues, one that no rendered page shows a raw key, and the existing web tests under both languages; screenshots taken from this app only | Documentation correctness is read by a person against the running app, not by a test; the Portuguese catalogue is checked for presence, not for quality |
+
+**The exit criterion** ("two consecutive versions, upgraded in place with a restored backup") needs two tags, and none exists. It
+is met in two steps and the roadmap says which: now by the rehearsal between two commits with different schemas (the older
+one a real ancestor of `main`), and, for the claim to be closed, by the first real upgrade (`1.0.0` to `1.0.1`, or a release
+candidate to the next) following the guide, written into the release notes. Phase 9 is ticked as done only with the first.
 
 Why this order: **2 before 3**, because restoring must restore the roles' grants and the policies, and the guide describes the
 deployment RLS forces (an owner role that migrates and a runtime role that serves); **2 before 5**, so the baseline carries
@@ -153,8 +169,8 @@ the rest is written beside the item.
   says so now), and the first tag is the first version number that means something to an operator.
 - The roadmap's phase titles stop saying "(v0.N)" without a state: each says whether the phase is done, so a reader is not
   told that a finished phase is open.
-- `CLAUDE.md` gains a rule for each promise as its slice lands, so a change that would break one meets it in the
-  instructions before it meets a user.
+- `CLAUDE.md` states the promises from this slice on (one section) and gains the detailed rules of each item as its slice
+  lands, so a change that would break one meets it in the instructions before it meets a user.
 - Writing "no down migrations" and "restore is the way back" commits the project to taking the backup step seriously in the
   upgrade guide and to keeping a rehearsal in CI that proves a restore works.
 
