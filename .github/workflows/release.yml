@@ -21,6 +21,12 @@ jobs:
       IMAGE: ghcr.io/${{ github.repository }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: The tag is on main
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "the tag $GITHUB_REF_NAME is not a commit of main" >&2; exit 1; }
       - name: The tag is the version of the code
         run: |
           tag="${GITHUB_REF_NAME#v}"

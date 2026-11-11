@@ -13,10 +13,12 @@
 # them the dump is taken first and the files after, which can leave a file with no record (harmless) and, rarely, a record whose
 # file was removed in between (the entry then shows the attachment as unavailable).
 #
+# ATTACHMENTS_TAR_CMD (a command that writes the tar of the files to its standard output) replaces ATTACHMENTS_DIR for files in a
+# container's volume, e.g. ATTACHMENTS_TAR_CMD="docker compose exec -T app tar -C /data/attachments -cf - .".
 # PG_DUMP and PSQL may be set to other commands, e.g. PG_DUMP="docker compose exec -T db pg_dump -U conta_verde conta_verde".
 set -euo pipefail
 
-: "${ATTACHMENTS_DIR:?set ATTACHMENTS_DIR}"
+if [ -z "${ATTACHMENTS_TAR_CMD:-}" ]; then : "${ATTACHMENTS_DIR:?set ATTACHMENTS_DIR, or ATTACHMENTS_TAR_CMD}"; fi
 : "${BACKUP_DIR:?set BACKUP_DIR}"
 if [ -z "${PG_DUMP:-}" ] || [ -z "${PSQL:-}" ]; then
     : "${BACKUP_DATABASE_URL:?set BACKUP_DATABASE_URL (the owner of the schema), or PG_DUMP and PSQL}"
@@ -44,7 +46,9 @@ fi
 
 # The dump first: a file written after it is an orphan nobody asks for, a file read before it could be missing from a record.
 $PG_DUMP --format=custom --no-owner --no-acl > "$out/db.dump"
-if [ -d "$ATTACHMENTS_DIR" ]; then
+if [ -n "${ATTACHMENTS_TAR_CMD:-}" ]; then
+    bash -c "$ATTACHMENTS_TAR_CMD" > "$out/attachments.tar"
+elif [ -d "$ATTACHMENTS_DIR" ]; then
     tar -C "$ATTACHMENTS_DIR" -cf "$out/attachments.tar" .
 else
     tar -cf "$out/attachments.tar" -T /dev/null

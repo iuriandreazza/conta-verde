@@ -11,12 +11,14 @@ import { useCanWrite } from "../lib/useCanWrite";
 import { UserPlusIcon } from "../components/icons/user-plus";
 import { ASSIGNABLE_ROLES, ROLE_LABELS } from "../lib/roles";
 import { HelpTitle } from "../components/HelpTitle";
+import { useT } from "../i18n";
 
 const formatDate = (millis: number) => new Date(millis).toLocaleDateString("pt-BR");
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one
 // instance.
 export function MembersPage() {
+  const t = useT();
   const { companyId = "" } = useParams();
   const { session } = useAuth();
   const canWrite = useCanWrite("members");
@@ -135,7 +137,7 @@ export function MembersPage() {
                         {member.role === "owner" || member.user_id === ownId ? (
                           // A company has one owner, who is not changed or removed.
                           <>
-                            <td>{ROLE_LABELS[member.role]}</td>
+                            <td>{t(ROLE_LABELS[member.role])}</td>
                             <td />
                           </>
                         ) : (
@@ -153,7 +155,7 @@ export function MembersPage() {
                               >
                                 {ASSIGNABLE_ROLES.map((option) => (
                                   <option key={option} value={option}>
-                                    {ROLE_LABELS[option]}
+                                    {t(ROLE_LABELS[option])}
                                   </option>
                                 ))}
                               </select>
@@ -232,7 +234,7 @@ export function MembersPage() {
                     {invitations.map((invitation) => (
                       <tr key={invitation.id}>
                         <td>{invitation.email}</td>
-                        <td>{ROLE_LABELS[invitation.role]}</td>
+                        <td>{t(ROLE_LABELS[invitation.role])}</td>
                         <td>
                           {invitation.expired ? (
                             <span className="badge badge-warning">Expirado</span>

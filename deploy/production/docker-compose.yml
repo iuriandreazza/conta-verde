@@ -20,7 +20,8 @@ services:
       - db-data:/var/lib/postgresql/data
       - ../postgres/create-app-role.sh:/docker-entrypoint-initdb.d/10-app-role.sh:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U conta_verde"]
+      # Over TCP: the temporary server of the first start (which makes the roles) answers on the socket only, and the app must wait for the real one.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U conta_verde"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -46,6 +47,8 @@ services:
       PAYMENT_PROVIDER: ${PAYMENT_PROVIDER:-off}
       FISCAL_GATEWAY: ${FISCAL_GATEWAY:-off}
       ATTACHMENTS_DIR: /data/attachments
+      # A dead API ends the container, so `restart: unless-stopped` starts it again (the image would otherwise keep answering 502).
+      EXIT_WITH_API: "true"
     volumes:
       # The only copy of the files attached to entries and the fiscal files: back it up with the database.
       - attachments:/data/attachments

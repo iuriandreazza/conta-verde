@@ -101,8 +101,13 @@ for index in $(seq 1 $((${#refs[@]} - 1))); do
     python3 "$here/check_books.py" verify "http://127.0.0.1:$API_PORT" "$work/state.json"
     stop_server
     counts "$db" > "$work/counts-$index.txt"
-    diff <(grep -F -f <(cut -d'|' -f1 "$work/counts-0.txt" | sed 's/$/|/') "$work/counts-$index.txt") "$work/counts-0.txt" \
-        && echo "  ok  every table of ${refs[0]} has the rows it had"
+    # The tables the oldest release has, by exact name: a table a later release added is not in the comparison.
+    awk -F'|' 'NR == FNR { known[$1] = 1; next } known[$1]' "$work/counts-0.txt" "$work/counts-$index.txt" > "$work/counts-same-tables.txt"
+    if ! diff "$work/counts-same-tables.txt" "$work/counts-0.txt"; then
+        echo "FAILED: a table of ${refs[0]} changed its row count in the upgrade to ${refs[$index]}" >&2
+        exit 1
+    fi
+    echo "  ok  every table of ${refs[0]} has the rows it had"
 done
 
 echo "== the oldest release refuses the upgraded database"
@@ -112,7 +117,7 @@ if start_server 0 "$db" "$work/files" 2>/dev/null; then
     exit 1
 fi
 stop_server
-grep -qi "migration" "$work/server-0.log" && echo "  ok  ${refs[0]} stops with: $(grep -i migration "$work/server-0.log" | tail -1 | sed "s/\x1b\[[0-9;]*m//g" | cut -c1-200)"
+grep -qi "migration" "$work/server-0.log" && echo "  ok  ${refs[0]} stops with: $(grep -iE "previously applied|missing|error" "$work/server-0.log" | tail -1 | sed "s/\x1b\[[0-9;]*m//g" | cut -c1-200)"
 
 echo "== the way back: the backup restored, and ${refs[0]} on it"
 psql -X -q "$OWNER_BASE_URL/postgres" -c "CREATE DATABASE $db_back"

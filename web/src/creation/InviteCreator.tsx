@@ -6,6 +6,7 @@ import { UserPlusIcon } from "../components/icons/user-plus";
 import { Notice } from "../components/Notice";
 import { ASSIGNABLE_ROLES, ROLE_HINTS, ROLE_LABELS } from "../lib/roles";
 import type { CreatorProps } from "./CreationProvider";
+import { useT } from "../i18n";
 
 const formatDate = (millis: number) => new Date(millis).toLocaleDateString("pt-BR");
 
@@ -36,6 +37,7 @@ function InviteResult({ invited }: { invited: Invited }) {
 
 /** The form that invites someone to the company, with the role they will have. */
 export function InviteCreator({ companyId, onBusyChange, onCreated, onCancel }: CreatorProps) {
+  const t = useT();
   const [role, setRole] = useState<Role>("viewer");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -73,14 +75,14 @@ export function InviteCreator({ companyId, onBusyChange, onCreated, onCancel }: 
             <select value={role} onChange={(event) => setRole(event.target.value as Role)}>
               {ASSIGNABLE_ROLES.map((option) => (
                 <option key={option} value={option}>
-                  {ROLE_LABELS[option]}
+                  {t(ROLE_LABELS[option])}
                 </option>
               ))}
             </select>
           </label>
         </div>
         <p className="muted" aria-live="polite">
-          {ROLE_HINTS[role]}
+          {t(ROLE_HINTS[role])}
         </p>
       </section>
       <Notice message={error} />

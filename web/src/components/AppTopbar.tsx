@@ -20,6 +20,8 @@ import { WalletIcon } from "./icons/wallet";
 import { MenuButton, type MenuItem } from "./MenuButton";
 import type { Area, Company } from "../api";
 import { useCreation, type CreateKind, type CreateOptions } from "../creation/CreationProvider";
+import { msg, useT } from "../i18n";
+import { LanguageSwitch } from "./LanguageSwitch";
 
 interface AppTopbarProps {
   userName: string;
@@ -59,27 +61,27 @@ function creationItems(
   openCreate: (kind: CreateKind, options?: CreateOptions) => void,
 ): MenuItem[] {
   const items: (MenuItem & { area: Area; creates?: CreateKind; options?: CreateOptions })[] = [
-    { key: "revenue", label: "Nova receita", icon: CircleDollarSignIcon, creates: "entry", options: { kind: "receivable" }, area: "finance" },
-    { key: "expense", label: "Nova despesa", icon: CircleDollarSignIcon, creates: "entry", options: { kind: "payable" }, area: "finance" },
-    { key: "transfer", label: "Nova transferência", icon: SendIcon, creates: "transfer", area: "finance" },
-    { key: "quote", label: "Novo orçamento", icon: FileTextIcon, creates: "quote", area: "sales" },
-    { key: "sale", label: "Novo pedido", icon: HandCoinsIcon, creates: "sale", area: "sales" },
-    { key: "purchase", label: "Nova compra", icon: BriefcaseBusinessIcon, creates: "purchase", area: "purchases" },
-    { key: "purchaseImport", label: "Entrada de NF-e (XML)", icon: FileTextIcon, creates: "purchaseImport", area: "purchases" },
-    { key: "stockMovement", label: "Novo movimento de estoque", icon: BoxIcon, creates: "stockMovement", area: "purchases" },
-    { key: "inventoryCount", label: "Novo inventário", icon: LayersIcon, creates: "inventoryCount", area: "purchases" },
-    { key: "party", label: "Novo cliente ou fornecedor", icon: UsersIcon, creates: "party", area: "parties" },
-    { key: "contract", label: "Novo contrato", icon: RotateCCWIcon, creates: "contract", area: "sales" },
-    { key: "commissionRule", label: "Nova regra de comissão", icon: HandCoinsIcon, creates: "commissionRule", area: "sales" },
-    { key: "priceList", label: "Nova tabela de preço", icon: LayersIcon, creates: "priceList", area: "sales" },
-    { key: "category", label: "Nova categoria", icon: FolderTreeIcon, creates: "category", area: "finance" },
-    { key: "recurrence", label: "Nova recorrência", icon: RotateCCWIcon, creates: "recurrence", area: "finance" },
-    { key: "invite", label: "Convidar alguém", icon: UserPlusIcon, creates: "invite", area: "members" },
-    { key: "bankAccount", label: "Nova conta bancária", icon: WalletIcon, creates: "bankAccount", area: "finance" },
-    { key: "costCenter", label: "Novo centro de custo", icon: LayersIcon, creates: "costCenter", area: "finance" },
-    { key: "paymentMethod", label: "Nova forma de pagamento", icon: CreditCardIcon, creates: "paymentMethod", area: "finance" },
-    { key: "paymentTerm", label: "Novo prazo de pagamento", icon: CalendarDaysIcon, creates: "paymentTerm", area: "finance" },
-    { key: "product", label: "Novo produto ou serviço", icon: BoxIcon, creates: "product", area: "products" },
+    { key: "revenue", label: msg("New revenue"), icon: CircleDollarSignIcon, creates: "entry", options: { kind: "receivable" }, area: "finance" },
+    { key: "expense", label: msg("New expense"), icon: CircleDollarSignIcon, creates: "entry", options: { kind: "payable" }, area: "finance" },
+    { key: "transfer", label: msg("New transfer"), icon: SendIcon, creates: "transfer", area: "finance" },
+    { key: "quote", label: msg("New quote"), icon: FileTextIcon, creates: "quote", area: "sales" },
+    { key: "sale", label: msg("New order"), icon: HandCoinsIcon, creates: "sale", area: "sales" },
+    { key: "purchase", label: msg("New purchase"), icon: BriefcaseBusinessIcon, creates: "purchase", area: "purchases" },
+    { key: "purchaseImport", label: msg("NF-e entry (XML)"), icon: FileTextIcon, creates: "purchaseImport", area: "purchases" },
+    { key: "stockMovement", label: msg("New stock movement"), icon: BoxIcon, creates: "stockMovement", area: "purchases" },
+    { key: "inventoryCount", label: msg("New inventory count"), icon: LayersIcon, creates: "inventoryCount", area: "purchases" },
+    { key: "party", label: msg("New customer or supplier"), icon: UsersIcon, creates: "party", area: "parties" },
+    { key: "contract", label: msg("New contract"), icon: RotateCCWIcon, creates: "contract", area: "sales" },
+    { key: "commissionRule", label: msg("New commission rule"), icon: HandCoinsIcon, creates: "commissionRule", area: "sales" },
+    { key: "priceList", label: msg("New price list"), icon: LayersIcon, creates: "priceList", area: "sales" },
+    { key: "category", label: msg("New category"), icon: FolderTreeIcon, creates: "category", area: "finance" },
+    { key: "recurrence", label: msg("New recurrence"), icon: RotateCCWIcon, creates: "recurrence", area: "finance" },
+    { key: "invite", label: msg("Invite someone"), icon: UserPlusIcon, creates: "invite", area: "members" },
+    { key: "bankAccount", label: msg("New bank account"), icon: WalletIcon, creates: "bankAccount", area: "finance" },
+    { key: "costCenter", label: msg("New cost center"), icon: LayersIcon, creates: "costCenter", area: "finance" },
+    { key: "paymentMethod", label: msg("New payment method"), icon: CreditCardIcon, creates: "paymentMethod", area: "finance" },
+    { key: "paymentTerm", label: msg("New payment term"), icon: CalendarDaysIcon, creates: "paymentTerm", area: "finance" },
+    { key: "product", label: msg("New product or service"), icon: BoxIcon, creates: "product", area: "products" },
   ];
   return items
     .filter((item) => permissions?.[item.area] === "write")
@@ -105,7 +107,8 @@ export function AppTopbar({
   onSignOut,
 }: AppTopbarProps) {
   const { openCreate } = useCreation();
-  const creating = companyId ? creationItems(permissions, openCreate) : [];
+  const t = useT();
+  const creating = companyId ? creationItems(permissions, openCreate).map((item) => ({ ...item, label: t(item.label) })) : [];
   const navigate = useNavigate();
   // A new key for the menu closes it: a shortcut used while it is open must not leave it behind the sheet.
   const [menuKey, setMenuKey] = useState(0);
@@ -135,28 +138,29 @@ export function AppTopbar({
           aria-controls="app-sidebar"
           onClick={onToggleNav}
         >
-          Menu
+          {t("Menu")}
         </button>
       )}
       {companyName && (
         <div className="topbar-company">
           <strong>{companyName}</strong>
-          {canSwitchCompany && <Link to="/">Trocar</Link>}
+          {canSwitchCompany && <Link to="/">{t("Switch")}</Link>}
         </div>
       )}
       <div className="topbar-actions">
-        {creating.length > 0 && <MenuButton key={menuKey} variant="primary" icon={PlusIcon} label="Novo registro" items={creating} align="end" />}
+        {creating.length > 0 && <MenuButton key={menuKey} variant="primary" icon={PlusIcon} label={t("New record")} items={creating} align="end" />}
         <Link to="/offline" className="topbar-link">
-          Uso offline
+          {t("Offline use")}
         </Link>
+        <LanguageSwitch />
         <span className="avatar" aria-hidden>
           {userName.trim().charAt(0).toUpperCase()}
         </span>
         <span className="user-name">{userName}</span>
         <Button variant="ghost" icon={LogoutIcon} pending={signingOut} onClick={onSignOut}>
-          Sair
+          {t("Sign out")}
         </Button>
-        {signOutFailed && <span role="alert">Não foi possível sair, tente novamente.</span>}
+        {signOutFailed && <span role="alert">{t("Could not sign out, try again.")}</span>}
       </div>
     </div>
   );

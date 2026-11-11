@@ -30,7 +30,7 @@ stop_server() {
 }
 cleanup() {
     stop_server
-    psql -X -q "$OWNER_BASE_URL/postgres" -c "DROP DATABASE IF EXISTS $db_a WITH (FORCE)" -c "DROP DATABASE IF EXISTS $db_b WITH (FORCE)" >/dev/null 2>&1 || true
+    psql -X -q "$OWNER_BASE_URL/postgres" -c "DROP DATABASE IF EXISTS $db_a WITH (FORCE)" -c "DROP DATABASE IF EXISTS $db_b WITH (FORCE)" -c "DROP DATABASE IF EXISTS ${db_b}_c WITH (FORCE)" >/dev/null 2>&1 || true
     rm -rf "$work"
 }
 trap cleanup EXIT
@@ -65,8 +65,16 @@ echo "== a restore into an empty database and directory"
 psql -X -q "$OWNER_BASE_URL/postgres" -c "CREATE DATABASE $db_b"
 RESTORE_DATABASE_URL="$OWNER_BASE_URL/$db_b" ATTACHMENTS_DIR="$work/files-b" "$here/restore.sh" "$backup"
 "$here/fingerprint.sh" "$OWNER_BASE_URL/$db_b" > "$work/fingerprint-b.txt"
-diff "$work/fingerprint-a.txt" "$work/fingerprint-b.txt" && echo "  ok  the restored database has the same rows, policies and schema version ($(wc -l < "$work/fingerprint-a.txt") lines compared)"
-diff -r "$work/files-a" "$work/files-b" && echo "  ok  the restored files are the same"
+if ! diff "$work/fingerprint-a.txt" "$work/fingerprint-b.txt"; then
+    echo "FAILED: the restored database is not the one that was backed up" >&2
+    exit 1
+fi
+echo "  ok  the restored database has the same rows, policies and schema version ($(wc -l < "$work/fingerprint-a.txt") lines compared)"
+if ! diff -r "$work/files-a" "$work/files-b"; then
+    echo "FAILED: the restored files are not the ones that were backed up" >&2
+    exit 1
+fi
+echo "  ok  the restored files are the same"
 
 echo "== a restore is refused where something already is"
 if RESTORE_DATABASE_URL="$OWNER_BASE_URL/$db_b" ATTACHMENTS_DIR="$work/files-c" "$here/restore.sh" "$backup" 2>/dev/null; then

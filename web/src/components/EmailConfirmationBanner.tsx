@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, errorMessage } from "../api";
+import { useT } from "../i18n";
 import { Button } from "./Button";
 
 /**
@@ -7,6 +8,7 @@ import { Button } from "./Button";
  * the account was made; this offers to send it again (one a minute at most is made, so a second click may change nothing).
  */
 export function EmailConfirmationBanner({ email }: { email: string }) {
+  const t = useT();
   const [state, setState] = useState<{ kind: "idle" | "sending" | "sent" } | { kind: "failed"; message: string }>({
     kind: "idle",
   });
@@ -25,14 +27,14 @@ export function EmailConfirmationBanner({ email }: { email: string }) {
     <div className="banner" role="status">
       <span>
         {state.kind === "sent"
-          ? `Enviamos um novo link para ${email}.`
+          ? t("We sent a new link to {email}.", { email })
           : state.kind === "failed"
             ? state.message
-            : `Confirme seu e-mail: enviamos um link para ${email}.`}
+            : t("Confirm your e-mail: we sent a link to {email}.", { email })}
       </span>
       {state.kind !== "sent" && (
         <Button type="button" variant="ghost" className="btn-small" pending={state.kind === "sending"} onClick={() => void resend()}>
-          Reenviar link
+          {t("Resend link")}
         </Button>
       )}
     </div>

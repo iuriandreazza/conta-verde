@@ -4,6 +4,7 @@ import { vi } from "vitest";
 import { App } from "./App";
 import type { Profile } from "./api";
 import { AuthProvider } from "./auth";
+import { I18nProvider } from "./i18n";
 
 export const OWNER_PERMISSIONS = {
   parties: "write",
@@ -39,7 +40,9 @@ export function renderAt(path: string) {
   return render(
     <MemoryRouter initialEntries={[path]}>
       <AuthProvider>
-        <App />
+        <I18nProvider>
+          <App />
+        </I18nProvider>
       </AuthProvider>
     </MemoryRouter>,
   );
