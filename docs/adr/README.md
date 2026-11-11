@@ -110,6 +110,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0092](0092-one-point-zero-hardening-plan.md) | What 1.0 means, and the plan for Phase 9 (hardening) | accepted | 9 |
 | [0093](0093-row-level-security.md) | Row-level security as the second barrier | accepted | 9 |
 | [0094](0094-stock-balance-import.md) | Opening the stock from a file | accepted | 9 |
+| [0096](0096-operations.md) | The image, the backup, the restore and the upgrade | accepted | 9 |
 
 ## Template
 

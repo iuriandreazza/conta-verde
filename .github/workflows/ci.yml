@@ -60,6 +60,17 @@ jobs:
           PUBLIC_URL: http://localhost:5173
           ATTACHMENTS_DIR: ${{ runner.temp }}/attachments
           PAYMENT_PROVIDER: fake
+      # A backup of seeded books is restored into a fresh database and compared row by row, and the server is started on the copy
+      # (ADR 0096). The PostgreSQL 17 tools come from the image, since the runner's client is older than the server.
+      - name: Rehearse a restore
+        run: |
+          scripts/ops/docker-pg-tools.sh "$RUNNER_TEMP/pg-tools"
+          export PATH="$RUNNER_TEMP/pg-tools:$PATH"
+          scripts/ops/rehearse-restore.sh
+        env:
+          OWNER_BASE_URL: postgres://conta_verde:conta_verde@localhost:5432
+          APP_BASE_URL: postgres://conta_verde_app:conta_verde_app@localhost:5432
+          API_BIN: target/debug/conta-verde
 
   web:
     runs-on: ubuntu-latest

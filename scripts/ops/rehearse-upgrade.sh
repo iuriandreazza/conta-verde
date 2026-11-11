@@ -112,7 +112,7 @@ if start_server 0 "$db" "$work/files" 2>/dev/null; then
     exit 1
 fi
 stop_server
-grep -qi "migration" "$work/server-0.log" && echo "  ok  ${refs[0]} stops with: $(grep -i migration "$work/server-0.log" | head -1 | cut -c1-140)"
+grep -qi "migration" "$work/server-0.log" && echo "  ok  ${refs[0]} stops with: $(grep -i migration "$work/server-0.log" | tail -1 | sed "s/\x1b\[[0-9;]*m//g" | cut -c1-200)"
 
 echo "== the way back: the backup restored, and ${refs[0]} on it"
 psql -X -q "$OWNER_BASE_URL/postgres" -c "CREATE DATABASE $db_back"
