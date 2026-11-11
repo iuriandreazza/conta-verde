@@ -4,6 +4,7 @@ import { Button } from "./Button";
 import { BackButton } from "./BackButton";
 import { CheckIcon } from "./icons/check";
 import { PlusIcon } from "./icons/plus";
+import { useT } from "../i18n";
 import { Notice } from "./Notice";
 
 interface CostCenterFormProps {
@@ -17,6 +18,7 @@ interface CostCenterFormProps {
 
 /** Registers a cost center, or changes one. Remount it (a `key`) to start over. */
 export function CostCenterForm({ costCenter, pending, error, onSubmit, onCancel }: CostCenterFormProps) {
+  const t = useT();
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (pending) return;
@@ -27,14 +29,14 @@ export function CostCenterForm({ costCenter, pending, error, onSubmit, onCancel 
   return (
     <form className="record-form" onSubmit={handleSubmit}>
       <section className="form-section" aria-labelledby="cost-center-info">
-        <h3 id="cost-center-info">Dados do centro de custo</h3>
+        <h3 id="cost-center-info">{t("Cost center details")}</h3>
         <div className="field-grid">
           <label>
-            Nome
+            {t("Name")}
             <input name="name" required maxLength={200} autoComplete="off" defaultValue={costCenter?.name} />
           </label>
           <label className="inline">
-            <input name="active" type="checkbox" defaultChecked={costCenter?.active ?? true} /> Ativo
+            <input name="active" type="checkbox" defaultChecked={costCenter?.active ?? true} /> {t("Active")}
           </label>
         </div>
       </section>
@@ -42,7 +44,7 @@ export function CostCenterForm({ costCenter, pending, error, onSubmit, onCancel 
       <div className="form-footer">
         <BackButton disabled={pending} onClick={onCancel} />
         <Button type="submit" icon={costCenter === null ? PlusIcon : CheckIcon} pending={pending}>
-          {costCenter === null ? "Adicionar" : "Salvar alterações"}
+          {costCenter === null ? t("Add") : t("Save changes")}
         </Button>
       </div>
     </form>

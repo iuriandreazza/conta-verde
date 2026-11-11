@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import type { BankAccount, BankAccountInput, BankAccountKind } from "../api";
+import { useT } from "../i18n";
 import { BANK_ACCOUNT_KINDS } from "../lib/kinds";
 import { Button } from "./Button";
 import { BackButton } from "./BackButton";
@@ -22,6 +23,7 @@ interface BankAccountFormProps {
  * Remount it (a `key`) to start over.
  */
 export function BankAccountForm({ account, pending, error, onSubmit, onCancel }: BankAccountFormProps) {
+  const t = useT();
   const [chosen, setChosen] = useState<BankAccountKind>("checking");
   const kind = account?.kind ?? chosen;
   const takesBank = kind !== "cash";
@@ -46,31 +48,31 @@ export function BankAccountForm({ account, pending, error, onSubmit, onCancel }:
   return (
     <form className="record-form" onSubmit={handleSubmit}>
       <section className="form-section" aria-labelledby="account-info">
-        <h3 id="account-info">Dados da conta</h3>
+        <h3 id="account-info">{t("Account details")}</h3>
         <div className="field-grid">
           <label>
-            Tipo
+            {t("Type")}
             <select value={kind} disabled={account !== null} onChange={(event) => setChosen(event.target.value as BankAccountKind)}>
               {BANK_ACCOUNT_KINDS.map((option) => (
                 <option key={option.key} value={option.key}>
-                  {option.label}
+                  {t(option.label)}
                 </option>
               ))}
             </select>
           </label>
           <label>
-            Nome
+            {t("Name")}
             <input name="name" required maxLength={200} autoComplete="off" defaultValue={account?.name} />
           </label>
           {takesBank && (
             <label>
-              {kind === "card" ? "Banco emissor" : "Código do banco"}
+              {kind === "card" ? t("Issuing bank") : t("Bank code")}
               <input
                 name="bank_code"
                 inputMode="numeric"
                 autoComplete="off"
                 maxLength={8}
-                placeholder="3 dígitos (ou 8, o ISPB)"
+                placeholder={t("3 digits (or 8, the ISPB)")}
                 defaultValue={account?.bank_code ?? ""}
               />
             </label>
@@ -78,36 +80,36 @@ export function BankAccountForm({ account, pending, error, onSubmit, onCancel }:
           {takesNumber && (
             <>
               <label>
-                Agência
+                {t("Branch")}
                 <input name="branch" autoComplete="off" spellCheck={false} maxLength={14} defaultValue={account?.branch ?? ""} />
               </label>
               <label>
-                Conta
+                {t("Account")}
                 <input
                   name="number"
                   autoComplete="off"
                   spellCheck={false}
                   maxLength={24}
-                  placeholder="com o dígito"
+                  placeholder={t("with the check digit")}
                   defaultValue={account?.number ?? ""}
                 />
               </label>
             </>
           )}
           <label className="inline">
-            <input name="active" type="checkbox" defaultChecked={account?.active ?? true} /> Ativa
+            <input name="active" type="checkbox" defaultChecked={account?.active ?? true} /> {t("Active account")}
           </label>
         </div>
-        {!takesBank && <p className="muted">O caixa não tem banco, agência nem número.</p>}
+        {!takesBank && <p className="muted">{t("A cash box has no bank, branch or number.")}</p>}
         {takesBank && !takesNumber && (
-          <p className="muted">Do cartão guardamos só o banco emissor: o número do cartão nunca é salvo.</p>
+          <p className="muted">{t("For a card we only keep the issuing bank: the card number is never saved.")}</p>
         )}
       </section>
       <Notice message={error} />
       <div className="form-footer">
         <BackButton disabled={pending} onClick={onCancel} />
         <Button type="submit" icon={account === null ? PlusIcon : CheckIcon} pending={pending}>
-          {account === null ? "Adicionar" : "Salvar alterações"}
+          {account === null ? t("Add") : t("Save changes")}
         </Button>
       </div>
     </form>

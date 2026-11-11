@@ -2,10 +2,12 @@ import { useEffect, useState } from "react";
 import { api, errorMessage, type Category, type NewCategory } from "../api";
 import { CategoryForm } from "../components/CategoryForm";
 import { Spinner } from "../components/Spinner";
+import { useT } from "../i18n";
 import type { CreatorProps } from "./CreationProvider";
 
 /** The form of a new category or subcategory, with the plan read first to choose the parent from. */
 export function CategoryCreator({ companyId, options, onBusyChange, onCreated, onCancel }: CreatorProps) {
+  const t = useT();
   const [categories, setCategories] = useState<Category[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -31,7 +33,7 @@ export function CategoryCreator({ companyId, options, onBusyChange, onCreated, o
     setError(null);
     try {
       const created = await api.createCategory(companyId, input);
-      onCreated({ id: created.id, message: `${created.name} cadastrada.` });
+      onCreated({ id: created.id, message: t("Category {name} registered.", { name: created.name }) });
     } catch (failure) {
       setError(errorMessage(failure));
       setSaving(false);
@@ -41,7 +43,7 @@ export function CategoryCreator({ companyId, options, onBusyChange, onCreated, o
   if (categories === null) {
     return loadError === null ? (
       <p role="status" className="status">
-        <Spinner /> Carregando…
+        <Spinner /> {t("Loading…")}
       </p>
     ) : (
       <p role="alert">{loadError}</p>

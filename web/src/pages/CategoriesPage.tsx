@@ -17,6 +17,7 @@ import { PlusIcon } from "../components/icons/plus";
 import { treeRows } from "../lib/categoryTree";
 import { cashFlowLabel, dreLabel } from "../lib/groups";
 import { useCanWrite } from "../lib/useCanWrite";
+import { useT } from "../i18n";
 import { SquarePenIcon } from "../components/icons/square-pen";
 import { StatusBadge } from "../components/StatusBadge";
 
@@ -24,6 +25,7 @@ import { StatusBadge } from "../components/StatusBadge";
 // instance: the old list is dropped and a reply still in flight for another company lands on an
 // unmounted component.
 export function CategoriesPage() {
+  const t = useT();
   const { companyId = "" } = useParams();
   const canWrite = useCanWrite("finance");
   const [categories, setCategories] = useState<Category[]>([]);
@@ -79,7 +81,7 @@ export function CategoriesPage() {
       // In place: the tree stays as it was, with this one changed.
       setCategories((current) => current.map((item) => (item.id === updated.id ? updated : item)));
       setEditing(null);
-      setSaved(`${updated.name} atualizada.`);
+      setSaved(t("Category {name} updated.", { name: updated.name }));
     } catch (failure) {
       setFormError(errorMessage(failure));
     } finally {
@@ -109,40 +111,40 @@ export function CategoriesPage() {
 
   return (
     <>
-      <PageHeader title="Categorias" description="O plano que organiza entradas e saídas." />
+      <PageHeader title={t("Categories")} description={t("The plan that organizes what comes in and what goes out.")} />
       {canWrite && (
         <div className="list-actions">
           <Button type="button" icon={PlusIcon} onClick={() => openCreate("category")}>
-            Nova categoria
+            {t("New category")}
           </Button>
         </div>
       )}
       <Notice message={saved} tone="success" />
       <div>
         <section className="card list-card">
-        <h2>Plano de categorias</h2>
+        <h2>{t("Category plan")}</h2>
         <Notice message={error} />
         {loading ? (
           <p role="status" className="status">
-            <Spinner /> Carregando…
+            <Spinner /> {t("Loading…")}
           </p>
         ) : categories.length === 0 && error ? (
           <Button type="button" variant="ghost" onClick={() => void load()}>
-            Tentar de novo
+            {t("Try again")}
           </Button>
         ) : categories.length === 0 ? (
           <div className="empty">
             <BriefcaseBusinessIcon size={40} aria-hidden />
-            <p>Nenhuma categoria ainda.</p>
+            <p>{t("No categories yet.")}</p>
             <p className="muted">
-              As categorias organizam o que entra e sai do caixa e montam o DRE gerencial.{" "}
+              {t("Categories organize what comes in and goes out of the cash and build the management income statement (DRE).")}{" "}
               {canWrite
-                ? "Comece pelo plano usual de uma pequena empresa ou crie as suas pelo botão acima."
-                : "Quem cuida do financeiro da empresa pode criar o plano."}
+                ? t("Start from the usual plan of a small business or create your own with the button above.")
+                : t("Whoever handles the company's finances can create the plan.")}
             </p>
             {canWrite && (
               <Button type="button" icon={PlusIcon} pending={applying} onClick={() => void applyTemplate()}>
-                Usar categorias padrão
+                {t("Use default categories")}
               </Button>
             )}
           </div>
@@ -151,12 +153,12 @@ export function CategoriesPage() {
             <table>
               <thead>
                 <tr>
-                  <th>Nome</th>
-                  <th>DRE</th>
-                  <th>Fluxo de caixa</th>
-                  <th>Situação</th>
+                  <th>{t("Name")}</th>
+                  <th>{t("DRE")}</th>
+                  <th>{t("Cash flow")}</th>
+                  <th>{t("Status")}</th>
                   <th>
-                    <span className="visually-hidden">Ações</span>
+                    <span className="visually-hidden">{t("Actions")}</span>
                   </th>
                 </tr>
               </thead>
@@ -165,11 +167,11 @@ export function CategoriesPage() {
                   <Fragment key={category.id}>
                     <ListRow index={index} highlighted={category.id === highlightedId}>
                       <td style={{ paddingLeft: `${0.5 + depth * 1.25}rem` }}>
-                        {parent && <span className="visually-hidden">Subcategoria de {parent.name}: </span>}
+                        {parent && <span className="visually-hidden">{t("Subcategory of {name}:", { name: parent.name })} </span>}
                         {category.name}
                       </td>
-                      <td>{dreLabel(category.dre_group)}</td>
-                      <td>{cashFlowLabel(category.cash_flow_group)}</td>
+                      <td>{dreLabel(category.dre_group, t)}</td>
+                      <td>{cashFlowLabel(category.cash_flow_group, t)}</td>
                       <td><StatusBadge active={category.active} feminine /></td>
                       <td className="row-actions">
                         {canWrite && (
@@ -178,11 +180,11 @@ export function CategoriesPage() {
                             icon={SquarePenIcon}
                             type="button"
                             variant="ghost"
-                            aria-label={`Alterar ${category.name}`}
+                            aria-label={t("Edit {name}", { name: category.name })}
                             disabled={saving}
                             onClick={() => startEditing(category)}
                           >
-                            Alterar
+                            {t("Change")}
                           </Button>
                         )}
                         {canWrite && category.active && !isTransfer(category) && category.level < 5 && (
@@ -191,18 +193,18 @@ export function CategoriesPage() {
                             icon={PlusIcon}
                             type="button"
                             variant="ghost"
-                            aria-label={`Nova subcategoria de ${category.name}`}
+                            aria-label={t("New subcategory of {name}", { name: category.name })}
                             disabled={saving}
                             onClick={() => openCreate("category", { parentId: category.id })}
                           >
-                            Subcategoria
+                            {t("Subcategory")}
                           </Button>
                         )}
                         <Button
                           iconOnly
                           type="button"
                           variant="ghost"
-                          aria-label={`Histórico de ${category.name}`}
+                          aria-label={t("History of {name}", { name: category.name })}
                           aria-expanded={historyOpenFor === category.id}
                           aria-controls={`history-${category.id}`}
                           icon={HistoryIcon}
@@ -210,13 +212,13 @@ export function CategoriesPage() {
                             setHistoryOpenFor(historyOpenFor === category.id ? null : category.id)
                           }
                         >
-                          Histórico
+                          {t("History")}
                         </Button>
                       </td>
                     </ListRow>
                     {historyOpenFor === category.id && (
                       <tr id={`history-${category.id}`}>
-                        <td colSpan={5} role="region" aria-label={`Histórico de ${category.name}`}>
+                        <td colSpan={5} role="region" aria-label={t("History of {name}", { name: category.name })}>
                           <CategoryHistory
                             // Remounted when the category changes, so an open history follows an edit.
                             key={JSON.stringify(category)}
@@ -234,7 +236,7 @@ export function CategoriesPage() {
         )}
       </section>
         {canWrite && (
-          <Sheet open={editing !== null} locked={saving} title={`Alterar ${shown?.name ?? ""}`} onClose={closeSheet}>
+          <Sheet open={editing !== null} locked={saving} title={t("Edit {name}", { name: shown?.name ?? "" })} onClose={closeSheet}>
             {shown !== null && (
               <CategoryForm
                 key={shown.id}
