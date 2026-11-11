@@ -96,14 +96,16 @@ const I18nContext = createContext<I18nValue>(build(DEFAULT_LANGUAGE, () => undef
 export function I18nProvider({ children }: { children: ReactNode }) {
   const { session } = useAuth();
   const userId = session.status === "authenticated" ? session.profile.user.id : null;
-  const [language, setChosen] = useState<Language>(() => readLanguage(null));
-  useEffect(() => setChosen(readLanguage(userId)), [userId]);
+  // A choice made in this page lasts for the person who made it; otherwise it is read from the device at once, so the first
+  // render of a person who chose Portuguese on a device last set to English is not in English.
+  const [chosen, setChosen] = useState<{ userId: string | null; language: Language } | null>(null);
+  const language = chosen !== null && chosen.userId === userId ? chosen.language : readLanguage(userId);
   useEffect(() => {
     document.documentElement.lang = language;
   }, [language]);
   const setLanguage = useCallback(
     (next: Language) => {
-      setChosen(next);
+      setChosen({ userId, language: next });
       writeLanguage(userId, next);
     },
     [userId],

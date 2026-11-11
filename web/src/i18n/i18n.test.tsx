@@ -1,6 +1,6 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { profile, mockApi, renderAt } from "../testSupport";
 import { translate } from ".";
 import { ptBR } from "./pt-BR";
@@ -59,11 +59,37 @@ describe("the language of the screens", () => {
     await headingShows("Página não encontrada");
   });
 
-  it("falls back to the language last chosen on the device for a person who never chose, and to Portuguese when storage is blocked", async () => {
+  it("falls back to the language last chosen on the device for a person who never chose", async () => {
     window.localStorage.setItem("conta-verde.language", "en");
     signedIn();
     renderAt("/no-such-page");
     await headingShows("Page not found");
+  });
+
+  it("is Portuguese when storage is blocked, and a choice then lasts until the page is closed", async () => {
+    const blocked = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    const blockedWrite = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    signedIn();
+    renderAt("/no-such-page");
+    await headingShows("Página não encontrada");
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Idioma" }), "en");
+    await headingShows("Page not found");
+    blocked.mockRestore();
+    blockedWrite.mockRestore();
+  });
+
+  it("shows the person's own language from the first render, not the device's", async () => {
+    window.localStorage.setItem("conta-verde.language", "en");
+    window.localStorage.setItem("conta-verde.language.u1", "pt-BR");
+    signedIn();
+    renderAt("/no-such-page");
+    await headingShows("Página não encontrada");
+    // Never English on the way: the last device choice must not have been committed once for this person.
+    expect(screen.queryByRole("heading", { name: "Page not found" })).not.toBeInTheDocument();
   });
 
   it("reaches the pages before sign-in, in both languages, with no key shown as it was written", async () => {
