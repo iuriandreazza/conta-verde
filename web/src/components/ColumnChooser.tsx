@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { useT } from "../i18n";
 import type { ColumnDef } from "../lib/useColumns";
 import { Button } from "./Button";
 
@@ -11,6 +12,7 @@ interface ColumnChooserProps<K extends string> {
 
 /** Which columns of a table to show: a button that opens a list of checkboxes, closed by Escape or a click elsewhere. */
 export function ColumnChooser<K extends string>({ columns, isShown, onToggle, onReset }: ColumnChooserProps<K>) {
+  const t = useT();
   const root = useRef<HTMLDetailsElement>(null);
 
   useEffect(() => {
@@ -31,9 +33,9 @@ export function ColumnChooser<K extends string>({ columns, isShown, onToggle, on
 
   return (
     <details className="column-chooser" ref={root}>
-      <summary className="btn btn-ghost">Colunas</summary>
+      <summary className="btn btn-ghost">{t("Columns")}</summary>
       <fieldset className="column-chooser-list">
-        <legend className="visually-hidden">Colunas da tabela</legend>
+        <legend className="visually-hidden">{t("Table columns")}</legend>
         {columns
           .filter((column) => !column.required)
           .map((column) => (
@@ -43,7 +45,7 @@ export function ColumnChooser<K extends string>({ columns, isShown, onToggle, on
             </label>
           ))}
         <Button type="button" variant="ghost" className="btn-small" onClick={onReset}>
-          Restaurar
+          {t("Restore")}
         </Button>
       </fieldset>
     </details>

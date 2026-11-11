@@ -44,7 +44,7 @@ import { useParams } from "react-router-dom";
 type View = "positions" | "movements" | "alerts" | "settings" | "import";
 
 const KIND_LABELS: Record<StockMovementKind, string> = {
-  in: msg("Entry"),
+  in: msg("Stock entry"),
   out: msg("Exit"),
   adjustment: msg("Adjustment"),
 };
@@ -156,7 +156,7 @@ function PositionsView({ companyId, lowIds }: { companyId: string; lowIds: Set<s
     !loading,
   );
   const tiles: TileOption<StockPositionFilters["situation"]>[] = [
-    { key: "", label: t("All products"), count: summary?.total ?? null },
+    { key: "", label: t("Every product"), count: summary?.total ?? null },
     { key: "in_stock", label: t("In stock"), count: summary?.in_stock ?? null },
     { key: "below_minimum", label: t("Below minimum"), count: summary?.below_minimum ?? null },
     { key: "depleted", label: t("Depleted"), count: summary?.depleted ?? null },
@@ -340,7 +340,7 @@ function MovementsView({ companyId, products, canWrite }: { companyId: string; p
           <label>
             {t("Product")}
             <select value={filters.product} onChange={(event) => setFilters({ ...filters, product: event.target.value })}>
-              <option value="">{t("All products")}</option>
+              <option value="">{t("Every product")}</option>
               {products.map((product) => (
                 <option key={product.id} value={product.id}>
                   {product.name}

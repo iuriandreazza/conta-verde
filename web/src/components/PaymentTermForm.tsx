@@ -8,6 +8,7 @@ import {
   splitEvenly,
   sumOfPercents,
 } from "../lib/installments";
+import { useT } from "../i18n";
 import { Button } from "./Button";
 import { BackButton } from "./BackButton";
 import { CheckIcon } from "./icons/check";
@@ -48,6 +49,7 @@ export function PaymentTermForm({
   onSubmit,
   onCancel,
 }: PaymentTermFormProps) {
+  const t = useT();
   const nextKey = useRef(0);
   const newRow = (days: string, percent: string): Row => ({ key: nextKey.current++, days, percent });
   const [rows, setRows] = useState<Row[]>(() =>
@@ -68,12 +70,12 @@ export function PaymentTermForm({
   const invalidShare = firstInvalidShare(percents);
   const sumMessage =
     total === null
-      ? `Preencha a porcentagem da parcela ${(invalidShare ?? 0) + 1}, por exemplo 33,33.`
+      ? t("Fill in the percentage of installment {number}, for example 33,33.", { number: (invalidShare ?? 0) + 1 })
       : total === WHOLE_IN_HUNDREDTHS
-        ? "Total: 100%."
+        ? t("Total: 100%.")
         : total < WHOLE_IN_HUNDREDTHS
-          ? `Faltam ${showHundredths(WHOLE_IN_HUNDREDTHS - total)}% para fechar 100%.`
-          : `Passou ${showHundredths(total - WHOLE_IN_HUNDREDTHS)}% de 100%.`;
+          ? t("{percent}% missing to reach 100%.", { percent: showHundredths(WHOLE_IN_HUNDREDTHS - total) })
+          : t("{percent}% over 100%.", { percent: showHundredths(total - WHOLE_IN_HUNDREDTHS) });
 
   function update(key: number, change: Partial<Row>) {
     setFieldError(null);
@@ -103,7 +105,7 @@ export function PaymentTermForm({
       return;
     }
     if (rows.some((row) => !/^\d+$/.test(row.days.trim()))) {
-      setFieldError("Informe os dias de cada parcela, com 0 para à vista.");
+      setFieldError(t("Enter the days of each installment, with 0 for upfront."));
       return;
     }
     setFieldError(null);
@@ -122,38 +124,38 @@ export function PaymentTermForm({
   return (
     <form className="record-form" onSubmit={handleSubmit}>
       <section className="form-section" aria-labelledby="term-info">
-        <h3 id="term-info">Dados do prazo</h3>
+        <h3 id="term-info">{t("Term details")}</h3>
         <div className="field-grid">
       <label>
-        Nome
+        {t("Name")}
         <input
           name="name"
           required
           maxLength={200}
           autoComplete="off"
-          placeholder="Por exemplo 30/60/90"
+          placeholder={t("For example 30/60/90")}
           defaultValue={term?.name}
         />
       </label>
       <label className="inline">
-        <input name="active" type="checkbox" defaultChecked={term?.active ?? true} /> Ativo
+        <input name="active" type="checkbox" defaultChecked={term?.active ?? true} /> {t("Active")}
       </label>
         </div>
       </section>
 
       <section className="form-section" aria-labelledby="term-installments">
-        <h3 id="term-installments">Parcelas do prazo</h3>
+        <h3 id="term-installments">{t("Installments of the term")}</h3>
       <fieldset className="installments">
-        <legend>Parcelas</legend>
+        <legend>{t("Installments")}</legend>
         {rows.map((row, index) => (
           <div className="installment-row" key={row.key}>
             <label>
-              Dias
+              {t("Days")}
               <input
                 inputMode="numeric"
                 autoComplete="off"
-                aria-label={`Dias da parcela ${index + 1}`}
-                placeholder="0 = à vista"
+                aria-label={t("Days of installment {number}", { number: index + 1 })}
+                placeholder={t("0 = upfront")}
                 value={row.days}
                 onChange={(event) => update(row.key, { days: event.target.value })}
               />
@@ -163,7 +165,7 @@ export function PaymentTermForm({
               <input
                 inputMode="decimal"
                 autoComplete="off"
-                aria-label={`Porcentagem da parcela ${index + 1}`}
+                aria-label={t("Percentage of installment {number}", { number: index + 1 })}
                 placeholder="0,00"
                 value={row.percent}
                 onChange={(event) => update(row.key, { percent: event.target.value })}
@@ -173,11 +175,11 @@ export function PaymentTermForm({
               type="button"
               variant="ghost"
               className="btn-small"
-              aria-label={`Remover parcela ${index + 1}`}
+              aria-label={t("Remove installment {number}", { number: index + 1 })}
               disabled={rows.length === 1}
               onClick={() => editRows((current) => current.filter((item) => item.key !== row.key))}
             >
-              Remover
+              {t("Remove")}
             </Button>
           </div>
         ))}
@@ -190,10 +192,10 @@ export function PaymentTermForm({
             disabled={rows.length >= MAX_INSTALLMENTS}
             onClick={addRow}
           >
-            Adicionar parcela
+            {t("Add installment")}
           </Button>
           <Button type="button" variant="ghost" className="btn-small" onClick={splitEqually}>
-            Dividir igualmente
+            {t("Split evenly")}
           </Button>
         </div>
         <p
@@ -214,7 +216,7 @@ export function PaymentTermForm({
           pending={pending}
           disabled={total !== WHOLE_IN_HUNDREDTHS}
         >
-          {term === null ? "Adicionar" : "Salvar alterações"}
+          {term === null ? t("Add") : t("Save changes")}
         </Button>
       </div>
     </form>

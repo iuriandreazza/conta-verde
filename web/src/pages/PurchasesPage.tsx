@@ -67,7 +67,7 @@ type Action = "approve" | "cancel" | "close";
 
 const ORDER_LABELS: Record<PurchaseOrderFilters["sort"], string> = {
   "-number": msg("Newest first"),
-  number: msg("Oldest first"),
+  number: msg("Oldest orders first"),
 };
 
 /** The statuses a bulk action applies to; the rest of what is ticked is left alone. */
@@ -333,7 +333,7 @@ export function PurchasesPage() {
               />
             </label>
             <label>
-              {t("Order")}
+              {t("Sort order")}
               <select
                 value={filters.sort}
                 onChange={(event) => setFilters({ ...filters, sort: event.target.value as PurchaseOrderFilters["sort"] })}
@@ -500,7 +500,7 @@ export function PurchasesPage() {
                               aria-expanded={isOpen("close", order.id)}
                               onClick={() => toggle("close", order.id)}
                             >
-                              {t("Close")}
+                              {t("Close order")}
                             </Button>
                           )}
                           {canWrite && (order.status === "draft" || order.status === "approved") && (

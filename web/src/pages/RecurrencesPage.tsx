@@ -31,19 +31,20 @@ import { formatMoney } from "../lib/decimal";
 import { formatDate } from "../lib/entryInstallments";
 import { useCanWrite } from "../lib/useCanWrite";
 import { usePagedList } from "../lib/usePagedList";
+import { msg, useT, type Translate } from "../i18n";
 
 
 const FIELD_LABELS: Record<string, string> = {
-  kind: "Tipo",
-  description: "Descrição",
-  party_id: "Cliente ou fornecedor",
-  category_id: "Categoria",
-  cost_center_id: "Centro de custo",
-  amount: "Valor",
-  frequency: "Frequência",
-  starts_on: "Primeiro vencimento",
-  ends_on: "Último dia",
-  active: "Situação",
+  kind: msg("Type"),
+  description: msg("Description"),
+  party_id: msg("Customer or supplier"),
+  category_id: msg("Category"),
+  cost_center_id: msg("Cost center"),
+  amount: msg("Amount"),
+  frequency: msg("Frequency"),
+  starts_on: msg("First due date"),
+  ends_on: msg("Last day"),
+  active: msg("Status"),
 };
 
 
@@ -51,6 +52,7 @@ const FIELD_LABELS: Record<string, string> = {
 // instance: the old list is dropped and a reply still in flight for another company lands on an
 // unmounted component.
 export function RecurrencesPage() {
+  const t = useT();
   const { companyId = "" } = useParams();
   const canWrite = useCanWrite("finance");
   const [filters, setFilters] = useState<RecurrenceFilters>(NO_RECURRENCE_FILTERS);
@@ -95,7 +97,7 @@ export function RecurrencesPage() {
       // In place: the list keeps its page and its filters.
       setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)));
       setEditing(null);
-      setSaved(`${updated.description} atualizada. O que já foi gerado não muda.`);
+      setSaved(t("{name} updated. What was already generated does not change.", { name: updated.description }));
     } catch (failure) {
       setFormError(errorMessage(failure));
     } finally {
@@ -111,89 +113,89 @@ export function RecurrencesPage() {
   return (
     <>
       <PageHeader
-        title="Recorrências"
-        description="Aluguel, assinaturas, mensalidades: o que se repete. Os lançamentos dos próximos dois meses são gerados sozinhos."
+        title={t("Recurrences")}
+        description={t("Rent, subscriptions, monthly fees: what repeats. The entries for the next two months are generated on their own.")}
       />
       {canWrite && (
         <div className="list-actions">
           <Button type="button" icon={PlusIcon} onClick={() => openCreate("recurrence")}>
-            Nova recorrência
+            {t("New recurrence")}
           </Button>
         </div>
       )}
       <Notice message={saved} tone="success" />
       <div>
         <section className="card list-card">
-          <h2>Cadastradas</h2>
+          <h2>{t("Set up")}</h2>
           <div className="filters" role="search">
             <label>
-              Buscar
+              {t("Search")}
               <input
                 type="search"
                 value={filters.q}
-                placeholder="Descrição"
+                placeholder={t("Description")}
                 autoComplete="off"
                 maxLength={100}
                 onChange={(event) => setFilters({ ...filters, q: event.target.value })}
               />
             </label>
             <label>
-              Mostrar
+              {t("Show")}
               <select
                 value={filters.kind}
                 onChange={(event) => setFilters({ ...filters, kind: event.target.value as RecurrenceFilters["kind"] })}
               >
-                <option value="">A receber e a pagar</option>
-                <option value="receivable">Só a receber</option>
-                <option value="payable">Só a pagar</option>
+                <option value="">{t("Receivable and payable")}</option>
+                <option value="receivable">{t("Receivables only")}</option>
+                <option value="payable">{t("Payables only")}</option>
               </select>
             </label>
             <label>
-              Situação
+              {t("Status")}
               <select
                 value={filters.active}
                 onChange={(event) => setFilters({ ...filters, active: event.target.value as RecurrenceFilters["active"] })}
               >
-                <option value="">Ativas e pausadas</option>
-                <option value="true">Só ativas</option>
-                <option value="false">Só pausadas</option>
+                <option value="">{t("Running and paused")}</option>
+                <option value="true">{t("Only running")}</option>
+                <option value="false">{t("Only paused")}</option>
               </select>
             </label>
           </div>
           <Notice message={error ?? targetsError} />
           {loading ? (
             <p role="status" className="status">
-              <Spinner /> Carregando…
+              <Spinner /> {t("Loading…")}
             </p>
           ) : items.length === 0 && error ? (
             <Button type="button" variant="ghost" onClick={() => void reload()}>
-              Tentar de novo
+              {t("Try again")}
             </Button>
           ) : items.length === 0 && isFiltered ? (
             <div className="empty">
               <RotateCCWIcon size={40} aria-hidden />
-              <p role="status">Nenhuma recorrência encontrada.</p>
+              <p role="status">{t("No recurrence found.")}</p>
               <Button type="button" variant="ghost" onClick={() => setFilters({ ...NO_RECURRENCE_FILTERS })}>
-                Limpar filtros
+                {t("Clear filters")}
               </Button>
             </div>
           ) : items.length === 0 ? (
             <div className="empty">
               <RotateCCWIcon size={40} aria-hidden />
-              <p>Nenhuma recorrência ainda.</p>
-              <p className="muted">O aluguel, a assinatura do sistema, a mensalidade de um cliente.</p>
+              <p>{t("No recurrences yet.")}</p>
+              <p className="muted">{t("The rent, the system subscription, a customer's monthly fee.")}</p>
             </div>
           ) : (
             <div className="table-wrap">
               <table>
                 <thead>
                   <tr>
-                    <th>Descrição</th>
-                    <th>Quando</th>
-                    <th className="num">Valor</th>
-                    <th>Situação</th>
+                    <th>{t("Description")}</th>
+                    <th>{t("When")}</th>
+                    <th className="num">{t("Amount")}</th>
+                    <th>{t("Status")}</th>
                     <th>
-                      <span className="visually-hidden">Ações</span>
+                      <span className="visually-hidden">{t("Actions")}</span>
                     </th>
                   </tr>
                 </thead>
@@ -204,20 +206,20 @@ export function RecurrencesPage() {
                         <td>
                           <div className="cell-title">{recurrence.description}</div>
                           <div className="muted">
-                            {recurrence.kind === "receivable" ? "A receber" : "A pagar"} ·{" "}
+                            {recurrence.kind === "receivable" ? t("Receivable") : t("Payable")} ·{" "}
                             {names.get(recurrence.category_id) ?? ""}
                           </div>
                         </td>
                         <td>
-                          {frequencyLabel(recurrence.frequency)}
+                          {frequencyLabel(recurrence.frequency, t)}
                           <div className="muted">
-                            desde {formatDate(recurrence.starts_on)}
-                            {recurrence.ends_on !== null && ` até ${formatDate(recurrence.ends_on)}`}
+                            {t("since {date}", { date: formatDate(recurrence.starts_on) })}
+                            {recurrence.ends_on !== null && ` ${t("until {date}", { date: formatDate(recurrence.ends_on) })}`}
                           </div>
                         </td>
                         <td className="num">{formatMoney(recurrence.amount)}</td>
                         <td>
-                          <StatusBadge active={recurrence.active} feminine activeLabel="Ativa" inactiveLabel="Pausada" />
+                          <StatusBadge active={recurrence.active} feminine activeLabel={t("Running")} inactiveLabel={t("Recurrence paused")} />
                         </td>
                         <td className="row-actions">
                           {canWrite && (
@@ -226,7 +228,7 @@ export function RecurrencesPage() {
                               icon={SquarePenIcon}
                               type="button"
                               variant="ghost"
-                              aria-label={`Alterar ${recurrence.description}`}
+                              aria-label={t("Edit {name}", { name: recurrence.description })}
                               disabled={saving}
                               onClick={() => {
                                 setEditing(recurrence);
@@ -234,31 +236,31 @@ export function RecurrencesPage() {
                                 setSaved(null);
                               }}
                             >
-                              Alterar
+                              {t("Change")}
                             </Button>
                           )}
                           <Button
                             iconOnly
                             type="button"
                             variant="ghost"
-                            aria-label={`Histórico de ${recurrence.description}`}
+                            aria-label={t("History of {name}", { name: recurrence.description })}
                             aria-expanded={historyOpenFor === recurrence.id}
                             aria-controls={`history-${recurrence.id}`}
                             icon={HistoryIcon}
                             onClick={() => setHistoryOpenFor(historyOpenFor === recurrence.id ? null : recurrence.id)}
                           >
-                            Histórico
+                            {t("History")}
                           </Button>
                         </td>
                       </ListRow>
                       {historyOpenFor === recurrence.id && (
                         <tr id={`history-${recurrence.id}`}>
-                          <td colSpan={5} role="region" aria-label={`Histórico de ${recurrence.description}`}>
+                          <td colSpan={5} role="region" aria-label={t("History of {name}", { name: recurrence.description })}>
                             <History
                               load={historyLoader(recurrence.id)}
-                              fieldLabel={(field) => FIELD_LABELS[field] ?? field}
-                              valueLabel={(field, value) => displayValue(field, value, names)}
-                              emptyMessage="Sem registros."
+                              fieldLabel={(field) => (field in FIELD_LABELS ? t(FIELD_LABELS[field]) : field)}
+                              valueLabel={(field, value) => displayValue(field, value, names, t)}
+                              emptyMessage={t("No records.")}
                             />
                           </td>
                         </tr>
@@ -271,12 +273,12 @@ export function RecurrencesPage() {
           )}
           {nextCursor !== null && (
             <Button type="button" variant="ghost" icon={ChevronDownIcon} pending={loadingMore} onClick={() => void loadMore()}>
-              Carregar mais
+              {t("Load more")}
             </Button>
           )}
         </section>
         {canWrite && (
-          <Sheet open={editing !== null} locked={saving} title={`Alterar ${shown?.description ?? ""}`} onClose={closeSheet}>
+          <Sheet open={editing !== null} locked={saving} title={t("Edit {name}", { name: shown?.description ?? "" })} onClose={closeSheet}>
             {shown !== null &&
               (targetsLoaded ? (
                 <RecurrenceForm
@@ -290,7 +292,7 @@ export function RecurrencesPage() {
                 />
               ) : targetsError === null ? (
                 <p role="status" className="status">
-                  <Spinner /> Carregando…
+                  <Spinner /> {t("Loading…")}
                 </p>
               ) : (
                 <p role="alert">{targetsError}</p>
@@ -303,13 +305,13 @@ export function RecurrencesPage() {
 }
 
 /** A value of the trail as a person reads it: names for references, words for keys, `R$` for the amount. */
-function displayValue(field: string, value: string | null, names: Map<string, string>): string {
+function displayValue(field: string, value: string | null, names: Map<string, string>, t: Translate): string {
   if (value === null) return "—";
   if (["party_id", "category_id", "cost_center_id"].includes(field)) return names.get(value) ?? value;
-  if (field === "kind") return value === "receivable" ? "A receber" : "A pagar";
-  if (field === "frequency") return frequencyLabel(value as RecurrenceFrequency);
+  if (field === "kind") return value === "receivable" ? t("Receivable") : t("Payable");
+  if (field === "frequency") return frequencyLabel(value as RecurrenceFrequency, t);
   if (field === "amount") return formatMoney(value);
   if (field === "starts_on" || field === "ends_on") return formatDate(value);
-  if (field === "active") return value === "true" ? "Ativa" : "Pausada";
+  if (field === "active") return value === "true" ? t("Running") : t("Recurrence paused");
   return value;
 }

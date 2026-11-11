@@ -10,6 +10,7 @@ import { Button } from "./Button";
 import { PlusIcon } from "./icons/plus";
 import { Notice } from "./Notice";
 import { Spinner } from "./Spinner";
+import { useT } from "../i18n";
 
 interface AttachmentsPanelProps {
   companyId: string;
@@ -22,6 +23,7 @@ interface AttachmentsPanelProps {
  * link, so the browser saves it rather than showing it as a page of the app.
  */
 export function AttachmentsPanel({ companyId, entryId, canWrite }: AttachmentsPanelProps) {
+  const t = useT();
   const [attachments, setAttachments] = useState<Attachment[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
@@ -51,7 +53,7 @@ export function AttachmentsPanel({ companyId, entryId, canWrite }: AttachmentsPa
     if (file === undefined || sending || removingId !== null) {
       return;
     }
-    const problem = fileProblem(file);
+    const problem = fileProblem(file, t);
     if (problem !== null) {
       setError(problem);
       setSaved(null);
@@ -63,7 +65,7 @@ export function AttachmentsPanel({ companyId, entryId, canWrite }: AttachmentsPa
     try {
       const made = await api.attachFile(companyId, entryId, file);
       if (await load()) {
-        setSaved(`${made.file_name} anexado.`);
+        setSaved(t("{name} attached.", { name: made.file_name }));
       }
     } catch (failure) {
       setError(errorMessage(failure));
@@ -100,16 +102,16 @@ export function AttachmentsPanel({ companyId, entryId, canWrite }: AttachmentsPa
       <Notice message={saved} tone="success" />
       {attachments === null && error === null ? (
         <p role="status" className="status">
-          <Spinner /> Carregando…
+          <Spinner /> {t("Loading…")}
         </p>
       ) : attachments === null ? (
         <Button type="button" variant="ghost" onClick={() => void load()}>
-          Tentar de novo
+          {t("Try again")}
         </Button>
       ) : (
         attachments !== null &&
         (attachments.length === 0 ? (
-          <p className="muted">Nenhum arquivo anexado.</p>
+          <p className="muted">{t("No file attached.")}</p>
         ) : (
           <ul className="history">
             {attachments.map((attachment) => (
@@ -123,12 +125,12 @@ export function AttachmentsPanel({ companyId, entryId, canWrite }: AttachmentsPa
                     type="button"
                     variant="ghost"
                     className="btn-small"
-                    aria-label={`Remover ${attachment.file_name}`}
+                    aria-label={t("Remove {name}", { name: attachment.file_name })}
                     pending={removingId === attachment.id}
                     disabled={removingId !== null || sending}
                     onClick={() => void remove(attachment)}
                   >
-                    Remover
+                    {t("Remove")}
                   </Button>
                 )}
               </li>
@@ -143,7 +145,7 @@ export function AttachmentsPanel({ companyId, entryId, canWrite }: AttachmentsPa
             type="file"
             hidden
             accept={ATTACHMENT_ACCEPT}
-            aria-label="Arquivo"
+            aria-label={t("File")}
             onChange={(event) => void attach(event)}
           />
           <Button
@@ -153,12 +155,12 @@ export function AttachmentsPanel({ companyId, entryId, canWrite }: AttachmentsPa
             disabled={full || removingId !== null}
             onClick={() => picker.current?.click()}
           >
-            Anexar arquivo
+            {t("Attach file")}
           </Button>
           <p className="muted">
             {full
-              ? `Este lançamento já tem ${MAX_ENTRY_ATTACHMENTS} arquivos: remova um para anexar outro.`
-              : `Até ${MAX_ENTRY_ATTACHMENTS} arquivos de 10 MB: PDF, imagem, texto, CSV ou XML.`}
+              ? t("This entry already has {max} files: remove one to attach another.", { max: MAX_ENTRY_ATTACHMENTS })
+              : t("Up to {max} files of 10 MB: PDF, image, text, CSV or XML.", { max: MAX_ENTRY_ATTACHMENTS })}
           </p>
         </>
       )}

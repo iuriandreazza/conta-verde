@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import type { PriceList, PriceListInput, Product } from "../api";
+import { useT } from "../i18n";
 import { isAmbiguousDecimal, toApiDecimal, toInputDecimal } from "../lib/decimal";
 import { BackButton } from "./BackButton";
 import { Button } from "./Button";
@@ -37,6 +38,7 @@ interface PriceListFormProps {
 
 /** Registers a price table, or changes one. Remount it (a `key`) to start over. */
 export function PriceListForm({ list, products, pending, error, onSubmit, onCancel }: PriceListFormProps) {
+  const t = useT();
   const [rows, setRows] = useState<Row[]>(() =>
     list === null ? [newRow()] : list.items.map((item) => newRow(item.product_id, toInputDecimal(item.price))),
   );
@@ -74,16 +76,16 @@ export function PriceListForm({ list, products, pending, error, onSubmit, onCanc
     if (pending) return;
     const position = rows.findIndex((row) => row.product_id === "");
     if (position !== -1) {
-      setFieldError(`Escolha o produto do item ${position + 1}.`);
+      setFieldError(t("Choose the product of item {number}.", { number: position + 1 }));
       return;
     }
     if (new Set(rows.map((row) => row.product_id)).size !== rows.length) {
-      setFieldError("Cada produto aparece uma vez só na tabela.");
+      setFieldError(t("Each product appears only once in the list."));
       return;
     }
     const wrong = rows.findIndex((row) => isAmbiguousDecimal(row.price) || toApiDecimal(row.price) === undefined);
     if (wrong !== -1) {
-      setFieldError(`Informe o preço do item ${wrong + 1}, por exemplo 12,50.`);
+      setFieldError(t("Enter the price of item {number}, for example 12,50.", { number: wrong + 1 }));
       return;
     }
     setFieldError(null);
@@ -98,31 +100,31 @@ export function PriceListForm({ list, products, pending, error, onSubmit, onCanc
   return (
     <form className="record-form" onSubmit={handleSubmit}>
       <section className="form-section" aria-labelledby="price-list-info">
-        <h3 id="price-list-info">Dados da tabela</h3>
+        <h3 id="price-list-info">{t("List details")}</h3>
         <div className="field-grid">
           <label>
-            Nome
-            <input name="name" required maxLength={200} autoComplete="off" placeholder="Por exemplo Atacado" defaultValue={list?.name} />
+            {t("Name")}
+            <input name="name" required maxLength={200} autoComplete="off" placeholder={t("For example Wholesale")} defaultValue={list?.name} />
           </label>
           <label className="inline">
-            <input name="active" type="checkbox" defaultChecked={list?.active ?? true} /> Ativa
+            <input name="active" type="checkbox" defaultChecked={list?.active ?? true} /> {t("Enabled")}
           </label>
         </div>
       </section>
       <section className="form-section" aria-labelledby="price-list-items">
-        <h3 id="price-list-items">Preços</h3>
+        <h3 id="price-list-items">{t("Prices")}</h3>
         <fieldset className="lines" aria-labelledby="price-list-items">
           {rows.map((row, index) => (
             <div className="line-row" key={row.key}>
               <label className="span-all">
-                Produto ou serviço
+                {t("Product or service")}
                 <select
-                  aria-label={`Produto ou serviço do preço ${index + 1}`}
+                  aria-label={t("Product or service of price {number}", { number: index + 1 })}
                   value={row.product_id}
                   onChange={(event) => chooseProduct(row.key, event.target.value)}
                 >
                   <option value="" disabled>
-                    Escolha
+                    {t("Choose")}
                   </option>
                   {productChoices.map((product) => (
                     <option key={product.id} value={product.id} disabled={inList.has(product.id) && product.id !== row.product_id}>
@@ -132,9 +134,9 @@ export function PriceListForm({ list, products, pending, error, onSubmit, onCanc
                 </select>
               </label>
               <label>
-                Preço
+                {t("Price")}
                 <input
-                  aria-label={`Preço do item ${index + 1}`}
+                  aria-label={t("Price of item {number}", { number: index + 1 })}
                   inputMode="decimal"
                   autoComplete="off"
                   placeholder="0,00"
@@ -146,11 +148,11 @@ export function PriceListForm({ list, products, pending, error, onSubmit, onCanc
                 type="button"
                 variant="ghost"
                 className="btn-small"
-                aria-label={`Remover o preço ${index + 1}`}
+                aria-label={t("Remove price {number}", { number: index + 1 })}
                 disabled={rows.length === 1}
                 onClick={() => editRows((current) => current.filter((item) => item.key !== row.key))}
               >
-                Remover
+                {t("Remove")}
               </Button>
             </div>
           ))}
@@ -163,14 +165,14 @@ export function PriceListForm({ list, products, pending, error, onSubmit, onCanc
               disabled={rows.length >= MAX_PRICES}
               onClick={() => editRows((current) => [...current, newRow()])}
             >
-              Adicionar produto
+              {t("Add product")}
             </Button>
             <div className="action-with-tip">
               <Button type="button" variant="ghost" className="btn-small" disabled={missing.length === 0} onClick={addAllProducts}>
-                Incluir todos os produtos
+                {t("Include all products")}
               </Button>
-              <InfoTip label="Sobre incluir todos os produtos" align="start">
-                <p>Incluir todos traz o preço de venda de cada produto que ainda não está na tabela.</p>
+              <InfoTip label={t("About including all products")} align="start">
+                <p>{t("Including all brings the sale price of each product that is not in the list yet.")}</p>
               </InfoTip>
             </div>
           </div>
@@ -180,7 +182,7 @@ export function PriceListForm({ list, products, pending, error, onSubmit, onCanc
       <div className="form-footer">
         <BackButton disabled={pending} onClick={onCancel} />
         <Button type="submit" icon={list === null ? PlusIcon : CheckIcon} pending={pending}>
-          {list === null ? "Cadastrar tabela" : "Salvar alterações"}
+          {list === null ? t("Register list") : t("Save changes")}
         </Button>
       </div>
     </form>

@@ -9,9 +9,11 @@ import { Spinner } from "../components/Spinner";
 import { STATUS_BADGES, STATUS_LABELS, lastSync, syncSummary } from "../lib/bankConnections";
 import { readUpTo } from "../lib/readUpTo";
 import { useCanWrite } from "../lib/useCanWrite";
+import { useT } from "../i18n";
 
 /** Links one bank account of the company to an account the aggregator holds, after asking which accounts a connection has. */
 function ConnectForm({ companyId, accounts, onConnected }: { companyId: string; accounts: BankAccount[]; onConnected: (connection: BankConnection) => void }) {
+  const t = useT();
   const [bankAccountId, setBankAccountId] = useState("");
   const [itemId, setItemId] = useState("");
   const [found, setFound] = useState<AggregatedBankAccount[] | null>(null);
@@ -57,12 +59,12 @@ function ConnectForm({ companyId, accounts, onConnected }: { companyId: string; 
 
   return (
     <section className="card">
-      <h2>Conectar uma conta</h2>
+      <h2>{t("Connect an account")}</h2>
       <form onSubmit={connect}>
         <label>
-          Conta bancária no sistema
+          {t("Bank account in the system")}
           <select value={bankAccountId} onChange={(event) => setBankAccountId(event.target.value)} required>
-            <option value="">Escolha…</option>
+            <option value="">{t("Choose…")}</option>
             {accounts.map((account) => (
               <option key={account.id} value={account.id}>
                 {account.name}
@@ -71,7 +73,7 @@ function ConnectForm({ companyId, accounts, onConnected }: { companyId: string; 
           </select>
         </label>
         <label>
-          Código da conexão (Item ID)
+          {t("Connection code (Item ID)")}
           <input
             value={itemId}
             onChange={(event) => {
@@ -83,15 +85,15 @@ function ConnectForm({ companyId, accounts, onConnected }: { companyId: string; 
         </label>
         <div className="form-actions">
           <Button type="button" variant="ghost" className="btn-small" pending={looking} disabled={itemId.trim() === ""} onClick={() => void look()}>
-            Buscar contas
+            {t("Find accounts")}
           </Button>
         </div>
-        {found !== null && found.length === 0 && <p className="muted">Essa conexão não tem contas.</p>}
+        {found !== null && found.length === 0 && <p className="muted">{t("This connection has no accounts.")}</p>}
         {found !== null && found.length > 0 && (
           <label>
-            Conta no provedor
+            {t("Account at the provider")}
             <select value={accountId} onChange={(event) => setAccountId(event.target.value)} required>
-              <option value="">Escolha…</option>
+              <option value="">{t("Choose…")}</option>
               {found.map((account) => (
                 <option key={account.id} value={account.id}>
                   {account.name}
@@ -103,7 +105,7 @@ function ConnectForm({ companyId, accounts, onConnected }: { companyId: string; 
         )}
         <Notice message={error} />
         <Button type="submit" className="btn-small" pending={saving} disabled={bankAccountId === "" || accountId === ""}>
-          Conectar
+          {t("Connect")}
         </Button>
       </form>
     </section>
@@ -112,6 +114,7 @@ function ConnectForm({ companyId, accounts, onConnected }: { companyId: string; 
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one instance.
 export function BankConnectionsPage() {
+  const t = useT();
   const { companyId = "" } = useParams();
   const canWrite = useCanWrite("finance");
   const [connections, setConnections] = useState<BankConnection[]>([]);
@@ -145,7 +148,7 @@ export function BankConnectionsPage() {
     void load();
   }, [load]);
 
-  const nameOf = (id: string) => accounts.find((account) => account.id === id)?.name ?? "Conta removida";
+  const nameOf = (id: string) => accounts.find((account) => account.id === id)?.name ?? t("Removed account");
   // An account that already has a live connection is not offered again.
   const free = accounts.filter((account) => account.active && !connections.some((connection) => connection.bank_account_id === account.id && connection.status !== "disconnected"));
 
@@ -167,16 +170,16 @@ export function BankConnectionsPage() {
     }
   }
 
-  const sync = (connection: BankConnection) => act(connection, async () => setNotice(syncSummary(await api.syncBankConnection(companyId, connection.id))));
+  const sync = (connection: BankConnection) => act(connection, async () => setNotice(syncSummary(await api.syncBankConnection(companyId, connection.id), t)));
   const disconnect = (connection: BankConnection) => act(connection, async () => void (await api.disconnectBankConnection(companyId, connection.id)));
 
   return (
     <>
       <PageHeader
-        title="Conexões bancárias"
-        description="O extrato de uma conta bancária vem sozinho, todo dia, de um provedor de dados bancários (Open Finance), e entra na Conciliação como qualquer extrato importado. O sistema não guarda senha de banco nem credencial: só o vínculo. Sem provedor configurado no servidor, importe o arquivo OFX na Conciliação."
+        title={t("Bank connections")}
+        description={t("The statement of a bank account comes on its own, every day, from a bank data provider (Open Finance), and enters Reconciliation like any imported statement. The system keeps no bank password or credential: only the link. With no provider set up on the server, import the OFX file in Reconciliation.")}
       />
-      {!loading && !available && <Notice message="Nenhum provedor de dados bancários está configurado neste servidor (BANK_AGGREGATOR). Peça a quem cuida do servidor, ou importe o extrato em OFX na Conciliação." />}
+      {!loading && !available && <Notice message={t("No bank data provider is set up on this server (BANK_AGGREGATOR). Ask whoever looks after the server, or import the OFX statement in Reconciliation.")} />}
       <Notice message={error} />
       <Notice tone="success" message={notice} />
       {canWrite && available && !loading && (
@@ -184,29 +187,29 @@ export function BankConnectionsPage() {
           companyId={companyId}
           accounts={free}
           onConnected={() => {
-            setNotice("Conta conectada. O extrato começa a vir na próxima sincronização, ou agora, em “Sincronizar”.");
+            setNotice(t("Account connected. The statement starts to arrive at the next sync, or now, with “Sync”."));
             void load();
           }}
         />
       )}
       <section className="card list-card">
-        <h2>Conexões</h2>
+        <h2>{t("Connections")}</h2>
         {loading ? (
           <p role="status" className="status">
-            <Spinner /> Carregando…
+            <Spinner /> {t("Loading…")}
           </p>
         ) : connections.length === 0 ? (
-          <p className="muted">Nenhuma conta conectada ainda.</p>
+          <p className="muted">{t("No account connected yet.")}</p>
         ) : (
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Conta</th>
-                  <th>Estado</th>
-                  <th>Última sincronização</th>
+                  <th>{t("Account")}</th>
+                  <th>{t("State")}</th>
+                  <th>{t("Last sync")}</th>
                   <th>
-                    <span className="visually-hidden">Ações</span>
+                    <span className="visually-hidden">{t("Actions")}</span>
                   </th>
                 </tr>
               </thead>
@@ -218,11 +221,11 @@ export function BankConnectionsPage() {
                         {nameOf(connection.bank_account_id)}
                         <br />
                         <span className="muted">
-                          {provider === connection.provider ? "" : `${connection.provider} · `}conectada por {connection.connected_by}
+                          {provider === connection.provider ? "" : `${connection.provider} · `}{t("connected by {name}", { name: connection.connected_by })}
                         </span>
                       </td>
                       <td>
-                        <span className={STATUS_BADGES[connection.status]}>{STATUS_LABELS[connection.status]}</span>
+                        <span className={STATUS_BADGES[connection.status]}>{t(STATUS_LABELS[connection.status])}</span>
                         {connection.last_error && (
                           <>
                             <br />
@@ -230,7 +233,7 @@ export function BankConnectionsPage() {
                           </>
                         )}
                       </td>
-                      <td>{lastSync(connection)}</td>
+                      <td>{lastSync(connection, t)}</td>
                       <td>
                         <span className="form-actions">
                           {canWrite && connection.status !== "disconnected" && (
@@ -239,34 +242,34 @@ export function BankConnectionsPage() {
                                 type="button"
                                 variant="ghost"
                                 className="btn-small"
-                                aria-label={`Sincronizar ${nameOf(connection.bank_account_id)}`}
+                                aria-label={t("Sync {name}", { name: nameOf(connection.bank_account_id) })}
                                 pending={busy === connection.id}
                                 disabled={busy !== null || !available}
                                 onClick={() => void sync(connection)}
                               >
-                                Sincronizar
+                                {t("Sync")}
                               </Button>
                               {confirming === connection.id ? (
                                 <Button
                                   type="button"
                                   variant="ghost"
                                   className="btn-small"
-                                  aria-label={`Confirmar: desconectar ${nameOf(connection.bank_account_id)}`}
+                                  aria-label={t("Confirm: disconnect {name}", { name: nameOf(connection.bank_account_id) })}
                                   disabled={busy !== null}
                                   onClick={() => void disconnect(connection)}
                                 >
-                                  Confirmar desconexão
+                                  {t("Confirm disconnection")}
                                 </Button>
                               ) : (
                                 <Button
                                   type="button"
                                   variant="ghost"
                                   className="btn-small"
-                                  aria-label={`Desconectar ${nameOf(connection.bank_account_id)}`}
+                                  aria-label={t("Disconnect {name}", { name: nameOf(connection.bank_account_id) })}
                                   disabled={busy !== null}
                                   onClick={() => setConfirming(connection.id)}
                                 >
-                                  Desconectar
+                                  {t("Disconnect")}
                                 </Button>
                               )}
                             </>
@@ -275,10 +278,10 @@ export function BankConnectionsPage() {
                             type="button"
                             variant="ghost"
                             className="btn-small"
-                            aria-label={`Histórico de ${nameOf(connection.bank_account_id)}`}
+                            aria-label={t("History of {name}", { name: nameOf(connection.bank_account_id) })}
                             onClick={() => setHistoryOf(historyOf === connection.id ? null : connection.id)}
                           >
-                            Histórico
+                            {t("History")}
                           </Button>
                         </span>
                       </td>

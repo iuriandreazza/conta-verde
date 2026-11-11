@@ -7,7 +7,7 @@ export const PURCHASE_STATUS_LABELS: Record<PurchaseStatus, string> = {
   approved: msg("Approved"),
   partially_received: msg("Partially received"),
   received: msg("Received"),
-  cancelled: msg("Cancelled"),
+  cancelled: msg("Purchase cancelled"),
 };
 
 /** The badge of a status: the dot and the word say it, the color only helps. */

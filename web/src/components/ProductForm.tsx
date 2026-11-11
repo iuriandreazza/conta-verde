@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import type { Product, ProductInput, ProductKind } from "../api";
+import { msg, useT } from "../i18n";
 import { isAmbiguousDecimal, toApiDecimal, toInputDecimal } from "../lib/decimal";
 import { Button } from "./Button";
 import { CheckIcon } from "./icons/check";
@@ -7,9 +8,9 @@ import { PlusIcon } from "./icons/plus";
 import { Notice } from "./Notice";
 
 const AMOUNT_FIELDS = [
-  { name: "sale_price", label: "Preço de venda" },
-  { name: "cost_price", label: "Preço de custo" },
-  { name: "minimum_stock", label: "Estoque mínimo" },
+  { name: "sale_price", label: msg("Sale price") },
+  { name: "cost_price", label: msg("Cost price") },
+  { name: "minimum_stock", label: msg("Minimum stock") },
 ];
 
 interface ProductFormProps {
@@ -32,6 +33,7 @@ export function ProductForm({
   onSubmit,
   onCancel,
 }: ProductFormProps) {
+  const t = useT();
   const [kind, setKind] = useState<ProductKind>(product?.kind ?? "product");
   const isProduct = kind === "product";
   const [fieldError, setFieldError] = useState<string | null>(null);
@@ -49,7 +51,10 @@ export function ProductForm({
     );
     if (ambiguous) {
       setFieldError(
-        `${ambiguous.label}: "${text(ambiguous.name).trim()}" pode ser lido de dois jeitos. Use vírgula para os decimais (1,234) ou escreva o milhar com decimais (1.234,00).`,
+        t("{field}: \"{value}\" can be read in two ways. Use a comma for the decimals (1,234) or write the thousands with decimals (1.234,00).", {
+          field: t(ambiguous.label),
+          value: text(ambiguous.name).trim(),
+        }),
       );
       return;
     }
@@ -71,19 +76,19 @@ export function ProductForm({
   return (
     <form className="form-grid" onSubmit={handleSubmit}>
       <label>
-        Tipo
+        {t("Type")}
         {/* Stock and fiscal data hang from the kind, so it is chosen once. */}
         <select
           value={kind}
           disabled={product !== null}
           onChange={(event) => setKind(event.target.value as ProductKind)}
         >
-          <option value="product">Produto</option>
-          <option value="service">Serviço</option>
+          <option value="product">{t("Product")}</option>
+          <option value="service">{t("Service")}</option>
         </select>
       </label>
       <label>
-        Nome
+        {t("Name")}
         <input
           name="name"
           required
@@ -92,7 +97,7 @@ export function ProductForm({
         />
       </label>
       <label>
-        SKU
+        {t("SKU")}
         <input
           name="sku"
           autoComplete="off"
@@ -102,18 +107,18 @@ export function ProductForm({
         />
       </label>
       <label>
-        Unidade
+        {t("Unit")}
         <input
           name="unit"
           required
           maxLength={6}
           autoComplete="off"
-          placeholder="UN, KG, M2…"
+          placeholder={t("UN, KG, M2…")}
           defaultValue={product?.unit ?? "UN"}
         />
       </label>
       <label>
-        NCM
+        {t("NCM")}
         <input
           name="ncm"
           inputMode="numeric"
@@ -124,7 +129,7 @@ export function ProductForm({
         />
       </label>
       <label>
-        Preço de venda (R$)
+        {t("Sale price (R$)")}
         <input
           name="sale_price"
           inputMode="decimal"
@@ -134,7 +139,7 @@ export function ProductForm({
         />
       </label>
       <label>
-        Preço de custo (R$)
+        {t("Cost price (R$)")}
         <input
           name="cost_price"
           inputMode="decimal"
@@ -144,7 +149,7 @@ export function ProductForm({
         />
       </label>
       <label>
-        Estoque mínimo
+        {t("Minimum stock")}
         <input
           name="minimum_stock"
           inputMode="decimal"
@@ -154,16 +159,16 @@ export function ProductForm({
         />
       </label>
       <label className="inline">
-        <input name="active" type="checkbox" defaultChecked={product?.active ?? true} /> Ativo
+        <input name="active" type="checkbox" defaultChecked={product?.active ?? true} /> {t("Active")}
       </label>
       <Notice message={fieldError ?? error} />
       <div className="form-actions">
         <Button type="submit" icon={product === null ? PlusIcon : CheckIcon} pending={pending}>
-          {product === null ? "Adicionar" : "Salvar alterações"}
+          {product === null ? t("Add") : t("Save changes")}
         </Button>
         {product !== null && (
           <Button type="button" variant="ghost" onClick={onCancel}>
-            Cancelar
+            {t("Cancel")}
           </Button>
         )}
       </div>

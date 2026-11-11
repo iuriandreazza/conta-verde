@@ -6,6 +6,7 @@ import { PaymentMethodForm } from "../components/PaymentMethodForm";
 import { PaymentTermForm } from "../components/PaymentTermForm";
 import { CommissionRuleForm } from "../components/CommissionRuleForm";
 import { PriceListForm } from "../components/PriceListForm";
+import { useT, type Translate } from "../i18n";
 import { Spinner } from "../components/Spinner";
 import { formatDecimal } from "../lib/decimal";
 import { readUpTo } from "../lib/readUpTo";
@@ -24,10 +25,11 @@ interface FormProps<Input> {
  */
 function registerCreator<Input, Created extends { id: string }>(options: {
   create: (companyId: string, input: Input) => Promise<Created>;
-  message: (created: Created) => string;
+  message: (created: Created, t: Translate) => string;
   form: (props: FormProps<Input>) => ReactNode;
 }) {
   return function RegisterCreator({ companyId, onBusyChange, onCreated, onCancel }: CreatorProps) {
+    const t = useT();
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
@@ -40,7 +42,7 @@ function registerCreator<Input, Created extends { id: string }>(options: {
       setError(null);
       try {
         const created = await options.create(companyId, input);
-        onCreated({ id: created.id, message: options.message(created) });
+        onCreated({ id: created.id, message: options.message(created, t) });
       } catch (failure) {
         setError(errorMessage(failure));
         setSaving(false);
@@ -53,25 +55,25 @@ function registerCreator<Input, Created extends { id: string }>(options: {
 
 export const CostCenterCreator = registerCreator<CostCenterInput, { id: string; name: string }>({
   create: (companyId, input) => api.createCostCenter(companyId, input),
-  message: (created) => `${created.name} cadastrado.`,
+  message: (created, t) => t("{name} registered.", { name: created.name }),
   form: (props) => <CostCenterForm costCenter={null} {...props} />,
 });
 
 export const PaymentMethodCreator = registerCreator<PaymentMethodInput, { id: string; name: string }>({
   create: (companyId, input) => api.createPaymentMethod(companyId, input),
-  message: (created) => `${created.name} cadastrada.`,
+  message: (created, t) => t("Payment method {name} registered.", { name: created.name }),
   form: (props) => <PaymentMethodForm method={null} {...props} />,
 });
 
 export const PaymentTermCreator = registerCreator<PaymentTermInput, { id: string; name: string }>({
   create: (companyId, input) => api.createPaymentTerm(companyId, input),
-  message: (created) => `${created.name} cadastrado.`,
+  message: (created, t) => t("{name} registered.", { name: created.name }),
   form: (props) => <PaymentTermForm term={null} {...props} />,
 });
 
 export const BankAccountCreator = registerCreator<BankAccountInput, { id: string; name: string }>({
   create: (companyId, input) => api.createBankAccount(companyId, input),
-  message: (created) => `${created.name} cadastrada.`,
+  message: (created, t) => t("Bank account {name} registered.", { name: created.name }),
   form: (props) => <BankAccountForm account={null} {...props} />,
 });
 

@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { api, errorMessage, type AccountBalance, type OpeningBalance } from "../api";
+import { useT } from "../i18n";
 import { isAmbiguousDecimal, toInputDecimal } from "../lib/decimal";
 import { isIsoDate } from "../lib/entryInstallments";
 import { toSignedApi } from "../lib/signedAmount";
@@ -20,6 +21,7 @@ interface OpeningBalanceFormProps {
  * It may be negative: a card or an account in overdraft starts below zero.
  */
 export function OpeningBalanceForm({ companyId, item, onSaved }: OpeningBalanceFormProps) {
+  const t = useT();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
@@ -35,11 +37,11 @@ export function OpeningBalanceForm({ companyId, item, onSaved }: OpeningBalanceF
     // `1.000` could be a thousand or one: the person says which, as in every amount field.
     const balance = isAmbiguousDecimal(typed.replace(/^-\s*/, "")) ? null : toSignedApi(typed);
     if (balance === null) {
-      setError("Informe o saldo em reais e centavos, por exemplo 1.234,50 ou -200,00.");
+      setError(t("Enter the balance in reais and centavos, for example 1.234,50 or -200,00."));
       return;
     }
     if (!isIsoDate(on)) {
-      setError("Informe o dia a que esse saldo se refere.");
+      setError(t("Enter the day this balance refers to."));
       return;
     }
     setSaving(true);
@@ -47,7 +49,7 @@ export function OpeningBalanceForm({ companyId, item, onSaved }: OpeningBalanceF
     setSaved(null);
     try {
       const stored = await api.setOpeningBalance(companyId, item.account.id, { balance, on });
-      setSaved("Saldo inicial salvo.");
+      setSaved(t("Opening balance saved."));
       onSaved(stored);
     } catch (failure) {
       setError(errorMessage(failure));
@@ -59,7 +61,7 @@ export function OpeningBalanceForm({ companyId, item, onSaved }: OpeningBalanceF
   return (
     <form className="opening-form" onSubmit={(event) => void handleSubmit(event)}>
       <label>
-        Saldo no início do dia
+        {t("Balance at the start of the day")}
         <input
           name="balance"
           inputMode="decimal"
@@ -70,17 +72,16 @@ export function OpeningBalanceForm({ companyId, item, onSaved }: OpeningBalanceF
         />
       </label>
       <label>
-        Dia
+        {t("Day")}
         <input name="on" type="date" required defaultValue={item.opening?.on ?? ""} />
       </label>
       <div className="action-with-tip">
         <Button type="submit" icon={CheckIcon} pending={saving}>
-          Salvar saldo inicial
+          {t("Save opening balance")}
         </Button>
-        <InfoTip label="Sobre o saldo inicial" align="start">
+        <InfoTip label={t("About the opening balance")} align="start">
           <p>
-            O saldo da conta soma o que foi baixado e transferido a partir desse dia. Antes dele, o saldo
-            aparece zerado.
+            {t("The account balance adds up what was settled and transferred from this day on. Before it, the balance shows as zero.")}
           </p>
         </InfoTip>
       </div>

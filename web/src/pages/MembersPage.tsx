@@ -97,35 +97,35 @@ export function MembersPage() {
   return (
     <>
       <PageHeader
-        title="Membros"
-        description="Quem participa desta empresa e o que cada um pode fazer."
+        title={t("Members")}
+        description={t("Who takes part in this company and what each person can do.")}
       />
       {canWrite && (
         <div className="list-actions">
           <Button type="button" icon={UserPlusIcon} onClick={() => openCreate("invite")}>
-            Convidar alguém
+            {t("Invite someone")}
           </Button>
         </div>
       )}
       <div>
         <div className="stack">
           <section className="card list-card">
-            <h2>Participantes</h2>
+            <h2>{t("Participants")}</h2>
             <Notice message={error} />
             {loading ? (
               <p role="status" className="status">
-                <Spinner /> Carregando…
+                <Spinner /> {t("Loading…")}
               </p>
             ) : (
               <div className="table-wrap">
                 <table>
                   <thead>
                     <tr>
-                      <th>Nome</th>
-                      <th>E-mail</th>
-                      <th>Papel</th>
+                      <th>{t("Name")}</th>
+                      <th>{t("E-mail")}</th>
+                      <th>{t("Role")}</th>
                       <th>
-                        <span className="visually-hidden">Ações</span>
+                        <span className="visually-hidden">{t("Actions")}</span>
                       </th>
                     </tr>
                   </thead>
@@ -144,7 +144,7 @@ export function MembersPage() {
                           <>
                             <td>
                               <select
-                                aria-label={`Papel de ${member.name}`}
+                                aria-label={t("Role of {name}", { name: member.name })}
                                 value={member.role}
                                 disabled={changingId !== null}
                                 onChange={(event) =>
@@ -167,7 +167,7 @@ export function MembersPage() {
                                     type="button"
                                     variant="ghost"
                                     className="btn-small"
-                                    aria-label={`Confirmar a remoção de ${member.name}`}
+                                    aria-label={t("Confirm removing {name}", { name: member.name })}
                                     pending={changingId === member.user_id}
                                     disabled={changingId !== null}
                                     onClick={() =>
@@ -176,7 +176,7 @@ export function MembersPage() {
                                       )
                                     }
                                   >
-                                    Confirmar
+                                    {t("Confirm")}
                                   </Button>
                                   <Button
                                     type="button"
@@ -185,7 +185,7 @@ export function MembersPage() {
                                     disabled={changingId !== null}
                                     onClick={() => setConfirmingId(null)}
                                   >
-                                    Cancelar
+                                    {t("Cancel")}
                                   </Button>
                                 </span>
                               ) : (
@@ -193,11 +193,11 @@ export function MembersPage() {
                                   type="button"
                                   variant="ghost"
                                   className="btn-small"
-                                  aria-label={`Remover ${member.name}`}
+                                  aria-label={t("Remove {name}", { name: member.name })}
                                   disabled={changingId !== null}
                                   onClick={() => setConfirmingId(member.user_id)}
                                 >
-                                  Remover
+                                  {t("Remove")}
                                 </Button>
                               )}
                             </td>
@@ -212,21 +212,21 @@ export function MembersPage() {
           </section>
 
           <section className="card list-card" aria-labelledby="open-invitations">
-            <HelpTitle level={2} id="open-invitations" title="Convites em aberto">
-              <p>Um convite expirado ou retirado não vale mais: convide de novo para mandar outro link.</p>
+            <HelpTitle level={2} id="open-invitations" title={t("Open invitations")}>
+              <p>{t("An expired or withdrawn invitation no longer works: invite again to send another link.")}</p>
             </HelpTitle>
             {invitations.length === 0 ? (
-              <p className="muted">Nenhum convite em aberto.</p>
+              <p className="muted">{t("No open invitations.")}</p>
             ) : (
               <div className="table-wrap">
                 <table>
                   <thead>
                     <tr>
-                      <th>E-mail</th>
-                      <th>Papel</th>
-                      <th>Validade</th>
+                      <th>{t("E-mail")}</th>
+                      <th>{t("Role")}</th>
+                      <th>{t("Invitation valid until")}</th>
                       <th>
-                        <span className="visually-hidden">Ações</span>
+                        <span className="visually-hidden">{t("Actions")}</span>
                       </th>
                     </tr>
                   </thead>
@@ -237,9 +237,9 @@ export function MembersPage() {
                         <td>{t(ROLE_LABELS[invitation.role])}</td>
                         <td>
                           {invitation.expired ? (
-                            <span className="badge badge-warning">Expirado</span>
+                            <span className="badge badge-warning">{t("Expired")}</span>
                           ) : (
-                            `até ${formatDate(invitation.expires_at)}`
+                            t("until {date}", { date: formatDate(invitation.expires_at) })
                           )}
                         </td>
                         <td>
@@ -247,12 +247,12 @@ export function MembersPage() {
                             type="button"
                             variant="ghost"
                             className="btn-small"
-                            aria-label={`Retirar o convite de ${invitation.email}`}
+                            aria-label={t("Withdraw the invitation of {email}", { email: invitation.email })}
                             pending={revokingId === invitation.id}
                             disabled={revokingId !== null}
                             onClick={() => void revoke(invitation)}
                           >
-                            Retirar
+                            {t("Withdraw")}
                           </Button>
                         </td>
                       </tr>

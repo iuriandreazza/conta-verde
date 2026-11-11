@@ -12,7 +12,7 @@ import { Notice } from "./Notice";
 import { useSheetDirty } from "./Sheet";
 
 const KIND_LABELS: Record<StockMovementKind, string> = {
-  in: msg("Entry"),
+  in: msg("Stock entry"),
   out: msg("Exit"),
   adjustment: msg("Adjustment"),
 };

@@ -1,4 +1,5 @@
 import type { Entry, EntryInstallment } from "../api";
+import { msg } from "../i18n";
 import { centsToApi, toCents } from "./entryInstallments";
 
 export type InstallmentStatus = "open" | "partial" | "settled" | "overdue";
@@ -46,8 +47,8 @@ export function entryStatus(entry: Entry, today: string): InstallmentStatus {
 }
 
 export const STATUS_LABELS: Record<InstallmentStatus, string> = {
-  open: "Em aberto",
-  partial: "Parcial",
-  settled: "Pago",
-  overdue: "Vencido",
+  open: msg("Open"),
+  partial: msg("Partial"),
+  settled: msg("Paid"),
+  overdue: msg("Installment past due"),
 };
