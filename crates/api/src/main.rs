@@ -133,6 +133,12 @@ const WEBHOOK_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const WEBHOOK_PER_PASS: usize = 10;
 const CNPJ_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 
+/// Starts background work (the workers and the hourly passes). It belongs to no company, so it sees all of them
+/// and the application's own checks are its only barrier; a request never runs like this ([ADR 0093]).
+fn spawn_system(work: impl std::future::Future<Output = ()> + Send + 'static) {
+    tokio::spawn(conta_verde_infrastructure::tenant::system(work));
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing_subscriber::fmt()
@@ -173,7 +179,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         config.v1.clock.clone(),
     ));
     for _ in 0..WEBHOOK_WORKERS {
-        tokio::spawn(run_webhook_worker(
+        spawn_system(run_webhook_worker(
             webhook_subscriptions.clone(),
             HttpWebhookSender::new(allow_private_targets),
         ));
@@ -264,7 +270,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         )
     };
     let recurrences = recurrence_service();
-    tokio::spawn(generate_recurring_entries(recurrence_service()));
+    spawn_system(generate_recurring_entries(recurrence_service()));
     let reconciliation_over_postgres = || {
         ReconciliationService::new(
             PostgresStatementLineRepository::new(pool.clone()),
@@ -285,7 +291,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         reconciliation_over_postgres(),
         PostgresJobQueue::new(pool.clone()),
     ));
-    tokio::spawn(run_bank_sync_worker(bank_sync.clone()));
+    spawn_system(run_bank_sync_worker(bank_sync.clone()));
     let balances = BalanceService::new(
         PostgresBankAccountRepository::new(pool.clone()),
         PostgresFinancialEntryRepository::new(pool.clone()),
@@ -328,7 +334,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         ))
     };
     let dunning = dunning_service()?;
-    tokio::spawn(send_reminders(dunning_service()?));
+    spawn_system(send_reminders(dunning_service()?));
     let package_schedules = || {
         Ok::<_, Box<dyn std::error::Error + Send + Sync>>(PackageScheduleService::new(
             PostgresPackageScheduleRepository::new(pool.clone()),
@@ -338,7 +344,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         ))
     };
     let packages = package_schedules()?;
-    tokio::spawn(announce_monthly_packages(package_schedules()?));
+    spawn_system(announce_monthly_packages(package_schedules()?));
     let price_lists = PriceListService::new(
         PostgresPriceListRepository::new(pool.clone()),
         RegisterDocumentReferences::new(
@@ -411,7 +417,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     );
     let sales = sale_service();
     let contracts = contract_service();
-    tokio::spawn(bill_contracts(contract_service()));
+    spawn_system(bill_contracts(contract_service()));
     let members = MemberService::new(
         PostgresInvitationRepository::new(pool.clone()),
         PostgresIdentityRepository::new(pool.clone()),
@@ -420,7 +426,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         INVITATION_LIFETIME,
         &public_url,
     );
-    tokio::spawn(run_jobs(JobRunner::new(
+    spawn_system(run_jobs(JobRunner::new(
         PostgresJobQueue::new(pool.clone()),
         email_sender_from_env()?,
     )));
@@ -461,7 +467,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             references(),
         )
     };
-    tokio::spawn(poll_fiscal_documents(fiscal_documents()));
+    spawn_system(poll_fiscal_documents(fiscal_documents()));
     let fiscal_documents = fiscal_documents();
     let api_keys = std::sync::Arc::new(ApiKeyService::new(
         PostgresApiKeyRepository::new(pool.clone()),

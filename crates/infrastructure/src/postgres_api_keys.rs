@@ -8,6 +8,7 @@ use sqlx::{PgConnection, PgPool, Row};
 
 use crate::postgres::storage_error;
 use crate::postgres_audit;
+use crate::tenant;
 
 const SELECT_KEYS: &str = "SELECT id, company_id, name, label, scopes, expires_at, revoked, \
      created_by_id, created_by_name, created_at, rotated_from, \
@@ -131,12 +132,21 @@ impl ApiKeyRepository for PostgresApiKeyRepository {
     }
 
     async fn find_by_digest(&self, digest: &str) -> Result<Option<ApiKey>, RepositoryError> {
-        let row = sqlx::query(&format!("{SELECT_KEYS} WHERE digest = $1"))
-            .bind(digest)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(storage_error)?;
-        row.as_ref().map(key_from_row).transpose()
+        // The secret is what names the company, so it is looked up among all of them, and the request that
+        // presented it is then narrowed to the company it found.
+        let row = tenant::system(async {
+            sqlx::query(&format!("{SELECT_KEYS} WHERE digest = $1"))
+                .bind(digest)
+                .fetch_optional(&self.pool)
+                .await
+        })
+        .await
+        .map_err(storage_error)?;
+        let key = row.as_ref().map(key_from_row).transpose()?;
+        if let Some(key) = &key {
+            tenant::set_company(key.company_id());
+        }
+        Ok(key)
     }
 
     async fn list(&self, company_id: CompanyId) -> Result<Vec<ApiKey>, RepositoryError> {

@@ -1309,6 +1309,18 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         )
         .merge(v1::routes(state.clone()))
         .with_state(state)
+        // The outermost layer: every request gets a company scope of its own, empty until the caller is known
+        // ([ADR 0093]).
+        .layer(axum::middleware::from_fn(tenant_scope))
+}
+
+/// What the row-level policies know of a request: nothing, until the extractor that checks the caller's membership
+/// (or the gate that checks an API key, or the lookup of a token that names a company) narrows it to one company.
+async fn tenant_scope(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    conta_verde_infrastructure::tenant::scoped(next.run(request)).await
 }
 
 #[derive(Serialize)]

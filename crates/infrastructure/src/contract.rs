@@ -95,7 +95,20 @@ pub fn registry() -> InMemoryCnpjRegistry {
 
 pub async fn test_pool() -> PgPool {
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    crate::connect_and_migrate(&url).await.unwrap()
+    // The adapters' contract runs without a request around it, so it sees every company (the policies still
+    // apply: the role owns nothing); the barrier has its own tests with a scope.
+    crate::postgres::connect(&url, crate::tenant::Unscoped::SeeEveryCompany)
+        .await
+        .unwrap()
+}
+
+/// A pool as the role that owns the schema, for a test that changes the schema itself (a trigger) or that checks what
+/// the constraints refuse with the row-level policies out of the way (they refuse a row of another company first).
+pub async fn owner_pool() -> PgPool {
+    let url = std::env::var("DATABASE_MIGRATE_URL")
+        .or_else(|_| std::env::var("DATABASE_URL"))
+        .expect("DATABASE_URL must be set");
+    PgPool::connect(&url).await.unwrap()
 }
 
 /// Parties reference companies, so database tests need a real one.

@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 use crate::postgres::{next_document_number, snapshot, storage_error};
 use crate::postgres_audit;
+use crate::tenant;
 
 const SELECT_QUOTES: &str = "SELECT id, company_id, number, customer_id, \
      to_char(issued_on, 'YYYY-MM-DD') AS issued_on, to_char(valid_until, 'YYYY-MM-DD') AS valid_until, \
@@ -115,16 +116,24 @@ impl QuoteRepository for PostgresQuoteRepository {
     }
 
     async fn find_by_link(&self, digest: &str) -> Result<Option<Quote>, RepositoryError> {
-        let mut tx = snapshot(&self.pool).await?;
-        let row = sqlx::query(&format!("{SELECT_QUOTES} WHERE link_digest = $1"))
-            .bind(digest)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(storage_error)?;
-        let Some(row) = row else { return Ok(None) };
-        let mut quotes = with_lines(&mut tx, vec![row]).await?;
-        tx.commit().await.map_err(storage_error)?;
-        Ok(quotes.pop())
+        // The link is what names the company: looked up among all of them, then the request is narrowed to it.
+        let quote = tenant::system(async {
+            let mut tx = snapshot(&self.pool).await?;
+            let row = sqlx::query(&format!("{SELECT_QUOTES} WHERE link_digest = $1"))
+                .bind(digest)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(storage_error)?;
+            let Some(row) = row else { return Ok(None) };
+            let mut quotes = with_lines(&mut tx, vec![row]).await?;
+            tx.commit().await.map_err(storage_error)?;
+            Ok::<_, RepositoryError>(quotes.pop())
+        })
+        .await?;
+        if let Some(quote) = &quote {
+            tenant::set_company(quote.company_id());
+        }
+        Ok(quote)
     }
 
     async fn update(
