@@ -60,6 +60,17 @@ jobs:
           PUBLIC_URL: http://localhost:5173
           ATTACHMENTS_DIR: ${{ runner.temp }}/attachments
           PAYMENT_PROVIDER: fake
+      # A backup of seeded books is restored into a fresh database and compared row by row, and the server is started on the copy
+      # (ADR 0096). The PostgreSQL 17 tools come from the image, since the runner's client is older than the server.
+      - name: Rehearse a restore
+        run: |
+          scripts/ops/docker-pg-tools.sh "$RUNNER_TEMP/pg-tools"
+          export PATH="$RUNNER_TEMP/pg-tools:$PATH"
+          scripts/ops/rehearse-restore.sh
+        env:
+          OWNER_BASE_URL: postgres://conta_verde:conta_verde@localhost:5432
+          APP_BASE_URL: postgres://conta_verde_app:conta_verde_app@localhost:5432
+          API_BIN: target/debug/conta-verde
 
   web:
     runs-on: ubuntu-latest
@@ -85,3 +96,25 @@ jobs:
           node-version: 22
       - run: node --test "test/*.test.js"
         working-directory: connectors/woocommerce
+
+  # The image builds as a release would (it is not published: only a tag does that, .github/workflows/release.yml), and the
+  # production compose file is valid with a release, a domain and the passwords given (ADR 0096).
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: conta-verde:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: The production compose file is valid
+        run: docker compose -f deploy/production/docker-compose.yml config --quiet
+        env:
+          CONTA_VERDE_VERSION: 0.0.0
+          DOMAIN: erp.example.com
+          OWNER_DB_PASSWORD: owner
+          APP_DB_PASSWORD: app

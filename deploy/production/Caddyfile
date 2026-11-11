@@ -1,0 +1,13 @@
+# The TLS proxy of docs/operations. Caddy gets and renews the certificate for {$DOMAIN} (the name must point at this host
+# and ports 80 and 443 must be reachable) and sends everything to the application image, which serves the web app and
+# /api and rate-limits sign-in itself. Caddy adds X-Forwarded-For and X-Forwarded-Proto.
+{$DOMAIN} {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+	reverse_proxy app:3080
+}

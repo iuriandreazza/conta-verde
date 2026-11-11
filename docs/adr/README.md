@@ -111,6 +111,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0093](0093-row-level-security.md) | Row-level security as the second barrier | accepted | 9 |
 | [0094](0094-stock-balance-import.md) | Opening the stock from a file | accepted | 9 |
 | [0095](0095-i18n.md) | The screens in two languages | accepted | 9 |
+| [0096](0096-operations.md) | The image, the backup, the restore and the upgrade | accepted | 9 |
 
 ## Template
 

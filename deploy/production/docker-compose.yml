@@ -1,0 +1,77 @@
+# conta-verde in production: PostgreSQL, the application image and a TLS proxy in front of it (docs/operations, ADR 0096).
+#
+#   cp production.env.example production.env      # then fill it in: nothing in it is a default worth keeping
+#   docker compose --env-file production.env up -d
+#
+# The proxy is Caddy because it gets and renews the certificate on its own; any proxy that forwards to app:3080 and sets
+# X-Forwarded-For and X-Forwarded-Proto will do. Only the proxy publishes ports.
+services:
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      # The owner of the schema: it migrates, and a backup is taken as it (docs/operations/backup-and-restore.md).
+      POSTGRES_USER: conta_verde
+      POSTGRES_PASSWORD: ${OWNER_DB_PASSWORD:?set OWNER_DB_PASSWORD}
+      POSTGRES_DB: conta_verde
+      # The role the application serves requests as (ADR 0093): made once, when the database is first created.
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?set APP_DB_PASSWORD}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ../postgres/create-app-role.sh:/docker-entrypoint-initdb.d/10-app-role.sh:ro
+    healthcheck:
+      # Over TCP: the temporary server of the first start (which makes the roles) answers on the socket only, and the app must wait for the real one.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U conta_verde"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    image: ghcr.io/iuriandreazza/conta-verde:${CONTA_VERDE_VERSION:?set CONTA_VERDE_VERSION to a release}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://conta_verde_app:${APP_DB_PASSWORD}@db:5432/conta_verde
+      DATABASE_MIGRATE_URL: postgres://conta_verde:${OWNER_DB_PASSWORD}@db:5432/conta_verde
+      COOKIE_SECURE: "true"
+      PUBLIC_URL: https://${DOMAIN:?set DOMAIN}
+      # The key that seals what the application stores secret (gateway settings, webhook secrets): without it they cannot be
+      # opened, and it is not in the database. Keep it with the backup, apart from it.
+      FISCAL_SECRETS_KEY: ${FISCAL_SECRETS_KEY:-}
+      SMTP_URL: ${SMTP_URL:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      CNPJ_LOOKUP: ${CNPJ_LOOKUP:-brasilapi}
+      CEP_LOOKUP: ${CEP_LOOKUP:-brasilapi}
+      PAYMENT_PROVIDER: ${PAYMENT_PROVIDER:-off}
+      FISCAL_GATEWAY: ${FISCAL_GATEWAY:-off}
+      ATTACHMENTS_DIR: /data/attachments
+      # A dead API ends the container, so `restart: unless-stopped` starts it again (the image would otherwise keep answering 502).
+      EXIT_WITH_API: "true"
+    volumes:
+      # The only copy of the files attached to entries and the fiscal files: back it up with the database.
+      - attachments:/data/attachments
+    expose:
+      - "3080"
+
+  proxy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - app
+    environment:
+      DOMAIN: ${DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  db-data:
+  attachments:
+  caddy-data:
+  caddy-config:
