@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { ApiError, api, setSessionLostHandler, type Profile, type Registration } from "./api";
+import { clearOfflineData, syncIdentity } from "./pwa/client";
 
 type Session =
   | { status: "loading" }
@@ -34,9 +35,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    setSessionLostHandler(() => setSession({ status: "anonymous" }));
+    // A lost session is a device that must not keep the company's data.
+    setSessionLostHandler(() => {
+      void clearOfflineData();
+      setSession({ status: "anonymous" });
+    });
     return () => setSessionLostHandler(null);
   }, []);
+
+  // The worker is told who is signed in (it cannot read the HttpOnly cookie), whenever that is known or changes.
+  const userId = session.status === "authenticated" ? session.profile.user.id : session.status === "anonymous" ? null : undefined;
+  useEffect(() => {
+    if (userId !== undefined) void syncIdentity(userId);
+  }, [userId]);
 
   const signIn = useCallback(async (email: string, password: string) => {
     const profile = await api.login(email, password);
@@ -50,9 +61,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
-    await api.logout();
+    // Clearing first and calling the network second: signing out offline still clears the device.
+    await clearOfflineData();
+    try {
+      await api.logout();
+    } catch (failure) {
+      // Still signed in (offline, say): the worker is told again who it is, or the mode would be dead until a reload.
+      if (userId) await syncIdentity(userId);
+      throw failure;
+    }
     setSession({ status: "anonymous" });
-  }, []);
+  }, [userId]);
 
   const refresh = useCallback(async () => {
     const profile = await api.me();

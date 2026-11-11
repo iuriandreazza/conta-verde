@@ -31,6 +31,7 @@ import { EntriesPage } from "./pages/EntriesPage";
 import { InventoryCountsPage } from "./pages/InventoryCountsPage";
 import { MembersPage } from "./pages/MembersPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
+import { OfflinePage } from "./pages/OfflinePage";
 import { PartiesPage } from "./pages/PartiesPage";
 import { PaymentPage } from "./pages/PaymentPage";
 import { PaymentMethodsPage } from "./pages/PaymentMethodsPage";
@@ -61,6 +62,7 @@ export function App() {
         <Route path="/pay/:token" element={<PaymentPage />} />
         <Route element={<RequireAuth />}>
           <Route path="/" element={<CompaniesPage />} />
+          <Route path="/offline" element={<OfflinePage />} />
           <Route path="/companies/:companyId" element={<DashboardPage />} />
           <Route path="/companies/:companyId/parties" element={<PartiesPage />} />
           <Route path="/companies/:companyId/products" element={<ProductsPage />} />

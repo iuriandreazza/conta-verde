@@ -146,6 +146,9 @@ export function AppTopbar({
       )}
       <div className="topbar-actions">
         {creating.length > 0 && <MenuButton key={menuKey} variant="primary" icon={PlusIcon} label="Novo registro" items={creating} align="end" />}
+        <Link to="/offline" className="topbar-link">
+          Uso offline
+        </Link>
         <span className="avatar" aria-hidden>
           {userName.trim().charAt(0).toUpperCase()}
         </span>
