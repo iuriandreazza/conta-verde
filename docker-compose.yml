@@ -9,6 +9,9 @@ services:
       - "127.0.0.1:${DB_PORT:-5432}:5432"
     volumes:
       - db-data:/var/lib/postgresql/data
+      # Creates the role the server serves requests as, on a database's first start (an existing volume: run the file
+      # by hand or `docker compose down -v`, ADR 0093).
+      - ./deploy/postgres/create-app-role.sql:/docker-entrypoint-initdb.d/10-app-role.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U conta_verde"]
       interval: 5s

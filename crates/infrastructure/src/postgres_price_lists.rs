@@ -268,7 +268,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires DATABASE_URL"]
     async fn the_database_refuses_what_one_row_can_show() {
-        let pool = contract::test_pool().await;
+        let pool = contract::owner_pool().await;
         let company = contract::create_company(&pool).await;
         let seed = contract::seed_sales_records(
             &PostgresPartyRepository::new(pool.clone()),

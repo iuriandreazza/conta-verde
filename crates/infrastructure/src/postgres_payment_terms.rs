@@ -277,7 +277,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires DATABASE_URL"]
     async fn the_database_refuses_what_one_row_can_show() {
-        let pool = contract::test_pool().await;
+        let pool = contract::owner_pool().await;
         let company = contract::create_company(&pool).await;
         let term_id = Uuid::new_v4();
         sqlx::query("INSERT INTO payment_terms (id, company_id, name, active) VALUES ($1, $2, 'Base', true)")

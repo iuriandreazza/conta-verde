@@ -7,7 +7,7 @@ tags: [roadmap]
 
 # Roadmap
 
-Progress tracker for the [macro plan](macro-plan.md). Phases are ordered by dependency;
+Progress tracker for the [macro plan](macro-plan.md). The "v0.N" in a phase title names the phase, not a tagged release (nothing has been tagged yet, [ADR 0092](adr/0092-one-point-zero-hardening-plan.md)). Phases are ordered by dependency;
 each one builds on the data created by the previous one. A phase is done when every item
 is ticked and its exit criteria hold on `main`.
 
@@ -42,7 +42,7 @@ Registers:
 Exit criteria: a new user signs up, creates a company, invites a colleague and fills every
 register from the browser; no endpoint accepts a `company_id` the caller is not a member of.
 
-## Phase 2 — Financial control (v0.3)
+## Phase 2 — Financial control (v0.3, done)
 
 - [x] Financial entries (receivable/payable) with installments, due dates, category, cost center, party, attachments ([ADR 0029](adr/0029-financial-entries.md), [ADR 0036](adr/0036-entry-attachments.md)) — register, change and list entries with their installments and history, in the `finance` area; attach up to 20 files of 10 MB (PDF, image, text, CSV, XML) to an entry, kept behind a `BlobStore` on disk, downloaded as files and removed by marking; there is no cancelling of an entry, it is settled and reversed
 - [x] Settlement: full and partial, interest, fine and discount, settlement date and bank account ([ADR 0030](adr/0030-settlements.md)) — pay an installment from an account, never for more than is left, reverse a settlement; an entry with settlements keeps its installments and kind; the list says paid, partial, overdue or open
@@ -94,7 +94,7 @@ installment through a signed webhook, once however many times it arrives (`settl
 adapters and through the API), and the hourly pass, on a moved clock, sends each rule's reminder once with the
 payment link (`sends_reminders_on_schedule`).
 
-## Phase 5 — Purchases and inventory (v0.6)
+## Phase 5 — Purchases and inventory (v0.6, done)
 
 - [x] Purchase orders: items, supplier, expected dates, approval, receipt ([ADR 0053](adr/0053-purchase-orders.md)) — `/purchase-orders`: draft, approved, partly or fully received, cancelled; each receipt (partial ones allowed) values what arrived cumulatively and makes its own payable by the payment term; a `purchases` area (the `stock` role writes it)
 - [x] Purchase entry from NF-e XML (parsing and validation only, no SEFAZ calls): supplier, items, taxes, payables ([ADR 0057](adr/0057-purchase-entry-from-nfe-xml.md)) — the XML is read without entities and limited to 1 MiB, checked in the domain (key check digit, totals, installments), previewed and entered once by its access key as a purchase received whole: payable on the invoice's installments, stock at what each item costs
@@ -114,7 +114,7 @@ the average cost (`a_purchase_xml_creates_payables_and_stock_and_a_sale_takes_it
 `enters_a_supplier_invoice_once` and `stock_follows_purchases_and_sales`, the worked example of ADR 0054: 10 at 5 and
 10 at 7 are 20 worth 120, a sale of 5 takes 30).
 
-## Phase 6 — Accountant and reporting (v0.7)
+## Phase 6 — Accountant and reporting (v0.7, done)
 
 Planned in [ADR 0067](adr/0067-accountant-and-reporting-plan.md), which also accepts [ADR 0013](adr/0013-accountant-access-and-exports.md)
 and settles what the phase changes underneath (an `accounting` area where the accountant writes only the lock, the exports and
@@ -150,7 +150,7 @@ files hold the month's entries, settlements and transfers exactly, byte for byte
 zip and the spreadsheet were opened with `unzip`, Python's `zipfile` and `openpyxl`, the notice reached a mailbox once however
 often the API restarted, and the pages were used in a browser.
 
-## Phase 7 — Fiscal (v0.8)
+## Phase 7 — Fiscal (v0.8, built; the accountant's sign-off is open)
 
 Planned in [ADR 0073](adr/0073-fiscal-module-plan.md), which also settles what the phase changes underneath (a `fiscal` area, the
 `FiscalGateway` port with Focus NFe as the first real adapter, the gateway token in the environment and the A1 certificate left at
@@ -179,7 +179,7 @@ accepted and no other proposed ADR belongs to the phase. One slice per pull requ
 Exit criteria: a product sale and a service sale produce authorized documents in the
 provider's test environment and the XMLs reach the accountant export.
 
-## Phase 8 — Integrations and mobile (v0.9)
+## Phase 8 — Integrations and mobile (v0.9, done)
 
 The plan, the order of the slices and what each settles are in [ADR 0086](adr/0086-integrations-and-mobile-plan.md).
 
@@ -192,9 +192,13 @@ The plan, the order of the slices and what each settles are in [ADR 0086](adr/00
 Exit criteria: a third-party client creates a sale and receives its webhook without any
 private endpoint.
 
-## Phase 9 — 1.0 hardening
+## Phase 9 — 1.0 hardening (in progress)
 
-- [ ] PostgreSQL row-level security policies as a second barrier to the application checks ([ADR 0004](adr/0004-company-scoped-tenancy.md))
+Planned in [ADR 0092](adr/0092-one-point-zero-hardening-plan.md), which says what 1.0 promises (the `/v1` API, forward-only
+migrations, configuration names, file layouts), how each item below is proven and what it does not cover. One slice per pull
+request, in this order:
+
+- [x] PostgreSQL row-level security policies as a second barrier to the application checks ([ADR 0004](adr/0004-company-scoped-tenancy.md), [ADR 0093](adr/0093-row-level-security.md)) — a policy on every table with a `company_id` (a test fails when one has none), the company set per request from what was verified (the membership, the key, the token), the server serving requests as a role that owns nothing and bypasses nothing (it refuses to start otherwise) and the owner migrating; a test proves that with the application's check skipped another company's rows are not found and a write into them is refused; background work runs in a system scope and is **not** protected by it
 - [ ] Backup and restore procedure, upgrade guide, published Docker image
 - [ ] Migration importers: entries, open or paid, from CSV (done, [ADR 0064](adr/0064-entry-import-from-a-file.md), with `scripts/export-to-entries-csv.py` to convert a reference product's export); stock balances from CSV; guidance for leaving the reference product
 - [ ] Performance baseline on a 5-year dataset; indexes reviewed
@@ -202,3 +206,5 @@ private endpoint.
 
 Exit criteria: an operator upgrades two consecutive versions in place with a restored backup
 and all checks green.
+Nothing has been tagged, so this is rehearsed between two commits first and closed by the first real upgrade between two
+tags ([ADR 0092](adr/0092-one-point-zero-hardening-plan.md)); the phase is ticked only with the second.

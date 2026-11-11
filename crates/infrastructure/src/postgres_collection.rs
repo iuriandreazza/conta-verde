@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use crate::postgres::storage_error;
 use crate::postgres_audit;
+use crate::tenant;
 
 pub struct PostgresCollectionSettingsRepository {
     pool: PgPool,
@@ -204,17 +205,30 @@ impl PaymentLinkRepository for PostgresPaymentLinkRepository {
     }
 
     async fn find(&self, digest: &str) -> Result<Option<LinkTarget>, RepositoryError> {
-        let row = sqlx::query("SELECT company_id, charge_id FROM payment_links WHERE digest = $1")
-            .bind(digest)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(storage_error)?;
-        row.map(|row| {
-            Ok(LinkTarget {
-                company_id: CompanyId::from_uuid(row.try_get("company_id").map_err(storage_error)?),
-                charge_id: ChargeId::from_uuid(row.try_get("charge_id").map_err(storage_error)?),
-            })
+        // The link is what names the company: looked up among all of them, then the request is narrowed to it.
+        let row = tenant::system(async {
+            sqlx::query("SELECT company_id, charge_id FROM payment_links WHERE digest = $1")
+                .bind(digest)
+                .fetch_optional(&self.pool)
+                .await
         })
-        .transpose()
+        .await
+        .map_err(storage_error)?;
+        let target = row
+            .map(|row| {
+                Ok(LinkTarget {
+                    company_id: CompanyId::from_uuid(
+                        row.try_get("company_id").map_err(storage_error)?,
+                    ),
+                    charge_id: ChargeId::from_uuid(
+                        row.try_get("charge_id").map_err(storage_error)?,
+                    ),
+                })
+            })
+            .transpose()?;
+        if let Some(target) = &target {
+            tenant::set_company(target.company_id);
+        }
+        Ok(target)
     }
 }

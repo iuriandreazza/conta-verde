@@ -1262,6 +1262,9 @@ pub(crate) async fn receive_fiscal_webhook<X: Ports>(
     let hook = &state.config.fiscal_webhook;
     let company = Uuid::parse_str(&company_id).ok();
     let company_id = company.map(conta_verde_domain::CompanyId::from_uuid);
+    if let Some(id) = company_id {
+        conta_verde_infrastructure::tenant::set_company(id);
+    }
     // The company's own secret wins, and a company that has one never accepts the operator's.
     let own = match company_id {
         Some(id) => match state
@@ -1300,29 +1303,32 @@ pub(crate) async fn receive_fiscal_webhook<X: Ports>(
         return Err(not_found());
     }
     if knock_starts_the_work(company) {
-        tokio::spawn(async move {
-            loop {
-                if let Err(error) = state.fiscal_documents.sync_received(company_id).await {
-                    tracing::warn!(%error, "a fiscal webhook could not sync the received invoices");
+        tokio::spawn(conta_verde_infrastructure::tenant::within(
+            company_id,
+            async move {
+                loop {
+                    if let Err(error) = state.fiscal_documents.sync_received(company_id).await {
+                        tracing::warn!(%error, "a fiscal webhook could not sync the received invoices");
+                    }
+                    let now = crate::now_unix();
+                    if let Err(error) = state
+                        .fiscal_documents
+                        .poll_company(
+                            company_id,
+                            now - WEBHOOK_POLL_WINDOW_SECONDS,
+                            WEBHOOK_POLL_BATCH,
+                            now,
+                        )
+                        .await
+                    {
+                        tracing::warn!(%error, "a fiscal webhook could not poll the documents");
+                    }
+                    if !work_is_finished(company) {
+                        break;
+                    }
                 }
-                let now = crate::now_unix();
-                if let Err(error) = state
-                    .fiscal_documents
-                    .poll_company(
-                        company_id,
-                        now - WEBHOOK_POLL_WINDOW_SECONDS,
-                        WEBHOOK_POLL_BATCH,
-                        now,
-                    )
-                    .await
-                {
-                    tracing::warn!(%error, "a fiscal webhook could not poll the documents");
-                }
-                if !work_is_finished(company) {
-                    break;
-                }
-            }
-        });
+            },
+        ));
     }
     Ok(StatusCode::ACCEPTED)
 }
