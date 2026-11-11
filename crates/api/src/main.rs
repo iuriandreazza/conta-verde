@@ -1442,12 +1442,16 @@ impl conta_verde_application::SecretCipher for ConfiguredCipher {
 }
 
 fn secrets_cipher_from_env() -> Result<ConfiguredCipher, Box<dyn std::error::Error + Send + Sync>> {
-    match std::env::var("FISCAL_SECRETS_KEY") {
-        Ok(key) => Ok(ConfiguredCipher::Sealing(std::sync::Arc::new(
+    // `FISCAL_SECRETS_KEY=` in an env file or a compose file means "none", not "a key of no characters".
+    match std::env::var("FISCAL_SECRETS_KEY")
+        .ok()
+        .filter(|key| !key.trim().is_empty())
+    {
+        Some(key) => Ok(ConfiguredCipher::Sealing(std::sync::Arc::new(
             conta_verde_infrastructure::RingSecretCipher::from_hex(&key)
                 .map_err(|error| format!("FISCAL_SECRETS_KEY: {error}"))?,
         ))),
-        Err(_) => Ok(ConfiguredCipher::Off(
+        None => Ok(ConfiguredCipher::Off(
             conta_verde_infrastructure::NoSecretCipher,
         )),
     }
