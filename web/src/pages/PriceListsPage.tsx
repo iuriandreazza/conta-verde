@@ -22,6 +22,7 @@ import { Notice } from "../components/Notice";
 import { PriceListForm } from "../components/PriceListForm";
 import { Sheet } from "../components/Sheet";
 import { useCreation, useOnCreated } from "../creation/CreationProvider";
+import { msg, useT, type Translate } from "../i18n";
 import { useLastValue } from "../lib/useLastValue";
 import { PageHeader } from "../components/PageHeader";
 import { Spinner } from "../components/Spinner";
@@ -31,10 +32,11 @@ import { readUpTo } from "../lib/readUpTo";
 import { useCanWrite } from "../lib/useCanWrite";
 import { usePagedList } from "../lib/usePagedList";
 
-const FIELD_LABELS: Record<string, string> = { name: "Nome", items: "Preços", active: "Situação" };
+const FIELD_LABELS: Record<string, string> = { name: msg("Name"), items: msg("Prices"), active: msg("Status") };
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one instance.
 export function PriceListsPage() {
+  const t = useT();
   const { companyId = "" } = useParams();
   const canWrite = useCanWrite("sales");
   const [filters, setFilters] = useState<PriceListFilters>(NO_PRICE_LIST_FILTERS);
@@ -94,7 +96,7 @@ export function PriceListsPage() {
       const updated = await api.updatePriceList(companyId, editing.id, input);
       setHighlightedId(updated.id);
       setEditing(null);
-      setSaved(`${updated.name} atualizada. Documentos já feitos guardam os preços que tinham.`);
+      setSaved(t("{name} updated. Documents already made keep the prices they had.", { name: updated.name }));
       await reload();
     } catch (failure) {
       setFormError(errorMessage(failure));
@@ -108,77 +110,77 @@ export function PriceListsPage() {
   return (
     <>
       <PageHeader
-        title="Tabelas de preço"
-        description="Preços de venda por produto para atacado, varejo ou um parceiro. Escolher uma tabela num orçamento, venda ou contrato só preenche o preço dos itens."
+        title={t("Price lists")}
+        description={t("Sale prices per product for wholesale, retail or a partner. Choosing a list in a quote, sale or contract only fills in the price of the items.")}
       />
       {canWrite && (
         <div className="list-actions">
           <Button type="button" icon={PlusIcon} onClick={() => openCreate("priceList")}>
-            Nova tabela de preço
+            {t("New price list")}
           </Button>
         </div>
       )}
       <Notice message={saved} tone="success" />
       <div>
         <section className="card list-card">
-          <h2>Cadastradas</h2>
+          <h2>{t("Registered lists")}</h2>
           <div className="filters" role="search">
             <label>
-              Buscar
+              {t("Search")}
               <input
                 type="search"
                 value={filters.q}
-                placeholder="Nome"
+                placeholder={t("Name")}
                 autoComplete="off"
                 maxLength={100}
                 onChange={(event) => setFilters({ ...filters, q: event.target.value })}
               />
             </label>
             <label>
-              Situação
+              {t("Status")}
               <select
                 value={filters.active}
                 onChange={(event) => setFilters({ ...filters, active: event.target.value as PriceListFilters["active"] })}
               >
-                <option value="">Ativas e inativas</option>
-                <option value="true">Só ativas</option>
-                <option value="false">Só inativas</option>
+                <option value="">{t("Active and inactive")}</option>
+                <option value="true">{t("Only active")}</option>
+                <option value="false">{t("Only inactive")}</option>
               </select>
             </label>
           </div>
           <Notice message={error ?? targetsError} />
           {loading ? (
             <p role="status" className="status">
-              <Spinner /> Carregando…
+              <Spinner /> {t("Loading…")}
             </p>
           ) : items.length === 0 && error ? (
             <Button type="button" variant="ghost" onClick={() => void reload()}>
-              Tentar de novo
+              {t("Try again")}
             </Button>
           ) : items.length === 0 && isFiltered ? (
             <div className="empty">
               <LayersIcon size={40} aria-hidden />
-              <p role="status">Nenhuma tabela encontrada.</p>
+              <p role="status">{t("No lists found.")}</p>
               <Button type="button" variant="ghost" onClick={() => setFilters({ ...NO_PRICE_LIST_FILTERS })}>
-                Limpar filtros
+                {t("Clear filters")}
               </Button>
             </div>
           ) : items.length === 0 ? (
             <div className="empty">
               <LayersIcon size={40} aria-hidden />
-              <p>Nenhuma tabela de preço ainda.</p>
-              <p className="muted">Sem tabela, cada item usa o preço de venda do produto.</p>
+              <p>{t("No price lists yet.")}</p>
+              <p className="muted">{t("Without a list, each item uses the product's sale price.")}</p>
             </div>
           ) : (
             <div className="table-wrap">
               <table>
                 <thead>
                   <tr>
-                    <th>Nome</th>
-                    <th className="num">Preços</th>
-                    <th>Situação</th>
+                    <th>{t("Name")}</th>
+                    <th className="num">{t("Prices")}</th>
+                    <th>{t("Status")}</th>
                     <th>
-                      <span className="visually-hidden">Ações</span>
+                      <span className="visually-hidden">{t("Actions")}</span>
                     </th>
                   </tr>
                 </thead>
@@ -198,7 +200,7 @@ export function PriceListsPage() {
                               icon={SquarePenIcon}
                               type="button"
                               variant="ghost"
-                              aria-label={`Alterar ${list.name}`}
+                              aria-label={t("Change {name}", { name: list.name })}
                               disabled={saving}
                               onClick={() => {
                                 setEditing(list);
@@ -206,31 +208,31 @@ export function PriceListsPage() {
                                 setSaved(null);
                               }}
                             >
-                              Alterar
+                              {t("Change")}
                             </Button>
                           )}
                           <Button
                             iconOnly
                             type="button"
                             variant="ghost"
-                            aria-label={`Histórico de ${list.name}`}
+                            aria-label={t("History of {name}", { name: list.name })}
                             aria-expanded={historyOf === list.id}
                             icon={HistoryIcon}
                             onClick={() => setHistoryOf(historyOf === list.id ? null : list.id)}
                           >
-                            Histórico
+                            {t("History")}
                           </Button>
                         </td>
                       </ListRow>
                       {historyOf === list.id && (
                         <tr>
-                          <td colSpan={4} role="region" aria-label={`Histórico de ${list.name}`}>
+                          <td colSpan={4} role="region" aria-label={t("History of {name}", { name: list.name })}>
                             <History
                               key={JSON.stringify(list)}
                               load={historyLoader(list.id)}
-                              fieldLabel={(field) => FIELD_LABELS[field] ?? field}
-                              valueLabel={(field, value) => displayValue(field, value, names)}
-                              emptyMessage="Sem registros."
+                              fieldLabel={(field) => (field in FIELD_LABELS ? t(FIELD_LABELS[field]) : field)}
+                              valueLabel={(field, value) => displayValue(field, value, names, t)}
+                              emptyMessage={t("No records.")}
                             />
                           </td>
                         </tr>
@@ -243,12 +245,12 @@ export function PriceListsPage() {
           )}
           {nextCursor !== null && (
             <Button type="button" variant="ghost" icon={ChevronDownIcon} pending={loadingMore} onClick={() => void loadMore()}>
-              Carregar mais
+              {t("Load more")}
             </Button>
           )}
         </section>
         {canWrite && (
-          <Sheet open={editing !== null} locked={saving} title={`Alterar ${shown?.name ?? ""}`} onClose={closeSheet}>
+          <Sheet open={editing !== null} locked={saving} title={t("Change {name}", { name: shown?.name ?? "" })} onClose={closeSheet}>
             {shown !== null &&
               (targetsLoaded ? (
                 <PriceListForm
@@ -262,7 +264,7 @@ export function PriceListsPage() {
                 />
               ) : targetsError === null ? (
                 <p role="status" className="status">
-                  <Spinner /> Carregando…
+                  <Spinner /> {t("Loading…")}
                 </p>
               ) : (
                 <p role="alert">{targetsError}</p>
@@ -275,15 +277,15 @@ export function PriceListsPage() {
 }
 
 /** A value of the trail as a person reads it: a product by name and its price in reais. */
-function displayValue(field: string, value: string | null, names: Map<string, string>): string {
+function displayValue(field: string, value: string | null, names: Map<string, string>, t: Translate): string {
   if (value === null) return "—";
-  if (field === "active") return value === "true" ? "Ativa" : "Inativa";
+  if (field === "active") return value === "true" ? t("Enabled") : t("Disabled");
   if (field === "items") {
     return value
       .split("\n")
       .map((row) => {
         const [product, price] = row.split(":");
-        return `${names.get(product) ?? "produto"} a ${formatMoney(price)}`;
+        return t("{name} at {price}", { name: names.get(product) ?? t("product"), price: formatMoney(price) });
       })
       .join("; ");
   }

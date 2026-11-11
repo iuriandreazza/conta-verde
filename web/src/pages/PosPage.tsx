@@ -12,8 +12,8 @@ import { Button } from "../components/Button";
 import { HelpTitle } from "../components/HelpTitle";
 import { LinesEditor, linesProblem, linesToInput, newLine, type LineRow } from "../components/LinesEditor";
 import { Notice } from "../components/Notice";
+import { useI18n } from "../i18n";
 import { PageHeader } from "../components/PageHeader";
-import { useT } from "../i18n";
 import { treeRows } from "../lib/categoryTree";
 import { formatMoney } from "../lib/decimal";
 import { centsToApi, toCents } from "../lib/entryInstallments";
@@ -39,7 +39,7 @@ const newPayment = (): PaymentRow => ({ key: ++lastPayment, form: "", amount: ""
  * invoice fails, the person tries the invoice again.
  */
 export function PosPage() {
-  const t = useT();
+  const { t, rich } = useI18n();
   const { companyId = "" } = useParams();
   const canWrite = useCanWrite("fiscal") && useCanWrite("sales");
   const targets = useSalesTargets(companyId);
@@ -94,7 +94,7 @@ export function PosPage() {
   async function finish(event: FormEvent) {
     event.preventDefault();
     if (pending || total === null) return;
-    const problem = linesProblem(rows);
+    const problem = linesProblem(rows, t);
     if (problem !== null) {
       setError(problem);
       return;
@@ -134,7 +134,7 @@ export function PosPage() {
       if (document.status === "rejected") {
         // The sale stands and the invoice is asked again under the same id: the person fixes what was refused first.
         setRefused(document);
-        setError(`Recusada (${document.refusal?.code ?? "?"}): ${document.refusal?.message ?? ""}`);
+        setError(t("Refused ({code}): {message}", { code: document.refusal?.code ?? "?", message: document.refusal?.message ?? "" }));
       } else {
         setRefused(null);
         setMade(document);
@@ -163,19 +163,22 @@ export function PosPage() {
   if (made) {
     return (
       <>
-        <PageHeader title="Caixa" />
+        <PageHeader title={t("Point of sale")} />
         <div className="record-detail">
           <p role="status">
-            NFC-e: <span className="badge">{t(STATUS_LABELS[made.status])}</span> · {formatMoney(made.total)}
+            {rich("NFC-e: {status} · {amount}", {
+              status: <span className="badge">{t(STATUS_LABELS[made.status])}</span>,
+              amount: formatMoney(made.total),
+            })}
           </p>
           {made.access_key && <p className="access-key">{made.access_key}</p>}
-          {made.refusal && <Notice message={`Recusada (${made.refusal.code}): ${made.refusal.message}`} tone="warning" />}
-          {made.environment === "homologation" && <Notice message="Documento de homologação: não tem valor fiscal." tone="warning" />}
+          {made.refusal && <Notice message={t("Refused ({code}): {message}", { code: made.refusal.code, message: made.refusal.message })} tone="warning" />}
+          {made.environment === "homologation" && <Notice message={t("Homologation document: it has no fiscal value.")} tone="warning" />}
           <div className="form-actions">
             <Button type="button" onClick={startOver}>
-              Nova venda
+              {t("New sale")}
             </Button>
-            <Link to={`/companies/${companyId}/fiscal/documents`}>Ver nos documentos fiscais</Link>
+            <Link to={`/companies/${companyId}/fiscal/documents`}>{t("See in the fiscal documents")}</Link>
           </div>
         </div>
       </>
@@ -185,11 +188,11 @@ export function PosPage() {
   return (
     <>
       <PageHeader
-        title="Caixa"
-        description="Uma venda de produtos no balcão, concluída e emitida como NFC-e de uma vez. As escolhas fiscais são suas e começam vazias; o que foi pago precisa somar o total da venda, porque o sistema não declara troco."
+        title={t("Point of sale")}
+        description={t("A sale of products at the counter, completed and issued as an NFC-e in one go. The fiscal choices are yours and start empty; what was paid must add up to the sale total, because the system does not declare change.")}
       />
       {!canWrite ? (
-        <Notice message="Só quem escreve em Vendas e em Fiscal usa o caixa." />
+        <Notice message={t("Only those who write in Sales and in Fiscal use the point of sale.")} />
       ) : (
         <form className="record-form" onSubmit={(event) => void finish(event)}>
           <Notice message={error ?? targets.error} />
@@ -198,16 +201,16 @@ export function PosPage() {
               tone="warning"
               message={
                 completed
-                  ? "A venda já foi feita e concluída. Corrija o que a NFC-e pede e emita de novo: a venda não é refeita."
-                  : "A venda foi feita, mas ainda não concluída. Tente de novo: ela não é refeita."
+                  ? t("The sale was already made and completed. Fix what the NFC-e asks for and issue it again: the sale is not made again.")
+                  : t("The sale was made, but not yet completed. Try again: it is not made again.")
               }
             />
           )}
           <div className="field-grid">
             <label>
-              Cliente
+              {t("Customer")}
               <select required value={customer} onChange={(event) => setCustomer(event.target.value)} disabled={saleId !== null}>
-                <option value="">Escolha o cliente</option>
+                <option value="">{t("Choose the customer")}</option>
                 {customers.map((item) => (
                   <option key={item.id} value={item.id}>
                     {item.name}
@@ -216,9 +219,9 @@ export function PosPage() {
               </select>
             </label>
             <label>
-              Categoria da receita
+              {t("Revenue category")}
               <select required value={category} onChange={(event) => setCategory(event.target.value)} disabled={saleId !== null}>
-                <option value="">Escolha a categoria</option>
+                <option value="">{t("Choose the category")}</option>
                 {categoryRows.map(({ category: item, depth }) => (
                   <option key={item.id} value={item.id}>
                     {`${"— ".repeat(depth)}${item.name}`}
@@ -232,13 +235,13 @@ export function PosPage() {
             <LinesEditor companyId={companyId} rows={rows} onChange={setRows} products={products} />
           </fieldset>
 
-          <h3>Pagamento</h3>
+          <h3>{t("Payment")}</h3>
           {payments.map((row) => (
             <div className="field-grid" key={row.key}>
               <label>
-                Forma de pagamento
+                {t("Payment method")}
                 <select required value={row.form} onChange={(event) => changePayment(row.key, { form: event.target.value })}>
-                  <option value="">Escolha a forma</option>
+                  <option value="">{t("Choose the method")}</option>
                   {Object.entries(PAYMENT_LABELS).map(([key, label]) => (
                     <option key={key} value={key}>
                       {t(label)}
@@ -247,33 +250,40 @@ export function PosPage() {
                 </select>
               </label>
               <label>
-                Valor pago
+                {t("Amount paid")}
                 <input required inputMode="decimal" value={row.amount} onChange={(event) => changePayment(row.key, { amount: event.target.value })} />
               </label>
             </div>
           ))}
           <div className="form-actions">
             <Button type="button" onClick={() => setPayments((current) => [...current, newPayment()])}>
-              Outra forma de pagamento
+              {t("Another payment method")}
             </Button>
           </div>
           <p role="status">
-            Total {total === null ? "—" : formatMoney(centsToApi(total))} · Pago {paid === null ? "—" : formatMoney(centsToApi(paid))}
-            {total !== null && paid !== null && total !== paid ? ` · Falta ${formatMoney(centsToApi(total > paid ? total - paid : paid - total))} ${total > paid ? "a receber" : "a menos"}` : ""}
+            {t("Total {total} · Paid {paid}", {
+              total: total === null ? "—" : formatMoney(centsToApi(total)),
+              paid: paid === null ? "—" : formatMoney(centsToApi(paid)),
+            })}
+            {total !== null && paid !== null && total !== paid
+              ? ` · ${
+                  total > paid
+                    ? t("Missing {amount} to receive", { amount: formatMoney(centsToApi(total - paid)) })
+                    : t("Missing {amount} less", { amount: formatMoney(centsToApi(paid - total)) })
+                }`
+              : ""}
           </p>
 
-          <HelpTitle title="Escolhas fiscais" level={3}>
+          <HelpTitle title={t("Fiscal choices")} level={3}>
             <p>
-              São fatos fiscais que o sistema não sabe: a natureza de operação, a origem da mercadoria, como o comprador estava presente
-              e se o consumidor é identificado na nota (com o CPF ou CNPJ do cliente). A NFC-e sai das linhas de produto, sempre dentro
-              do estado. Confirme com o seu contador.
+              {t("These are fiscal facts the system does not know: the operation nature, the origin of the goods, how the buyer was present and whether the consumer is identified on the invoice (with the customer's CPF or CNPJ). The NFC-e comes from the product lines, always within the state. Confirm with your accountant.")}
             </p>
           </HelpTitle>
           <div className="field-grid">
             <label>
-              Natureza de operação
+              {t("Operation nature")}
               <select required value={nature} onChange={(event) => setNature(event.target.value)}>
-                <option value="">Escolha a natureza</option>
+                <option value="">{t("Choose the nature")}</option>
                 {productNatures.map((item) => (
                   <option key={item.code} value={item.code}>
                     {item.name}
@@ -282,9 +292,9 @@ export function PosPage() {
               </select>
             </label>
             <label>
-              Origem da mercadoria
+              {t("Origin of the goods")}
               <select required value={origin} onChange={(event) => setOrigin(event.target.value)}>
-                <option value="">Escolha a origem</option>
+                <option value="">{t("Choose the origin")}</option>
                 {[0, 1, 2, 3, 4, 5, 6, 7, 8].map((code) => (
                   <option key={code} value={code}>
                     {code}
@@ -293,9 +303,9 @@ export function PosPage() {
               </select>
             </label>
             <label>
-              Presença do comprador
+              {t("Buyer presence")}
               <select required value={presence} onChange={(event) => setPresence(event.target.value)}>
-                <option value="">Escolha a presença</option>
+                <option value="">{t("Choose the presence")}</option>
                 {counterPresences.map(([key, label]) => (
                   <option key={key} value={key}>
                     {t(label)}
@@ -304,16 +314,16 @@ export function PosPage() {
               </select>
             </label>
             <label>
-              Identificar o consumidor na nota
+              {t("Identify the consumer on the invoice")}
               <select required value={identify} onChange={(event) => setIdentify(event.target.value)}>
-                <option value="">Escolha</option>
-                <option value="yes">Sim</option>
-                <option value="no">Não</option>
+                <option value="">{t("Choose")}</option>
+                <option value="yes">{t("Yes")}</option>
+                <option value="no">{t("No")}</option>
               </select>
             </label>
           </div>
           <Button type="submit" pending={pending} disabled={!balanced}>
-            {saleId === null ? "Finalizar e emitir NFC-e" : completed ? "Emitir a NFC-e de novo" : "Concluir a venda e emitir"}
+            {saleId === null ? t("Finish and issue NFC-e") : completed ? t("Issue the NFC-e again") : t("Complete the sale and issue")}
           </Button>
         </form>
       )}

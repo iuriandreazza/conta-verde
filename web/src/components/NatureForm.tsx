@@ -60,7 +60,7 @@ const rateOf = (text: string): string | null => toApiDecimal(text) ?? null;
 const ISS_TAXATION_LABELS: Record<IssTaxation, string> = {
   taxable: msg("Taxable"),
   immune: msg("Immune"),
-  export: msg("Export"),
+  export: msg("Export operation"),
   not_incident: msg("Not incident"),
 };
 

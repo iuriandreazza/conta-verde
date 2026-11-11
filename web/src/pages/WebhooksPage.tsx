@@ -9,6 +9,7 @@ import { WebhookHistory } from "../components/WebhookHistory";
 import { WebhookSecret } from "../components/WebhookSecret";
 import { SendIcon } from "../components/icons/send";
 import { useCreation, useOnCreated } from "../creation/CreationProvider";
+import { useT } from "../i18n";
 import { DELIVERY_LABELS, EVENT_LABELS, eventLabel, eventsText } from "../lib/webhooks";
 import { useCanWrite } from "../lib/useCanWrite";
 
@@ -20,6 +21,7 @@ const formatMoment = (millis: number) => new Date(millis).toLocaleString("pt-BR"
 
 /** The log of what was sent to one subscription, newest first, with the way to send one again. */
 function DeliveryLog({ companyId, subscription, canWrite, refresh }: { companyId: string; subscription: WebhookSubscription; canWrite: boolean; refresh: number }) {
+  const t = useT();
   const [items, setItems] = useState<WebhookDelivery[] | null>(null);
   const [next, setNext] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -70,38 +72,38 @@ function DeliveryLog({ companyId, subscription, canWrite, refresh }: { companyId
   if (items === null && error === null) {
     return (
       <p role="status" className="status">
-        <Spinner size={16} /> Carregando entregas…
+        <Spinner size={16} /> {t("Loading deliveries…")}
       </p>
     );
   }
   return (
     <>
       <Notice message={error} />
-      {items !== null && items.length === 0 && <p className="muted">Nenhuma entrega ainda.</p>}
+      {items !== null && items.length === 0 && <p className="muted">{t("No deliveries yet.")}</p>}
       {items !== null && items.length > 0 && (
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Evento</th>
-                <th>Estado</th>
-                <th>Tentativas</th>
-                <th>Última resposta</th>
-                <th>Quando</th>
+                <th>{t("Event")}</th>
+                <th>{t("Current state")}</th>
+                <th>{t("Attempts")}</th>
+                <th>{t("Last response")}</th>
+                <th>{t("When")}</th>
                 <th>
-                  <span className="visually-hidden">Ações</span>
+                  <span className="visually-hidden">{t("Actions")}</span>
                 </th>
               </tr>
             </thead>
             <tbody>
               {items.map((delivery) => (
                 <tr key={delivery.id}>
-                  <td>{eventLabel(delivery.kind)}</td>
+                  <td>{eventLabel(delivery.kind, t)}</td>
                   <td>
-                    <span className={`badge ${BADGES[delivery.status]}`}>{DELIVERY_LABELS[delivery.status]}</span>
+                    <span className={`badge ${BADGES[delivery.status]}`}>{t(DELIVERY_LABELS[delivery.status])}</span>
                   </td>
                   <td>{delivery.attempts}</td>
-                  <td>{delivery.last_error ?? (delivery.last_status ? `Resposta ${delivery.last_status}` : "—")}</td>
+                  <td>{delivery.last_error ?? (delivery.last_status ? t("Response {status}", { status: delivery.last_status }) : "—")}</td>
                   <td>{formatMoment(delivery.created_at)}</td>
                   <td>
                     {/* A pending one has a retry of its own: a second would send it twice. */}
@@ -110,12 +112,12 @@ function DeliveryLog({ companyId, subscription, canWrite, refresh }: { companyId
                         type="button"
                         variant="ghost"
                         className="btn-small"
-                        aria-label={`Enviar de novo: ${eventLabel(delivery.kind)} de ${formatMoment(delivery.created_at)}`}
+                        aria-label={t("Send again: {event} of {when}", { event: eventLabel(delivery.kind, t), when: formatMoment(delivery.created_at) })}
                         pending={busy === delivery.id}
                         disabled={busy !== null}
                         onClick={() => void again(delivery)}
                       >
-                        Enviar de novo
+                        {t("Send again")}
                       </Button>
                     )}
                   </td>
@@ -127,16 +129,17 @@ function DeliveryLog({ companyId, subscription, canWrite, refresh }: { companyId
       )}
       {next !== null && (
         <Button type="button" variant="ghost" className="btn-small" onClick={() => void more()}>
-          Ver mais
+          {t("See more")}
         </Button>
       )}
-      <p className="muted">Guardamos as entregas por 30 dias. Só o código da resposta e um motivo curto ficam registrados, nunca o que o destino respondeu.</p>
+      <p className="muted">{t("We keep the deliveries for 30 days. Only the response code and a short reason are recorded, never what the destination answered.")}</p>
     </>
   );
 }
 
 /** Replaces the secret: with one of the person's own, or with one made here and shown once. */
 function SecretPanel({ companyId, subscription, onMade }: { companyId: string; subscription: WebhookSubscription; onMade: (secret: string) => void }) {
+  const t = useT();
   const [typed, setTyped] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -152,7 +155,7 @@ function SecretPanel({ companyId, subscription, onMade }: { companyId: string; s
       if (reply.secret !== null) {
         onMade(reply.secret);
       } else {
-        setDone("Segredo trocado. O anterior continua assinando por 24 horas.");
+        setDone(t("Secret replaced. The previous one keeps signing for 24 hours."));
         setTyped("");
       }
     } catch (failure) {
@@ -165,13 +168,13 @@ function SecretPanel({ companyId, subscription, onMade }: { companyId: string; s
   return (
     <>
       <p className="muted">
-        O segredo é guardado cifrado e nunca é mostrado de novo. Ao trocar, o anterior continua assinando por 24 horas, para quem recebe trocar sem corte.
+        {t("The secret is kept encrypted and is never shown again. When you replace it, the previous one keeps signing for 24 hours, so whoever receives can switch without a gap.")}
       </p>
       <Notice message={error} />
       <Notice tone="success" message={done} />
       <div className="form-actions">
         <Button type="button" className="btn-small" pending={saving} onClick={() => void replace()}>
-          Gerar um novo segredo
+          {t("Generate a new secret")}
         </Button>
       </div>
       <form
@@ -182,11 +185,11 @@ function SecretPanel({ companyId, subscription, onMade }: { companyId: string; s
         }}
       >
         <label>
-          Ou use o seu
-          <input value={typed} onChange={(event) => setTyped(event.target.value)} autoComplete="off" placeholder="8 a 200 caracteres, sem espaços" />
+          {t("Or use your own")}
+          <input value={typed} onChange={(event) => setTyped(event.target.value)} autoComplete="off" placeholder={t("8 to 200 characters, no spaces")} />
         </label>
         <Button type="submit" variant="ghost" className="btn-small" disabled={typed.trim() === "" || saving}>
-          Usar este segredo
+          {t("Use this secret")}
         </Button>
       </form>
     </>
@@ -195,6 +198,7 @@ function SecretPanel({ companyId, subscription, onMade }: { companyId: string; s
 
 /** Changes where, what and whether. */
 function EditPanel({ companyId, subscription, onSaved }: { companyId: string; subscription: WebhookSubscription; onSaved: () => void }) {
+  const t = useT();
   const [url, setUrl] = useState(subscription.url);
   const [events, setEvents] = useState(subscription.events);
   const [active, setActive] = useState(subscription.active);
@@ -219,7 +223,7 @@ function EditPanel({ companyId, subscription, onSaved }: { companyId: string; su
   return (
     <form onSubmit={save}>
       <label>
-        Endereço
+        {t("Address")}
         <input value={url} onChange={(event) => setUrl(event.target.value)} required maxLength={2000} />
       </label>
       <div className="field-grid">
@@ -232,17 +236,17 @@ function EditPanel({ companyId, subscription, onSaved }: { companyId: string; su
                 checked={events.includes(kind)}
                 onChange={(event) => setEvents(event.target.checked ? [...events, kind] : events.filter((other) => other !== kind))}
               />
-              {EVENT_LABELS[kind]}
+              {t(EVENT_LABELS[kind])}
             </label>
           ))}
       </div>
       <label className="check">
         <input type="checkbox" checked={active} onChange={(event) => setActive(event.target.checked)} />
-        Ativo
+        {t("Active")}
       </label>
       <Notice message={error} />
       <Button type="submit" className="btn-small" pending={saving}>
-        Salvar
+        {t("Save")}
       </Button>
     </form>
   );
@@ -250,6 +254,7 @@ function EditPanel({ companyId, subscription, onSaved }: { companyId: string; su
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one instance.
 export function WebhooksPage() {
+  const t = useT();
   const { companyId = "" } = useParams();
   const canWrite = useCanWrite("members");
   const { openCreate } = useCreation();
@@ -290,7 +295,7 @@ export function WebhooksPage() {
     setNotice(null);
     try {
       await api.testWebhook(companyId, subscription.id);
-      setNotice("Evento de teste na fila: ele aparece no log em instantes.");
+      setNotice(t("Test event queued: it shows in the log in a moment."));
       setSent((held) => held + 1);
     } catch (failure) {
       setError(errorMessage(failure));
@@ -304,47 +309,47 @@ export function WebhooksPage() {
   return (
     <>
       <PageHeader
-        title="Webhooks"
-        description="Avisos que o sistema envia a um endereço seu quando algo acontece (um pedido, uma cobrança paga, o estoque abaixo do mínimo). Cada envio é assinado com o segredo do webhook, repetido por até cerca de nove horas se o destino não responder, e fica no log."
+        title={t("Webhooks")}
+        description={t("Notices the system sends to an address of yours when something happens (an order, a paid charge, stock below the minimum). Each delivery is signed with the webhook's secret, retried for up to about nine hours if the destination does not answer, and kept in the log.")}
       />
       {!available && (
-        <Notice message="Webhooks desligados: o servidor não tem a chave para guardar os segredos (FISCAL_SECRETS_KEY). Peça a quem cuida do servidor." />
+        <Notice message={t("Webhooks are off: the server has no key to keep the secrets (FISCAL_SECRETS_KEY). Ask whoever looks after the server.")} />
       )}
       {canWrite && available && (
         <div className="list-actions">
           <Button type="button" icon={SendIcon} onClick={() => openCreate("webhook")}>
-            Novo webhook
+            {t("New webhook")}
           </Button>
         </div>
       )}
       {made && (
         <>
-          <WebhookSecret secret={made} title="Novo segredo" />
+          <WebhookSecret secret={made} title={t("New secret")} />
           <Button type="button" variant="ghost" className="btn-small" onClick={() => setMade(null)}>
-            Já copiei o segredo
+            {t("I copied the secret")}
           </Button>
         </>
       )}
       <section className="card list-card">
-        <h2>Destinos</h2>
+        <h2>{t("Destinations")}</h2>
         <Notice message={error} />
         <Notice tone="success" message={notice} />
         {loading ? (
           <p role="status" className="status">
-            <Spinner /> Carregando…
+            <Spinner /> {t("Loading…")}
           </p>
         ) : subscriptions.length === 0 ? (
-          <p className="muted">Nenhum webhook ainda.</p>
+          <p className="muted">{t("No webhooks yet.")}</p>
         ) : (
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Endereço</th>
-                  <th>Eventos</th>
-                  <th>Estado</th>
+                  <th>{t("Address")}</th>
+                  <th>{t("Events")}</th>
+                  <th>{t("Current state")}</th>
                   <th>
-                    <span className="visually-hidden">Ações</span>
+                    <span className="visually-hidden">{t("Actions")}</span>
                   </th>
                 </tr>
               </thead>
@@ -355,16 +360,16 @@ export function WebhooksPage() {
                       <td>
                         {subscription.url}
                         <br />
-                        <span className="muted">criado por {subscription.created_by}</span>
+                        <span className="muted">{t("created by {name}", { name: subscription.created_by })}</span>
                       </td>
-                      <td>{eventsText(subscription.events)}</td>
+                      <td>{eventsText(subscription.events, t)}</td>
                       <td>
-                        <span className={`badge ${subscription.active ? "badge-ok" : "badge-muted"}`}>{subscription.active ? "Ativo" : "Desligado"}</span>
+                        <span className={`badge ${subscription.active ? "badge-ok" : "badge-muted"}`}>{subscription.active ? t("Active") : t("Turned off")}</span>
                       </td>
                       <td>
                         <span className="form-actions">
-                          <Button type="button" variant="ghost" className="btn-small" aria-label={`Log de ${subscription.url}`} onClick={() => toggle(subscription.id, "log")}>
-                            Log
+                          <Button type="button" variant="ghost" className="btn-small" aria-label={t("Log of {url}", { url: subscription.url })} onClick={() => toggle(subscription.id, "log")}>
+                            {t("Log")}
                           </Button>
                           {canWrite && (
                             <>
@@ -372,23 +377,23 @@ export function WebhooksPage() {
                                 type="button"
                                 variant="ghost"
                                 className="btn-small"
-                                aria-label={`Testar ${subscription.url}`}
+                                aria-label={t("Test {url}", { url: subscription.url })}
                                 pending={testingId === subscription.id}
                                 disabled={testingId !== null}
                                 onClick={() => void test(subscription)}
                               >
-                                Enviar teste
+                                {t("Send test")}
                               </Button>
-                              <Button type="button" variant="ghost" className="btn-small" aria-label={`Segredo de ${subscription.url}`} onClick={() => toggle(subscription.id, "secret")}>
-                                Segredo
+                              <Button type="button" variant="ghost" className="btn-small" aria-label={t("Secret of {url}", { url: subscription.url })} onClick={() => toggle(subscription.id, "secret")}>
+                                {t("Secret")}
                               </Button>
-                              <Button type="button" variant="ghost" className="btn-small" aria-label={`Editar ${subscription.url}`} onClick={() => toggle(subscription.id, "edit")}>
-                                Editar
+                              <Button type="button" variant="ghost" className="btn-small" aria-label={t("Edit {url}", { url: subscription.url })} onClick={() => toggle(subscription.id, "edit")}>
+                                {t("Edit")}
                               </Button>
                             </>
                           )}
-                          <Button type="button" variant="ghost" className="btn-small" aria-label={`Histórico de ${subscription.url}`} onClick={() => toggle(subscription.id, "history")}>
-                            Histórico
+                          <Button type="button" variant="ghost" className="btn-small" aria-label={t("History of {url}", { url: subscription.url })} onClick={() => toggle(subscription.id, "history")}>
+                            {t("History")}
                           </Button>
                         </span>
                       </td>

@@ -1,9 +1,11 @@
+import { useT } from "../i18n";
 import { CheckIcon } from "./icons/check";
 
 /** The steps of a flow that goes in order: the ones done are ticked, the one the person is on is marked. */
 export function Stepper({ steps, current }: { steps: string[]; current: number }) {
+  const t = useT();
   return (
-    <ol className="stepper" aria-label="Etapas">
+    <ol className="stepper" aria-label={t("Steps")}>
       {steps.map((label, index) => (
         <li
           key={label}

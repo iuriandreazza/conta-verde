@@ -33,8 +33,8 @@ const FIELD_LABELS: Record<string, string> = {
 };
 
 const VALUE_LABELS: Record<string, string> = {
-  set: msg("set"),
-  changed: msg("changed"),
+  set: msg("Secret was set"),
+  changed: msg("Secret was changed"),
   focus: "Focus NFe",
   nfeio: "NFE.io",
   true: msg("yes"),
@@ -282,7 +282,7 @@ export function GatewaySettingsPage() {
           load={loadHistory}
           fieldLabel={(field) => (field in FIELD_LABELS ? t(FIELD_LABELS[field]) : field)}
           valueLabel={(_, value) => (value === null ? "—" : value in VALUE_LABELS ? t(VALUE_LABELS[value]) : value)}
-          emptyMessage={t("No records yet.")}
+          emptyMessage={t("No history yet.")}
         />
       </section>
     </>

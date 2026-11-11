@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type DocumentLine, type LineInput, type PriceList, type Product } from "../api";
 import { formatMoney, toApiDecimal, toInputDecimal } from "../lib/decimal";
+import { DEFAULT_LANGUAGE, translate, useT, type Translate } from "../i18n";
 import { centsToApi } from "../lib/entryInstallments";
 import { readUpTo } from "../lib/readUpTo";
 import { linesTotalCents, lineTotalCents } from "../lib/saleLines";
@@ -45,13 +46,16 @@ const typed = (row: LineRow) => ({
   discount: row.discount,
 });
 
+// A form that has not yet been given its translator (the purchase form) gets the message in the default language.
+const inDefaultLanguage: Translate = (key, params) => translate(DEFAULT_LANGUAGE, key, params);
+
 /** Why the lines cannot be sent, or `null` when they can. */
-export function linesProblem(rows: LineRow[]): string | null {
+export function linesProblem(rows: LineRow[], t: Translate = inDefaultLanguage): string | null {
   const position = rows.findIndex((row) => row.product_id === "" || row.description.trim() === "");
-  if (position !== -1) return `Escolha o produto ou serviço do item ${position + 1}.`;
+  if (position !== -1) return t("Choose the product or service of item {number}.", { number: position + 1 });
   const invalid = rows.findIndex((row) => lineTotalCents(typed(row)) === null);
   if (invalid !== -1) {
-    return `O item ${invalid + 1} precisa de quantidade (até 3 casas), preço (até 6 casas) e desconto em reais e centavos, que não passe do valor do item.`;
+    return t("Item {number} needs a quantity (up to 3 decimals), a price (up to 6 decimals) and a discount in reais and cents that does not exceed the item's value.", { number: invalid + 1 });
   }
   return null;
 }
@@ -85,8 +89,9 @@ interface LinesEditorProps {
  * what is shown is what is stored (ADR 0037).
  */
 export function LinesEditor({ companyId, rows, onChange, products, pricing = "sale" }: LinesEditorProps) {
+  const t = useT();
   const costed = pricing === "cost";
-  const priceLabel = costed ? "Custo" : "Preço";
+  const priceLabel = costed ? t("Cost") : t("Price");
   const [priceLists, setPriceLists] = useState<PriceList[]>([]);
   // Kept here and never sent: a document keeps the prices its lines were filled with (ADR 0042).
   const [priceListId, setPriceListId] = useState("");
@@ -138,14 +143,14 @@ export function LinesEditor({ companyId, rows, onChange, products, pricing = "sa
 
   return (
     <fieldset className="lines">
-      <legend>Itens</legend>
+      <legend>{t("Items")}</legend>
       {priceLists.length > 0 && (
         <>
           <div className="span-all field-with-tip">
             <label>
-              Tabela de preços
+              {t("Price list")}
               <select value={priceListId} onChange={(event) => choosePriceList(event.target.value)}>
-                <option value="">Preço de venda de cada produto</option>
+                <option value="">{t("Each product's sale price")}</option>
                 {priceLists.map((list) => (
                   <option key={list.id} value={list.id}>
                     {list.name}
@@ -153,8 +158,8 @@ export function LinesEditor({ companyId, rows, onChange, products, pricing = "sa
                 ))}
               </select>
             </label>
-            <InfoTip label="Sobre a tabela de preços">
-              <p>Trocar a tabela refaz o preço dos itens que já têm produto.</p>
+            <InfoTip label={t("About the price list")}>
+              <p>{t("Changing the list prices the items that already have a product again.")}</p>
             </InfoTip>
           </div>
         </>
@@ -164,14 +169,14 @@ export function LinesEditor({ companyId, rows, onChange, products, pricing = "sa
         return (
           <div className="line-row" key={row.key}>
             <label className="span-all">
-              Produto ou serviço
+              {t("Product or service")}
               <select
-                aria-label={`Produto ou serviço do item ${index + 1}`}
+                aria-label={t("Product or service of item {number}", { number: index + 1 })}
                 value={row.product_id}
                 onChange={(event) => choose(row.key, event.target.value)}
               >
                 <option value="" disabled>
-                  Escolha
+                  {t("Choose")}
                 </option>
                 {products.map((product) => (
                   <option key={product.id} value={product.id}>
@@ -181,9 +186,9 @@ export function LinesEditor({ companyId, rows, onChange, products, pricing = "sa
               </select>
             </label>
             <label className="span-all">
-              Descrição
+              {t("Description")}
               <input
-                aria-label={`Descrição do item ${index + 1}`}
+                aria-label={t("Description of item {number}", { number: index + 1 })}
                 maxLength={200}
                 autoComplete="off"
                 value={row.description}
@@ -191,9 +196,9 @@ export function LinesEditor({ companyId, rows, onChange, products, pricing = "sa
               />
             </label>
             <label>
-              Quantidade
+              {t("Quantity")}
               <input
-                aria-label={`Quantidade do item ${index + 1}`}
+                aria-label={t("Quantity of item {number}", { number: index + 1 })}
                 inputMode="decimal"
                 autoComplete="off"
                 value={row.quantity}
@@ -203,7 +208,7 @@ export function LinesEditor({ companyId, rows, onChange, products, pricing = "sa
             <label>
               {priceLabel}
               <input
-                aria-label={`${priceLabel} do item ${index + 1}`}
+                aria-label={t("{label} of item {number}", { label: priceLabel, number: index + 1 })}
                 inputMode="decimal"
                 autoComplete="off"
                 placeholder="0,00"
@@ -212,9 +217,9 @@ export function LinesEditor({ companyId, rows, onChange, products, pricing = "sa
               />
             </label>
             <label>
-              Desconto
+              {t("Discount")}
               <input
-                aria-label={`Desconto do item ${index + 1}`}
+                aria-label={t("Discount of item {number}", { number: index + 1 })}
                 inputMode="decimal"
                 autoComplete="off"
                 placeholder="0,00"
@@ -223,18 +228,18 @@ export function LinesEditor({ companyId, rows, onChange, products, pricing = "sa
               />
             </label>
             <div className="line-total">
-              <span className="muted">Valor</span>
+              <span className="muted">{t("Value")}</span>
               <strong>{cents === null ? "—" : formatMoney(centsToApi(cents))}</strong>
             </div>
             <Button
               type="button"
               variant="ghost"
               className="btn-small"
-              aria-label={`Remover item ${index + 1}`}
+              aria-label={t("Remove item {number}", { number: index + 1 })}
               disabled={rows.length === 1}
               onClick={() => onChange(rows.filter((item) => item.key !== row.key))}
             >
-              Remover
+              {t("Remove")}
             </Button>
           </div>
         );
@@ -248,11 +253,11 @@ export function LinesEditor({ companyId, rows, onChange, products, pricing = "sa
           disabled={rows.length >= MAX_LINES}
           onClick={() => onChange([...rows, newLine()])}
         >
-          Adicionar item
+          {t("Add item")}
         </Button>
       </div>
       <p role="status" className={total === null ? "installments-sum installments-off" : "muted"}>
-        {total === null ? "Há itens com valores que não são números válidos." : `Total: ${formatMoney(centsToApi(total))}`}
+        {total === null ? t("Some items have values that are not valid numbers.") : t("Total: {amount}", { amount: formatMoney(centsToApi(total)) })}
       </p>
     </fieldset>
   );

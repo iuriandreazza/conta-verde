@@ -38,6 +38,7 @@ import { CreditCardIcon } from "../components/icons/credit-card";
 import { HandCoinsIcon } from "../components/icons/hand-coins";
 import { WalletIcon } from "../components/icons/wallet";
 import type { AnimatedIcon } from "../components/Button";
+import { useT } from "../i18n";
 
 const KIND_ICONS: Record<BankAccount["kind"], AnimatedIcon> = {
   checking: WalletIcon,
@@ -59,6 +60,7 @@ import { StatusBadge } from "../components/StatusBadge";
 
 /** What an account holds today. The opening balance it started from is in the form that sets it. */
 function BalanceCell({ item }: { item: AccountBalance | undefined }) {
+  const t = useT();
   if (item === undefined) {
     return <td className="num">—</td>;
   }
@@ -67,8 +69,8 @@ function BalanceCell({ item }: { item: AccountBalance | undefined }) {
       className={item.balance.startsWith("-") ? "num negative" : "num"}
       title={
         item.opening === null
-          ? "Sem saldo inicial: soma tudo o que foi baixado e transferido."
-          : `Saldo inicial de ${formatMoney(item.opening.balance)} em ${formatDate(item.opening.on)}`
+          ? t("No opening balance: adds up everything that was settled and transferred.")
+          : t("Opening balance of {amount} on {date}", { amount: formatMoney(item.opening.balance), date: formatDate(item.opening.on) })
       }
     >
       {formatMoney(item.balance)}
@@ -80,6 +82,7 @@ function BalanceCell({ item }: { item: AccountBalance | undefined }) {
 // instance: the old list is dropped and a reply still in flight for another company lands on an
 // unmounted component.
 export function BankAccountsPage() {
+  const t = useT();
   const { companyId = "" } = useParams();
   const canWrite = useCanWrite("finance");
   const [filters, setFilters] = useState<BankAccountFilters>(NO_BANK_ACCOUNT_FILTERS);
@@ -162,7 +165,7 @@ export function BankAccountsPage() {
       // In place: the list keeps its page and its filters.
       setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)));
       setEditing(null);
-      setSaved(`${updated.name} atualizada.`);
+      setSaved(t("Bank account {name} updated.", { name: updated.name }));
     } catch (failure) {
       setFormError(errorMessage(failure));
     } finally {
@@ -172,119 +175,119 @@ export function BankAccountsPage() {
 
   return (
     <>
-      <PageHeader title="Contas bancárias" description="Onde o dinheiro da empresa fica e circula: bancos, caixa e cartões." />
+      <PageHeader title={t("Bank accounts")} description={t("Where the company's money sits and moves: banks, cash and cards.")} />
       <Notice message={balancesError} />
       {balances !== null && (
         <div className="kpi-row">
           <StatTile
-            label={`Saldo consolidado em ${formatDate(balances.on)}`}
+            label={t("Consolidated balance on {date}", { date: formatDate(balances.on) })}
             value={formatMoney(balances.total)}
-            note="Soma de todas as contas, inclusive as inativas."
+            note={t("Sum of all accounts, including inactive ones.")}
           />
         </div>
       )}
       {canWrite && (
         <div className="list-actions">
           <Button type="button" icon={PlusIcon} onClick={() => openCreate("bankAccount")}>
-            Nova conta bancária
+            {t("New bank account")}
           </Button>
         </div>
       )}
       <Notice message={saved} tone="success" />
       <div>
       <section className="card list-card">
-        <h2>Cadastradas</h2>
+        <h2>{t("Registered accounts")}</h2>
         <div className="filters" role="search">
           <label>
-            Buscar
+            {t("Search")}
             <input
               type="search"
               value={filters.q}
-              placeholder="Nome ou número da conta"
+              placeholder={t("Name or account number")}
               autoComplete="off"
               maxLength={100}
               onChange={(event) => setFilters({ ...filters, q: event.target.value })}
             />
           </label>
           <label>
-            Mostrar
+            {t("Show")}
             <select
               value={filters.kind}
               onChange={(event) =>
                 setFilters({ ...filters, kind: event.target.value as BankAccountFilters["kind"] })
               }
             >
-              <option value="">Todas</option>
+              <option value="">{t("Every account")}</option>
               {BANK_ACCOUNT_KINDS.map((option) => (
                 <option key={option.key} value={option.key}>
-                  {option.label}
+                  {t(option.label)}
                 </option>
               ))}
             </select>
           </label>
           <label>
-            Situação
+            {t("Status")}
             <select
               value={filters.active}
               onChange={(event) =>
                 setFilters({ ...filters, active: event.target.value as BankAccountFilters["active"] })
               }
             >
-              <option value="">Ativas e inativas</option>
-              <option value="true">Só ativas</option>
-              <option value="false">Só inativas</option>
+              <option value="">{t("Active and inactive accounts")}</option>
+              <option value="true">{t("Active accounts only")}</option>
+              <option value="false">{t("Inactive accounts only")}</option>
             </select>
           </label>
           <label>
-            Ordem
+            {t("Sort order")}
             <select
               value={filters.sort}
               onChange={(event) =>
                 setFilters({ ...filters, sort: event.target.value as BankAccountFilters["sort"] })
               }
             >
-              <option value="name">Nome (A–Z)</option>
-              <option value="-name">Nome (Z–A)</option>
+              <option value="name">{t("Name (A–Z)")}</option>
+              <option value="-name">{t("Name (Z–A)")}</option>
             </select>
           </label>
         </div>
         <Notice message={error} />
         {loading ? (
           <p role="status" className="status">
-            <Spinner /> Carregando…
+            <Spinner /> {t("Loading…")}
           </p>
         ) : accounts.length === 0 && error ? (
           <Button type="button" variant="ghost" onClick={() => void reload()}>
-            Tentar de novo
+            {t("Try again")}
           </Button>
         ) : accounts.length === 0 && isFiltered ? (
           <div className="empty">
             <BriefcaseBusinessIcon size={40} aria-hidden />
-            <p role="status">Nenhum cadastro encontrado.</p>
+            <p role="status">{t("No records found.")}</p>
             <Button
               type="button"
               variant="ghost"
               onClick={() => setFilters({ ...NO_BANK_ACCOUNT_FILTERS, sort: filters.sort })}
             >
-              Limpar filtros
+              {t("Clear filters")}
             </Button>
           </div>
         ) : accounts.length === 0 ? (
           <div className="empty">
             <BriefcaseBusinessIcon size={40} aria-hidden />
-            <p>Nenhuma conta ainda.</p>
-            <p className="muted">Uma conta corrente, a poupança, o caixa da loja ou um cartão.</p>
+            <p>{t("No accounts yet.")}</p>
+            <p className="muted">{t("A checking account, savings, the store's cash box or a card.")}</p>
           </div>
         ) : (
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Conta</th>
-                  <th className="num">Saldo hoje</th>
-                  <th>Situação</th>
+                  <th>{t("Account")}</th>
+                  <th className="num">{t("Balance today")}</th>
+                  <th>{t("Status")}</th>
                   <th>
-                    <span className="visually-hidden">Ações</span>
+                    <span className="visually-hidden">{t("Actions")}</span>
                   </th>
                 </tr>
               </thead>
@@ -310,7 +313,7 @@ export function BankAccountsPage() {
                             icon={CircleDollarSignIcon}
                             type="button"
                             variant="ghost"
-                            aria-label={`Saldo inicial de ${account.name}`}
+                            aria-label={t("Opening balance of {name}", { name: account.name })}
                             aria-expanded={openingOpenFor === account.id}
                             aria-controls={`opening-${account.id}`}
                             disabled={balances === null}
@@ -318,7 +321,7 @@ export function BankAccountsPage() {
                               setOpeningOpenFor(openingOpenFor === account.id ? null : account.id)
                             }
                           >
-                            Saldo inicial
+                            {t("Opening balance")}
                           </Button>
                         )}
                         {canWrite && (
@@ -327,7 +330,7 @@ export function BankAccountsPage() {
                             icon={SquarePenIcon}
                             type="button"
                             variant="ghost"
-                            aria-label={`Alterar ${account.name}`}
+                            aria-label={t("Edit {name}", { name: account.name })}
                             disabled={saving}
                             onClick={() => {
                               setEditing(account);
@@ -335,14 +338,14 @@ export function BankAccountsPage() {
                               setSaved(null);
                             }}
                           >
-                            Alterar
+                            {t("Change")}
                           </Button>
                         )}
                         <Button
                           iconOnly
                           type="button"
                           variant="ghost"
-                          aria-label={`Histórico de ${account.name}`}
+                          aria-label={t("History of {name}", { name: account.name })}
                           aria-expanded={historyOpenFor === account.id}
                           aria-controls={`history-${account.id}`}
                           icon={HistoryIcon}
@@ -350,13 +353,13 @@ export function BankAccountsPage() {
                             setHistoryOpenFor(historyOpenFor === account.id ? null : account.id)
                           }
                         >
-                          Histórico
+                          {t("History")}
                         </Button>
                       </td>
                     </ListRow>
                     {openingOpenFor === account.id && balanceOf.has(account.id) && (
                       <tr id={`opening-${account.id}`}>
-                        <td colSpan={4} role="region" aria-label={`Saldo inicial de ${account.name}`}>
+                        <td colSpan={4} role="region" aria-label={t("Opening balance of {name}", { name: account.name })}>
                           <OpeningBalanceForm
                             companyId={companyId}
                             item={balanceOf.get(account.id) as AccountBalance}
@@ -367,7 +370,7 @@ export function BankAccountsPage() {
                     )}
                     {historyOpenFor === account.id && (
                       <tr id={`history-${account.id}`}>
-                        <td colSpan={4} role="region" aria-label={`Histórico de ${account.name}`}>
+                        <td colSpan={4} role="region" aria-label={t("History of {name}", { name: account.name })}>
                           <BankAccountHistory
                             // Remounted when the account changes, so an open history follows an edit.
                             key={JSON.stringify(account)}
@@ -386,7 +389,7 @@ export function BankAccountsPage() {
         {!loading && accounts.length > 0 && (
           <ListFooter
             count={accounts.length}
-            noun={["conta", "contas"]}
+            noun={[t("account"), t("accounts")]}
             hasMore={nextCursor !== null}
             loadingMore={loadingMore}
             refreshing={refreshing}
@@ -395,7 +398,7 @@ export function BankAccountsPage() {
         )}
       </section>
         {canWrite && (
-          <Sheet open={editing !== null} locked={saving} title={`Alterar ${shown?.name ?? ""}`} onClose={closeSheet}>
+          <Sheet open={editing !== null} locked={saving} title={t("Edit {name}", { name: shown?.name ?? "" })} onClose={closeSheet}>
             {shown !== null && (
               <BankAccountForm
                 key={shown.id}

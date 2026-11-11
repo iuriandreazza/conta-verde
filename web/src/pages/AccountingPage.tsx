@@ -134,7 +134,7 @@ export function AccountingPage() {
               </HelpTitle>
               {through === null ? (
                 <p className="lock-through">
-                  <span className="badge badge-dot badge-muted">{t("Open")}</span>
+                  <span className="badge badge-dot badge-muted">{t("Month open")}</span>
                   <span>{t("No month is closed.")}</span>
                 </p>
               ) : (

@@ -3,10 +3,12 @@ import { api, errorMessage, type InvoiceEntryParams, type InvoicePreview } from 
 import { PurchaseImportForm } from "../components/PurchaseImportForm";
 import { Spinner } from "../components/Spinner";
 import { useSalesTargets } from "../lib/useSalesTargets";
+import { useT } from "../i18n";
 import type { CreatorProps } from "./CreationProvider";
 
 /** Enters a supplier's NF-e: reads the XML for a preview first, then enters it with what the person chose. */
 export function PurchaseImportCreator({ companyId, onBusyChange, onCreated, onCancel }: CreatorProps) {
+  const t = useT();
   const targets = useSalesTargets(companyId);
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<InvoicePreview | null>(null);
@@ -39,8 +41,8 @@ export function PurchaseImportCreator({ companyId, onBusyChange, onCreated, onCa
       onCreated({
         id: entered.purchase_id,
         message: entered.already_entered
-          ? `Esta NF-e já havia sido entrada como a compra nº ${entered.number}: nada foi feito de novo.`
-          : `Compra nº ${entered.number} criada a partir da NF-e.`,
+          ? t("This NF-e had already been entered as purchase no. {number}: nothing was done again.", { number: entered.number })
+          : t("Purchase no. {number} created from the NF-e.", { number: entered.number }),
       });
     } catch (failure) {
       setError(errorMessage(failure));
@@ -51,7 +53,7 @@ export function PurchaseImportCreator({ companyId, onBusyChange, onCreated, onCa
   if (!targets.loaded) {
     return targets.error === null ? (
       <p role="status" className="status">
-        <Spinner /> Carregando…
+        <Spinner /> {t("Loading…")}
       </p>
     ) : (
       <p role="alert">{targets.error}</p>

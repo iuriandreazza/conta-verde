@@ -3,10 +3,12 @@ import { api, errorMessage, type PurchaseOrderInput } from "../api";
 import { PurchaseForm } from "../components/PurchaseForm";
 import { Spinner } from "../components/Spinner";
 import { useSalesTargets } from "../lib/useSalesTargets";
+import { useT } from "../i18n";
 import type { CreatorProps } from "./CreationProvider";
 
 /** The form of a new purchase order, with what it points at read for the company, and the call that saves it. */
 export function PurchaseCreator({ companyId, onBusyChange, onCreated, onCancel }: CreatorProps) {
+  const t = useT();
   const targets = useSalesTargets(companyId);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -20,7 +22,7 @@ export function PurchaseCreator({ companyId, onBusyChange, onCreated, onCancel }
     setError(null);
     try {
       const created = await api.createPurchaseOrder(companyId, input);
-      onCreated({ id: created.id, message: `Compra nº ${created.number} criada.` });
+      onCreated({ id: created.id, message: t("Purchase no. {number} created.", { number: created.number }) });
     } catch (failure) {
       setError(errorMessage(failure));
       setSaving(false);
@@ -30,7 +32,7 @@ export function PurchaseCreator({ companyId, onBusyChange, onCreated, onCancel }
   if (!targets.loaded) {
     return targets.error === null ? (
       <p role="status" className="status">
-        <Spinner /> Carregando…
+        <Spinner /> {t("Loading…")}
       </p>
     ) : (
       <p role="alert">{targets.error}</p>

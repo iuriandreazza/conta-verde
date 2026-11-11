@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { errorMessage } from "../api";
+import { useT } from "../i18n";
 import { downloadCsv, toCsv } from "../lib/csv";
 import { readCapped } from "../lib/readUpTo";
 import { Button } from "./Button";
@@ -18,10 +19,11 @@ interface ListToolsProps<T> {
 }
 
 /**
- * "Exportar" and "Imprimir" for a list: the file holds every row the filters give (not just the pages
+ * "Export" and "Print" for a list: the file holds every row the filters give (not just the pages
  * on screen), and the printed page is the list without the shell around it (see `@media print`).
  */
 export function ListTools<T>({ filename, header, fetchPage, toRow }: ListToolsProps<T>) {
+  const t = useT();
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<{ text: string; tone: "error" | "warning" | "success" } | null>(null);
 
@@ -33,8 +35,8 @@ export function ListTools<T>({ filename, header, fetchPage, toRow }: ListToolsPr
       downloadCsv(`${filename}.csv`, toCsv(header, items.map(toRow)));
       setMessage(
         complete
-          ? { text: `${items.length} ${items.length === 1 ? "linha exportada" : "linhas exportadas"}.`, tone: "success" }
-          : { text: `Foram exportadas as primeiras ${EXPORT_CAP} linhas: filtre a lista para exportar o resto.`, tone: "warning" },
+          ? { text: items.length === 1 ? t("{count} row exported.", { count: 1 }) : t("{count} rows exported.", { count: items.length }), tone: "success" }
+          : { text: t("The first {count} rows were exported: filter the list to export the rest.", { count: EXPORT_CAP }), tone: "warning" },
       );
     } catch (failure) {
       setMessage({ text: errorMessage(failure), tone: "error" });
@@ -46,10 +48,10 @@ export function ListTools<T>({ filename, header, fetchPage, toRow }: ListToolsPr
   return (
     <>
       <Button type="button" variant="ghost" pending={pending} onClick={() => void exportRows()}>
-        Exportar
+        {t("Export")}
       </Button>
       <Button type="button" variant="ghost" onClick={() => window.print()}>
-        Imprimir
+        {t("Print")}
       </Button>
       <Notice message={message?.text ?? null} tone={message?.tone} />
     </>

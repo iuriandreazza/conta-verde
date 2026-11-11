@@ -1,4 +1,6 @@
+import type { Translate } from "../i18n";
 import { formatDecimal, toApiDecimal } from "./decimal";
+import { inDefaultLanguage } from "./inDefaultLanguage";
 
 // Percentages are kept in hundredths of a percent (an integer), never in a `Number` with decimals:
 // 33.33 + 33.33 + 33.34 is exactly 100 and a float would say 99.99999999999999.
@@ -58,23 +60,25 @@ export function showHundredths(hundredths: number): string {
 }
 
 /** "à vista" for day 0, "30 dias" for the others. */
-export function dueLabel(days: number): string {
-  return days === 0 ? "à vista" : `${days} ${days === 1 ? "dia" : "dias"}`;
+export function dueLabel(days: number, t: Translate = inDefaultLanguage): string {
+  if (days === 0) return t("upfront");
+  return days === 1 ? t("{days} day", { days }) : t("{days} days", { days });
 }
 
 /** The installments as a short sentence: `à vista 50% · 30 dias 50%`. */
-export function describeInstallments(installments: { days: number; percent: string }[]): string {
+export function describeInstallments(installments: { days: number; percent: string }[], t: Translate = inDefaultLanguage): string {
   return installments
-    .map((installment) => `${dueLabel(installment.days)} ${formatDecimal(installment.percent)}%`)
+    .map((installment) => `${dueLabel(installment.days, t)} ${formatDecimal(installment.percent)}%`)
     .join(" · ");
 }
 
 /** The audit trail's canonical text (`0:50,30:50`) as the same sentence. */
-export function describeInstallmentsText(text: string): string {
+export function describeInstallmentsText(text: string, t: Translate = inDefaultLanguage): string {
   return describeInstallments(
     text.split(",").map((part) => {
       const [days, percent] = part.split(":");
       return { days: Number(days), percent };
     }),
+    t,
   );
 }

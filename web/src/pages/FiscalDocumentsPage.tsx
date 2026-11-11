@@ -93,7 +93,7 @@ export function FiscalDocumentsPage() {
               <th>{t("Type")}</th>
               <th>{t("Number")}</th>
               <th>{t("Recipient")}</th>
-              <th>{t("Issued on")}</th>
+              <th>{t("Document issued on")}</th>
               <th>{t("Total")}</th>
               <th>{t("Status")}</th>
             </tr>

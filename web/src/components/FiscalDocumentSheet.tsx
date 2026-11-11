@@ -36,7 +36,7 @@ const FIELD_LABELS: Record<string, string> = {
   recipient: msg("Recipient"),
   nature: msg("Nature"),
   total: msg("Total"),
-  issued_on: msg("Issued on"),
+  issued_on: msg("Document issued on"),
   access_key: msg("Access key"),
   number: msg("Number"),
   series: msg("Series"),
@@ -172,9 +172,9 @@ export function FiscalDocumentSheet({ companyId, document, natures, canWrite, on
         </dd>
         <dt>{t("Total")}</dt>
         <dd>{formatMoney(document.total)}</dd>
-        <dt>{t("Issued on")}</dt>
+        <dt>{t("Document issued on")}</dt>
         <dd>
-          {formatDate(document.issued_on)} · {document.environment === "production" ? t("Production") : t("Test")}
+          {formatDate(document.issued_on)} · {document.environment === "production" ? t("Production") : t("Test environment")}
         </dd>
         {document.access_key && (
           <>
@@ -368,11 +368,11 @@ export function FiscalDocumentSheet({ companyId, document, natures, canWrite, on
           valueLabel={(field, value) => {
             if (value === null) return "—";
             if (field === "status") return value in STATUS_LABELS ? t(STATUS_LABELS[value as keyof typeof STATUS_LABELS]) : value;
-            if (field === "environment") return value === "production" ? t("Production") : t("Test");
+            if (field === "environment") return value === "production" ? t("Production") : t("Test environment");
             if (field === "total") return formatMoney(value);
             return value;
           }}
-          emptyMessage={t("No records yet.")}
+          emptyMessage={t("No history yet.")}
         />
       </section>
     </div>

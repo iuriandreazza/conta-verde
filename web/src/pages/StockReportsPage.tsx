@@ -9,6 +9,7 @@ import { Notice } from "../components/Notice";
 import { PageHeader } from "../components/PageHeader";
 import { PeriodFilter } from "../components/PeriodFilter";
 import { Spinner } from "../components/Spinner";
+import { msg, useT } from "../i18n";
 import { formatDecimal, formatMoney } from "../lib/decimal";
 import { formatDate, isIsoDate } from "../lib/entryInstallments";
 import { fitted, monthSpan } from "../lib/reports";
@@ -20,26 +21,27 @@ import { HelpTitle } from "../components/HelpTitle";
 
 type View = "valuation" | "movements";
 
-const SERIES = [{ name: "Valor em estoque", color: "var(--series-1)" }];
+const SERIES = [{ name: msg("Value in stock"), color: "var(--series-1)" }];
 const MAX_BARS = 8;
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one instance.
 export function StockReportsPage() {
+  const t = useT();
   const { companyId = "" } = useParams();
   const [view, setView] = useState<View>("valuation");
 
   return (
     <>
       <PageHeader
-        title="Relatórios de estoque"
-        description="O que o estoque vale em um dia e o que se moveu em um período, produto a produto, ao custo médio."
+        title={t("Stock reports")}
+        description={t("What the stock is worth on a day and what moved in a period, product by product, at average cost.")}
       />
-      <div className="segmented" role="group" aria-label="Relatório de estoque">
+      <div className="segmented" role="group" aria-label={t("Stock report")}>
         <button type="button" aria-pressed={view === "valuation"} onClick={() => setView("valuation")}>
-          Valorização
+          {t("Valuation")}
         </button>
         <button type="button" aria-pressed={view === "movements"} onClick={() => setView("movements")}>
-          Movimentações do período
+          {t("Movements of the period")}
         </button>
       </div>
       {view === "valuation" ? <ValuationView companyId={companyId} /> : <MovementsView companyId={companyId} />}
@@ -82,6 +84,7 @@ function useReport<T>(load: (() => Promise<T>) | null, key: string) {
 }
 
 function ValuationView({ companyId }: { companyId: string }) {
+  const t = useT();
   const [on, setOn] = useState(() => todayIso());
   // A year still being typed (0002) is not a day to ask about.
   const valid = isIsoDate(on) && on >= "1000-01-01";
@@ -92,18 +95,18 @@ function ValuationView({ companyId }: { companyId: string }) {
       <section className="card filters-card">
         <div className="filters" role="search">
           <label>
-            Em
+            {t("As of")}
             <input type="date" value={on} onChange={(event) => setOn(event.target.value)} />
           </label>
         </div>
-        <Notice message={valid ? null : "Informe o dia da valorização."} />
+        <Notice message={valid ? null : t("Enter the valuation day.")} />
       </section>
       <Notice message={error} />
       {report === null || !valid ? (
         valid &&
         loading && (
           <p role="status" className="status">
-            <Spinner /> Carregando…
+            <Spinner /> {t("Loading…")}
           </p>
         )
       ) : (
@@ -114,6 +117,8 @@ function ValuationView({ companyId }: { companyId: string }) {
 }
 
 function ValuationReport({ report, refreshing }: { report: StockValuation; refreshing: boolean }) {
+  const t = useT();
+  const series = SERIES.map((item) => ({ ...item, name: t(item.name) }));
   const rows = report.rows;
   const withStock = rows.filter((row) => toQuantity(row.quantity) !== null).length;
   const label = (row: StockValuation["rows"][number]) => (row.sku === null ? row.name : `${row.name} (${row.sku})`);
@@ -122,51 +127,55 @@ function ValuationReport({ report, refreshing }: { report: StockValuation; refre
     <>
       {refreshing && (
         <p role="status" className="status muted">
-          <Spinner size={16} /> Atualizando…
+          <Spinner size={16} /> {t("Updating…")}
         </p>
       )}
       <div className="kpi-row">
-        <StatTile label="Valor do estoque" value={formatMoney(report.total)} note={`Em ${formatDate(report.on)}, ao custo médio.`} />
-        <StatTile label="Produtos com saldo" value={String(withStock)} note="Com quantidade acima de zero nesse dia." />
+        <StatTile label={t("Stock value")} value={formatMoney(report.total)} note={t("On {date}, at average cost.", { date: formatDate(report.on) })} />
+        <StatTile label={t("Products with a balance")} value={String(withStock)} note={t("With a quantity above zero on that day.")} />
       </div>
       {report.negative > 0 && (
         <Notice
           tone="warning"
-          message={`${report.negative} ${report.negative === 1 ? "produto com saldo negativo" : "produtos com saldo negativo"}: o valor deles é zero e o total não mostra a falta. Acerte com um inventário.`}
+          message={
+            report.negative === 1
+              ? t("{count} product with a negative balance: its value is zero and the total does not show the shortfall. Fix it with an inventory count.", { count: report.negative })
+              : t("{count} products with a negative balance: their value is zero and the total does not show the shortfall. Fix it with an inventory count.", { count: report.negative })
+          }
         />
       )}
       {rows.length === 0 ? (
         <div className="card empty">
-          <p role="status">Nenhum produto com saldo nesse dia.</p>
+          <p role="status">{t("No product has a balance on that day.")}</p>
         </div>
       ) : (
         <>
           <ChartCard
-            title="Maiores valores em estoque, por produto"
-            description={`Os ${Math.min(MAX_BARS, rows.length)} maiores; a tabela abaixo tem todos.`}
-            legend={<Legend items={SERIES} kind="bar" />}
+            title={t("Largest stock values, by product")}
+            description={t("The {count} largest; the table below has them all.", { count: Math.min(MAX_BARS, rows.length) })}
+            legend={<Legend items={series} kind="bar" />}
             table={{
-              columns: ["Produto", "Valor", "% do total"],
+              columns: [t("Product"), t("Value"), t("% of total")],
               rows: rows.map((row) => [label(row), formatMoney(row.value), `${formatDecimal(row.share, 2)}%`]),
             }}
           >
             <BarChart
-              label="Maiores valores em estoque por produto"
-              series={SERIES}
+              label={t("Largest stock values by product")}
+              series={series}
               groups={rows.slice(0, MAX_BARS).map((row) => ({ label: fitted(row.name), values: [row.value] }))}
             />
           </ChartCard>
           <section className="card list-card">
-            <h2>Valorização por produto</h2>
+            <h2>{t("Valuation by product")}</h2>
             <div className="table-wrap">
               <table>
                 <thead>
                   <tr>
-                    <th>Produto</th>
-                    <th className="num">Quantidade</th>
-                    <th className="num">Custo médio</th>
-                    <th className="num">Valor</th>
-                    <th className="num">% do total</th>
+                    <th>{t("Product")}</th>
+                    <th className="num">{t("Quantity")}</th>
+                    <th className="num">{t("Average cost")}</th>
+                    <th className="num">{t("Value")}</th>
+                    <th className="num">{t("% of total")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -195,13 +204,14 @@ function ValuationReport({ report, refreshing }: { report: StockValuation; refre
 }
 
 function MovementsView({ companyId }: { companyId: string }) {
+  const t = useT();
   const [today] = useState(() => todayIso());
   const [span, setSpan] = useState(() => monthSpan(today));
   const spanError =
     !isIsoDate(span.from) || !isIsoDate(span.to)
-      ? "Informe o primeiro e o último dia."
+      ? t("Enter the first and the last day.")
       : span.from > span.to
-        ? "O primeiro dia não pode ser depois do último."
+        ? t("The first day cannot be after the last.")
         : null;
   // The server refuses a span over 366 days and says so: its message is shown as it is.
   const { report, error, loading } = useReport<StockMovementSummary>(
@@ -220,19 +230,19 @@ function MovementsView({ companyId }: { companyId: string }) {
         spanError === null &&
         loading && (
           <p role="status" className="status">
-            <Spinner /> Carregando…
+            <Spinner /> {t("Loading…")}
           </p>
         )
       ) : (
         <>
           {loading && (
             <p role="status" className="status muted">
-              <Spinner size={16} /> Atualizando…
+              <Spinner size={16} /> {t("Updating…")}
             </p>
           )}
           {report.items.length === 0 ? (
             <div className="card empty">
-              <p role="status">Nenhum produto se moveu nesse período.</p>
+              <p role="status">{t("No product moved in this period.")}</p>
             </div>
           ) : (
             <MovementsTable report={report} />
@@ -250,22 +260,23 @@ function totalOf(rows: StockMovementSummaryRow[], pick: (row: StockMovementSumma
 }
 
 function MovementsTable({ report }: { report: StockMovementSummary }) {
+  const t = useT();
   const rows = report.items;
   return (
     <section className="card list-card">
-      <HelpTitle level={2} title={`Movimentações de ${formatDate(report.from)} a ${formatDate(report.to)}`}>
-        <p>Saldo inicial mais entradas, menos saídas, mais ajustes, é o saldo final. Os ajustes têm sinal.</p>
+      <HelpTitle level={2} title={t("Movements from {from} to {to}", { from: formatDate(report.from), to: formatDate(report.to) })}>
+        <p>{t("Opening balance plus entries, minus exits, plus adjustments, is the closing balance. Adjustments carry a sign.")}</p>
       </HelpTitle>
       <div className="table-wrap">
         <table>
           <thead>
             <tr>
-              <th>Produto</th>
-              <th className="num">Saldo inicial</th>
-              <th className="num">Entradas</th>
-              <th className="num">Saídas</th>
-              <th className="num">Ajustes</th>
-              <th className="num">Saldo final</th>
+              <th>{t("Product")}</th>
+              <th className="num">{t("Opening balance")}</th>
+              <th className="num">{t("Stock entries")}</th>
+              <th className="num">{t("Exits")}</th>
+              <th className="num">{t("Adjustments")}</th>
+              <th className="num">{t("Closing balance")}</th>
             </tr>
           </thead>
           <tbody>
@@ -285,7 +296,7 @@ function MovementsTable({ report }: { report: StockMovementSummary }) {
           </tbody>
           <tfoot>
             <tr>
-              <th>Total (valores)</th>
+              <th>{t("Total (values)")}</th>
               <td className="num">{totalOf(rows, (row) => row.opening_value)}</td>
               <td className="num">{totalOf(rows, (row) => row.entered_value)}</td>
               <td className="num">{totalOf(rows, (row) => row.exited_value)}</td>

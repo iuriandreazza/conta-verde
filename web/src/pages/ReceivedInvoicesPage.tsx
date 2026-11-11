@@ -119,7 +119,7 @@ export function ReceivedInvoicesPage() {
           <thead>
             <tr>
               <th>{t("Issuer")}</th>
-              <th>{t("Issued on")}</th>
+              <th>{t("Document issued on")}</th>
               <th>{t("Total")}</th>
               <th>{t("Status")}</th>
               <th>{t("Manifestation")}</th>

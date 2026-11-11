@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import type { BillingCycle, Category, Contract, ContractInput, CostCenter, Party, PaymentTerm, Product } from "../api";
+import { useT } from "../i18n";
 import { treeRows } from "../lib/categoryTree";
 import { CYCLE_LABELS } from "../lib/contractCycle";
 import { isIsoDate } from "../lib/entryInstallments";
@@ -35,6 +36,7 @@ interface ContractFormProps {
 
 /** Registers a contract, or changes one. Remount it (a `key`) to start over. */
 export function ContractForm({ companyId, contract, targets, pending, error, onSubmit, onCancel }: ContractFormProps) {
+  const t = useT();
   const [rows, setRowsState] = useState<LineRow[]>(() => (contract === null ? [newLine()] : rowsFromLines(contract.lines)));
   const [fieldError, setFieldError] = useState<string | null>(null);
   const markDirty = useSheetDirty();
@@ -59,14 +61,14 @@ export function ContractForm({ companyId, contract, targets, pending, error, onS
     const form = new FormData(event.currentTarget);
     const field = (name: string) => String(form.get(name) ?? "").trim();
     if (!isIsoDate(field("starts_on"))) {
-      setFieldError("Informe a data da primeira cobrança.");
+      setFieldError(t("Enter the date of the first charge."));
       return;
     }
     if (field("ends_on") !== "" && (!isIsoDate(field("ends_on")) || field("ends_on") < field("starts_on"))) {
-      setFieldError("A última cobrança precisa ser uma data que não venha antes da primeira.");
+      setFieldError(t("The last charge must be a date that is not before the first."));
       return;
     }
-    const problem = linesProblem(rows);
+    const problem = linesProblem(rows, t);
     if (problem !== null) {
       setFieldError(problem);
       return;
@@ -91,17 +93,17 @@ export function ContractForm({ companyId, contract, targets, pending, error, onS
   return (
     <form className="record-form" onSubmit={handleSubmit}>
       <section className="form-section" aria-labelledby="contract-info">
-        <h3 id="contract-info">Dados do contrato</h3>
+        <h3 id="contract-info">{t("Contract details")}</h3>
         <div className="field-grid">
           <label>
-            Nome
+            {t("Name")}
             <input name="name" required maxLength={200} autoComplete="off" defaultValue={contract?.name} />
           </label>
           <label>
-            Cliente
+            {t("Customer")}
             <select name="customer_id" required defaultValue={contract?.customer_id ?? ""}>
               <option value="" disabled>
-                Escolha um cliente
+                {t("Choose a customer")}
               </option>
               {targets.parties.map((party) => (
                 <option key={party.id} value={party.id}>
@@ -111,9 +113,9 @@ export function ContractForm({ companyId, contract, targets, pending, error, onS
             </select>
           </label>
           <label>
-            Vendedor
+            {t("Seller")}
             <select name="seller_id" defaultValue={contract?.seller_id ?? ""}>
-              <option value="">Nenhum</option>
+              <option value="">{t("None")}</option>
               {sellers.map((party) => (
                 <option key={party.id} value={party.id}>
                   {party.name}
@@ -122,34 +124,34 @@ export function ContractForm({ companyId, contract, targets, pending, error, onS
             </select>
           </label>
           <label>
-            Ciclo de cobrança
+            {t("Billing cycle")}
             <select name="cycle" defaultValue={contract?.cycle ?? "monthly"}>
               {Object.entries(CYCLE_LABELS).map(([key, label]) => (
                 <option key={key} value={key}>
-                  {label}
+                  {t(label)}
                 </option>
               ))}
             </select>
           </label>
           <label>
-            Primeira cobrança
+            {t("First charge")}
             <input name="starts_on" type="date" required defaultValue={contract?.starts_on ?? todayIso()} />
           </label>
           <label>
-            Última cobrança (opcional)
+            {t("Last charge (optional)")}
             <input name="ends_on" type="date" defaultValue={contract?.ends_on ?? ""} />
           </label>
         </div>
       </section>
       <section className="form-section" aria-labelledby="contract-billing">
-        <HelpTitle id="contract-billing" title="Como cobrar">
-          <p>Mudar o contrato vale para as próximas cobranças; o que já foi cobrado não muda.</p>
+        <HelpTitle id="contract-billing" title={t("How to charge")}>
+          <p>{t("Changing the contract applies to the next charges; what was already charged does not change.")}</p>
         </HelpTitle>
         <div className="field-grid">
           <label>
-            Prazo de pagamento
+            {t("Payment term")}
             <select name="payment_term_id" defaultValue={contract?.payment_term_id ?? ""}>
-              <option value="">À vista, no dia da cobrança</option>
+              <option value="">{t("Cash, on the day of the charge")}</option>
               {termChoices.map((term) => (
                 <option key={term.id} value={term.id}>
                   {term.name}
@@ -158,10 +160,10 @@ export function ContractForm({ companyId, contract, targets, pending, error, onS
             </select>
           </label>
           <label>
-            Categoria da receita
+            {t("Revenue category")}
             <select name="category_id" required defaultValue={contract?.category_id ?? ""}>
               <option value="" disabled>
-                Escolha uma categoria
+                {t("Choose a category")}
               </option>
               {categoryRows.map(({ category, depth }) => (
                 <option key={category.id} value={category.id}>
@@ -172,9 +174,9 @@ export function ContractForm({ companyId, contract, targets, pending, error, onS
             </select>
           </label>
           <label>
-            Centro de custo
+            {t("Cost center")}
             <select name="cost_center_id" defaultValue={contract?.cost_center_id ?? ""}>
-              <option value="">Nenhum</option>
+              <option value="">{t("None")}</option>
               {costCenterChoices.map((center) => (
                 <option key={center.id} value={center.id}>
                   {center.name}
@@ -185,24 +187,24 @@ export function ContractForm({ companyId, contract, targets, pending, error, onS
         </div>
       </section>
       <section className="form-section" aria-labelledby="contract-lines">
-        <h3 id="contract-lines">Itens</h3>
+        <h3 id="contract-lines">{t("Items")}</h3>
         <LinesEditor companyId={companyId} rows={rows} onChange={setRows} products={productChoices} />
       </section>
       <section className="form-section" aria-labelledby="contract-notes">
-        <h3 id="contract-notes">Observações</h3>
+        <h3 id="contract-notes">{t("Notes")}</h3>
         <label>
-          Observações
+          {t("Notes")}
           <textarea name="notes" rows={3} maxLength={2000} defaultValue={contract?.notes ?? ""} />
         </label>
         <label className="inline">
-          <input name="active" type="checkbox" defaultChecked={contract ? contract.status === "active" : true} /> Ativo
+          <input name="active" type="checkbox" defaultChecked={contract ? contract.status === "active" : true} /> {t("Active")}
         </label>
       </section>
       <Notice message={fieldError ?? error} />
       <div className="form-footer">
         <BackButton disabled={pending} onClick={onCancel} />
         <Button type="submit" icon={contract === null ? PlusIcon : CheckIcon} pending={pending}>
-          {contract === null ? "Cadastrar contrato" : "Salvar alterações"}
+          {contract === null ? t("Register contract") : t("Save changes")}
         </Button>
       </div>
     </form>

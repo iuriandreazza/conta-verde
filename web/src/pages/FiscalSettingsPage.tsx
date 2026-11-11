@@ -342,7 +342,7 @@ export function FiscalSettingsPage() {
                       <input required maxLength={80} autoComplete="off" value={form.city} onChange={(event) => set("city", event.target.value)} />
                     </label>
                     <label className="span-2">
-                      {t("State")}
+                      {t("Issuer state")}
                       <select required value={form.state} onChange={(event) => set("state", event.target.value)}>
                         <option value=""></option>
                         {STATES.map((state) => (
@@ -478,7 +478,7 @@ export function FiscalSettingsPage() {
                                 {canWrite && (
                                   <>
                                     <Button iconOnly icon={SquarePenIcon} type="button" variant="ghost" aria-label={t("Edit {name}", { name: item.name })} onClick={() => setEditing(index)}>
-                                      {t("Edit")}
+                                      {t("Change")}
                                     </Button>
                                     <Button
                                       type="button"

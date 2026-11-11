@@ -22,7 +22,7 @@ const FIELD_LABELS: Record<string, string> = {
 
 // The names of the tax regimes are the law's own words and are written the same in both languages.
 const REGIMES: Record<string, string> = { simples_nacional: "Simples Nacional", lucro_presumido: "Lucro Presumido" };
-const ENVIRONMENTS: Record<string, string> = { homologation: msg("Test"), production: msg("Production") };
+const ENVIRONMENTS: Record<string, string> = { homologation: msg("Test environment"), production: msg("Production") };
 
 // The trail keeps a nature as `code|name|kind|cfop in state|cfop interstate|active|rules`, the rules apart by `;` and
 // each one `regime:ncm prefix:icms:pis:cofins:icms rate:pis rate:cofins rate`: written out so a changed rate shows. A

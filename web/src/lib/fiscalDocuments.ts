@@ -19,7 +19,7 @@ export const SPECIAL_REGIME_LABELS: Record<SpecialTaxRegime, string> = {
   notary_or_registrar: msg("Notary or registrar"),
   autonomous_professional: msg("Autonomous professional"),
   professionals_society: msg("Professionals' society"),
-  other: msg("Other"),
+  other: msg("Others"),
 };
 
 export const STATUS_LABELS: Record<FiscalDocumentStatus, string> = {
@@ -45,7 +45,7 @@ export const PRESENCE_LABELS: Record<BuyerPresence, string> = {
   telephone: msg("By telephone"),
   home_delivery: msg("Home delivery"),
   outside_the_establishment: msg("In person, outside the establishment"),
-  other: msg("Other"),
+  other: msg("Others"),
 };
 
 export const PAYMENT_LABELS: Record<PaymentForm, string> = {
@@ -57,9 +57,9 @@ export const PAYMENT_LABELS: Record<PaymentForm, string> = {
   bank_slip: msg("Bank slip (boleto)"),
   bank_deposit: msg("Bank deposit"),
   pix: msg("Pix"),
-  transfer: msg("Transfer"),
+  transfer: msg("Transfer payment"),
   no_payment: msg("No payment"),
-  other: msg("Other"),
+  other: msg("Others"),
 };
 
 /** What is still to be answered by the authority: the page offers to ask again. */
