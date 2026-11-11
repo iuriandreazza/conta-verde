@@ -2,11 +2,13 @@ import { motion } from "motion/react";
 import { Link, Navigate } from "react-router-dom";
 import { useAuth } from "../auth";
 import { BriefcaseBusinessIcon } from "../components/icons/briefcase-business";
+import { useT } from "../i18n";
 import { usePageTitle } from "../lib/usePageTitle";
 
 export function CompaniesPage() {
   const { session } = useAuth();
-  usePageTitle("Escolha uma empresa");
+  const t = useT();
+  usePageTitle(t("Choose a company"));
   if (session.status !== "authenticated") {
     return null;
   }
@@ -19,7 +21,7 @@ export function CompaniesPage() {
 
   return (
     <section className="narrow-wide">
-      <h1>Escolha uma empresa</h1>
+      <h1>{t("Choose a company")}</h1>
       <ul className="plain-list company-list">
         {companies.map((company, index) => (
           <motion.li
