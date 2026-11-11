@@ -22026,6 +22026,27 @@ pub async fn imports_stock_balances<M, P, St>(
         .unwrap();
     assert_eq!((zero.created, zero.valid, zero.skipped.len()), (0, 1, 1));
     assert_eq!(coffee().await, empty);
+    // A zero row is still a row (its cost must be one), and a cost that makes the value less than a cent is no balance.
+    let odd = stock
+        .import_balances(
+            company,
+            &ana,
+            "migration",
+            on,
+            vec![
+                row(2, "CAFE-500", "0", Some("abc")),
+                row(3, "PAO-1", "0.5", Some("0.009")),
+            ],
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(odd.created, 0);
+    assert_eq!(
+        odd.refused.iter().map(|note| note.row).collect::<Vec<_>>(),
+        [2, 3]
+    );
+    assert!(odd.refused[1].message.contains("less than a cent"));
 
     // A check writes nothing.
     let file = || {

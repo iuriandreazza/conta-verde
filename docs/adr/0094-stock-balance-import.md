@@ -47,13 +47,14 @@ ambiguous `1.234` as the products import.
   `record` (products locked in id order, the balances read again and the write retried when another one moved them), so a partial
   opening cannot be left behind.
 - **Sending the same file twice adds nothing.** The origin is `(import, v5(company, reference, SKU), 1)`: the second time the row
-  finds its movement and is `skipped`, as is a row of another file under the same reference. A row that was reversed by hand is
-  written again (the origin index ignores a reversal's pair), which is the same rule as every other document.
+  finds its movement and is `skipped`, as is a row of another file under the same reference. A movement that came from a file cannot be
+  reversed by hand (like every movement of a document), so a wrong file is corrected with an inventory count, and its
+  rows stay "done" for their reference.
 - **A product that already has movements is refused**, whatever they are, unless they came from this reference. An opening balance
   is for a product that has none; correcting a balance is what an inventory count is for. This is the guard against sending a file
   on a running stock and doubling it. A quantity of **zero opens nothing** and is skipped with a note (an export lists products with
   nothing on hand).
-- The **period lock** applies to the day like any movement: a day on or before a closed month refuses the whole file.
+- The **period lock** applies to the day like any movement: a day on or before a closed month refuses the whole file, a check included.
 - The web app adds **Importar saldos** to the stock page (writers only): the name of the import and the day, then the usual CSV card
   with its template, a check that writes nothing, and the import.
 
@@ -84,8 +85,14 @@ cost are unchanged.
 
 - The origin kind is new, so `stock_movements.origin_kind` has a sixth value that old binaries do not know: this is a forward-only
   migration like any other ([ADR 0092](0092-one-point-zero-hardening-plan.md)).
-- A person who sent a wrong file cannot take it back with one click: the movements are reversed one at a time (a reversal is how the ledger
-  undoes anything), or the product is corrected with a count. A whole-file undo is not built.
+- A person who sent a wrong file cannot take it back: the movements of a file are not reversible by hand, like those of any document, and a
+  product that has them is refused by a new file. The product is corrected with an inventory count. A whole-file undo is not built.
+- **Inactive products** are opened like any other (their stock exists whether or not they are offered), services never are.
+- A cost that rounds the quantity's value to less than a cent (0.5 at 0.009) is refused: the product would be held at quantity with no
+  value. A cost of exactly zero is allowed (goods that cost nothing).
+- A product made non-empty between the check and the write (another send under another reference, a manual entry) makes the write
+  answer `409` `StockChanged` instead of opening on top of it; the check is repeated by sending the file again. Two sends of the same
+  file at once end with one write and one `skipped`.
 - The checks read every product of the company once and make a few queries per row (the origin and the ledger of the product), which is
   fine for 1,000 rows; a bulk read of the ledger would be the step if files grow.
 - Opening a product that has **no SKU** is not possible, because the file names products by SKU. The guide says to give the products their

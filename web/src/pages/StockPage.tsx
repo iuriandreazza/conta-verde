@@ -565,7 +565,6 @@ const SETTING_LABELS: Record<string, string> = { block_sale_without_balance: "Bl
 const settingValue = (field: string, value: string | null) =>
   field === "block_sale_without_balance" ? (value === "true" ? "Ligado" : "Desligado") : (value ?? "—");
 
-/** The company's stock rules: today, whether a sale the stock cannot cover is refused. */
 const STOCK_TEMPLATE = ["sku,quantity,unit_cost", "CAFE-500,10,5.00", "PAO-1,3,"].join("\n");
 
 /** Opens the stock of products from a file, once: the name of the file and the day are what sending it again recognises. */
@@ -613,6 +612,7 @@ function ImportView({ companyId, onImported }: { companyId: string; onImported: 
   );
 }
 
+/** The company's stock rules: today, whether a sale the stock cannot cover is refused. */
 function SettingsView({ companyId, canWrite }: { companyId: string; canWrite: boolean }) {
   const [settings, setSettings] = useState<StockSettings | null>(null);
   const [error, setError] = useState<string | null>(null);

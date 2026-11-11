@@ -41,8 +41,8 @@ Each step needs the one before it, because a row names what it points at.
    - the open receivables and payables (`Relatórios`, the overdue list, and `Financeiro > Inadimplência`) against the old lists,
    - the stock valuation (`Suprimentos > Relatórios de estoque`) against the old stock valuation.
 
-   A difference is almost always a row skipped (an existing document or SKU), a quantity or cost typed with a thousands separator, or an
-   account with no opening balance. Every importer says which row and why.
+   A difference is almost always a row skipped (an existing document or SKU) or refused (a product that already had stock movements),
+   a quantity or cost typed with a thousands separator, or an account with no opening balance. Every importer says which row and why.
 8. **Close the month.** On the accountant's page (`Contador`) lock the last month of the old system, so the migrated history cannot
    be changed by accident ([ADR 0069](../adr/0069-period-lock.md)).
 
@@ -71,6 +71,6 @@ conta-verde does not guess: whatever a file does not say stays empty.
 
 ## When something is wrong after the cut-over
 
-A wrongly opened balance is corrected with an inventory count; a wrong entry is reversed or cancelled in the app (nothing is deleted).
+A wrongly opened balance is corrected with an inventory count (the movements of a file cannot be reversed by hand); a wrong entry is reversed or cancelled in the app (nothing is deleted).
 If the whole migration was wrong, restore the backup taken before you started: see the operations guide once it exists
 ([ADR 0092](../adr/0092-one-point-zero-hardening-plan.md)), and take that backup **before step 3**.

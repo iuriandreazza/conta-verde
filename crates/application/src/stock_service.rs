@@ -405,6 +405,8 @@ where
         dry_run: bool,
     ) -> Result<ImportReport, ApplicationError> {
         let day = CalendarDate::parse(on).ok_or(DomainError::InvalidDate("on"))?;
+        // A check says so too: a closed day would refuse the real send.
+        self.ensure_open(company_id, std::iter::once(day)).await?;
         let reference = reference.trim();
         if reference.is_empty()
             || reference.chars().count() > MAX_STOCK_IMPORT_REFERENCE_CHARS
@@ -441,6 +443,14 @@ where
                 .parse::<Decimal>()
                 .is_ok_and(|quantity| quantity.is_zero())
             {
+                if draft
+                    .unit_cost
+                    .as_deref()
+                    .is_some_and(|cost| cost.parse::<Decimal>().is_err())
+                {
+                    refuse("unit_cost is not an amount".to_owned());
+                    continue;
+                }
                 report.skipped.push(RowNote {
                     row,
                     message: "nothing on hand, so nothing to open".to_owned(),
@@ -467,15 +477,32 @@ where
             let origin = origin_of_import(company_id, reference, &sku);
             // Whether the row would be accepted as typed: the movement is valued against the empty ledger the product
             // must have, by the same rules as any other.
-            if let Err(error) = StockMovement::new(
+            match StockMovement::new(
                 StockMovementId::generate(),
                 company_id,
                 movement.clone(),
                 Some(origin),
                 &StockBalance::EMPTY,
             ) {
-                refuse(error.to_string());
-                continue;
+                Ok(valued)
+                    if valued.value().is_zero()
+                        && movement
+                            .unit_cost
+                            .as_deref()
+                            .and_then(|cost| cost.parse::<Decimal>().ok())
+                            .is_some_and(|cost| !cost.is_zero()) =>
+                {
+                    refuse(
+                        "the quantity at this cost is worth less than a cent: the stock would be held at no value"
+                            .to_owned(),
+                    );
+                    continue;
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    refuse(error.to_string());
+                    continue;
+                }
             }
             let done = self
                 .movements
@@ -896,6 +923,24 @@ where
                 });
                 if done {
                     continue;
+                }
+                // An opening balance is for a product with no movements, and another write may have made one since the
+                // file was checked: the stock changed under it, and the person sends the file again to be told so.
+                if item
+                    .origin
+                    .is_some_and(|origin| origin.kind == StockOriginKind::Import)
+                    && !self
+                        .movements
+                        .list_by_company(
+                            company_id,
+                            &StockMovementQuery::default().of_product(item.draft.product_id),
+                            None,
+                            1,
+                        )
+                        .await?
+                        .is_empty()
+                {
+                    return Err(ApplicationError::StockChanged);
                 }
                 let balance = books.entry(item.draft.product_id).or_default();
                 let mut draft = item.draft.clone();
