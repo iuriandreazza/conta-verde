@@ -11,6 +11,7 @@ import { Notice } from "../components/Notice";
 import { PageHeader } from "../components/PageHeader";
 import { Sheet } from "../components/Sheet";
 import { Spinner } from "../components/Spinner";
+import { useT } from "../i18n";
 import { formatMoney } from "../lib/decimal";
 import { formatDate } from "../lib/entryInstallments";
 import { EVENT_STATUS_LABELS, KIND_LABELS, STATUS_LABELS, documentLabel } from "../lib/fiscalDocuments";
@@ -19,6 +20,7 @@ import { usePagedList } from "../lib/usePagedList";
 
 /** NF-e and NFS-e issued from sales, what the authority said about each, and the numbers declared unused (ADR 0076, ADR 0081). */
 export function FiscalDocumentsPage() {
+  const t = useT();
   const { companyId = "" } = useParams();
   const canWrite = useCanWrite("fiscal");
   const [filters, setFilters] = useState<FiscalDocumentFilters>({ status: "" });
@@ -47,16 +49,18 @@ export function FiscalDocumentsPage() {
   return (
     <>
       <PageHeader
-        title="Documentos fiscais"
-        description="As NF-e (produtos) e as NFS-e (serviços) emitidas a partir das vendas concluídas, o que a autoridade respondeu sobre cada uma, os arquivos para baixar, o cancelamento, as cartas de correção da NF-e e a inutilização de numeração. Uma venda com produtos e serviços tem um documento de cada tipo."
+        title={t("Fiscal documents")}
+        description={t(
+          "The NF-e (products) and NFS-e (services) issued from completed sales, what the authority answered about each, the files to download, cancellation, NF-e correction letters and the invalidation of numbers. A sale with products and services has one document of each kind.",
+        )}
         actions={
           canWrite && (
             <>
               <Button type="button" onClick={() => setIssuing("nfe")}>
-                Emitir NF-e
+                {t("Issue NF-e")}
               </Button>
               <Button type="button" onClick={() => setIssuing("nfse")}>
-                Emitir NFS-e
+                {t("Issue NFS-e")}
               </Button>
             </>
           )
@@ -65,12 +69,12 @@ export function FiscalDocumentsPage() {
       <Notice message={list.error} />
       <div className="filters">
         <label>
-          Situação
+          {t("Status")}
           <select value={filters.status} onChange={(event) => setFilters({ status: event.target.value as FiscalDocumentFilters["status"] })}>
-            <option value="">Todas</option>
+            <option value="">{t("All")}</option>
             {Object.entries(STATUS_LABELS).map(([key, label]) => (
               <option key={key} value={key}>
-                {label}
+                {t(label)}
               </option>
             ))}
           </select>
@@ -78,20 +82,20 @@ export function FiscalDocumentsPage() {
       </div>
       {list.loading ? (
         <p role="status" className="status">
-          <Spinner /> Carregando…
+          <Spinner /> {t("Loading…")}
         </p>
       ) : list.items.length === 0 ? (
-        <p className="empty">Nenhum documento fiscal ainda.</p>
+        <p className="empty">{t("No fiscal documents yet.")}</p>
       ) : (
         <table className="list-table">
           <thead>
             <tr>
-              <th>Tipo</th>
-              <th>Número</th>
-              <th>Destinatário</th>
-              <th>Emitida em</th>
-              <th>Total</th>
-              <th>Situação</th>
+              <th>{t("Type")}</th>
+              <th>{t("Number")}</th>
+              <th>{t("Recipient")}</th>
+              <th>{t("Document issued on")}</th>
+              <th>{t("Total")}</th>
+              <th>{t("Status")}</th>
             </tr>
           </thead>
           <tbody>
@@ -107,7 +111,7 @@ export function FiscalDocumentsPage() {
                 <td>{formatDate(item.issued_on)}</td>
                 <td className="amount">{formatMoney(item.total)}</td>
                 <td>
-                  <span className="badge">{STATUS_LABELS[item.status]}</span>
+                  <span className="badge">{t(STATUS_LABELS[item.status])}</span>
                 </td>
               </ListRow>
             ))}
@@ -116,17 +120,17 @@ export function FiscalDocumentsPage() {
       )}
       {list.nextCursor !== null && (
         <Button type="button" pending={list.loadingMore} onClick={() => void list.loadMore()}>
-          Carregar mais
+          {t("Load more")}
         </Button>
       )}
 
       <Invalidations companyId={companyId} canWrite={canWrite} />
 
-      <Sheet open={issuing === "nfe"} title="Emitir NF-e" onClose={() => setIssuing(null)}>
+      <Sheet open={issuing === "nfe"} title={t("Issue NF-e")} onClose={() => setIssuing(null)}>
         <IssueForm
           companyId={companyId}
           natures={natures}
-          submitLabel="Emitir"
+          submitLabel={t("Issue")}
           onSubmit={async (choices) => {
             const made = await api.issueFiscalDocument(companyId, choices);
             setIssuing(null);
@@ -136,11 +140,11 @@ export function FiscalDocumentsPage() {
           }}
         />
       </Sheet>
-      <Sheet open={issuing === "nfse"} title="Emitir NFS-e" onClose={() => setIssuing(null)}>
+      <Sheet open={issuing === "nfse"} title={t("Issue NFS-e")} onClose={() => setIssuing(null)}>
         <ServiceIssueForm
           companyId={companyId}
           natures={natures}
-          submitLabel="Emitir"
+          submitLabel={t("Issue")}
           onSubmit={async (choices) => {
             const made = await api.issueServiceDocument(companyId, choices);
             setIssuing(null);
@@ -150,7 +154,7 @@ export function FiscalDocumentsPage() {
           }}
         />
       </Sheet>
-      <Sheet open={shown !== null} title="Documento fiscal" onClose={() => setShown(null)}>
+      <Sheet open={shown !== null} title={t("Fiscal document")} onClose={() => setShown(null)}>
         {shown && <OpenDocument companyId={companyId} id={shown} natures={natures} canWrite={canWrite} onChanged={changed} />}
       </Sheet>
     </>
@@ -171,6 +175,7 @@ function OpenDocument({
   canWrite: boolean;
   onChanged: (document: FiscalDocument) => void;
 }) {
+  const t = useT();
   const [document, setDocument] = useState<FiscalDocument | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -191,7 +196,7 @@ function OpenDocument({
   if (!document) {
     return (
       <p role="status" className="status">
-        <Spinner /> Carregando…
+        <Spinner /> {t("Loading…")}
       </p>
     );
   }
@@ -211,6 +216,7 @@ function OpenDocument({
 
 /** The ranges of numbers declared unused, and the form to declare one. */
 function Invalidations({ companyId, canWrite }: { companyId: string; canWrite: boolean }) {
+  const t = useT();
   const [items, setItems] = useState<FiscalEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState({ series: "1", first: "", last: "", reason: "" });
@@ -232,7 +238,7 @@ function Invalidations({ companyId, canWrite }: { companyId: string; canWrite: b
     event.preventDefault();
     const [series, first, last] = [form.series, form.first, form.last].map(Number);
     if (![series, first, last].every(Number.isInteger)) {
-      setError("A série e os números são números inteiros.");
+      setError(t("The series and the numbers are whole numbers."));
       return;
     }
     setPending(true);
@@ -249,12 +255,12 @@ function Invalidations({ companyId, canWrite }: { companyId: string; canWrite: b
   }
 
   return (
-    <section aria-label="Inutilização de numeração">
-      <HelpTitle title="Inutilização de numeração" level={2}>
+    <section aria-label={t("Invalidation of numbers")}>
+      <HelpTitle title={t("Invalidation of numbers")} level={2}>
         <p>
-          Declara à SEFAZ que uma faixa de números da série não será usada (uma lacuna). Um número que uma nota nossa já usa
-          não se inutiliza. O pedido fica registrado antes de ser enviado e, se a resposta não vier, o sistema não o repete:
-          confira no gateway e use Desistir só se a SEFAZ não o recebeu.
+          {t(
+            "Declares to SEFAZ that a range of numbers in the series will not be used (a gap). A number that one of our invoices already uses cannot be invalidated. The request is recorded before it is sent and, if the answer does not come, the system does not repeat it: check at the gateway and use Give up only if SEFAZ did not receive it.",
+          )}
         </p>
       </HelpTitle>
       <Notice message={error} />
@@ -262,24 +268,24 @@ function Invalidations({ companyId, canWrite }: { companyId: string; canWrite: b
         <form className="record-form" onSubmit={(event) => void submit(event)}>
           <div className="field-grid">
             <label>
-              Série
+              {t("Series")}
               <input required inputMode="numeric" value={form.series} onChange={(event) => setForm({ ...form, series: event.target.value })} />
             </label>
             <label>
-              Do número
+              {t("From number")}
               <input required inputMode="numeric" value={form.first} onChange={(event) => setForm({ ...form, first: event.target.value })} />
             </label>
             <label>
-              Até o número
+              {t("To number")}
               <input required inputMode="numeric" value={form.last} onChange={(event) => setForm({ ...form, last: event.target.value })} />
             </label>
             <label>
-              Motivo (de 15 a 255 caracteres)
+              {t("Reason (15 to 255 characters)")}
               <input required minLength={15} maxLength={255} value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })} />
             </label>
           </div>
           <Button type="submit" pending={pending}>
-            Inutilizar
+            {t("Invalidate")}
           </Button>
         </form>
       )}
@@ -287,7 +293,12 @@ function Invalidations({ companyId, canWrite }: { companyId: string; canWrite: b
         <ul className="plain-list">
           {items.map((item) => (
             <li key={item.id}>
-              Série {item.series}, números {item.first} a {item.last} — {EVENT_STATUS_LABELS[item.status]}
+              {t("Series {series}, numbers {first} to {last} — {status}", {
+                series: item.series ?? "",
+                first: item.first ?? "",
+                last: item.last ?? "",
+                status: t(EVENT_STATUS_LABELS[item.status]),
+              })}
               {item.refusal ? ` (${item.refusal.code}: ${item.refusal.message})` : ""}
               {canWrite && item.status === "sent" && (
                 <Button
@@ -299,7 +310,7 @@ function Invalidations({ companyId, canWrite }: { companyId: string; canWrite: b
                       .catch((failure) => setError(errorMessage(failure)))
                   }
                 >
-                  Desistir
+                  {t("Give up")}
                 </Button>
               )}
             </li>

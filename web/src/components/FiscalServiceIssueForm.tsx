@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api, errorMessage, type IssueServiceChoices, type OperationNature, type Sale, type SpecialTaxRegime } from "../api";
+import { useT } from "../i18n";
 import { formatMoney } from "../lib/decimal";
 import { SPECIAL_REGIME_LABELS } from "../lib/fiscalDocuments";
 import { Button } from "./Button";
@@ -21,6 +22,7 @@ interface Props {
  * (ADR 0081). Nothing is sent until the button.
  */
 export function ServiceIssueForm({ companyId, natures, fixedSale, submitLabel, onSubmit }: Props) {
+  const t = useT();
   const [sales, setSales] = useState<Sale[]>([]);
   const [sale, setSale] = useState(fixedSale ?? "");
   const [nature, setNature] = useState("");
@@ -66,33 +68,32 @@ export function ServiceIssueForm({ companyId, natures, fixedSale, submitLabel, o
 
   return (
     <form className="record-form" onSubmit={(event) => void submit(event)}>
-      <HelpTitle title="Como emitir" level={3}>
+      <HelpTitle title={t("How to issue")} level={3}>
         <p>
-          A NFS-e sai das linhas de serviço da venda. O código do serviço, a forma de cobrança do ISS e a alíquota vêm da
-          natureza de operação, que a empresa e o contador escrevem nas configurações fiscais. Escolha aqui o que a venda não
-          diz: o dia de competência, o município onde o serviço foi prestado (pelo código do IBGE, que decide de quem é o ISS e
-          muitas vezes não é o da empresa) e o regime especial de tributação. Só o Simples Nacional emite por enquanto.
+          {t(
+            "The NFS-e comes from the sale's service lines. The service code, how ISS is charged and the rate come from the operation nature, which the company and its accountant write in the fiscal settings. Choose here what the sale does not say: the competence day, the municipality where the service was rendered (by its IBGE code, which decides who gets the ISS and is often not the company's) and the special tax regime. Only the Simples Nacional issues for now.",
+          )}
         </p>
       </HelpTitle>
       <Notice message={error} />
       <div className="field-grid">
         {!fixedSale && (
           <label>
-            Venda
+            {t("Sale")}
             <select required value={sale} onChange={(event) => setSale(event.target.value)}>
-              <option value="">Escolha a venda</option>
+              <option value="">{t("Choose the sale")}</option>
               {sales.map((item) => (
                 <option key={item.id} value={item.id}>
-                  {`Venda ${item.number} · ${formatMoney(item.total)}`}
+                  {t("Sale {number} · {total}", { number: item.number, total: formatMoney(item.total) })}
                 </option>
               ))}
             </select>
           </label>
         )}
         <label>
-          Natureza de operação
+          {t("Operation nature")}
           <select required value={nature} onChange={(event) => setNature(event.target.value)}>
-            <option value="">Escolha a natureza</option>
+            <option value="">{t("Choose the nature")}</option>
             {serviceNatures.map((item) => (
               <option key={item.code} value={item.code}>
                 {item.name}
@@ -101,27 +102,27 @@ export function ServiceIssueForm({ companyId, natures, fixedSale, submitLabel, o
           </select>
         </label>
         <label>
-          Competência
+          {t("Competence")}
           <input required type="date" value={competence} onChange={(event) => setCompetence(event.target.value)} />
         </label>
         <label>
-          Município da prestação (código do IBGE)
+          {t("Municipality of the service (IBGE code)")}
           <input
             required
             pattern="[0-9]{7}"
             maxLength={7}
             value={city}
             onChange={(event) => setCity(event.target.value)}
-            title="Sete dígitos, da tabela do IBGE"
+            title={t("Seven digits, from the IBGE table")}
           />
         </label>
         <label>
-          Regime especial de tributação
+          {t("Special tax regime")}
           <select required value={regime} onChange={(event) => setRegime(event.target.value)}>
-            <option value="">Escolha o regime</option>
+            <option value="">{t("Choose the regime")}</option>
             {Object.entries(SPECIAL_REGIME_LABELS).map(([key, label]) => (
               <option key={key} value={key}>
-                {label}
+                {t(label)}
               </option>
             ))}
           </select>
@@ -130,7 +131,7 @@ export function ServiceIssueForm({ companyId, natures, fixedSale, submitLabel, o
       {serviceNatures.length === 0 && (
         <Notice
           tone="warning"
-          message="Nenhuma natureza de serviço ativa tem os termos do ISS. Descreva-os nas configurações fiscais antes de emitir."
+          message={t("No active service nature has the ISS terms. Describe them in the fiscal settings before issuing.")}
         />
       )}
       <Button type="submit" pending={pending}>

@@ -8,23 +8,24 @@ import { Notice } from "../components/Notice";
 import { PageHeader } from "../components/PageHeader";
 import { Sheet } from "../components/Sheet";
 import { Spinner } from "../components/Spinner";
+import { msg, useT } from "../i18n";
 import { formatMoney } from "../lib/decimal";
 import { formatDate } from "../lib/entryInstallments";
 import { useCanWrite } from "../lib/useCanWrite";
 import { usePagedList } from "../lib/usePagedList";
 
 export const MANIFESTATION_LABELS: Record<Manifestation, string> = {
-  none: "Sem manifestação",
-  awareness: "Ciência da operação",
-  confirmation: "Confirmação da operação",
-  unknown: "Desconhecimento da operação",
-  not_performed: "Operação não realizada",
+  none: msg("No manifestation"),
+  awareness: msg("Acknowledgement of the operation"),
+  confirmation: msg("Confirmation of the operation"),
+  unknown: msg("Unawareness of the operation"),
+  not_performed: msg("Operation not performed"),
 };
 
 const SITUATION_LABELS: Record<ReceivedInvoice["situation"], string> = {
-  authorized: "Autorizada",
-  cancelled: "Cancelada",
-  denied: "Denegada",
+  authorized: msg("Authorized"),
+  cancelled: msg("Cancelled"),
+  denied: msg("Denied"),
 };
 
 /** What may follow what the recipient has already declared: awareness first, then at most one final word. */
@@ -40,6 +41,7 @@ function wordsAfter(current: Manifestation): Array<Exclude<Manifestation, "none"
  * words are the acts, each recorded in their name.
  */
 export function ReceivedInvoicesPage() {
+  const t = useT();
   const { companyId = "" } = useParams();
   const canWrite = useCanWrite("fiscal");
   const [filters, setFilters] = useState<ReceivedInvoiceFilters>({ manifestation: "" });
@@ -59,7 +61,13 @@ export function ReceivedInvoicesPage() {
     setMessage(null);
     try {
       const { added } = await api.syncReceivedInvoices(companyId);
-      setMessage(added === 0 ? "Nenhuma nota nova." : `${added} ${added === 1 ? "nota nova" : "notas novas"}.`);
+      setMessage(
+        added === 0
+          ? t("No new invoices.")
+          : added === 1
+            ? t("{count} new invoice.", { count: added })
+            : t("{count} new invoices.", { count: added }),
+      );
       await list.reload();
     } catch (failure) {
       setError(errorMessage(failure));
@@ -73,12 +81,14 @@ export function ReceivedInvoicesPage() {
   return (
     <>
       <PageHeader
-        title="Notas recebidas"
-        description="As NF-e que outras empresas emitiram contra a sua, buscadas no gateway. A lista é um espelho do que o gateway diz; o que você declara à autoridade (ciência, confirmação, desconhecimento ou operação não realizada) é um ato seu e fica no histórico com o seu nome. O gateway também avisa quando há nota nova, mas o aviso só faz o sistema perguntar."
+        title={t("Received invoices")}
+        description={t(
+          "The NF-e that other companies issued against yours, fetched from the gateway. The list is a mirror of what the gateway says; what you declare to the authority (acknowledgement, confirmation, unawareness or operation not performed) is your own act and stays in the history under your name. The gateway also warns when there is a new invoice, but the warning only makes the system ask.",
+        )}
         actions={
           canWrite && (
             <Button type="button" pending={syncing} onClick={() => void sync()}>
-              Buscar notas
+              {t("Fetch invoices")}
             </Button>
           )
         }
@@ -87,12 +97,12 @@ export function ReceivedInvoicesPage() {
       {message && <p role="status">{message}</p>}
       <div className="filters">
         <label>
-          Manifestação
+          {t("Manifestation")}
           <select value={filters.manifestation} onChange={(event) => setFilters({ manifestation: event.target.value as ReceivedInvoiceFilters["manifestation"] })}>
-            <option value="">Todas</option>
+            <option value="">{t("All")}</option>
             {Object.entries(MANIFESTATION_LABELS).map(([key, label]) => (
               <option key={key} value={key}>
-                {label}
+                {t(label)}
               </option>
             ))}
           </select>
@@ -100,19 +110,19 @@ export function ReceivedInvoicesPage() {
       </div>
       {list.loading ? (
         <p role="status" className="status">
-          <Spinner /> Carregando…
+          <Spinner /> {t("Loading…")}
         </p>
       ) : list.items.length === 0 ? (
-        <p className="empty">Nenhuma nota recebida ainda. Busque no gateway.</p>
+        <p className="empty">{t("No received invoices yet. Fetch them from the gateway.")}</p>
       ) : (
         <table className="list-table">
           <thead>
             <tr>
-              <th>Emitente</th>
-              <th>Emitida em</th>
-              <th>Total</th>
-              <th>Situação</th>
-              <th>Manifestação</th>
+              <th>{t("Issuer")}</th>
+              <th>{t("Document issued on")}</th>
+              <th>{t("Total")}</th>
+              <th>{t("Status")}</th>
+              <th>{t("Manifestation")}</th>
               <th />
             </tr>
           </thead>
@@ -126,15 +136,15 @@ export function ReceivedInvoicesPage() {
                 <td>{formatDate(item.issued_on)}</td>
                 <td className="amount">{formatMoney(item.total)}</td>
                 <td>
-                  <span className="badge">{SITUATION_LABELS[item.situation]}</span>
+                  <span className="badge">{t(SITUATION_LABELS[item.situation])}</span>
                 </td>
                 <td>
-                  <span className="badge">{MANIFESTATION_LABELS[item.manifestation]}</span>
+                  <span className="badge">{t(MANIFESTATION_LABELS[item.manifestation])}</span>
                 </td>
                 <td>
                   {canWrite && item.situation === "authorized" && wordsAfter(item.manifestation).length > 0 && (
                     <Button type="button" onClick={() => setAnswering(item)}>
-                      {`Manifestar ${item.issuer_name}`}
+                      {t("Declare on {name}", { name: item.issuer_name })}
                     </Button>
                   )}
                 </td>
@@ -145,10 +155,10 @@ export function ReceivedInvoicesPage() {
       )}
       {list.nextCursor !== null && (
         <Button type="button" pending={list.loadingMore} onClick={() => void list.loadMore()}>
-          Carregar mais
+          {t("Load more")}
         </Button>
       )}
-      <Sheet open={answering !== null} title="Manifestação do destinatário" onClose={() => setAnswering(null)}>
+      <Sheet open={answering !== null} title={t("Recipient's manifestation")} onClose={() => setAnswering(null)}>
         {answering && (
           <ManifestForm
             invoice={answering}
@@ -178,6 +188,7 @@ function ManifestForm({
   onDeclared: (invoice: ReceivedInvoice) => Promise<void>;
   onFailed: () => void;
 }) {
+  const t = useT();
   const [word, setWord] = useState("");
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -201,36 +212,36 @@ function ManifestForm({
 
   return (
     <form className="record-form" onSubmit={(event) => void submit(event)}>
-      <HelpTitle title="O que declarar" level={3}>
+      <HelpTitle title={t("What to declare")} level={3}>
         <p>
-          A ciência diz que você viu a nota e pode ser seguida de uma palavra final: confirmação, desconhecimento ou operação não
-          realizada (esta pede um motivo). Depois da palavra final nada mais se declara. A autoridade pode recusar, e a recusa vem com o
-          motivo dela.
+          {t(
+            "Acknowledgement says you saw the invoice and can be followed by one final word: confirmation, unawareness or operation not performed (this one asks for a reason). After the final word nothing more is declared. The authority may refuse, and the refusal comes with its reason.",
+          )}
         </p>
       </HelpTitle>
       <Notice message={error} />
       <p>
-        {invoice.issuer_name} · {formatMoney(invoice.total)} · agora: {MANIFESTATION_LABELS[invoice.manifestation]}
+        {invoice.issuer_name} · {formatMoney(invoice.total)} · {t("now:")} {t(MANIFESTATION_LABELS[invoice.manifestation])}
       </p>
       <label>
-        Palavra
+        {t("Declaration")}
         <select required value={word} onChange={(event) => setWord(event.target.value)}>
-          <option value="">Escolha</option>
+          <option value="">{t("Choose")}</option>
           {wordsAfter(invoice.manifestation).map((key) => (
             <option key={key} value={key}>
-              {MANIFESTATION_LABELS[key]}
+              {t(MANIFESTATION_LABELS[key])}
             </option>
           ))}
         </select>
       </label>
       {word === "not_performed" && (
         <label>
-          Motivo (de 15 a 255 caracteres)
+          {t("Reason (15 to 255 characters)")}
           <input required minLength={15} maxLength={255} value={reason} onChange={(event) => setReason(event.target.value)} />
         </label>
       )}
       <Button type="submit" pending={pending}>
-        Declarar
+        {t("Declare")}
       </Button>
     </form>
   );

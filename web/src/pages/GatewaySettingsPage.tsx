@@ -8,6 +8,7 @@ import { History } from "../components/History";
 import { Notice } from "../components/Notice";
 import { PageHeader } from "../components/PageHeader";
 import { Spinner } from "../components/Spinner";
+import { msg, useT } from "../i18n";
 import { useCanWrite } from "../lib/useCanWrite";
 
 type SecretName = "focus_token_homologation" | "focus_token_production" | "nfeio_api_key" | "webhook_secret";
@@ -22,16 +23,23 @@ const EMPTY_SECRET: SecretField = { typed: "", clear: false };
 
 const FIELD_LABELS: Record<string, string> = {
   kind: "Gateway",
-  focus_token_homologation: "Token do Focus NFe (homologação)",
-  focus_token_production: "Token do Focus NFe (produção)",
-  nfeio_api_key: "Chave da API do NFE.io",
-  webhook_secret: "Segredo do webhook",
-  nfeio_company_homologation: "Empresa no NFE.io (homologação)",
-  nfeio_company_production: "Empresa no NFE.io (produção)",
-  nfeio_search_confirmed: "Busca por referência confirmada",
+  focus_token_homologation: msg("Focus NFe token (test)"),
+  focus_token_production: msg("Focus NFe token (production)"),
+  nfeio_api_key: msg("NFE.io API key"),
+  webhook_secret: msg("Webhook secret"),
+  nfeio_company_homologation: msg("NFE.io company (test)"),
+  nfeio_company_production: msg("NFE.io company (production)"),
+  nfeio_search_confirmed: msg("Search by reference confirmed"),
 };
 
-const VALUE_LABELS: Record<string, string> = { set: "configurado", changed: "trocado", focus: "Focus NFe", nfeio: "NFE.io", true: "sim", false: "não" };
+const VALUE_LABELS: Record<string, string> = {
+  set: msg("Secret was set"),
+  changed: msg("Secret was changed"),
+  focus: "Focus NFe",
+  nfeio: "NFE.io",
+  true: msg("yes"),
+  false: msg("no"),
+};
 
 function change(field: SecretField): SecretChange {
   if (field.typed.trim() !== "") return { action: "set", value: field.typed.trim() };
@@ -44,6 +52,7 @@ function change(field: SecretField): SecretChange {
  * server's own settings (its environment) are used while the company has set none.
  */
 export function GatewaySettingsPage() {
+  const t = useT();
   const { companyId = "" } = useParams();
   const canWrite = useCanWrite("members");
   const [settings, setSettings] = useState<GatewaySettings | null>(null);
@@ -116,7 +125,7 @@ export function GatewaySettingsPage() {
   }
 
   async function reset() {
-    if (!window.confirm("Voltar ao gateway do servidor? Os segredos desta empresa serão apagados.")) return;
+    if (!window.confirm(t("Go back to the server's gateway? This company's secrets will be erased."))) return;
     setPending(true);
     setError(null);
     setSaved(false);
@@ -137,7 +146,7 @@ export function GatewaySettingsPage() {
       <Notice message={error} />
     ) : (
       <p role="status" className="status">
-        <Spinner /> Carregando…
+        <Spinner /> {t("Loading…")}
       </p>
     );
   }
@@ -160,7 +169,7 @@ export function GatewaySettingsPage() {
           spellCheck={false}
           value={secrets[name].typed}
           disabled={!canWrite || secrets[name].clear}
-          placeholder={isSet[name] ? "Configurado: digite para trocar" : "Não configurado"}
+          placeholder={isSet[name] ? t("Set: type to replace") : t("Not set")}
           onChange={(event) => setSecrets({ ...secrets, [name]: { ...secrets[name], typed: event.target.value } })}
         />
       </label>
@@ -170,9 +179,9 @@ export function GatewaySettingsPage() {
             type="checkbox"
             checked={secrets[name].clear}
             onChange={(event) => setSecrets({ ...secrets, [name]: { typed: "", clear: event.target.checked } })}
-            aria-label={`Remover: ${label}`}
+            aria-label={t("Remove: {label}", { label })}
           />{" "}
-          Remover
+          {t("Remove")}
         </label>
       )}
     </div>
@@ -181,33 +190,42 @@ export function GatewaySettingsPage() {
   return (
     <>
       <PageHeader
-        title="Gateway fiscal"
-        description="Por qual gateway esta empresa emite os documentos fiscais e os segredos para usá-lo. Só o dono e o administrador chegam aqui. Um segredo é gravado cifrado e nunca é mostrado de novo: a tela só diz se ele está configurado, e o que você digita o substitui. Enquanto a empresa não configura nada, vale o que o servidor tem no ambiente. Se o que a empresa configura não basta para o ambiente em uso (falta o token ou a chave), a emissão é recusada dizendo o que falta: o gateway do servidor nunca entra no lugar."
+        title={t("Fiscal gateway")}
+        description={t(
+          "Which gateway this company issues its fiscal documents through, and the secrets to use it. Only the owner and the administrator get here. A secret is stored encrypted and never shown again: the screen only says whether it is set, and what you type replaces it. While the company sets nothing, what the server has in its environment applies. If what the company sets is not enough for the environment in use (the token or the key is missing), issuing is refused saying what is missing: the server's gateway never takes its place.",
+        )}
       />
       <Notice message={error} />
-      {saved && <p role="status">Salvo.</p>}
+      {saved && <p role="status">{t("Saved.")}</p>}
       {!settings.encryption_available && (
         <Notice
           tone="warning"
-          message="O servidor não tem a chave de cifragem (FISCAL_SECRETS_KEY): nenhum segredo pode ser salvo até o operador defini-la. O gateway pode ser escolhido mesmo assim."
+          message={t(
+            "The server has no encryption key (FISCAL_SECRETS_KEY): no secret can be saved until the operator sets it. The gateway can be chosen anyway.",
+          )}
         />
       )}
       {settings.unreadable.length > 0 && (
         <Notice
           tone="warning"
-          message={`Estes segredos estão salvos, mas o servidor não consegue lê-los (a chave de cifragem mudou ou foi perdida): ${settings.unreadable
-            .map((field) => FIELD_LABELS[field] ?? field)
-            .join(", ")}. Digite-os de novo.`}
+          message={t(
+            "These secrets are saved, but the server cannot read them (the encryption key changed or was lost): {fields}. Type them again.",
+            { fields: settings.unreadable.map((field) => (field in FIELD_LABELS ? t(FIELD_LABELS[field]) : field)).join(", ") },
+          )}
         />
       )}
       {settings.kind === null && settings.server_gateway !== null && (
-        <Notice tone="warning" message={`A empresa ainda não configurou o gateway: vale o do servidor (${settings.server_gateway}).`} />
+        <Notice
+          tone="warning"
+          message={t("The company has not configured the gateway yet: the server's applies ({gateway}).", { gateway: settings.server_gateway })}
+        />
       )}
       <form className="record-form" onSubmit={(event) => void submit(event)}>
         <HelpTitle title="Gateway" level={3}>
           <p>
-            O certificado A1 continua sendo enviado no painel do gateway, nunca aqui. O endereço do gateway e os hosts de onde os arquivos
-            são baixados não se configuram aqui: ficam no servidor.
+            {t(
+              "The A1 certificate is still sent in the gateway's panel, never here. The gateway's address and the hosts files are downloaded from are not set here: they stay on the server.",
+            )}
           </p>
         </HelpTitle>
         <div className="field-grid">
@@ -220,51 +238,51 @@ export function GatewaySettingsPage() {
           </label>
           {kind === "focus" && (
             <>
-              {secretInput("focus_token_homologation", FIELD_LABELS.focus_token_homologation)}
-              {secretInput("focus_token_production", FIELD_LABELS.focus_token_production)}
+              {secretInput("focus_token_homologation", t(FIELD_LABELS.focus_token_homologation))}
+              {secretInput("focus_token_production", t(FIELD_LABELS.focus_token_production))}
             </>
           )}
           {kind === "nfeio" && (
             <>
-              {secretInput("nfeio_api_key", FIELD_LABELS.nfeio_api_key)}
+              {secretInput("nfeio_api_key", t(FIELD_LABELS.nfeio_api_key))}
               <label>
-                {FIELD_LABELS.nfeio_company_homologation}
+                {t(FIELD_LABELS.nfeio_company_homologation)}
                 <input value={homologationCompany} disabled={!canWrite} onChange={(event) => setHomologationCompany(event.target.value)} />
               </label>
               <label>
-                {FIELD_LABELS.nfeio_company_production}
+                {t(FIELD_LABELS.nfeio_company_production)}
                 <input value={productionCompany} disabled={!canWrite} onChange={(event) => setProductionCompany(event.target.value)} />
               </label>
               <label>
-                <input type="checkbox" checked={searchConfirmed} disabled={!canWrite} onChange={(event) => setSearchConfirmed(event.target.checked)} /> {FIELD_LABELS.nfeio_search_confirmed}
+                <input type="checkbox" checked={searchConfirmed} disabled={!canWrite} onChange={(event) => setSearchConfirmed(event.target.checked)} /> {t(FIELD_LABELS.nfeio_search_confirmed)}
               </label>
             </>
           )}
-          {secretInput("webhook_secret", FIELD_LABELS.webhook_secret)}
+          {secretInput("webhook_secret", t(FIELD_LABELS.webhook_secret))}
         </div>
         <p>
-          Endereço do webhook: <code>{webhookUrl}</code> <CopyButton text={webhookUrl} label="Copiar o endereço do webhook" />
+          {t("Webhook address:")} <code>{webhookUrl}</code> <CopyButton text={webhookUrl} label={t("Copy the webhook address")} />
         </p>
         {canWrite && (
           <div className="form-actions">
             <Button type="submit" pending={pending}>
-              Salvar
+              {t("Save")}
             </Button>
             {settings.kind !== null && (
               <Button type="button" disabled={pending} onClick={() => void reset()}>
-                Voltar ao gateway do servidor
+                {t("Back to the server's gateway")}
               </Button>
             )}
           </div>
         )}
       </form>
-      <section aria-label="Histórico">
-        <h3>Histórico</h3>
+      <section aria-label={t("History")}>
+        <h3>{t("History")}</h3>
         <History
           load={loadHistory}
-          fieldLabel={(field) => FIELD_LABELS[field] ?? field}
-          valueLabel={(_, value) => (value === null ? "—" : (VALUE_LABELS[value] ?? value))}
-          emptyMessage="Ainda não há registros."
+          fieldLabel={(field) => (field in FIELD_LABELS ? t(FIELD_LABELS[field]) : field)}
+          valueLabel={(_, value) => (value === null ? "—" : value in VALUE_LABELS ? t(VALUE_LABELS[value]) : value)}
+          emptyMessage={t("No history yet.")}
         />
       </section>
     </>

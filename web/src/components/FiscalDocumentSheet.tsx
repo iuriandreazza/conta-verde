@@ -11,6 +11,7 @@ import { saveFile } from "../lib/csv";
 import { formatDate } from "../lib/entryInstallments";
 import { formatMoney } from "../lib/decimal";
 import { EVENT_STATUS_LABELS, KIND_LABELS, STATUS_LABELS, isWaiting, numberLabel } from "../lib/fiscalDocuments";
+import { msg, useT } from "../i18n";
 import { Button } from "./Button";
 import { History } from "./History";
 import { HelpTitle } from "./HelpTitle";
@@ -19,34 +20,34 @@ import { ServiceIssueForm } from "./FiscalServiceIssueForm";
 import { Notice } from "./Notice";
 
 const FILE_LABELS: Record<FiscalFileKind, string> = {
-  xml: "Baixar XML",
-  pdf: "Baixar DANFE (PDF)",
-  cancellation_xml: "Baixar XML do cancelamento",
+  xml: msg("Download XML"),
+  pdf: msg("Download DANFE (PDF)"),
+  cancellation_xml: msg("Download the cancellation XML"),
 };
 
 /** The printed form of an NFS-e is the DANFSe. */
-const SERVICE_FILE_LABELS: Record<FiscalFileKind, string> = { ...FILE_LABELS, pdf: "Baixar DANFSe (PDF)" };
+const SERVICE_FILE_LABELS: Record<FiscalFileKind, string> = { ...FILE_LABELS, pdf: msg("Download DANFSe (PDF)") };
 
 const FIELD_LABELS: Record<string, string> = {
-  kind: "Tipo",
-  status: "Situação",
-  issuer_cnpj: "CNPJ do emitente",
-  environment: "Ambiente",
-  recipient: "Destinatário",
-  nature: "Natureza",
-  total: "Total",
-  issued_on: "Emitida em",
-  access_key: "Chave de acesso",
-  number: "Número",
-  series: "Série",
-  protocol: "Protocolo",
-  dps: "DPS (série/número)",
-  nfse_number: "Número da NFS-e",
-  nfse_key: "Chave da NFS-e",
-  verification_code: "Código de verificação",
-  gateway_reference: "Referência do gateway",
-  refusal: "Recusa",
-  note: "Observação",
+  kind: msg("Type"),
+  status: msg("Status"),
+  issuer_cnpj: msg("Issuer CNPJ"),
+  environment: msg("Environment"),
+  recipient: msg("Recipient"),
+  nature: msg("Nature"),
+  total: msg("Total"),
+  issued_on: msg("Document issued on"),
+  access_key: msg("Access key"),
+  number: msg("Number"),
+  series: msg("Series"),
+  protocol: msg("Protocol"),
+  dps: msg("DPS (series/number)"),
+  nfse_number: msg("NFS-e number"),
+  nfse_key: msg("NFS-e key"),
+  verification_code: msg("Verification code"),
+  gateway_reference: msg("Gateway reference"),
+  refusal: msg("Refusal"),
+  note: msg("Note"),
 };
 
 interface Props {
@@ -60,6 +61,7 @@ interface Props {
 
 /** One document: what the authority said, its files, and what can still be done to it. */
 export function FiscalDocumentSheet({ companyId, document, natures, canWrite, onChanged }: Props) {
+  const t = useT();
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [reason, setReason] = useState("");
@@ -128,79 +130,82 @@ export function FiscalDocumentSheet({ companyId, document, natures, canWrite, on
     <div className="record-detail">
       <Notice message={error} />
       <dl className="summary">
-        <dt>Situação</dt>
+        <dt>{t("Status")}</dt>
         <dd>
-          <span className="badge">{STATUS_LABELS[document.status]}</span>
+          <span className="badge">{t(STATUS_LABELS[document.status])}</span>
         </dd>
-        <dt>Tipo</dt>
+        <dt>{t("Type")}</dt>
         <dd>{KIND_LABELS[document.kind]}</dd>
         {isService ? (
           <>
-            <dt>Número da NFS-e</dt>
+            <dt>{t("NFS-e number")}</dt>
             <dd>{document.nfse ? document.nfse.number : "—"}</dd>
             {document.dps && (
               <>
-                <dt>DPS (série/número)</dt>
+                <dt>{t("DPS (series/number)")}</dt>
                 <dd>{numberLabel(document.dps.series, document.dps.number)}</dd>
               </>
             )}
             {document.nfse?.verification_code && (
               <>
-                <dt>Código de verificação</dt>
+                <dt>{t("Verification code")}</dt>
                 <dd>{document.nfse.verification_code}</dd>
               </>
             )}
             {document.nfse?.key && (
               <>
-                <dt>Chave da NFS-e</dt>
+                <dt>{t("NFS-e key")}</dt>
                 <dd className="access-key">{document.nfse.key}</dd>
               </>
             )}
           </>
         ) : (
           <>
-            <dt>Número / série</dt>
+            <dt>{t("Number / series")}</dt>
             <dd>{numberLabel(document.series, document.number)}</dd>
           </>
         )}
-        <dt>Destinatário</dt>
+        <dt>{t("Recipient")}</dt>
         <dd>
           {document.recipient_name}
           {document.recipient_document ? ` · ${document.recipient_document}` : ""}
         </dd>
-        <dt>Total</dt>
+        <dt>{t("Total")}</dt>
         <dd>{formatMoney(document.total)}</dd>
-        <dt>Emitida em</dt>
+        <dt>{t("Document issued on")}</dt>
         <dd>
-          {formatDate(document.issued_on)} · {document.environment === "production" ? "Produção" : "Homologação"}
+          {formatDate(document.issued_on)} · {document.environment === "production" ? t("Production") : t("Test environment")}
         </dd>
         {document.access_key && (
           <>
-            <dt>Chave de acesso</dt>
+            <dt>{t("Access key")}</dt>
             <dd className="access-key">{document.access_key}</dd>
           </>
         )}
         {document.protocol && (
           <>
-            <dt>Protocolo</dt>
+            <dt>{t("Protocol")}</dt>
             <dd>{document.protocol}</dd>
           </>
         )}
-        <dt>Enviada por</dt>
+        <dt>{t("Sent by")}</dt>
         <dd>{document.submitted_by}</dd>
       </dl>
       {document.refusal && (
-        <Notice message={`Recusada (${document.refusal.code}): ${document.refusal.message}`} tone="warning" />
+        <Notice
+          message={t("Refused ({code}): {message}", { code: document.refusal.code, message: document.refusal.message })}
+          tone="warning"
+        />
       )}
       {document.note && <Notice message={document.note} tone="warning" />}
       {document.environment === "homologation" && (
-        <Notice message="Documento de homologação: não tem valor fiscal." tone="warning" />
+        <Notice message={t("Test document: it has no fiscal value.")} tone="warning" />
       )}
 
       <div className="form-actions">
         {document.files.map((kind) => (
           <Button key={kind} type="button" pending={pending === kind} disabled={pending !== null} onClick={() => void download(kind)}>
-            {(isService ? SERVICE_FILE_LABELS : FILE_LABELS)[kind]}
+            {t((isService ? SERVICE_FILE_LABELS : FILE_LABELS)[kind])}
           </Button>
         ))}
         {canWrite && isWaiting(document.status) && (
@@ -210,25 +215,25 @@ export function FiscalDocumentSheet({ companyId, document, natures, canWrite, on
             disabled={pending !== null}
             onClick={() => void run("refresh", async () => onChanged(await api.refreshFiscalDocument(companyId, document.id)))}
           >
-            Atualizar situação
+            {t("Refresh status")}
           </Button>
         )}
         {canWrite && document.status === "rejected" && document.kind !== "nfce" && (
           <Button type="button" onClick={() => setResending((open) => !open)}>
-            Reenviar
+            {t("Resend")}
           </Button>
         )}
       </div>
 
       {document.kind === "nfce" && document.status === "rejected" && (
-        <Notice tone="warning" message="O reenvio de uma NFC-e recusada ainda não tem tela aqui: use o Caixa logo depois da recusa, ou a API." />
+        <Notice tone="warning" message={t("Resending a refused NFC-e has no screen here yet: use the Cash register right after the refusal, or the API.")} />
       )}
       {resending && takesLetters && (
         <IssueForm
           companyId={companyId}
           natures={natures}
           fixedSale={document.sale_id}
-          submitLabel="Reenviar a mesma nota"
+          submitLabel={t("Resend the same invoice")}
           onSubmit={async (choices) => {
             onChanged(await api.resendFiscalDocument(companyId, document.id, choices));
             setResending(false);
@@ -240,7 +245,7 @@ export function FiscalDocumentSheet({ companyId, document, natures, canWrite, on
           companyId={companyId}
           natures={natures}
           fixedSale={document.sale_id}
-          submitLabel="Reenviar a mesma nota (mesmo número de DPS)"
+          submitLabel={t("Resend the same invoice (same DPS number)")}
           onSubmit={async (choices) => {
             onChanged(await api.resendServiceDocument(companyId, document.id, choices));
             setResending(false);
@@ -252,7 +257,7 @@ export function FiscalDocumentSheet({ companyId, document, natures, canWrite, on
         <>
           <Notice
             tone="warning"
-            message="O cancelamento foi enviado e a SEFAZ ainda não respondeu. O sistema pergunta de novo sozinho; a nota continua autorizada até lá."
+            message={t("The cancellation was sent and SEFAZ has not answered yet. The system asks again on its own; the invoice stays authorized until then.")}
           />
           {canWrite && (
             <Button
@@ -266,7 +271,7 @@ export function FiscalDocumentSheet({ companyId, document, natures, canWrite, on
                 })
               }
             >
-              Desistir do cancelamento
+              {t("Give up on the cancellation")}
             </Button>
           )}
         </>
@@ -276,35 +281,37 @@ export function FiscalDocumentSheet({ companyId, document, natures, canWrite, on
         <>
           {document.cancellation === null && (
           <form className="record-form" onSubmit={(event) => void cancel(event)}>
-            <HelpTitle title="Cancelar a nota" level={3}>
+            <HelpTitle title={t("Cancel the invoice")} level={3}>
               <p>
-                O prazo para cancelar é da SEFAZ, não do sistema: se passou, a recusa vem com o motivo dela. Cancelar a nota
-                não cancela a venda, e uma nota de um mês fechado só se cancela depois de reabri-lo.
+                {t(
+                  "The deadline to cancel is SEFAZ's, not the system's: if it has passed, the refusal comes with its reason. Cancelling the invoice does not cancel the sale, and an invoice from a closed month can only be cancelled after reopening it.",
+                )}
               </p>
             </HelpTitle>
             <label>
-              Motivo (de 15 a 255 caracteres)
+              {t("Reason (15 to 255 characters)")}
               <input required minLength={15} maxLength={255} value={reason} onChange={(event) => setReason(event.target.value)} />
             </label>
             <Button type="submit" pending={pending === "cancel"} disabled={pending !== null}>
-              Cancelar nota
+              {t("Cancel invoice")}
             </Button>
           </form>
           )}
           {takesLetters && (
           <form className="record-form" onSubmit={(event) => void correct(event)}>
-            <HelpTitle title="Carta de correção" level={3}>
+            <HelpTitle title={t("Correction letter")} level={3}>
               <p>
-                Corrige dados que não mudam valores (endereço, transportadora). A SEFAZ aceita até 20 cartas por nota e não
-                aceita a que muda um valor. Uma carta enviada sem resposta não é reenviada pelo sistema.
+                {t(
+                  "Corrects data that does not change amounts (address, carrier). SEFAZ accepts up to 20 letters per invoice and does not accept one that changes an amount. A letter sent with no answer is not sent again by the system.",
+                )}
               </p>
             </HelpTitle>
             <label>
-              Texto (de 15 a 1000 caracteres)
+              {t("Text (15 to 1000 characters)")}
               <input required minLength={15} maxLength={1000} value={letter} onChange={(event) => setLetter(event.target.value)} />
             </label>
             <Button type="submit" pending={pending === "letter"} disabled={pending !== null}>
-              Enviar carta
+              {t("Send letter")}
             </Button>
           </form>
           )}
@@ -312,12 +319,12 @@ export function FiscalDocumentSheet({ companyId, document, natures, canWrite, on
       )}
 
       {letters && letters.length > 0 && (
-        <section aria-label="Cartas de correção">
-          <h3>Cartas de correção</h3>
+        <section aria-label={t("Correction letters")}>
+          <h3>{t("Correction letters")}</h3>
           <ul className="plain-list">
             {letters.map((item) => (
               <li key={item.id}>
-                {item.sequence}. {item.text} — {EVENT_STATUS_LABELS[item.status]}
+                {item.sequence}. {item.text} — {t(EVENT_STATUS_LABELS[item.status])}
                 {item.refusal ? ` (${item.refusal.code}: ${item.refusal.message})` : ""}
                 {item.has_file && (
                   <Button
@@ -330,7 +337,7 @@ export function FiscalDocumentSheet({ companyId, document, natures, canWrite, on
                       })
                     }
                   >
-                    Baixar XML
+                    {t("Download XML")}
                   </Button>
                 )}
                 {canWrite && item.status === "sent" && (
@@ -344,7 +351,7 @@ export function FiscalDocumentSheet({ companyId, document, natures, canWrite, on
                       })
                     }
                   >
-                    Desistir
+                    {t("Give up")}
                   </Button>
                 )}
               </li>
@@ -353,19 +360,19 @@ export function FiscalDocumentSheet({ companyId, document, natures, canWrite, on
         </section>
       )}
 
-      <section aria-label="Histórico">
-        <h3>Histórico</h3>
+      <section aria-label={t("History")}>
+        <h3>{t("History")}</h3>
         <History
           load={loadHistory}
-          fieldLabel={(field) => FIELD_LABELS[field] ?? field}
+          fieldLabel={(field) => (field in FIELD_LABELS ? t(FIELD_LABELS[field]) : field)}
           valueLabel={(field, value) => {
             if (value === null) return "—";
-            if (field === "status") return STATUS_LABELS[value as keyof typeof STATUS_LABELS] ?? value;
-            if (field === "environment") return value === "production" ? "Produção" : "Homologação";
+            if (field === "status") return value in STATUS_LABELS ? t(STATUS_LABELS[value as keyof typeof STATUS_LABELS]) : value;
+            if (field === "environment") return value === "production" ? t("Production") : t("Test environment");
             if (field === "total") return formatMoney(value);
             return value;
           }}
-          emptyMessage="Ainda não há registros."
+          emptyMessage={t("No history yet.")}
         />
       </section>
     </div>
