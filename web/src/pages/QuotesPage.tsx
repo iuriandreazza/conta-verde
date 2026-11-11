@@ -25,6 +25,7 @@ import { Notice } from "../components/Notice";
 import { QuoteForm } from "../components/QuoteForm";
 import { Sheet } from "../components/Sheet";
 import { useCreation, useOnCreated } from "../creation/CreationProvider";
+import { msg, useT, type Translate } from "../i18n";
 import { useLastValue } from "../lib/useLastValue";
 import { useSalesTargets } from "../lib/useSalesTargets";
 import { PageHeader } from "../components/PageHeader";
@@ -34,19 +35,20 @@ import { formatMoney } from "../lib/decimal";
 import { formatDate, isIsoDate } from "../lib/entryInstallments";
 import { QUOTE_STATUS_LABELS } from "../lib/quoteStatus";
 import { todayIso } from "../lib/settlement";
+import { linesTrailText } from "../lib/trail";
 import { useCanWrite } from "../lib/useCanWrite";
 import { usePagedList } from "../lib/usePagedList";
 
 const FIELD_LABELS: Record<string, string> = {
-  customer_id: "Cliente",
-  issued_on: "Emitido em",
-  valid_until: "Válido até",
-  payment_term_id: "Prazo de pagamento",
-  notes: "Observações",
-  lines: "Itens",
-  status: "Situação",
-  link: "Link",
-  answered_by: "Respondido por",
+  customer_id: msg("Customer"),
+  issued_on: msg("Issued on"),
+  valid_until: msg("Valid until"),
+  payment_term_id: msg("Payment term"),
+  notes: msg("Notes"),
+  lines: msg("Items"),
+  status: msg("Status"),
+  link: msg("Link"),
+  answered_by: msg("Answered by"),
 };
 
 /** A quote is open to change while it is a draft or waiting for the answer. */
@@ -54,6 +56,7 @@ const isOpen = (quote: Quote) => quote.status === "draft" || quote.status === "s
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one instance.
 export function QuotesPage() {
+  const t = useT();
   const { companyId = "" } = useParams();
   const canWrite = useCanWrite("sales");
   const [filters, setFilters] = useState<QuoteFilters>(NO_QUOTE_FILTERS);
@@ -107,8 +110,8 @@ export function QuotesPage() {
       setEditing(null);
       setSaved(
         editing.status === "sent" && updated.status === "draft"
-          ? `Orçamento nº ${updated.number} atualizado. Voltou a ser rascunho e o link enviado deixou de valer: envie de novo.`
-          : `Orçamento nº ${updated.number} atualizado.`,
+          ? t("Quote no. {number} updated. It went back to a draft and the link sent stopped working: send it again.", { number: updated.number })
+          : t("Quote no. {number} updated.", { number: updated.number }),
       );
     } catch (failure) {
       setFormError(errorMessage(failure));
@@ -125,7 +128,7 @@ export function QuotesPage() {
     const form = new FormData(event.currentTarget);
     const field = (name: string) => String(form.get(name) ?? "").trim();
     if (!isIsoDate(field("sold_on"))) {
-      setConvertError("Informe a data da venda.");
+      setConvertError(t("Enter the sale date."));
       return;
     }
     setConverting(true);
@@ -170,42 +173,42 @@ export function QuotesPage() {
   return (
     <>
       <PageHeader
-        title="Orçamentos"
-        description="Itens com desconto, validade e um link para o cliente aprovar. Aprovado, vira venda."
+        title={t("Quotes")}
+        description={t("Items with discount, validity and a link for the customer to approve. Once approved, it becomes a sale.")}
       />
       {canWrite && (
         <div className="list-actions">
           <Button type="button" icon={PlusIcon} onClick={() => openCreate("quote")}>
-            Novo orçamento
+            {t("New quote")}
           </Button>
         </div>
       )}
       <Notice message={saved} tone="success" />
       <div>
         <section className="card list-card">
-          <h2>Emitidos</h2>
+          <h2>{t("Issued")}</h2>
           <div className="filters" role="search">
             <label>
-              Buscar
+              {t("Search")}
               <input
                 type="search"
                 value={filters.q}
-                placeholder="Número, item ou observação"
+                placeholder={t("Number, item or notes")}
                 autoComplete="off"
                 maxLength={100}
                 onChange={(event) => setFilters({ ...filters, q: event.target.value })}
               />
             </label>
             <label>
-              Situação
+              {t("Status")}
               <select
                 value={filters.status}
                 onChange={(event) => setFilters({ ...filters, status: event.target.value as QuoteFilters["status"] })}
               >
-                <option value="">Todas</option>
+                <option value="">{t("All")}</option>
                 {Object.entries(QUOTE_STATUS_LABELS).map(([key, label]) => (
                   <option key={key} value={key}>
-                    {label}
+                    {t(label)}
                   </option>
                 ))}
               </select>
@@ -214,38 +217,38 @@ export function QuotesPage() {
           <Notice message={error ?? targetsError} />
           {loading ? (
             <p role="status" className="status">
-              <Spinner /> Carregando…
+              <Spinner /> {t("Loading…")}
             </p>
           ) : items.length === 0 && error ? (
             <Button type="button" variant="ghost" onClick={() => void reload()}>
-              Tentar de novo
+              {t("Try again")}
             </Button>
           ) : items.length === 0 && isFiltered ? (
             <div className="empty">
               <FileTextIcon size={40} aria-hidden />
-              <p role="status">Nenhum orçamento encontrado.</p>
+              <p role="status">{t("No quotes found.")}</p>
               <Button type="button" variant="ghost" onClick={() => setFilters({ ...NO_QUOTE_FILTERS })}>
-                Limpar filtros
+                {t("Clear filters")}
               </Button>
             </div>
           ) : items.length === 0 ? (
             <div className="empty">
               <FileTextIcon size={40} aria-hidden />
-              <p>Nenhum orçamento ainda.</p>
-              <p className="muted">Monte os itens, envie o link e o cliente aprova sem precisar de conta.</p>
+              <p>{t("No quotes yet.")}</p>
+              <p className="muted">{t("Put the items together, send the link and the customer approves without needing an account.")}</p>
             </div>
           ) : (
             <div className="table-wrap">
               <table>
                 <thead>
                   <tr>
-                    <th>Nº</th>
-                    <th>Cliente</th>
-                    <th>Validade</th>
-                    <th className="num">Total</th>
-                    <th>Situação</th>
+                    <th>{t("No.")}</th>
+                    <th>{t("Customer")}</th>
+                    <th>{t("Validity")}</th>
+                    <th className="num">{t("Total")}</th>
+                    <th>{t("Status")}</th>
                     <th>
-                      <span className="visually-hidden">Ações</span>
+                      <span className="visually-hidden">{t("Actions")}</span>
                     </th>
                   </tr>
                 </thead>
@@ -257,13 +260,13 @@ export function QuotesPage() {
                         <td>
                           <div className="cell-title">{names.get(quote.customer_id) ?? ""}</div>
                           <div className="muted">
-                            {quote.lines.length} {quote.lines.length === 1 ? "item" : "itens"}
+                            {quote.lines.length === 1 ? t("{count} item", { count: 1 }) : t("{count} items", { count: quote.lines.length })}
                           </div>
                         </td>
                         <td>{formatDate(quote.valid_until)}</td>
                         <td className="num">{formatMoney(quote.total)}</td>
                         <td>
-                          <span className={statusClass(quote.status)}>{QUOTE_STATUS_LABELS[quote.status]}</span>
+                          <span className={statusClass(quote.status)}>{t(QUOTE_STATUS_LABELS[quote.status])}</span>
                         </td>
                         <td className="row-actions">
                           <a
@@ -271,8 +274,8 @@ export function QuotesPage() {
                             href={api.quotePdfUrl(companyId, quote.id)}
                             target="_blank"
                             rel="noreferrer"
-                            aria-label={`PDF do orçamento ${quote.number}`}
-                            title={`PDF do orçamento ${quote.number}`}
+                            aria-label={t("Quote {number} PDF", { number: quote.number })}
+                            title={t("Quote {number} PDF", { number: quote.number })}
                           >
                             <FileTextIcon size={16} aria-hidden />
                           </a>
@@ -282,7 +285,7 @@ export function QuotesPage() {
                               icon={HandCoinsIcon}
                               type="button"
                               variant="ghost"
-                              aria-label={`Converter o orçamento ${quote.number} em venda`}
+                              aria-label={t("Convert quote {number} into a sale", { number: quote.number })}
                               aria-expanded={convertingFor === quote.id}
                               onClick={() => {
                                 setConvertingFor(convertingFor === quote.id ? null : quote.id);
@@ -290,7 +293,7 @@ export function QuotesPage() {
                                 setConverted(null);
                               }}
                             >
-                              Converter em venda
+                              {t("Convert into a sale")}
                             </Button>
                           )}
                           {canWrite && isOpen(quote) && (
@@ -300,7 +303,7 @@ export function QuotesPage() {
                                 icon={SquarePenIcon}
                                 type="button"
                                 variant="ghost"
-                                aria-label={`Alterar o orçamento ${quote.number}`}
+                                aria-label={t("Change quote {number}", { number: quote.number })}
                                 disabled={saving}
                                 onClick={() => {
                                   setEditing(quote);
@@ -308,14 +311,14 @@ export function QuotesPage() {
                                   setSaved(null);
                                 }}
                               >
-                                Alterar
+                                {t("Change")}
                               </Button>
                               <Button
                                 iconOnly
                                 icon={SendIcon}
                                 type="button"
                                 variant="ghost"
-                                aria-label={`Enviar o orçamento ${quote.number}`}
+                                aria-label={t("Send quote {number}", { number: quote.number })}
                                 aria-expanded={sendingFor === quote.id}
                                 onClick={() => {
                                   setSendingFor(sendingFor === quote.id ? null : quote.id);
@@ -323,7 +326,7 @@ export function QuotesPage() {
                                   setSent(null);
                                 }}
                               >
-                                Enviar
+                                {t("Send")}
                               </Button>
                             </>
                           )}
@@ -331,35 +334,35 @@ export function QuotesPage() {
                             iconOnly
                             type="button"
                             variant="ghost"
-                            aria-label={`Histórico do orçamento ${quote.number}`}
+                            aria-label={t("History of quote {number}", { number: quote.number })}
                             aria-expanded={historyOpenFor === quote.id}
                             aria-controls={`history-${quote.id}`}
                             icon={HistoryIcon}
                             onClick={() => setHistoryOpenFor(historyOpenFor === quote.id ? null : quote.id)}
                           >
-                            Histórico
+                            {t("History")}
                           </Button>
                         </td>
                       </ListRow>
                       {convertingFor === quote.id && (
                         <tr>
-                          <td colSpan={6} role="region" aria-label={`Conversão do orçamento ${quote.number}`}>
+                          <td colSpan={6} role="region" aria-label={t("Conversion of quote {number}", { number: quote.number })}>
                             {converted !== null && converted.quote_id === quote.id ? (
                               <Notice
                                 tone="success"
-                                message={`Pedido nº ${converted.number} criado a partir deste orçamento. Conclua-o em Vendas para gerar a conta a receber.`}
+                                message={t("Order no. {number} created from this quote. Complete it in Sales to generate the receivable.", { number: converted.number })}
                               />
                             ) : (
                               <form className="opening-form" onSubmit={(event) => void handleConvert(event, quote)}>
                                 <label>
-                                  Data da venda
+                                  {t("Sale date")}
                                   <input name="sold_on" type="date" required defaultValue={todayIso()} />
                                 </label>
                                 <label>
-                                  Categoria da receita
+                                  {t("Revenue category")}
                                   <select name="category_id" required defaultValue="">
                                     <option value="" disabled>
-                                      Escolha
+                                      {t("Choose")}
                                     </option>
                                     {treeRows(categories)
                                       .filter(({ category }) => category.active && category.dre_group !== "transfers")
@@ -372,9 +375,9 @@ export function QuotesPage() {
                                   </select>
                                 </label>
                                 <label>
-                                  Centro de custo
+                                  {t("Cost center")}
                                   <select name="cost_center_id" defaultValue="">
-                                    <option value="">Nenhum</option>
+                                    <option value="">{t("None")}</option>
                                     {costCenters
                                       .filter((center) => center.active)
                                       .map((center) => (
@@ -385,9 +388,9 @@ export function QuotesPage() {
                                   </select>
                                 </label>
                                 <label>
-                                  Vendedor
+                                  {t("Seller")}
                                   <select name="seller_id" defaultValue="">
-                                    <option value="">Nenhum</option>
+                                    <option value="">{t("None")}</option>
                                     {parties
                                       .filter((party) => party.is_seller)
                                       .map((party) => (
@@ -398,14 +401,14 @@ export function QuotesPage() {
                                   </select>
                                 </label>
                                 <Button type="submit" icon={HandCoinsIcon} pending={converting}>
-                                  Criar pedido
+                                  {t("Create order")}
                                 </Button>
                                 <Notice message={convertError} />
                               </form>
                             )}
                             {converted !== null && converted.quote_id === quote.id && (
                               <p>
-                                <Link to={`/companies/${companyId}/sales`}>Ir para as vendas</Link>
+                                <Link to={`/companies/${companyId}/sales`}>{t("Go to sales")}</Link>
                               </p>
                             )}
                           </td>
@@ -413,10 +416,10 @@ export function QuotesPage() {
                       )}
                       {sendingFor === quote.id && (
                         <tr>
-                          <td colSpan={6} role="region" aria-label={`Envio do orçamento ${quote.number}`}>
+                          <td colSpan={6} role="region" aria-label={t("Sending of quote {number}", { number: quote.number })}>
                             <form className="opening-form" onSubmit={(event) => void handleSend(event, quote)}>
                               <label>
-                                E-mail do cliente
+                                {t("Customer e-mail")}
                                 <input
                                   name="to"
                                   type="email"
@@ -426,7 +429,7 @@ export function QuotesPage() {
                                 />
                               </label>
                               <Button type="submit" icon={SendIcon} pending={sending}>
-                                Enviar link
+                                {t("Send link")}
                               </Button>
                               <Notice message={sendError} />
                               {sent !== null && sent.quote.id === quote.id && (
@@ -435,11 +438,11 @@ export function QuotesPage() {
                                     tone={sent.emailed ? "success" : "warning"}
                                     message={
                                       sent.emailed
-                                        ? "Link na fila de envio por e-mail. Aparece só aqui: copie se precisar."
-                                        : "O e-mail não saiu. Passe o link ao cliente por outro meio: ele aparece só aqui."
+                                        ? t("Link queued to be sent by e-mail. It appears only here: copy it if you need it.")
+                                        : t("The e-mail was not sent. Pass the link to the customer another way: it appears only here.")
                                     }
                                   />
-                                  <input aria-label="Link para o cliente" readOnly value={sent.link} onFocus={(event) => event.target.select()} />
+                                  <input aria-label={t("Link for the customer")} readOnly value={sent.link} onFocus={(event) => event.target.select()} />
                                 </>
                               )}
                             </form>
@@ -448,12 +451,12 @@ export function QuotesPage() {
                       )}
                       {historyOpenFor === quote.id && (
                         <tr id={`history-${quote.id}`}>
-                          <td colSpan={6} role="region" aria-label={`Histórico do orçamento ${quote.number}`}>
+                          <td colSpan={6} role="region" aria-label={t("History of quote {number}", { number: quote.number })}>
                             <History
                               load={historyLoader(quote.id)}
-                              fieldLabel={(field) => FIELD_LABELS[field] ?? field}
-                              valueLabel={(field, value) => displayValue(field, value, names)}
-                              emptyMessage="Sem registros."
+                              fieldLabel={(field) => (field in FIELD_LABELS ? t(FIELD_LABELS[field]) : field)}
+                              valueLabel={(field, value) => displayValue(field, value, names, t)}
+                              emptyMessage={t("No records.")}
                             />
                           </td>
                         </tr>
@@ -466,12 +469,12 @@ export function QuotesPage() {
           )}
           {nextCursor !== null && (
             <Button type="button" variant="ghost" icon={ChevronDownIcon} pending={loadingMore} onClick={() => void loadMore()}>
-              Carregar mais
+              {t("Load more")}
             </Button>
           )}
         </section>
         {canWrite && (
-          <Sheet open={editing !== null} locked={saving} title={`Alterar o orçamento ${shown?.number ?? ""}`} onClose={closeSheet}>
+          <Sheet open={editing !== null} locked={saving} title={t("Change quote {number}", { number: shown?.number ?? "" })} onClose={closeSheet}>
             {shown !== null &&
               (targetsLoaded ? (
                 <QuoteForm
@@ -486,7 +489,7 @@ export function QuotesPage() {
                 />
               ) : targetsError === null ? (
                 <p role="status" className="status">
-                  <Spinner /> Carregando…
+                  <Spinner /> {t("Loading…")}
                 </p>
               ) : (
                 <p role="alert">{targetsError}</p>
@@ -513,21 +516,11 @@ function statusClass(status: QuoteStatus): string {
 }
 
 /** A value of the trail as a person reads it: names for references, words for keys. */
-function displayValue(field: string, value: string | null, names: Map<string, string>): string {
+function displayValue(field: string, value: string | null, names: Map<string, string>, t: Translate): string {
   if (value === null) return "—";
   if (field === "customer_id" || field === "payment_term_id") return names.get(value) ?? value;
-  if (field === "status") return QUOTE_STATUS_LABELS[value as QuoteStatus] ?? value;
+  if (field === "status") return t(QUOTE_STATUS_LABELS[value as QuoteStatus] ?? value);
   if (field === "issued_on" || field === "valid_until") return formatDate(value);
-  if (field === "lines") {
-    return value
-      .split("\n")
-      .map((line) => {
-        // The description comes last and may hold colons of its own.
-        const [product, quantity, price, discount, ...description] = line.split(":");
-        const name = description.length > 0 ? description.join(":") : (names.get(product) ?? "item");
-        return `${name} × ${quantity.replace(".", ",")} a ${formatMoney(price)}${discount === "0" ? "" : ` (− ${formatMoney(discount)})`}`;
-      })
-      .join("; ");
-  }
+  if (field === "lines") return linesTrailText(value, names, t);
   return value;
 }

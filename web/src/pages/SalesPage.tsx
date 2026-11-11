@@ -25,6 +25,7 @@ import { Notice } from "../components/Notice";
 import { SaleForm } from "../components/SaleForm";
 import { Sheet } from "../components/Sheet";
 import { useCreation, useOnCreated } from "../creation/CreationProvider";
+import { msg, useI18n, useT, type Translate } from "../i18n";
 import { useLastValue } from "../lib/useLastValue";
 import { useSalesTargets } from "../lib/useSalesTargets";
 import { PageHeader } from "../components/PageHeader";
@@ -40,22 +41,23 @@ import { useCanWrite } from "../lib/useCanWrite";
 import { usePagedList } from "../lib/usePagedList";
 
 const FIELD_LABELS: Record<string, string> = {
-  customer_id: "Cliente",
-  seller_id: "Vendedor",
-  sold_on: "Data da venda",
-  payment_term_id: "Prazo de pagamento",
-  category_id: "Categoria",
-  cost_center_id: "Centro de custo",
-  notes: "Observações",
-  lines: "Itens",
-  status: "Situação",
-  quote_id: "Orçamento",
+  customer_id: msg("Customer"),
+  seller_id: msg("Seller"),
+  sold_on: msg("Sale date"),
+  payment_term_id: msg("Payment term"),
+  category_id: msg("Category"),
+  cost_center_id: msg("Cost center"),
+  notes: msg("Notes"),
+  lines: msg("Items"),
+  status: msg("Status"),
+  quote_id: msg("Quote"),
 };
 
 type Panel = { kind: "complete" | "returns" | "history" | "cancel"; id: string };
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one instance.
 export function SalesPage() {
+  const t = useT();
   const { companyId = "" } = useParams();
   const canWrite = useCanWrite("sales");
   const [filters, setFilters] = useState<SaleFilters>(NO_SALE_FILTERS);
@@ -102,7 +104,7 @@ export function SalesPage() {
       const updated = await api.updateSale(companyId, editing.id, input);
       setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)));
       setEditing(null);
-      setSaved(`Pedido nº ${updated.number} atualizado.`);
+      setSaved(t("Order no. {number} updated.", { number: updated.number }));
     } catch (failure) {
       setFormError(errorMessage(failure));
     } finally {
@@ -124,8 +126,10 @@ export function SalesPage() {
       setPanel(null);
       setSaved(
         action === "complete"
-          ? `Venda nº ${updated.number} concluída: a conta a receber está nos lançamentos.`
-          : `Venda nº ${updated.number} cancelada${sale.status === "completed" ? " e a conta a receber também" : ""}.`,
+          ? t("Sale no. {number} completed: the receivable is in the entries.", { number: updated.number })
+          : sale.status === "completed"
+            ? t("Sale no. {number} cancelled, and so was the receivable.", { number: updated.number })
+            : t("Sale no. {number} cancelled.", { number: updated.number }),
       );
     } catch (failure) {
       setActionError(errorMessage(failure));
@@ -143,42 +147,42 @@ export function SalesPage() {
   return (
     <>
       <PageHeader
-        title="Vendas"
-        description="Pedidos e vendas: concluir gera a conta a receber pelo prazo de pagamento; devoluções geram a conta a pagar do reembolso."
+        title={t("Sales")}
+        description={t("Orders and sales: completing generates the receivable by the payment term; returns generate the refund payable.")}
       />
       {canWrite && (
         <div className="list-actions">
           <Button type="button" icon={PlusIcon} onClick={() => openCreate("sale")}>
-            Novo pedido
+            {t("New order")}
           </Button>
         </div>
       )}
       <Notice message={saved} tone="success" />
       <div>
         <section className="card list-card">
-          <h2>Pedidos e vendas</h2>
+          <h2>{t("Orders and sales")}</h2>
           <div className="filters" role="search">
             <label>
-              Buscar
+              {t("Search")}
               <input
                 type="search"
                 value={filters.q}
-                placeholder="Número, item ou observação"
+                placeholder={t("Number, item or notes")}
                 autoComplete="off"
                 maxLength={100}
                 onChange={(event) => setFilters({ ...filters, q: event.target.value })}
               />
             </label>
             <label>
-              Situação
+              {t("Status")}
               <select
                 value={filters.status}
                 onChange={(event) => setFilters({ ...filters, status: event.target.value as SaleFilters["status"] })}
               >
-                <option value="">Todas</option>
+                <option value="">{t("All")}</option>
                 {Object.entries(SALE_STATUS_LABELS).map(([key, label]) => (
                   <option key={key} value={key}>
-                    {label}
+                    {t(label)}
                   </option>
                 ))}
               </select>
@@ -187,38 +191,38 @@ export function SalesPage() {
           <Notice message={error ?? targetsError} />
           {loading ? (
             <p role="status" className="status">
-              <Spinner /> Carregando…
+              <Spinner /> {t("Loading…")}
             </p>
           ) : items.length === 0 && error ? (
             <Button type="button" variant="ghost" onClick={() => void reload()}>
-              Tentar de novo
+              {t("Try again")}
             </Button>
           ) : items.length === 0 && isFiltered ? (
             <div className="empty">
               <HandCoinsIcon size={40} aria-hidden />
-              <p role="status">Nenhuma venda encontrada.</p>
+              <p role="status">{t("No sales found.")}</p>
               <Button type="button" variant="ghost" onClick={() => setFilters({ ...NO_SALE_FILTERS })}>
-                Limpar filtros
+                {t("Clear filters")}
               </Button>
             </div>
           ) : items.length === 0 ? (
             <div className="empty">
               <HandCoinsIcon size={40} aria-hidden />
-              <p>Nenhuma venda ainda.</p>
-              <p className="muted">Crie um pedido aqui, ou converta um orçamento aprovado.</p>
+              <p>{t("No sales yet.")}</p>
+              <p className="muted">{t("Create an order here, or convert an approved quote.")}</p>
             </div>
           ) : (
             <div className="table-wrap">
               <table>
                 <thead>
                   <tr>
-                    <th>Nº</th>
-                    <th>Cliente</th>
-                    <th>Data</th>
-                    <th className="num">Total</th>
-                    <th>Situação</th>
+                    <th>{t("No.")}</th>
+                    <th>{t("Customer")}</th>
+                    <th>{t("Date")}</th>
+                    <th className="num">{t("Total")}</th>
+                    <th>{t("Status")}</th>
                     <th>
-                      <span className="visually-hidden">Ações</span>
+                      <span className="visually-hidden">{t("Actions")}</span>
                     </th>
                   </tr>
                 </thead>
@@ -230,15 +234,15 @@ export function SalesPage() {
                         <td>
                           <div className="cell-title">{names.get(sale.customer_id) ?? ""}</div>
                           <div className="muted">
-                            {sale.lines.length} {sale.lines.length === 1 ? "item" : "itens"}
+                            {sale.lines.length === 1 ? t("{count} item", { count: 1 }) : t("{count} items", { count: sale.lines.length })}
                             {sale.seller_id !== null && ` · ${names.get(sale.seller_id) ?? ""}`}
-                            {sale.contract_id !== null && " · De um contrato"}
+                            {sale.contract_id !== null && ` · ${t("From a contract")}`}
                           </div>
                         </td>
                         <td>{formatDate(sale.sold_on)}</td>
                         <td className="num">{formatMoney(sale.total)}</td>
                         <td>
-                          <span className={statusClass(sale.status)}>{SALE_STATUS_LABELS[sale.status]}</span>
+                          <span className={statusClass(sale.status)}>{t(SALE_STATUS_LABELS[sale.status])}</span>
                         </td>
                         <td className="row-actions">
                           {canWrite && sale.status === "open" && (
@@ -248,7 +252,7 @@ export function SalesPage() {
                                 icon={SquarePenIcon}
                                 type="button"
                                 variant="ghost"
-                                aria-label={`Alterar o pedido ${sale.number}`}
+                                aria-label={t("Change order {number}", { number: sale.number })}
                                 disabled={saving || acting}
                                 onClick={() => {
                                   setEditing(sale);
@@ -256,18 +260,18 @@ export function SalesPage() {
                                   setSaved(null);
                                 }}
                               >
-                                Alterar
+                                {t("Change")}
                               </Button>
                               <Button
                                 iconOnly
                                 icon={CheckIcon}
                                 type="button"
                                 variant="ghost"
-                                aria-label={`Concluir a venda ${sale.number}`}
+                                aria-label={t("Complete sale {number}", { number: sale.number })}
                                 aria-expanded={panel?.kind === "complete" && panel.id === sale.id}
                                 onClick={() => toggle("complete", sale.id)}
                               >
-                                Concluir
+                                {t("Complete")}
                               </Button>
                             </>
                           )}
@@ -277,11 +281,11 @@ export function SalesPage() {
                               icon={RotateCCWIcon}
                               type="button"
                               variant="ghost"
-                              aria-label={`Devoluções da venda ${sale.number}`}
+                              aria-label={t("Returns of sale {number}", { number: sale.number })}
                               aria-expanded={panel?.kind === "returns" && panel.id === sale.id}
                               onClick={() => toggle("returns", sale.id)}
                             >
-                              Devoluções
+                              {t("Returns")}
                             </Button>
                           )}
                           {canWrite && sale.status !== "cancelled" && (
@@ -289,29 +293,29 @@ export function SalesPage() {
                               type="button"
                               variant="ghost"
                               className="btn-small"
-                              aria-label={`Cancelar a venda ${sale.number}`}
+                              aria-label={t("Cancel sale {number}", { number: sale.number })}
                               aria-expanded={panel?.kind === "cancel" && panel.id === sale.id}
                               onClick={() => toggle("cancel", sale.id)}
                             >
-                              Cancelar
+                              {t("Cancel")}
                             </Button>
                           )}
                           <Button
                             iconOnly
                             type="button"
                             variant="ghost"
-                            aria-label={`Histórico da venda ${sale.number}`}
+                            aria-label={t("History of sale {number}", { number: sale.number })}
                             aria-expanded={panel?.kind === "history" && panel.id === sale.id}
                             icon={HistoryIcon}
                             onClick={() => toggle("history", sale.id)}
                           >
-                            Histórico
+                            {t("History")}
                           </Button>
                         </td>
                       </ListRow>
                       {panel?.id === sale.id && panel.kind === "complete" && (
                         <tr>
-                          <td colSpan={6} role="region" aria-label={`Conclusão da venda ${sale.number}`}>
+                          <td colSpan={6} role="region" aria-label={t("Completion of sale {number}", { number: sale.number })}>
                             <CompletePanel
                               sale={sale}
                               term={terms.find((term) => term.id === sale.payment_term_id) ?? null}
@@ -324,20 +328,20 @@ export function SalesPage() {
                       )}
                       {panel?.id === sale.id && panel.kind === "cancel" && (
                         <tr>
-                          <td colSpan={6} role="region" aria-label={`Cancelamento da venda ${sale.number}`}>
+                          <td colSpan={6} role="region" aria-label={t("Cancellation of sale {number}", { number: sale.number })}>
                             <div className="settlements">
                               <p>
                                 {sale.status === "completed"
-                                  ? "Cancelar a venda cancela também a conta a receber que ela gerou, e isso não se desfaz: para vender de novo, faça outra venda. Se a conta já recebeu baixas, desfaça as baixas antes."
-                                  : "Cancelar o pedido o encerra: ele não é reaberto."}
+                                  ? t("Cancelling the sale also cancels the receivable it generated, and this cannot be undone: to sell again, make another sale. If the receivable already has settlements, undo them first.")
+                                  : t("Cancelling the order closes it: it is not reopened.")}
                               </p>
                               <Notice message={actionError} />
                               <div className="form-actions">
                                 <Button type="button" pending={acting} onClick={() => void act(sale, "cancel")}>
-                                  Cancelar a venda
+                                  {t("Cancel the sale")}
                                 </Button>
                                 <Button type="button" variant="ghost" disabled={acting} onClick={() => setPanel(null)}>
-                                  Manter
+                                  {t("Keep")}
                                 </Button>
                               </div>
                             </div>
@@ -346,7 +350,7 @@ export function SalesPage() {
                       )}
                       {panel?.id === sale.id && panel.kind === "returns" && (
                         <tr>
-                          <td colSpan={6} role="region" aria-label={`Devoluções da venda ${sale.number}`}>
+                          <td colSpan={6} role="region" aria-label={t("Returns of sale {number}", { number: sale.number })}>
                             <ReturnsPanel
                               companyId={companyId}
                               sale={sale}
@@ -358,12 +362,12 @@ export function SalesPage() {
                       )}
                       {panel?.id === sale.id && panel.kind === "history" && (
                         <tr>
-                          <td colSpan={6} role="region" aria-label={`Histórico da venda ${sale.number}`}>
+                          <td colSpan={6} role="region" aria-label={t("History of sale {number}", { number: sale.number })}>
                             <History
                               load={historyLoader(sale.id)}
-                              fieldLabel={(field) => FIELD_LABELS[field] ?? field}
-                              valueLabel={(field, value) => displayValue(field, value, names)}
-                              emptyMessage="Sem registros."
+                              fieldLabel={(field) => (field in FIELD_LABELS ? t(FIELD_LABELS[field]) : field)}
+                              valueLabel={(field, value) => displayValue(field, value, names, t)}
+                              emptyMessage={t("No records.")}
                             />
                           </td>
                         </tr>
@@ -376,13 +380,13 @@ export function SalesPage() {
           )}
           {nextCursor !== null && (
             <Button type="button" variant="ghost" icon={ChevronDownIcon} pending={loadingMore} onClick={() => void loadMore()}>
-              Carregar mais
+              {t("Load more")}
             </Button>
           )}
           {panel === null && <Notice message={actionError} />}
         </section>
         {canWrite && (
-          <Sheet open={editing !== null} locked={saving} title={`Alterar o pedido ${shown?.number ?? ""}`} onClose={closeSheet}>
+          <Sheet open={editing !== null} locked={saving} title={t("Change order {number}", { number: shown?.number ?? "" })} onClose={closeSheet}>
             {shown !== null &&
               (targetsLoaded ? (
                 <SaleForm
@@ -397,7 +401,7 @@ export function SalesPage() {
                 />
               ) : targetsError === null ? (
                 <p role="status" className="status">
-                  <Spinner /> Carregando…
+                  <Spinner /> {t("Loading…")}
                 </p>
               ) : (
                 <p role="alert">{targetsError}</p>
@@ -434,6 +438,7 @@ function CompletePanel({
   error: string | null;
   onConfirm: () => void;
 }) {
+  const { t, rich } = useI18n();
   const total = toCents(sale.total);
   // A term the page has not read is not "no term": the preview waits instead of showing what the server will not make.
   const waiting = sale.payment_term_id !== null && term === null;
@@ -446,15 +451,21 @@ function CompletePanel({
   return (
     <div className="settlements">
       <p>
-        Concluir gera uma conta a receber de <strong>{formatMoney(sale.total)}</strong>
-        {term === null ? ", para o dia da venda" : ` pelo prazo ${term.name}`}. Depois disso os itens não mudam.
+        {term === null
+          ? rich("Completing generates a receivable of {amount}, due on the day of the sale. After that the items do not change.", {
+              amount: <strong>{formatMoney(sale.total)}</strong>,
+            })
+          : rich("Completing generates a receivable of {amount} by the term {term}. After that the items do not change.", {
+              amount: <strong>{formatMoney(sale.total)}</strong>,
+              term: term.name,
+            })}
       </p>
       {waiting ? (
         <p role="status" className="status">
-          <Spinner /> Carregando o prazo…
+          <Spinner /> {t("Loading the term…")}
         </p>
       ) : parts === null ? (
-        <Notice message="O valor é pequeno demais para este prazo: uma parcela ficaria com menos de um centavo." />
+        <Notice message={t("The amount is too small for this term: an installment would be less than one cent.")} />
       ) : (
         <ul className="history">
           {parts.map((part, index) => (
@@ -467,7 +478,7 @@ function CompletePanel({
       <Notice message={error} />
       <div className="form-actions">
         <Button type="button" icon={CheckIcon} pending={acting} disabled={parts === null} onClick={onConfirm}>
-          Concluir venda
+          {t("Complete sale")}
         </Button>
       </div>
     </div>
@@ -486,6 +497,7 @@ function ReturnsPanel({
   categories: { id: string; label: string }[];
   canWrite: boolean;
 }) {
+  const t = useT();
   const [returns, setReturns] = useState<SaleReturn[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -515,11 +527,11 @@ function ReturnsPanel({
       return quantity === undefined || quantity === "0" ? [] : [{ line: index + 1, quantity }];
     });
     if (items.length === 0) {
-      setError("Informe a quantidade devolvida de pelo menos um item.");
+      setError(t("Enter the returned quantity of at least one item."));
       return;
     }
     if (!isIsoDate(field("returned_on")) || !isIsoDate(field("refund_due_on"))) {
-      setError("Informe a data da devolução e o vencimento do reembolso.");
+      setError(t("Enter the return date and the due date of the refund."));
       return;
     }
     setSaving(true);
@@ -545,33 +557,36 @@ function ReturnsPanel({
       <Notice message={loadError} />
       {returns === null ? (
         <p role="status" className="status">
-          <Spinner /> Carregando…
+          <Spinner /> {t("Loading…")}
         </p>
       ) : returns.length === 0 ? (
-        <p className="muted">Nada foi devolvido desta venda.</p>
+        <p className="muted">{t("Nothing was returned from this sale.")}</p>
       ) : (
         <ul className="history">
           {returns.map((made) => (
             <li key={made.id}>
-              {formatDate(made.returned_on)} · reembolso de {formatMoney(made.refund)} ·{" "}
-              {made.items
-                .map((item) => `${sale.lines[item.line - 1]?.description ?? "item"} × ${formatDecimal(item.quantity)}`)
-                .join(", ")}
+              {t("{date} · refund of {amount} · {items}", {
+                date: formatDate(made.returned_on),
+                amount: formatMoney(made.refund),
+                items: made.items
+                  .map((item) => `${sale.lines[item.line - 1]?.description ?? t("item")} × ${formatDecimal(item.quantity)}`)
+                  .join(", "),
+              })}
               {made.reason !== null && ` · ${made.reason}`}
-              {made.refund_entry_id === null && " · reembolso ainda não lançado"}
+              {made.refund_entry_id === null && ` · ${t("refund not yet booked")}`}
             </li>
           ))}
         </ul>
       )}
       {canWrite && (
         <form key={version} className="settle-form" onSubmit={(event) => void submit(event)}>
-          <h3>Registrar devolução</h3>
+          <h3>{t("Record a return")}</h3>
           {sale.lines.map((line, index) => (
             <label key={index}>
-              {line.description} (vendido: {formatDecimal(line.quantity)})
+              {t("{name} (sold: {quantity})", { name: line.description, quantity: formatDecimal(line.quantity) })}
               <input
                 name={`line-${index + 1}`}
-                aria-label={`Quantidade devolvida de ${line.description}`}
+                aria-label={t("Returned quantity of {name}", { name: line.description })}
                 inputMode="decimal"
                 autoComplete="off"
                 placeholder="0"
@@ -579,18 +594,18 @@ function ReturnsPanel({
             </label>
           ))}
           <label>
-            Data da devolução
+            {t("Return date")}
             <input name="returned_on" type="date" required defaultValue={todayIso()} />
           </label>
           <label>
-            Motivo
+            {t("Reason")}
             <input name="reason" maxLength={200} autoComplete="off" />
           </label>
           <label>
-            Categoria do reembolso
+            {t("Refund category")}
             <select name="refund_category_id" required defaultValue="">
               <option value="" disabled>
-                Escolha
+                {t("Choose")}
               </option>
               {categories.map((category) => (
                 <option key={category.id} value={category.id}>
@@ -600,12 +615,12 @@ function ReturnsPanel({
             </select>
           </label>
           <label>
-            Reembolso vence em
+            {t("Refund due on")}
             <input name="refund_due_on" type="date" required defaultValue={todayIso()} />
           </label>
           <Notice message={error} />
           <Button type="submit" icon={PlusIcon} pending={saving}>
-            Registrar devolução
+            {t("Record return")}
           </Button>
         </form>
       )}
@@ -614,13 +629,13 @@ function ReturnsPanel({
 }
 
 /** A value of the trail as a person reads it: names for references, words for keys. */
-function displayValue(field: string, value: string | null, names: Map<string, string>): string {
+function displayValue(field: string, value: string | null, names: Map<string, string>, t: Translate): string {
   if (value === null) return "—";
   if (["customer_id", "seller_id", "payment_term_id", "category_id", "cost_center_id"].includes(field)) {
     return names.get(value) ?? value;
   }
-  if (field === "status") return SALE_STATUS_LABELS[value as SaleStatus] ?? value;
+  if (field === "status") return t(SALE_STATUS_LABELS[value as SaleStatus] ?? value);
   if (field === "sold_on") return formatDate(value);
-  if (field === "lines") return linesTrailText(value, names);
+  if (field === "lines") return linesTrailText(value, names, t);
   return value;
 }

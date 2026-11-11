@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import type { Party, PaymentTerm, Product, Quote, QuoteInput } from "../api";
+import { useT } from "../i18n";
 import { isIsoDate } from "../lib/entryInstallments";
 import { todayIso } from "../lib/settlement";
 import { BackButton } from "./BackButton";
@@ -36,6 +37,7 @@ interface QuoteFormProps {
 
 /** Makes a quote, or changes one. Remount it (a `key`) to start over. */
 export function QuoteForm({ companyId, quote, targets, pending, error, onSubmit, onCancel }: QuoteFormProps) {
+  const t = useT();
   const [rows, setRowsState] = useState<LineRow[]>(() => (quote === null ? [newLine()] : rowsFromLines(quote.lines)));
   const [fieldError, setFieldError] = useState<string | null>(null);
   const markDirty = useSheetDirty();
@@ -57,14 +59,14 @@ export function QuoteForm({ companyId, quote, targets, pending, error, onSubmit,
     const form = new FormData(event.currentTarget);
     const field = (name: string) => String(form.get(name) ?? "").trim();
     if (!isIsoDate(field("issued_on")) || !isIsoDate(field("valid_until"))) {
-      setFieldError("Informe a data de emissão e a validade.");
+      setFieldError(t("Enter the issue date and the validity."));
       return;
     }
     if (field("valid_until") < field("issued_on")) {
-      setFieldError("A validade não pode ser antes da emissão.");
+      setFieldError(t("The validity cannot be before the issue date."));
       return;
     }
-    const problem = linesProblem(rows);
+    const problem = linesProblem(rows, t);
     if (problem !== null) {
       setFieldError(problem);
       return;
@@ -83,13 +85,13 @@ export function QuoteForm({ companyId, quote, targets, pending, error, onSubmit,
   return (
     <form className="record-form" onSubmit={handleSubmit}>
       <section className="form-section" aria-labelledby="quote-info">
-        <h3 id="quote-info">Dados do orçamento</h3>
+        <h3 id="quote-info">{t("Quote details")}</h3>
         <div className="field-grid">
           <label>
-            Cliente
+            {t("Customer")}
             <select name="customer_id" required defaultValue={quote?.customer_id ?? ""}>
               <option value="" disabled>
-                Escolha um cliente
+                {t("Choose a customer")}
               </option>
               {targets.parties.map((party) => (
                 <option key={party.id} value={party.id}>
@@ -99,17 +101,17 @@ export function QuoteForm({ companyId, quote, targets, pending, error, onSubmit,
             </select>
           </label>
           <label>
-            Emitido em
+            {t("Issued on")}
             <input name="issued_on" type="date" required defaultValue={quote?.issued_on ?? todayIso()} />
           </label>
           <label>
-            Válido até
+            {t("Valid until")}
             <input name="valid_until" type="date" required defaultValue={quote?.valid_until ?? plusDays(todayIso(), 15)} />
           </label>
           <label>
-            Prazo de pagamento
+            {t("Payment term")}
             <select name="payment_term_id" defaultValue={quote?.payment_term_id ?? ""}>
-              <option value="">Não informar</option>
+              <option value="">{t("Do not set")}</option>
               {termChoices.map((term) => (
                 <option key={term.id} value={term.id}>
                   {term.name}
@@ -120,18 +122,18 @@ export function QuoteForm({ companyId, quote, targets, pending, error, onSubmit,
         </div>
       </section>
       <section className="form-section" aria-labelledby="quote-lines">
-        <h3 id="quote-lines">Itens</h3>
+        <h3 id="quote-lines">{t("Items")}</h3>
         <LinesEditor companyId={companyId} rows={rows} onChange={setRows} products={productChoices} />
       </section>
       <section className="form-section" aria-labelledby="quote-notes">
-        <h3 id="quote-notes">Outras informações</h3>
+        <h3 id="quote-notes">{t("Other information")}</h3>
         <label>
-          Observações
+          {t("Notes")}
           <textarea name="notes" rows={3} maxLength={2000} defaultValue={quote?.notes ?? ""} />
         </label>
         {quote?.status === "sent" && (
           <p className="muted">
-            Alterar um orçamento enviado o devolve a rascunho e o link que o cliente recebeu deixa de valer.
+            {t("Changing a sent quote makes it a draft again and the link the customer received stops working.")}
           </p>
         )}
       </section>
@@ -139,7 +141,7 @@ export function QuoteForm({ companyId, quote, targets, pending, error, onSubmit,
       <div className="form-footer">
         <BackButton disabled={pending} onClick={onCancel} />
         <Button type="submit" icon={quote === null ? PlusIcon : CheckIcon} pending={pending}>
-          {quote === null ? "Criar orçamento" : "Salvar alterações"}
+          {quote === null ? t("Create quote") : t("Save changes")}
         </Button>
       </div>
     </form>
