@@ -9,10 +9,12 @@ import { Notice } from "../components/Notice";
 import { PageHeader } from "../components/PageHeader";
 import { Spinner } from "../components/Spinner";
 import { KIND_DESCRIPTIONS, STATE_BADGES, STATE_LABELS, attentionReason, packageUrl } from "../lib/connectors";
+import { useT } from "../i18n";
 import { useCanWrite } from "../lib/useCanWrite";
 
 /** Makes a connector of a kind of the catalogue, off, for a store the person names. */
 function CreateForm({ companyId, list, onCreated }: { companyId: string; list: ConnectorList; onCreated: () => void }) {
+  const t = useT();
   const [kind, setKind] = useState(list.catalogue[0]?.kind ?? "");
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
@@ -37,10 +39,10 @@ function CreateForm({ companyId, list, onCreated }: { companyId: string; list: C
   const described = KIND_DESCRIPTIONS[kind];
   return (
     <section className="card">
-      <h2>Novo conector</h2>
+      <h2>{t("New connector")}</h2>
       <form onSubmit={create}>
         <label>
-          Tipo
+          {t("Type")}
           <select value={kind} onChange={(event) => setKind(event.target.value)}>
             {list.catalogue.map((entry) => (
               <option key={entry.kind} value={entry.kind}>
@@ -51,16 +53,16 @@ function CreateForm({ companyId, list, onCreated }: { companyId: string; list: C
         </label>
         {described && (
           <p className="muted">
-            {described.what} <strong>Precisa de:</strong> {described.needs}
+            {t(described.what)} <strong>{t("Needs:")}</strong> {t(described.needs)}
           </p>
         )}
         <label>
-          Nome da loja
-          <input value={name} onChange={(event) => setName(event.target.value)} required maxLength={100} autoComplete="off" placeholder="Loja do centro" />
+          {t("Store name")}
+          <input value={name} onChange={(event) => setName(event.target.value)} required maxLength={100} autoComplete="off" placeholder={t("Downtown store")} />
         </label>
         <Notice message={error} />
         <Button type="submit" className="btn-small" pending={saving} disabled={name.trim() === "" || kind === ""}>
-          Criar
+          {t("Create")}
         </Button>
       </form>
     </section>
@@ -69,6 +71,7 @@ function CreateForm({ companyId, list, onCreated }: { companyId: string; list: C
 
 /** Asks where the package listens, and turns the connector on. */
 function TurnOnForm({ companyId, connector, onTurnedOn }: { companyId: string; connector: Connector; onTurnedOn: (result: TurnedOnConnector) => void }) {
+  const t = useT();
   const [address, setAddress] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -89,7 +92,7 @@ function TurnOnForm({ companyId, connector, onTurnedOn }: { companyId: string; c
   return (
     <form onSubmit={turnOn}>
       <label>
-        Endereço do pacote para receber os avisos (https)
+        {t("Address of the package to receive the notices (https)")}
         <input
           type="url"
           value={address}
@@ -97,13 +100,13 @@ function TurnOnForm({ companyId, connector, onTurnedOn }: { companyId: string; c
           required
           maxLength={2000}
           autoComplete="off"
-          placeholder="https://conector.minha-loja.example.com/webhooks/conta-verde"
+          placeholder={t("https://connector.my-store.example.com/webhooks/conta-verde")}
         />
       </label>
-      <p className="muted">Ligar faz uma chave de API (só o que o pacote precisa) e um webhook para esse endereço. Nada da loja fica guardado aqui.</p>
+      <p className="muted">{t("Turning on makes an API key (only what the package needs) and a webhook for this address. Nothing from the store is kept here.")}</p>
       <Notice message={error} />
       <Button type="submit" className="btn-small" pending={saving} disabled={address.trim() === ""}>
-        Ligar
+        {t("Turn on")}
       </Button>
     </form>
   );
@@ -111,6 +114,7 @@ function TurnOnForm({ companyId, connector, onTurnedOn }: { companyId: string; c
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one instance.
 export function ConnectorsPage() {
+  const t = useT();
   const { companyId = "" } = useParams();
   const canWrite = useCanWrite("members");
   const [list, setList] = useState<ConnectorList | null>(null);
@@ -142,7 +146,7 @@ export function ConnectorsPage() {
     setNotice(null);
     try {
       await api.deactivateConnector(companyId, connector.id);
-      setNotice(`“${connector.name}” desligado: a chave foi revogada e o webhook, desligado.`);
+      setNotice(t("“{name}” turned off: the key was revoked and the webhook was turned off.", { name: connector.name }));
       await load();
     } catch (failure) {
       setError(errorMessage(failure));
@@ -158,13 +162,13 @@ export function ConnectorsPage() {
   return (
     <>
       <PageHeader
-        title="Conectores"
-        description="Um conector liga a sua loja virtual ao sistema. Ele é um pacote à parte, que roda onde você colocar e conversa só pela API pública e pelos webhooks: ligar aqui só cria a chave de API e o webhook que ele usa, e desligar revoga a chave e desliga o webhook. A chave e a senha da loja ficam só no pacote."
+        title={t("Connectors")}
+        description={t("A connector links your online store to the system. It is a separate package, which runs wherever you put it and talks only through the public API and the webhooks: turning it on here only makes the API key and the webhook it uses, and turning it off revokes the key and turns the webhook off. The store's key and password stay only in the package.")}
       />
       <Notice message={error} />
       <Notice tone="success" message={notice} />
       {list && !list.available && (
-        <Notice message="Conectores desligados: o servidor não tem a chave para guardar os segredos dos webhooks (FISCAL_SECRETS_KEY). Peça a quem cuida do servidor." />
+        <Notice message={t("Connectors are off: the server has no key to keep the webhooks' secrets (FISCAL_SECRETS_KEY). Ask whoever looks after the server.")} />
       )}
       {shown.map((turned) => (
         <ConnectorSecrets
@@ -177,7 +181,7 @@ export function ConnectorsPage() {
       ))}
       {shown.length > 0 && (
         <Button type="button" variant="ghost" className="btn-small" onClick={() => setShown([])}>
-          Já copiei
+          {t("I already copied")}
         </Button>
       )}
       {canWrite && list && list.available && (
@@ -185,34 +189,34 @@ export function ConnectorsPage() {
           companyId={companyId}
           list={list}
           onCreated={() => {
-            setNotice("Conector criado. Ligue-o quando o pacote estiver no ar.");
+            setNotice(t("Connector created. Turn it on when the package is up."));
             void load();
           }}
         />
       )}
       <section className="card list-card">
-        <h2>Conectores da empresa</h2>
+        <h2>{t("Company connectors")}</h2>
         {list === null ? (
           <p role="status" className="status">
-            <Spinner /> Carregando…
+            <Spinner /> {t("Loading…")}
           </p>
         ) : list.items.length === 0 ? (
-          <p className="muted">Nenhum conector ainda.</p>
+          <p className="muted">{t("No connectors yet.")}</p>
         ) : (
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Loja</th>
-                  <th>Estado</th>
+                  <th>{t("Store")}</th>
+                  <th>{t("Current state")}</th>
                   <th>
-                    <span className="visually-hidden">Ações</span>
+                    <span className="visually-hidden">{t("Actions")}</span>
                   </th>
                 </tr>
               </thead>
               <tbody>
                 {list.items.map((connector) => {
-                  const reason = attentionReason(connector);
+                  const reason = attentionReason(connector, t);
                   return (
                     <Fragment key={connector.id}>
                       <tr>
@@ -220,11 +224,11 @@ export function ConnectorsPage() {
                           {connector.name}
                           <br />
                           <span className="muted">
-                            {kindTitle(connector.kind)} · criado por {connector.created_by}
+                            {t("{kind} · created by {name}", { kind: kindTitle(connector.kind), name: connector.created_by })}
                           </span>
                         </td>
                         <td>
-                          <span className={STATE_BADGES[connector.state]}>{STATE_LABELS[connector.state]}</span>
+                          <span className={STATE_BADGES[connector.state]}>{t(STATE_LABELS[connector.state])}</span>
                           {reason && (
                             <>
                               <br />
@@ -235,17 +239,17 @@ export function ConnectorsPage() {
                         <td>
                           <span className="form-actions">
                             {canWrite && !connector.active && (
-                              <Button type="button" variant="ghost" className="btn-small" aria-label={`Ligar ${connector.name}`} disabled={busy !== null || !list.available} onClick={() => setTurning(turning === connector.id ? null : connector.id)}>
-                                Ligar
+                              <Button type="button" variant="ghost" className="btn-small" aria-label={t("Turn on {name}", { name: connector.name })} disabled={busy !== null || !list.available} onClick={() => setTurning(turning === connector.id ? null : connector.id)}>
+                                {t("Turn on")}
                               </Button>
                             )}
                             {canWrite && connector.active && (
-                              <Button type="button" variant="ghost" className="btn-small" aria-label={`Desligar ${connector.name}`} pending={busy === connector.id} disabled={busy !== null} onClick={() => void turnOff(connector)}>
-                                Desligar
+                              <Button type="button" variant="ghost" className="btn-small" aria-label={t("Turn off {name}", { name: connector.name })} pending={busy === connector.id} disabled={busy !== null} onClick={() => void turnOff(connector)}>
+                                {t("Turn off")}
                               </Button>
                             )}
-                            <Button type="button" variant="ghost" className="btn-small" aria-label={`Histórico de ${connector.name}`} onClick={() => setHistoryOf(historyOf === connector.id ? null : connector.id)}>
-                              Histórico
+                            <Button type="button" variant="ghost" className="btn-small" aria-label={t("History of {name}", { name: connector.name })} onClick={() => setHistoryOf(historyOf === connector.id ? null : connector.id)}>
+                              {t("History")}
                             </Button>
                           </span>
                         </td>

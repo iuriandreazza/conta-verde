@@ -7,7 +7,7 @@ import { CheckIcon } from "../components/icons/check";
 import { Notice } from "../components/Notice";
 import { Spinner } from "../components/Spinner";
 import { ROLE_LABELS } from "../lib/roles";
-import { useT } from "../i18n";
+import { useI18n } from "../i18n";
 
 type Loaded =
   | { status: "loading" }
@@ -19,7 +19,7 @@ type Loaded =
  * may not have an account yet; accepting needs the account of the address it was sent to.
  */
 export function AcceptInvitationPage() {
-  const t = useT();
+  const { t, rich } = useI18n();
   const { token = "" } = useParams();
   const { session, refresh } = useAuth();
   const navigate = useNavigate();
@@ -63,17 +63,17 @@ export function AcceptInvitationPage() {
   if (loaded.status === "loading" || session.status === "loading") {
     return (
       <p role="status" className="status">
-        <Spinner /> Carregando…
+        <Spinner /> {t("Loading…")}
       </p>
     );
   }
   if (loaded.status === "failed") {
     return (
       <section className="card narrow">
-        <h1>{loaded.gone ? "Convite indisponível" : "Convite não encontrado"}</h1>
+        <h1>{loaded.gone ? t("Invitation unavailable") : t("Invitation not found")}</h1>
         <Notice message={loaded.message} tone="warning" />
         <p>
-          <Link to="/">Voltar ao início</Link>
+          <Link to="/">{t("Back to the start")}</Link>
         </p>
       </section>
     );
@@ -83,33 +83,34 @@ export function AcceptInvitationPage() {
   const next = encodeURIComponent(`/invitations/${token}`);
   return (
     <section className="card narrow">
-      <h1>Convite para {preview.company_name}</h1>
+      <h1>{t("Invitation to {company}", { company: preview.company_name })}</h1>
       <p>
-        Você foi convidado para participar de <strong>{preview.company_name}</strong> como{" "}
-        <strong>{t(ROLE_LABELS[preview.role])}</strong>. O convite é para{" "}
-        <strong>{preview.email}</strong>.
+        {rich("You were invited to take part in {company} as {role}. The invitation is for {email}.", {
+          company: <strong>{preview.company_name}</strong>,
+          role: <strong>{t(ROLE_LABELS[preview.role])}</strong>,
+          email: <strong>{preview.email}</strong>,
+        })}
       </p>
       {session.status === "authenticated" ? (
         <>
           <p className="muted">
-            Você está como {session.profile.user.email}.
-            {session.profile.user.email !== preview.email &&
-              " Para aceitar, saia e entre com o e-mail do convite."}
+            {t("You are signed in as {email}.", { email: session.profile.user.email })}
+            {session.profile.user.email !== preview.email && ` ${t("To accept, sign out and sign in with the invitation's e-mail.")}`}
           </p>
           <Notice message={error} />
           <Button type="button" icon={CheckIcon} pending={accepting} onClick={() => void accept()}>
-            Aceitar convite
+            {t("Accept invitation")}
           </Button>
         </>
       ) : (
         <>
-          <p>Entre, ou crie uma conta, com o e-mail do convite para aceitar.</p>
+          <p>{t("Sign in, or create an account, with the invitation's e-mail to accept.")}</p>
           <div className="form-actions">
             <Link className="btn btn-primary" to={`/login?next=${next}`}>
-              Entrar
+              {t("Sign in")}
             </Link>
             <Link className="btn btn-ghost" to={`/register?next=${next}`}>
-              Criar conta
+              {t("Create account")}
             </Link>
           </div>
         </>

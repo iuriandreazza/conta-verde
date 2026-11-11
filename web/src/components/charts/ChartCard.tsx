@@ -1,4 +1,5 @@
 import { useId, useState, type ReactNode } from "react";
+import { useT } from "../../i18n";
 import { InfoTip } from "../InfoTip";
 
 interface ChartCardProps {
@@ -11,6 +12,7 @@ interface ChartCardProps {
 }
 
 export function ChartCard({ title, description, legend, table, children }: ChartCardProps) {
+  const t = useT();
   const [showTable, setShowTable] = useState(false);
   const titleId = useId();
   return (
@@ -19,7 +21,7 @@ export function ChartCard({ title, description, legend, table, children }: Chart
         <div>
           <div className="title-with-tip">
             <h2 id={titleId}>{title}</h2>
-            <InfoTip label={`Sobre este gráfico: ${title}`} align="start">
+            <InfoTip label={t("About this chart: {title}", { title })} align="start">
               <p>{description}</p>
             </InfoTip>
           </div>
@@ -30,7 +32,7 @@ export function ChartCard({ title, description, legend, table, children }: Chart
           aria-pressed={showTable}
           onClick={() => setShowTable(!showTable)}
         >
-          {showTable ? "Ver gráfico" : "Ver como tabela"}
+          {showTable ? t("View chart") : t("View as table")}
         </button>
       </figcaption>
       {legend}

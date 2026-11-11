@@ -1,3 +1,5 @@
+import { msg } from "../i18n";
+
 export interface Span {
   from: string;
   to: string;
@@ -29,21 +31,22 @@ export function monthsSpan(year: number, month: number, count: number): Span {
 
 export interface Preset {
   key: string;
+  /** A `msg` key: the screen that shows it translates it. */
   label: string;
   span: (today: string) => Span;
 }
 
 export const PRESETS: Preset[] = [
-  { key: "this-month", label: "Este mês", span: (today) => monthsSpan(parse(today)[0], parse(today)[1], 1) },
-  { key: "last-month", label: "Mês passado", span: (today) => monthsSpan(parse(today)[0], parse(today)[1] - 1, 1) },
-  { key: "next-month", label: "Próximo mês", span: (today) => monthsSpan(parse(today)[0], parse(today)[1] + 1, 1) },
-  { key: "three-months", label: "Este mês e os 2 seguintes", span: (today) => monthsSpan(parse(today)[0], parse(today)[1], 3) },
+  { key: "this-month", label: msg("This month"), span: (today) => monthsSpan(parse(today)[0], parse(today)[1], 1) },
+  { key: "last-month", label: msg("Last month"), span: (today) => monthsSpan(parse(today)[0], parse(today)[1] - 1, 1) },
+  { key: "next-month", label: msg("Next month"), span: (today) => monthsSpan(parse(today)[0], parse(today)[1] + 1, 1) },
+  { key: "three-months", label: msg("This month and the next 2"), span: (today) => monthsSpan(parse(today)[0], parse(today)[1], 3) },
   {
     key: "quarter",
-    label: "Este trimestre",
+    label: msg("This quarter"),
     span: (today) => monthsSpan(parse(today)[0], Math.floor((parse(today)[1] - 1) / 3) * 3 + 1, 3),
   },
-  { key: "year", label: "Este ano", span: (today) => monthsSpan(parse(today)[0], 1, 12) },
+  { key: "year", label: msg("This year"), span: (today) => monthsSpan(parse(today)[0], 1, 12) },
 ];
 
 export const CUSTOM = "custom";
