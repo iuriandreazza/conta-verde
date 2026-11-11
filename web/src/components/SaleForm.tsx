@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import type { Category, CostCenter, Party, PaymentTerm, Product, Sale, SaleInput } from "../api";
+import { useT } from "../i18n";
 import { treeRows } from "../lib/categoryTree";
 import { isIsoDate } from "../lib/entryInstallments";
 import { todayIso } from "../lib/settlement";
@@ -33,6 +34,7 @@ interface SaleFormProps {
 
 /** Makes an order (a sale not yet completed), or changes one. Remount it (a `key`) to start over. */
 export function SaleForm({ companyId, sale, targets, pending, error, onSubmit, onCancel }: SaleFormProps) {
+  const t = useT();
   const [rows, setRowsState] = useState<LineRow[]>(() => (sale === null ? [newLine()] : rowsFromLines(sale.lines)));
   const [fieldError, setFieldError] = useState<string | null>(null);
   const markDirty = useSheetDirty();
@@ -58,10 +60,10 @@ export function SaleForm({ companyId, sale, targets, pending, error, onSubmit, o
     const form = new FormData(event.currentTarget);
     const field = (name: string) => String(form.get(name) ?? "").trim();
     if (!isIsoDate(field("sold_on"))) {
-      setFieldError("Informe a data da venda.");
+      setFieldError(t("Enter the sale date."));
       return;
     }
-    const problem = linesProblem(rows);
+    const problem = linesProblem(rows, t);
     if (problem !== null) {
       setFieldError(problem);
       return;
@@ -82,13 +84,13 @@ export function SaleForm({ companyId, sale, targets, pending, error, onSubmit, o
   return (
     <form className="record-form" onSubmit={handleSubmit}>
       <section className="form-section" aria-labelledby="sale-info">
-        <h3 id="sale-info">Dados do pedido</h3>
+        <h3 id="sale-info">{t("Order details")}</h3>
         <div className="field-grid">
           <label>
-            Cliente
+            {t("Customer")}
             <select name="customer_id" required defaultValue={sale?.customer_id ?? ""}>
               <option value="" disabled>
-                Escolha um cliente
+                {t("Choose a customer")}
               </option>
               {targets.parties.map((party) => (
                 <option key={party.id} value={party.id}>
@@ -98,9 +100,9 @@ export function SaleForm({ companyId, sale, targets, pending, error, onSubmit, o
             </select>
           </label>
           <label>
-            Vendedor
+            {t("Seller")}
             <select name="seller_id" defaultValue={sale?.seller_id ?? ""}>
-              <option value="">Nenhum</option>
+              <option value="">{t("None")}</option>
               {sellers.map((party) => (
                 <option key={party.id} value={party.id}>
                   {party.name}
@@ -109,18 +111,18 @@ export function SaleForm({ companyId, sale, targets, pending, error, onSubmit, o
             </select>
           </label>
           <label>
-            Data da venda
+            {t("Sale date")}
             <input name="sold_on" type="date" required defaultValue={sale?.sold_on ?? todayIso()} />
           </label>
         </div>
       </section>
       <section className="form-section" aria-labelledby="sale-billing">
-        <h3 id="sale-billing">Como receber</h3>
+        <h3 id="sale-billing">{t("How to receive")}</h3>
         <div className="field-grid">
           <label>
-            Prazo de pagamento
+            {t("Payment term")}
             <select name="payment_term_id" defaultValue={sale?.payment_term_id ?? ""}>
-              <option value="">À vista, no dia da venda</option>
+              <option value="">{t("Cash, on the day of the sale")}</option>
               {termChoices.map((term) => (
                 <option key={term.id} value={term.id}>
                   {term.name}
@@ -129,10 +131,10 @@ export function SaleForm({ companyId, sale, targets, pending, error, onSubmit, o
             </select>
           </label>
           <label>
-            Categoria da receita
+            {t("Revenue category")}
             <select name="category_id" required defaultValue={sale?.category_id ?? ""}>
               <option value="" disabled>
-                Escolha uma categoria
+                {t("Choose a category")}
               </option>
               {categoryRows.map(({ category, depth }) => (
                 <option key={category.id} value={category.id}>
@@ -143,9 +145,9 @@ export function SaleForm({ companyId, sale, targets, pending, error, onSubmit, o
             </select>
           </label>
           <label>
-            Centro de custo
+            {t("Cost center")}
             <select name="cost_center_id" defaultValue={sale?.cost_center_id ?? ""}>
-              <option value="">Nenhum</option>
+              <option value="">{t("None")}</option>
               {costCenterChoices.map((center) => (
                 <option key={center.id} value={center.id}>
                   {center.name}
@@ -156,13 +158,13 @@ export function SaleForm({ companyId, sale, targets, pending, error, onSubmit, o
         </div>
       </section>
       <section className="form-section" aria-labelledby="sale-lines">
-        <h3 id="sale-lines">Itens</h3>
+        <h3 id="sale-lines">{t("Items")}</h3>
         <LinesEditor companyId={companyId} rows={rows} onChange={setRows} products={productChoices} />
       </section>
       <section className="form-section" aria-labelledby="sale-notes">
-        <h3 id="sale-notes">Outras informações</h3>
+        <h3 id="sale-notes">{t("Other information")}</h3>
         <label>
-          Observações
+          {t("Notes")}
           <textarea name="notes" rows={3} maxLength={2000} defaultValue={sale?.notes ?? ""} />
         </label>
       </section>
@@ -170,7 +172,7 @@ export function SaleForm({ companyId, sale, targets, pending, error, onSubmit, o
       <div className="form-footer">
         <BackButton disabled={pending} onClick={onCancel} />
         <Button type="submit" icon={sale === null ? PlusIcon : CheckIcon} pending={pending}>
-          {sale === null ? "Criar pedido" : "Salvar alterações"}
+          {sale === null ? t("Create order") : t("Save changes")}
         </Button>
       </div>
     </form>
