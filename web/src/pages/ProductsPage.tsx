@@ -160,7 +160,7 @@ export function ProductsPage() {
                 setFilters({ ...filters, kind: event.target.value as ProductFilters["kind"] })
               }
             >
-              <option value="">{t("All")}</option>
+              <option value="">{t("Any")}</option>
               <option value="product">{t("Products")}</option>
               <option value="service">{t("Services")}</option>
             </select>
@@ -173,13 +173,13 @@ export function ProductsPage() {
                 setFilters({ ...filters, active: event.target.value as ProductFilters["active"] })
               }
             >
-              <option value="">{t("Active and inactive")}</option>
+              <option value="">{t("Active and inactive records")}</option>
               <option value="true">{t("Active only")}</option>
               <option value="false">{t("Inactive only")}</option>
             </select>
           </label>
           <label>
-            {t("Order")}
+            {t("Sort order")}
             <select
               value={filters.sort}
               onChange={(event) =>
@@ -265,7 +265,7 @@ export function ProductsPage() {
                             disabled={saving}
                             onClick={() => startEditing(product)}
                           >
-                            {t("Edit")}
+                            {t("Change")}
                           </Button>
                         )}
                         <Button

@@ -296,7 +296,7 @@ export function PartyForm({
           <input name="city" maxLength={80} autoComplete="off" defaultValue={address?.city ?? ""} />
         </label>
         <label className="span-2">
-          {t("State")}
+          {t("Address state")}
           <select name="state" defaultValue={address?.state ?? ""}>
             <option value=""></option>
             {STATES.map((state) => (

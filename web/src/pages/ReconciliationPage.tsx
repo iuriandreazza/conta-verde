@@ -25,11 +25,12 @@ import { formatDate } from "../lib/entryInstallments";
 import { readUpTo } from "../lib/readUpTo";
 import { useCanWrite } from "../lib/useCanWrite";
 import { usePagedList } from "../lib/usePagedList";
+import { msg, useT } from "../i18n";
 
 const STATUS_LABELS: Record<StatementLine["status"], string> = {
-  pending: "Pendente",
-  matched: "Conciliada",
-  ignored: "Ignorada",
+  pending: msg("Pending"),
+  matched: msg("Matched"),
+  ignored: msg("Ignored"),
 };
 
 const STATUS_BADGES: Record<StatementLine["status"], string> = {
@@ -43,6 +44,7 @@ type Open = { id: string; mode: "suggestions" | "entry" } | null;
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one
 // instance: a reply still in flight for another company lands on an unmounted component.
 export function ReconciliationPage() {
+  const t = useT();
   const { companyId = "" } = useParams();
   const canWrite = useCanWrite("finance");
   const [filters, setFilters] = useState<StatementLineFilters>(NO_STATEMENT_LINE_FILTERS);
@@ -111,17 +113,17 @@ export function ReconciliationPage() {
   return (
     <>
       <PageHeader
-        title="Conciliação"
-        description="Confira o extrato do banco com o que está lançado: cada linha vira uma baixa ou uma transferência que já existe, um lançamento novo, ou é ignorada."
+        title={t("Reconciliation")}
+        description={t("Check the bank statement against what is recorded: each line becomes a settlement or a transfer that already exists, a new entry, or is ignored.")}
       />
       {canWrite && (
         <>
           <section className="card filters-card">
             <div className="filters">
               <label>
-                Conta do extrato
+                {t("Statement account")}
                 <select value={importAccount} onChange={(event) => setImportAccount(event.target.value)}>
-                  <option value="">Escolha a conta</option>
+                  <option value="">{t("Choose the account")}</option>
                   {activeAccounts.map((account) => (
                     <option key={account.id} value={account.id}>
                       {account.name}
@@ -132,10 +134,10 @@ export function ReconciliationPage() {
             </div>
           </section>
           <CsvImport
-            title="Importar extrato"
-            fileLabel="Arquivo OFX do banco"
+            title={t("Import statement")}
+            fileLabel={t("Bank OFX file")}
             accept=".ofx,.OFX,application/x-ofx"
-            created={["linha importada", "linhas importadas"]}
+            created={[t("line imported"), t("lines imported")]}
             blocked={importAccount === ""}
             run={(file, dryRun) => api.importStatement(companyId, importAccount, file, dryRun)}
             onImported={() => {
@@ -143,18 +145,17 @@ export function ReconciliationPage() {
               void reload();
             }}
           >
-            O extrato em OFX que o banco oferece para baixar. Importar o mesmo arquivo de novo, ou um que
-            se sobreponha, não duplica linhas.
+            {t("The OFX statement that the bank offers for download. Importing the same file again, or one that overlaps, does not duplicate lines.")}
           </CsvImport>
         </>
       )}
       <section className="card list-card">
-        <h2>Linhas do extrato</h2>
+        <h2>{t("Statement lines")}</h2>
         <div className="filters" role="search">
           <label>
-            Conta
+            {t("Account")}
             <select value={filters.account} onChange={(event) => setFilters({ ...filters, account: event.target.value })}>
-              <option value="">Todas as contas</option>
+              <option value="">{t("All accounts")}</option>
               {accounts.map((account) => (
                 <option key={account.id} value={account.id}>
                   {account.name}
@@ -163,15 +164,15 @@ export function ReconciliationPage() {
             </select>
           </label>
           <label>
-            Situação
+            {t("Status")}
             <select
               value={filters.status}
               onChange={(event) => setFilters({ ...filters, status: event.target.value as StatementLineFilters["status"] })}
             >
-              <option value="pending">Pendentes</option>
-              <option value="matched">Conciliadas</option>
-              <option value="ignored">Ignoradas</option>
-              <option value="">Todas</option>
+              <option value="pending">{t("Pending lines")}</option>
+              <option value="matched">{t("Matched lines")}</option>
+              <option value="ignored">{t("Ignored lines")}</option>
+              <option value="">{t("All lines")}</option>
             </select>
           </label>
         </div>
@@ -180,32 +181,32 @@ export function ReconciliationPage() {
         <Notice message={notice} tone="success" />
         {loading ? (
           <p role="status" className="status">
-            <Spinner /> Carregando…
+            <Spinner /> {t("Loading…")}
           </p>
         ) : items.length === 0 && error ? (
           <Button type="button" variant="ghost" onClick={() => void reload()}>
-            Tentar de novo
+            {t("Try again")}
           </Button>
         ) : items.length === 0 ? (
           <div className="empty">
             <RotateCCWIcon size={40} aria-hidden />
             <p role="status">
-              {filters.status === "pending" ? "Nada pendente." : "Nenhuma linha encontrada."}
+              {filters.status === "pending" ? t("Nothing pending.") : t("No line found.")}
             </p>
-            <p className="muted">Importe o extrato de uma conta para começar.</p>
+            <p className="muted">{t("Import an account's statement to start.")}</p>
           </div>
         ) : (
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Data</th>
-                  <th>Descrição</th>
-                  <th>Conta</th>
-                  <th className="num">Valor</th>
-                  <th>Situação</th>
+                  <th>{t("Date")}</th>
+                  <th>{t("Description")}</th>
+                  <th>{t("Account")}</th>
+                  <th className="num">{t("Amount")}</th>
+                  <th>{t("Status")}</th>
                   <th>
-                    <span className="visually-hidden">Ações</span>
+                    <span className="visually-hidden">{t("Actions")}</span>
                   </th>
                 </tr>
               </thead>
@@ -218,7 +219,7 @@ export function ReconciliationPage() {
                       <td>{accountName(line.account_id)}</td>
                       <td className={line.amount.startsWith("-") ? "num negative" : "num"}>{formatMoney(line.amount)}</td>
                       <td>
-                        <span className={STATUS_BADGES[line.status]}>{STATUS_LABELS[line.status]}</span>
+                        <span className={STATUS_BADGES[line.status]}>{t(STATUS_LABELS[line.status])}</span>
                       </td>
                       <td className="row-actions">
                         {canWrite && line.status === "pending" && (
@@ -227,38 +228,38 @@ export function ReconciliationPage() {
                               type="button"
                               variant="ghost"
                               className="btn-small"
-                              aria-label={`Sugestões para ${line.description}`}
+                              aria-label={t("Suggestions for {name}", { name: line.description })}
                               aria-expanded={open?.id === line.id && open.mode === "suggestions"}
                               disabled={busyId !== null}
                               onClick={() =>
                                 setOpen(open?.id === line.id && open.mode === "suggestions" ? null : { id: line.id, mode: "suggestions" })
                               }
                             >
-                              Conciliar
+                              {t("Reconcile")}
                             </Button>
                             <Button
                               type="button"
                               variant="ghost"
                               className="btn-small"
-                              aria-label={`Criar lançamento para ${line.description}`}
+                              aria-label={t("Create an entry for {name}", { name: line.description })}
                               aria-expanded={open?.id === line.id && open.mode === "entry"}
                               disabled={busyId !== null}
                               onClick={() =>
                                 setOpen(open?.id === line.id && open.mode === "entry" ? null : { id: line.id, mode: "entry" })
                               }
                             >
-                              Lançar
+                              {t("Record")}
                             </Button>
                             <Button
                               type="button"
                               variant="ghost"
                               className="btn-small"
-                              aria-label={`Ignorar ${line.description}`}
+                              aria-label={t("Ignore {name}", { name: line.description })}
                               pending={busyId === line.id}
                               disabled={busyId !== null}
-                              onClick={() => void act(line, () => api.ignoreStatementLine(companyId, line.id), "Linha ignorada.")}
+                              onClick={() => void act(line, () => api.ignoreStatementLine(companyId, line.id), t("Line ignored."))}
                             >
-                              Ignorar
+                              {t("Ignore")}
                             </Button>
                           </>
                         )}
@@ -267,12 +268,12 @@ export function ReconciliationPage() {
                             type="button"
                             variant="ghost"
                             className="btn-small"
-                            aria-label={`Desfazer a conciliação de ${line.description}`}
+                            aria-label={t("Undo the reconciliation of {name}", { name: line.description })}
                             pending={busyId === line.id}
                             disabled={busyId !== null}
-                            onClick={() => void act(line, () => api.unmatchStatementLine(companyId, line.id), "Conciliação desfeita.")}
+                            onClick={() => void act(line, () => api.unmatchStatementLine(companyId, line.id), t("Reconciliation undone."))}
                           >
-                            Desfazer
+                            {t("Undo")}
                           </Button>
                         )}
                         {canWrite && line.status === "ignored" && (
@@ -280,19 +281,19 @@ export function ReconciliationPage() {
                             type="button"
                             variant="ghost"
                             className="btn-small"
-                            aria-label={`Restaurar ${line.description}`}
+                            aria-label={t("Restore {name}", { name: line.description })}
                             pending={busyId === line.id}
                             disabled={busyId !== null}
-                            onClick={() => void act(line, () => api.restoreStatementLine(companyId, line.id), "Linha restaurada.")}
+                            onClick={() => void act(line, () => api.restoreStatementLine(companyId, line.id), t("Line restored."))}
                           >
-                            Restaurar
+                            {t("Restore")}
                           </Button>
                         )}
                       </td>
                     </ListRow>
                     {open?.id === line.id && (
                       <tr>
-                        <td colSpan={6} role="region" aria-label={open.mode === "suggestions" ? `Sugestões para ${line.description}` : `Lançamento para ${line.description}`}>
+                        <td colSpan={6} role="region" aria-label={open.mode === "suggestions" ? t("Suggestions for {name}", { name: line.description }) : t("Entry for {name}", { name: line.description })}>
                           {open.mode === "suggestions" ? (
                             <Suggestions
                               key={`${line.id}-${suggestionsVersion}`}
@@ -301,7 +302,7 @@ export function ReconciliationPage() {
                               accountName={accountName}
                               busy={busyId !== null}
                               onMatch={(target) =>
-                                void act(line, () => api.matchStatementLine(companyId, line.id, target), "Linha conciliada.")
+                                void act(line, () => api.matchStatementLine(companyId, line.id, target), t("Line reconciled."))
                               }
                             />
                           ) : (
@@ -310,7 +311,7 @@ export function ReconciliationPage() {
                               categories={categoryRows.map(({ category, depth }) => ({ id: category.id, label: `${"— ".repeat(depth)}${category.name}` }))}
                               busy={busyId !== null}
                               onCreate={(input) =>
-                                void act(line, () => api.createEntryFromLine(companyId, line.id, input), "Lançamento criado e baixado.")
+                                void act(line, () => api.createEntryFromLine(companyId, line.id, input), t("Entry created and settled."))
                               }
                             />
                           )}
@@ -325,7 +326,7 @@ export function ReconciliationPage() {
         )}
         {nextCursor !== null && (
           <Button type="button" variant="ghost" icon={ChevronDownIcon} pending={loadingMore} onClick={() => void loadMore()}>
-            Carregar mais
+            {t("Load more")}
           </Button>
         )}
       </section>
@@ -347,6 +348,7 @@ function Suggestions({
   busy: boolean;
   onMatch: (target: { settlement_id: string } | { transfer_id: string }) => void;
 }) {
+  const t = useT();
   const [suggestions, setSuggestions] = useState<LineSuggestion[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -367,15 +369,14 @@ function Suggestions({
   if (suggestions === null) {
     return (
       <p role="status" className="status">
-        <Spinner /> Procurando…
+        <Spinner /> {t("Searching…")}
       </p>
     );
   }
   if (suggestions.length === 0) {
     return (
       <p className="muted">
-        Nada lançado com esse valor, nessa conta, perto dessa data. Use “Lançar” para criar o lançamento a partir da linha, ou
-        “Ignorar”.
+        {t("Nothing recorded with this amount, in this account, near this date. Use “Record” to create the entry from the line, or “Ignore”.")}
       </p>
     );
   }
@@ -384,34 +385,38 @@ function Suggestions({
       {suggestions.map((suggestion) =>
         suggestion.kind === "settlement" ? (
           <li key={suggestion.settlement.id}>
-            Baixa de {suggestion.entry_description} em {formatDate(suggestion.settlement.settled_on)}, {formatMoney(suggestion.settlement.cash)} na conta{" "}
-            {accountName(suggestion.settlement.bank_account_id)}
+            {t("Settlement of {description} on {date}, {amount} in the account {account}", {
+              description: suggestion.entry_description,
+              date: formatDate(suggestion.settlement.settled_on),
+              amount: formatMoney(suggestion.settlement.cash),
+              account: accountName(suggestion.settlement.bank_account_id),
+            })}
             <Button
               type="button"
               variant="ghost"
               className="btn-small"
               icon={CheckIcon}
-              aria-label={`Conciliar com a baixa de ${suggestion.entry_description}`}
+              aria-label={t("Reconcile with the settlement of {description}", { description: suggestion.entry_description })}
               disabled={busy}
               onClick={() => onMatch({ settlement_id: suggestion.settlement.id })}
             >
-              Conciliar
+              {t("Reconcile")}
             </Button>
           </li>
         ) : (
           <li key={suggestion.transfer.id}>
-            Transferência de {formatMoney(suggestion.transfer.amount)} em {formatDate(suggestion.transfer.occurred_on)}
+            {t("Transfer of {amount} on {date}", { amount: formatMoney(suggestion.transfer.amount), date: formatDate(suggestion.transfer.occurred_on) })}
             {suggestion.transfer.note ? ` (${suggestion.transfer.note})` : ""}
             <Button
               type="button"
               variant="ghost"
               className="btn-small"
               icon={CheckIcon}
-              aria-label={`Conciliar com a transferência de ${formatMoney(suggestion.transfer.amount)}`}
+              aria-label={t("Reconcile with the transfer of {amount}", { amount: formatMoney(suggestion.transfer.amount) })}
               disabled={busy}
               onClick={() => onMatch({ transfer_id: suggestion.transfer.id })}
             >
-              Conciliar
+              {t("Reconcile")}
             </Button>
           </li>
         ),
@@ -432,6 +437,7 @@ function EntryForm({
   busy: boolean;
   onCreate: (input: { category_id: string; description?: string }) => void;
 }) {
+  const t = useT();
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -443,12 +449,12 @@ function EntryForm({
   }
   return (
     <form className="settle-form" onSubmit={submit}>
-      <h3>{line.amount.startsWith("-") ? "Lançar como conta a pagar, já paga" : "Lançar como conta a receber, já recebida"}</h3>
+      <h3>{line.amount.startsWith("-") ? t("Record as a payable, already paid") : t("Record as a receivable, already received")}</h3>
       <label>
-        Categoria
+        {t("Category")}
         <select name="category_id" required defaultValue="">
           <option value="" disabled>
-            Escolha uma categoria
+            {t("Choose a category")}
           </option>
           {categories.map((category) => (
             <option key={category.id} value={category.id}>
@@ -458,14 +464,14 @@ function EntryForm({
         </select>
       </label>
       <label>
-        Descrição
+        {t("Description")}
         <input name="description" maxLength={200} autoComplete="off" defaultValue={line.description} />
       </label>
       <p className="muted">
-        Vence e é baixado em {formatDate(line.posted_on)}, por {formatMoney(line.amount.replace("-", ""))}, na conta do extrato.
+        {t("Due and settled on {date}, for {amount}, in the statement account.", { date: formatDate(line.posted_on), amount: formatMoney(line.amount.replace("-", "")) })}
       </p>
       <Button type="submit" icon={CheckIcon} disabled={busy}>
-        Criar lançamento
+        {t("Create entry")}
       </Button>
     </form>
   );

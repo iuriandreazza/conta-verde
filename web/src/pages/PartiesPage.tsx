@@ -184,7 +184,7 @@ export function PartiesPage() {
                 setFilters({ ...filters, kind: event.target.value as PartyFilters["kind"] })
               }
             >
-              <option value="">{t("All")}</option>
+              <option value="">{t("Any")}</option>
               <option value="customer">{t("Customers")}</option>
               <option value="supplier">{t("Suppliers")}</option>
               <option value="carrier">{t("Carriers")}</option>
@@ -204,7 +204,7 @@ export function PartiesPage() {
             />
           </label>
           <label>
-            {t("Order")}
+            {t("Sort order")}
             <select
               value={filters.sort}
               onChange={(event) =>
@@ -329,7 +329,7 @@ export function PartiesPage() {
                             setRegistryNotice(null);
                           }}
                         >
-                          {t("Edit")}
+                          {t("Change")}
                         </Button>
                       )}
                       <Button

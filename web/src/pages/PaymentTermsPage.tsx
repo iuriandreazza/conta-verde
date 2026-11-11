@@ -132,13 +132,13 @@ export function PaymentTermsPage() {
                   setFilters({ ...filters, active: event.target.value as PaymentTermFilters["active"] })
                 }
               >
-                <option value="">{t("Active and inactive")}</option>
+                <option value="">{t("Active and inactive records")}</option>
                 <option value="true">{t("Active only")}</option>
                 <option value="false">{t("Inactive only")}</option>
               </select>
             </label>
             <label>
-              {t("Order")}
+              {t("Sort order")}
               <select
                 value={filters.sort}
                 onChange={(event) =>
@@ -212,7 +212,7 @@ export function PaymentTermsPage() {
                                 setSaved(null);
                               }}
                             >
-                              {t("Edit")}
+                              {t("Change")}
                             </Button>
                           )}
                           <Button

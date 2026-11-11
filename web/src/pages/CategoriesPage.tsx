@@ -184,7 +184,7 @@ export function CategoriesPage() {
                             disabled={saving}
                             onClick={() => startEditing(category)}
                           >
-                            {t("Edit")}
+                            {t("Change")}
                           </Button>
                         )}
                         {canWrite && category.active && !isTransfer(category) && category.level < 5 && (

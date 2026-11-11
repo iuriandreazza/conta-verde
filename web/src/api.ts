@@ -1,5 +1,15 @@
 import { noteAnswer } from "./pwa/status";
 import { contentTypeOf } from "./lib/attachments";
+import { DEFAULT_LANGUAGE, LANGUAGES, translate } from "./i18n";
+
+/**
+ * Says a text the web writes itself (never one the server sent) in the person's language. This runs outside React, where the
+ * provider's context is out of reach, so it reads the language the provider put on `<html lang>`.
+ */
+function t(key: string): string {
+  const spoken = typeof document === "undefined" ? undefined : LANGUAGES.find((language) => language.code === document.documentElement.lang);
+  return translate(spoken?.code ?? DEFAULT_LANGUAGE, key);
+}
 
 export interface User {
   id: string;
@@ -2060,8 +2070,8 @@ export class ApiError extends Error {
 export function errorMessage(failure: unknown): string {
   // `fetch` rejects with a TypeError when the network is gone (Chrome says "Failed to fetch", Firefox "NetworkError…", Safari "Load
   // failed"): it is not "something went wrong", and nothing is saved offline. A TypeError that is a bug stays "something went wrong".
-  if (failure instanceof TypeError && /fetch|network|load failed/i.test(failure.message)) return "Sem conexão com o servidor. Confira a internet e tente de novo: não dá para salvar offline.";
-  return failure instanceof ApiError ? failure.message : "Algo deu errado, tente novamente.";
+  if (failure instanceof TypeError && /fetch|network|load failed/i.test(failure.message)) return t("No connection to the server. Check the internet and try again: nothing can be saved offline.");
+  return failure instanceof ApiError ? failure.message : t("Something went wrong, try again.");
 }
 
 let onSessionLost: (() => void) | null = null;
@@ -2096,7 +2106,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     }
     // A 2xx that is not JSON did not come from the API (a proxy aimed at another server, or a
     // fallback serving the app for /api); passing it on as data would crash whatever reads it.
-    throw new ApiError(response.status, "Resposta inesperada do servidor: confira se o endereço da API está certo.");
+    throw new ApiError(response.status, t("Unexpected reply from the server: check that the API address is right."));
   }
   return body as T;
 }
@@ -2128,7 +2138,7 @@ async function fetchFile(path: string, fallbackName: string): Promise<SavedFile>
   }
   // A 2xx that is a page did not come from the API (a fallback serving the app for /api): it would be saved as a file.
   if ((response.headers.get("Content-Type") ?? "").startsWith("text/html")) {
-    throw new ApiError(response.status, "Resposta inesperada do servidor: confira se o endereço da API está certo.");
+    throw new ApiError(response.status, t("Unexpected reply from the server: check that the API address is right."));
   }
   const named = /filename="([^"]+)"/.exec(response.headers.get("Content-Disposition") ?? "");
   return { blob: await response.blob(), filename: named?.[1] ?? fallbackName };

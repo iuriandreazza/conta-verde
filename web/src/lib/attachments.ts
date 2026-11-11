@@ -1,3 +1,5 @@
+import { DEFAULT_LANGUAGE, translate, type Translate } from "../i18n";
+
 /** The largest file an entry takes (ADR 0036): the API refuses more, this spares the upload. */
 export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 export const MAX_ENTRY_ATTACHMENTS = 20;
@@ -34,10 +36,13 @@ export function formatSize(bytes: number): string {
 }
 
 /** Why a file will not be sent, in words for the person, or `null` when it may be. */
-export function fileProblem(file: { name: string; size: number }): string | null {
-  if (file.size === 0) return `${file.name} está vazio.`;
+export function fileProblem(
+  file: { name: string; size: number },
+  t: Translate = (key, params) => translate(DEFAULT_LANGUAGE, key, params),
+): string | null {
+  if (file.size === 0) return t("{name} is empty.", { name: file.name });
   if (file.size > MAX_ATTACHMENT_BYTES) {
-    return `${file.name} passa de ${formatSize(MAX_ATTACHMENT_BYTES)}, o limite de cada arquivo.`;
+    return t("{name} is over {size}, the limit for each file.", { name: file.name, size: formatSize(MAX_ATTACHMENT_BYTES) });
   }
   return null;
 }

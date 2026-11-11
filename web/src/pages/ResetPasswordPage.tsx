@@ -5,6 +5,7 @@ import { useAuth } from "../auth";
 import { Button } from "../components/Button";
 import { Notice } from "../components/Notice";
 import { PasswordField } from "../components/PasswordField";
+import { useT } from "../i18n";
 import { usePageTitle } from "../lib/usePageTitle";
 
 /**
@@ -12,8 +13,9 @@ import { usePageTitle } from "../lib/usePageTitle";
  * account ends, so the person signs in again after it.
  */
 export function ResetPasswordPage() {
+  const t = useT();
   const { token = "" } = useParams();
-  usePageTitle("Nova senha");
+  usePageTitle(t("New password"));
   const { refresh } = useAuth();
   const [done, setDone] = useState(false);
   const [error, setError] = useState<{ message: string; gone: boolean } | null>(null);
@@ -39,27 +41,27 @@ export function ResetPasswordPage() {
 
   return (
     <section className="card narrow">
-      <h1>Nova senha</h1>
+      <h1>{t("New password")}</h1>
       {done ? (
         <>
-          <Notice tone="success" message="Senha alterada. Entre com a nova senha." />
+          <Notice tone="success" message={t("Password changed. Sign in with the new password.")} />
           <p>
-            <Link to="/login">Entrar</Link>
+            <Link to="/login">{t("Sign in")}</Link>
           </p>
         </>
       ) : (
         <>
-          <p className="page-lead">Escolha a nova senha da sua conta.</p>
+          <p className="page-lead">{t("Choose your account's new password.")}</p>
           <form onSubmit={handleSubmit}>
-            <PasswordField registering label="Nova senha" />
+            <PasswordField registering label={t("New password")} />
             <Notice message={error?.message ?? null} />
             <Button type="submit" pending={submitting}>
-              Salvar nova senha
+              {t("Save new password")}
             </Button>
           </form>
           {error?.gone && (
             <p>
-              <Link to="/forgot-password">Pedir um novo link</Link>
+              <Link to="/forgot-password">{t("Ask for a new link")}</Link>
             </p>
           )}
         </>

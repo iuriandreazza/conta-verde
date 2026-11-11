@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useT } from "../i18n";
 import { isIsoDate } from "../lib/entryInstallments";
 import { CUSTOM, PRESETS, presetOf, shiftSpan, type Span } from "../lib/period";
 import { Button } from "./Button";
@@ -17,6 +18,7 @@ interface PeriodFilterProps {
  * control for every page that asks for a span, so the same question is answered the same way.
  */
 export function PeriodFilter({ value, onChange, today }: PeriodFilterProps) {
+  const t = useT();
   // A date input passes through years like 0002 while the year is typed: such a span is not stepped.
   const valid = isIsoDate(value.from) && isIsoDate(value.to) && value.from >= "1000-01-01" && value.from <= value.to;
   // Two presets can be the same span (this quarter and "this month and the next two" in January,
@@ -26,21 +28,21 @@ export function PeriodFilter({ value, onChange, today }: PeriodFilterProps) {
   const stillPicked = valid && pickedPreset !== undefined && presetOf(value, today, [pickedPreset]) === picked;
   const current = !valid ? CUSTOM : stillPicked ? picked : presetOf(value, today);
   return (
-    <div className="period-filter" role="group" aria-label="Filtro de período">
+    <div className="period-filter" role="group" aria-label={t("Period filter")}>
       <Button
         type="button"
         variant="ghost"
         iconOnly
         icon={ChevronLeftIcon}
         className="period-step"
-        aria-label="Período anterior"
+        aria-label={t("Previous period")}
         disabled={!valid}
         onClick={() => onChange(shiftSpan(value, -1))}
       >
-        Período anterior
+        {t("Previous period")}
       </Button>
       <label>
-        Período
+        {t("Period")}
         <select
           value={current}
           onChange={(event) => {
@@ -51,10 +53,10 @@ export function PeriodFilter({ value, onChange, today }: PeriodFilterProps) {
         >
           {PRESETS.map((preset) => (
             <option key={preset.key} value={preset.key}>
-              {preset.label}
+              {t(preset.label)}
             </option>
           ))}
-          <option value={CUSTOM}>Personalizado</option>
+          <option value={CUSTOM}>{t("Custom")}</option>
         </select>
       </label>
       <Button
@@ -63,18 +65,18 @@ export function PeriodFilter({ value, onChange, today }: PeriodFilterProps) {
         iconOnly
         icon={ChevronRightIcon}
         className="period-step"
-        aria-label="Próximo período"
+        aria-label={t("Next period")}
         disabled={!valid}
         onClick={() => onChange(shiftSpan(value, 1))}
       >
-        Próximo período
+        {t("Next period")}
       </Button>
       <label>
-        De
+        {t("From")}
         <input type="date" value={value.from} onChange={(event) => onChange({ ...value, from: event.target.value })} />
       </label>
       <label>
-        Até
+        {t("To")}
         <input type="date" value={value.to} onChange={(event) => onChange({ ...value, to: event.target.value })} />
       </label>
     </div>

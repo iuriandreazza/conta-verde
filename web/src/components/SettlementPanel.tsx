@@ -23,6 +23,7 @@ import { CheckIcon } from "./icons/check";
 import { MailPanel } from "./MailPanel";
 import { Notice } from "./Notice";
 import { Spinner } from "./Spinner";
+import { useT } from "../i18n";
 
 const BADGES: Record<InstallmentStatus, string> = {
   open: "badge badge-dot badge-muted",
@@ -54,6 +55,7 @@ export function SettlementPanel({
   canWrite,
   onChanged,
 }: SettlementPanelProps) {
+  const t = useT();
   const [settlements, setSettlements] = useState<Settlement[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
@@ -103,24 +105,24 @@ export function SettlementPanel({
       // `1.000` could be a thousand or one: the person says which, as in every amount field.
       const cents = isAmbiguousDecimal(typed) ? null : toCents(typed);
       if (cents === null) {
-        setFormError(`${label} precisa estar em reais e centavos, por exemplo 1.234,50.`);
+        setFormError(t("{label} must be in reais and cents, for example 1.234,50.", { label }));
         return null;
       }
       return centsToApi(cents);
     };
-    const applied = money("applied", "O valor baixado");
-    const interest = money("interest", "Os juros");
-    const fine = money("fine", "A multa");
-    const discount = money("discount", "O desconto");
+    const applied = money("applied", t("The amount settled"));
+    const interest = money("interest", t("The interest"));
+    const fine = money("fine", t("The fine"));
+    const discount = money("discount", t("The discount"));
     if (applied === undefined) {
-      setFormError("Informe o valor baixado.");
+      setFormError(t("Give the amount settled."));
       return;
     }
     if (applied === null || interest === null || fine === null || discount === null) {
       return;
     }
     if (!isIsoDate(field("settled_on"))) {
-      setFormError("Informe a data da baixa.");
+      setFormError(t("Give the settlement date."));
       return;
     }
     const input: SettlementInput = {
@@ -138,7 +140,7 @@ export function SettlementPanel({
     setSaved(null);
     try {
       const made = await api.settleInstallment(companyId, entry.id, input);
-      setSaved(`Baixa de ${formatMoney(made.cash)} registrada.`);
+      setSaved(t("Settlement of {amount} recorded.", { amount: formatMoney(made.cash) }));
       setFormVersion((version) => version + 1);
       await load();
       onChanged();
@@ -178,12 +180,12 @@ export function SettlementPanel({
       <table>
         <thead>
           <tr>
-            <th>Parcela</th>
-            <th>Vencimento</th>
-            <th className="num">Valor</th>
-            <th className="num">Baixado</th>
-            <th className="num">Saldo</th>
-            <th>Situação</th>
+            <th>{t("Installment")}</th>
+            <th>{t("Due date")}</th>
+            <th className="num">{t("Amount")}</th>
+            <th className="num">{t("Settled")}</th>
+            <th className="num">{t("Balance")}</th>
+            <th>{t("Status")}</th>
           </tr>
         </thead>
         <tbody>
@@ -197,7 +199,7 @@ export function SettlementPanel({
                 <td className="num">{formatMoney(item.settled)}</td>
                 <td className="num">{formatMoney(balance(item))}</td>
                 <td>
-                  <span className={BADGES[status]}>{STATUS_LABELS[status]}</span>
+                  <span className={BADGES[status]}>{t(STATUS_LABELS[status])}</span>
                 </td>
               </tr>
             );
@@ -208,7 +210,7 @@ export function SettlementPanel({
       <Notice message={error} />
       {settlements === null && error === null ? (
         <p role="status" className="status">
-          <Spinner /> Carregando…
+          <Spinner /> {t("Loading…")}
         </p>
       ) : (
         settlements !== null &&
@@ -216,15 +218,20 @@ export function SettlementPanel({
           <ul className="history">
             {settlements.map((settlement) => (
               <li key={settlement.id} className={settlement.reversed ? "muted" : undefined}>
-                Parcela {settlement.installment}, {formatDate(settlement.settled_on)}:{" "}
-                {formatMoney(settlement.applied)} baixado
-                {settlement.interest !== "0" && `, juros ${formatMoney(settlement.interest)}`}
-                {settlement.fine !== "0" && `, multa ${formatMoney(settlement.fine)}`}
-                {settlement.discount !== "0" && `, desconto ${formatMoney(settlement.discount)}`}; saiu{" "}
-                {formatMoney(settlement.cash)} da conta{" "}
-                {banks.find((bank) => bank.id === settlement.bank_account_id)?.name ?? ""}
+                {t("Installment {number}, {date}: {amount} settled", {
+                  number: settlement.installment,
+                  date: formatDate(settlement.settled_on),
+                  amount: formatMoney(settlement.applied),
+                })}
+                {settlement.interest !== "0" && t(", interest {amount}", { amount: formatMoney(settlement.interest) })}
+                {settlement.fine !== "0" && t(", fine {amount}", { amount: formatMoney(settlement.fine) })}
+                {settlement.discount !== "0" && t(", discount {amount}", { amount: formatMoney(settlement.discount) })}
+                {t("; {amount} left account {account}", {
+                  amount: formatMoney(settlement.cash),
+                  account: banks.find((bank) => bank.id === settlement.bank_account_id)?.name ?? "",
+                })}
                 {settlement.reversed ? (
-                  <span className="badge badge-muted"> Estornada</span>
+                  <span className="badge badge-muted">{` ${t("Reversed")}`}</span>
                 ) : (
                   canWrite && (
                     <>
@@ -232,23 +239,23 @@ export function SettlementPanel({
                         type="button"
                         variant="ghost"
                         className="btn-small"
-                        aria-label={`Estornar a baixa de ${formatMoney(settlement.applied)} da parcela ${settlement.installment}`}
+                        aria-label={t("Reverse the settlement of {amount} of installment {number}", { amount: formatMoney(settlement.applied), number: settlement.installment })}
                         pending={reversingId === settlement.id}
                         disabled={reversingId !== null}
                         onClick={() => void reverse(settlement)}
                       >
-                        Estornar
+                        {t("Reverse")}
                       </Button>
                       {entry.kind === "receivable" && (
                         <Button
                           type="button"
                           variant="ghost"
                           className="btn-small"
-                          aria-label={`Enviar o comprovante da baixa de ${formatMoney(settlement.applied)} da parcela ${settlement.installment}`}
+                          aria-label={t("Send the receipt of the settlement of {amount} of installment {number}", { amount: formatMoney(settlement.applied), number: settlement.installment })}
                           aria-expanded={mailingId === settlement.id}
                           onClick={() => setMailingId(mailingId === settlement.id ? null : settlement.id)}
                         >
-                          Enviar comprovante
+                          {t("Send receipt")}
                         </Button>
                       )}
                     </>
@@ -256,7 +263,7 @@ export function SettlementPanel({
                 )}
                 {mailingId === settlement.id && (
                   <MailPanel
-                    what="o comprovante"
+                    what={t("the receipt")}
                     send={(to) => api.sendPaymentReceipt(companyId, entry.id, settlement.id, to)}
                     loadHistory={() => api.paymentReceiptMails(companyId, entry.id, settlement.id).then((reply) => reply.items)}
                     onClose={() => setMailingId(null)}
@@ -270,12 +277,12 @@ export function SettlementPanel({
 
       {canWrite &&
         (open.length === 0 ? (
-          <p className="muted">Todas as parcelas estão pagas.</p>
+          <p className="muted">{t("All the installments are paid.")}</p>
         ) : (
           <form onSubmit={handleSubmit} key={formVersion} className="settle-form">
-            <h3>Baixar uma parcela</h3>
+            <h3>{t("Settle an installment")}</h3>
             <label>
-              Parcela
+              {t("Installment")}
               <select
                 name="installment"
                 value={installment}
@@ -283,17 +290,17 @@ export function SettlementPanel({
               >
                 {open.map((item) => (
                   <option key={item.number} value={item.number}>
-                    {item.number} — vence em {formatDate(item.due_date)}, saldo {formatMoney(balance(item))}
+                    {t("{number} — due on {date}, balance {amount}", { number: item.number, date: formatDate(item.due_date), amount: formatMoney(balance(item)) })}
                   </option>
                 ))}
               </select>
             </label>
             <label>
-              Data da baixa
+              {t("Settlement date")}
               <input name="settled_on" type="date" required defaultValue={today} />
             </label>
             <label>
-              Valor baixado
+              {t("Amount settled")}
               <input
                 // Only this field starts over when the balance it proposes changes: the rest of what
                 // was typed, and the focus on the select, stay.
@@ -305,22 +312,22 @@ export function SettlementPanel({
               />
             </label>
             <label>
-              Juros
+              {t("Interest")}
               <input name="interest" inputMode="decimal" autoComplete="off" placeholder="0,00" />
             </label>
             <label>
-              Multa
+              {t("Fine")}
               <input name="fine" inputMode="decimal" autoComplete="off" placeholder="0,00" />
             </label>
             <label>
-              Desconto
+              {t("Discount")}
               <input name="discount" inputMode="decimal" autoComplete="off" placeholder="0,00" />
             </label>
             <label>
-              Conta
+              {t("Account")}
               <select name="bank_account_id" required defaultValue="">
                 <option value="" disabled>
-                  Escolha uma conta
+                  {t("Choose an account")}
                 </option>
                 {activeBanks.map((bank) => (
                   <option key={bank.id} value={bank.id}>
@@ -330,9 +337,9 @@ export function SettlementPanel({
               </select>
             </label>
             <label>
-              Forma de pagamento
+              {t("Payment method")}
               <select name="payment_method_id" defaultValue="">
-                <option value="">Nenhuma</option>
+                <option value="">{t("No payment method")}</option>
                 {activeMethods.map((method) => (
                   <option key={method.id} value={method.id}>
                     {method.name}
@@ -343,7 +350,7 @@ export function SettlementPanel({
             <Notice message={formError} />
             <Notice message={saved} tone="success" />
             <Button type="submit" icon={CheckIcon} pending={saving}>
-              Baixar
+              {t("Settle")}
             </Button>
           </form>
         ))}

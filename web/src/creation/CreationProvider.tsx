@@ -4,6 +4,7 @@ import { BadgeAlertIcon } from "../components/icons/badge-alert";
 import { Button } from "../components/Button";
 import { CheckIcon } from "../components/icons/check";
 import { Sheet } from "../components/Sheet";
+import { msg, useT } from "../i18n";
 import { EntryCreator } from "./EntryCreator";
 import { SaleCreator } from "./SaleCreator";
 import { PurchaseCreator } from "./PurchaseCreator";
@@ -52,34 +53,35 @@ export interface CreatorProps {
   onCancel: () => void;
 }
 
-const ENTRY_TITLES = { receivable: "Nova receita", payable: "Nova despesa" } as const;
+const ENTRY_TITLES = { receivable: msg("New revenue"), payable: msg("New expense") } as const;
 
+/** The titles are `msg` keys: the sheet translates the one it shows. */
 const CREATORS: Record<
   CreateKind,
   { title: string | ((options: CreateOptions) => string); Creator: (props: CreatorProps) => ReactNode }
 > = {
-  entry: { title: (options) => (options.kind ? ENTRY_TITLES[options.kind] : "Novo lançamento"), Creator: EntryCreator },
-  sale: { title: "Novo pedido", Creator: SaleCreator },
-  purchase: { title: "Nova compra", Creator: PurchaseCreator },
-  stockMovement: { title: "Novo movimento de estoque", Creator: StockMovementCreator },
-  inventoryCount: { title: (options) => (options.viaSheet ? "Novo inventário via planilha" : "Novo inventário"), Creator: InventoryCountCreator },
-  purchaseImport: { title: "Entrada por XML (NF-e)", Creator: PurchaseImportCreator },
-  quote: { title: "Novo orçamento", Creator: QuoteCreator },
-  contract: { title: "Novo contrato", Creator: ContractCreator },
-  commissionRule: { title: "Nova regra de comissão", Creator: CommissionRuleCreator },
-  priceList: { title: "Nova tabela de preço", Creator: PriceListCreator },
-  category: { title: "Nova categoria", Creator: CategoryCreator },
-  recurrence: { title: "Nova recorrência", Creator: RecurrenceCreator },
-  invite: { title: "Convidar alguém", Creator: InviteCreator },
-  apiKey: { title: "Nova chave de API", Creator: ApiKeyCreator },
-  webhook: { title: "Novo webhook", Creator: WebhookCreator },
-  bankAccount: { title: "Nova conta bancária", Creator: BankAccountCreator },
-  costCenter: { title: "Novo centro de custo", Creator: CostCenterCreator },
-  paymentMethod: { title: "Nova forma de pagamento", Creator: PaymentMethodCreator },
-  paymentTerm: { title: "Novo prazo de pagamento", Creator: PaymentTermCreator },
-  party: { title: "Novo cliente ou fornecedor", Creator: PartyCreator },
-  product: { title: "Novo produto ou serviço", Creator: ProductCreator },
-  transfer: { title: "Nova transferência", Creator: TransferCreator },
+  entry: { title: (options) => (options.kind ? ENTRY_TITLES[options.kind] : msg("New entry")), Creator: EntryCreator },
+  sale: { title: msg("New order"), Creator: SaleCreator },
+  purchase: { title: msg("New purchase"), Creator: PurchaseCreator },
+  stockMovement: { title: msg("New stock movement"), Creator: StockMovementCreator },
+  inventoryCount: { title: (options) => (options.viaSheet ? msg("New inventory count from a spreadsheet") : msg("New inventory count")), Creator: InventoryCountCreator },
+  purchaseImport: { title: msg("Entry from XML (NF-e)"), Creator: PurchaseImportCreator },
+  quote: { title: msg("New quote"), Creator: QuoteCreator },
+  contract: { title: msg("New contract"), Creator: ContractCreator },
+  commissionRule: { title: msg("New commission rule"), Creator: CommissionRuleCreator },
+  priceList: { title: msg("New price list"), Creator: PriceListCreator },
+  category: { title: msg("New category"), Creator: CategoryCreator },
+  recurrence: { title: msg("New recurrence"), Creator: RecurrenceCreator },
+  invite: { title: msg("Invite someone"), Creator: InviteCreator },
+  apiKey: { title: msg("New API key"), Creator: ApiKeyCreator },
+  webhook: { title: msg("New webhook"), Creator: WebhookCreator },
+  bankAccount: { title: msg("New bank account"), Creator: BankAccountCreator },
+  costCenter: { title: msg("New cost center"), Creator: CostCenterCreator },
+  paymentMethod: { title: msg("New payment method"), Creator: PaymentMethodCreator },
+  paymentTerm: { title: msg("New payment term"), Creator: PaymentTermCreator },
+  party: { title: msg("New customer or supplier"), Creator: PartyCreator },
+  product: { title: msg("New product or service"), Creator: ProductCreator },
+  transfer: { title: msg("New transfer"), Creator: TransferCreator },
 };
 
 interface Creation {
@@ -98,6 +100,7 @@ const CONFIRMATION_MS = 6000;
  * the register asked for, and, once it is saved, says so and lets the page read its list again.
  */
 export function CreationProvider({ companyId, children }: { companyId: string | undefined; children: ReactNode }) {
+  const t = useT();
   const [kind, setKind] = useState<CreateKind | null>(null);
   // An object, so the same words twice in a row are a new confirmation with a new timer.
   const [confirmation, setConfirmation] = useState<{ text: string; id: number; tone: "success" | "warning" } | null>(null);
@@ -149,14 +152,14 @@ export function CreationProvider({ companyId, children }: { companyId: string | 
     <CreationContext.Provider value={value}>
       {children}
       {companyId !== undefined && (
-        <Sheet open={kind !== null} title={current === null ? "" : typeof current.title === "function" ? current.title(options) : current.title} onClose={closeUnlessSaving} explicitClose={result !== null} locked={saving}>
+        <Sheet open={kind !== null} title={current === null ? "" : t(typeof current.title === "function" ? current.title(options) : current.title)} onClose={closeUnlessSaving} explicitClose={result !== null} locked={saving}>
           {kind !== null && current !== null && result !== null && (
             <div className="creation-result">
               {result}
               <div className="form-footer">
                 <span />
                 <Button type="button" icon={CheckIcon} onClick={closeUnlessSaving}>
-                  Concluir
+                  {t("Done")}
                 </Button>
               </div>
             </div>
@@ -209,7 +212,7 @@ export function CreationProvider({ companyId, children }: { companyId: string | 
               <span>{confirmation.text}</span>
               {confirmation.tone === "warning" && (
                 <button type="button" className="toast-dismiss" onClick={() => setConfirmation(null)}>
-                  Dispensar
+                  {t("Dismiss")}
                 </button>
               )}
             </motion.div>

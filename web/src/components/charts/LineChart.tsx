@@ -1,5 +1,6 @@
 import { motion } from "motion/react";
 import { useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useT } from "../../i18n";
 import { niceRange, rangeTicks, tickLabel, toDrawing, useElementWidth } from "../../lib/chart";
 import { formatMoney } from "../../lib/decimal";
 import type { LegendItem } from "./Legend";
@@ -16,19 +17,20 @@ const END_LABEL_ROOM = 76;
 
 /**
  * Lines on one axis that may go below zero, with a crosshair that snaps to the nearest point. `unit`
- * names what a point is, for the keyboard hint ("mês", "dia").
+ * names what a point is, for the keyboard hint ("month" unless said), already in the person's language.
  */
 export function LineChart({
   points,
   series,
   label,
-  unit = "mês",
+  unit,
 }: {
   points: FlowPoint[];
   series: LegendItem[];
   label: string;
   unit?: string;
 }) {
+  const t = useT();
   const bodyRef = useRef<HTMLDivElement>(null);
   const width = useElementWidth(bodyRef);
   const [active, setActive] = useState<number | null>(null);
@@ -64,7 +66,7 @@ export function LineChart({
         width={width}
         height={HEIGHT}
         role="group"
-        aria-label={`${label}. Use as setas para ver cada ${unit}.`}
+        aria-label={t("{label}. Use the arrow keys to see each {unit}.", { label, unit: unit ?? t("month") })}
         tabIndex={0}
         onKeyDown={move}
         onFocus={() => setActive((current) => current ?? points.length - 1)}

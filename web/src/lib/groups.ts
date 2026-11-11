@@ -17,7 +17,7 @@ export const CASH_FLOW_GROUPS: { key: CashFlowGroup; label: string }[] = [
   { key: "operating", label: msg("Operating") },
   { key: "investing", label: msg("Investing") },
   { key: "financing", label: msg("Financing") },
-  { key: "transfer", label: msg("Transfer") },
+  { key: "transfer", label: msg("Transfer group") },
 ];
 
 export function dreLabel(key: string, t: Translate): string {

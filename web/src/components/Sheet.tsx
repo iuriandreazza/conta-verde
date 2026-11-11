@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from "motion/react";
 import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { useT } from "../i18n";
 import { Button } from "./Button";
 import { XIcon } from "./icons/x";
 
@@ -38,6 +39,7 @@ const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), selec
  * Escape and the shade close it, and the focus returns to what opened it.
  */
 export function Sheet({ open, title, onClose, explicitClose = false, locked = false, children }: SheetProps) {
+  const t = useT();
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   const opener = useRef<HTMLElement | null>(null);
@@ -166,7 +168,7 @@ export function Sheet({ open, title, onClose, explicitClose = false, locked = fa
             <header className="sheet-head" inert={confirming !== null || undefined}>
               <h2 id={titleId}>{title}</h2>
               <Button type="button" variant="ghost" icon={XIcon} onClick={() => guard(onClose)}>
-                Fechar
+                {t("Close")}
               </Button>
             </header>
             <SheetGuard.Provider value={guardValue}>
@@ -177,11 +179,11 @@ export function Sheet({ open, title, onClose, explicitClose = false, locked = fa
             {confirming && (
               <div className="sheet-confirm" role="alertdialog" aria-modal="true" aria-labelledby={`${titleId}-confirm`} aria-describedby={`${titleId}-confirm-text`}>
                 <div className="sheet-confirm-box">
-                  <h3 id={`${titleId}-confirm`}>Descartar edições?</h3>
-                  <p id={`${titleId}-confirm-text`} className="muted">O que você preencheu ainda não foi salvo.</p>
+                  <h3 id={`${titleId}-confirm`}>{t("Discard edits?")}</h3>
+                  <p id={`${titleId}-confirm-text`} className="muted">{t("What you filled in has not been saved yet.")}</p>
                   <div className="form-actions">
                     <Button ref={confirmRef} type="button" variant="ghost" onClick={keepEditing}>
-                      Voltar e editar
+                      {t("Go back and edit")}
                     </Button>
                     <Button
                       type="button"
@@ -191,7 +193,7 @@ export function Sheet({ open, title, onClose, explicitClose = false, locked = fa
                         action();
                       }}
                     >
-                      Descartar e fechar
+                      {t("Discard and close")}
                     </Button>
                   </div>
                 </div>

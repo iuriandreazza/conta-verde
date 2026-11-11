@@ -217,7 +217,7 @@ export function BankAccountsPage() {
                 setFilters({ ...filters, kind: event.target.value as BankAccountFilters["kind"] })
               }
             >
-              <option value="">{t("All accounts")}</option>
+              <option value="">{t("Every account")}</option>
               {BANK_ACCOUNT_KINDS.map((option) => (
                 <option key={option.key} value={option.key}>
                   {t(option.label)}
@@ -239,7 +239,7 @@ export function BankAccountsPage() {
             </select>
           </label>
           <label>
-            {t("Order")}
+            {t("Sort order")}
             <select
               value={filters.sort}
               onChange={(event) =>
@@ -338,7 +338,7 @@ export function BankAccountsPage() {
                               setSaved(null);
                             }}
                           >
-                            {t("Edit")}
+                            {t("Change")}
                           </Button>
                         )}
                         <Button

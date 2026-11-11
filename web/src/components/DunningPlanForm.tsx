@@ -6,8 +6,9 @@ import { PlusIcon } from "./icons/plus";
 import { XIcon } from "./icons/x";
 import { InfoTip } from "./InfoTip";
 import { Notice } from "./Notice";
+import { msg, useT, type Translate } from "../i18n";
 
-const CHANNEL_LABELS: Record<DunningChannel, string> = { email: "E-mail", whatsapp: "WhatsApp" };
+const CHANNEL_LABELS: Record<DunningChannel, string> = { email: msg("E-mail"), whatsapp: msg("WhatsApp") };
 
 type When = "before" | "on" | "after";
 
@@ -39,12 +40,15 @@ function toRule(row: Row): DunningRule | null {
 }
 
 /** Describes a rule in words, for the list of what was sent. */
-export function describeRule(days: number): string {
+export function describeRule(days: number, t: Translate): string {
   if (days === 0) {
-    return "no vencimento";
+    return t("on the due date");
   }
-  const unit = Math.abs(days) === 1 ? "dia" : "dias";
-  return days < 0 ? `${-days} ${unit} antes` : `${days} ${unit} depois`;
+  const count = Math.abs(days);
+  if (days < 0) {
+    return count === 1 ? t("{count} day before", { count }) : t("{count} days before", { count });
+  }
+  return count === 1 ? t("{count} day after", { count }) : t("{count} days after", { count });
 }
 
 interface DunningPlanFormProps {
@@ -59,6 +63,7 @@ interface DunningPlanFormProps {
  * rules, saved as a whole. A reminder goes out on the due date moved by the rule's days.
  */
 export function DunningPlanForm({ companyId, plan, canWrite, onSaved }: DunningPlanFormProps) {
+  const t = useT();
   const [enabled, setEnabled] = useState(plan.enabled);
   const [rows, setRows] = useState<Row[]>(plan.rules.map(toRow));
   const [nextKey, setNextKey] = useState(plan.rules.length);
@@ -77,7 +82,7 @@ export function DunningPlanForm({ companyId, plan, canWrite, onSaved }: DunningP
     }
     const rules = rows.map(toRule);
     if (rules.some((rule) => rule === null)) {
-      setError("Informe quantos dias, um número inteiro de 1 em diante, em cada lembrete.");
+      setError(t("Give how many days, a whole number from 1 up, in each reminder."));
       return;
     }
     setSaving(true);
@@ -90,7 +95,7 @@ export function DunningPlanForm({ companyId, plan, canWrite, onSaved }: DunningP
       });
       onSaved(stored);
       setRows(stored.rules.map(toRow));
-      setSaved("Lembretes salvos.");
+      setSaved(t("Reminders saved."));
     } catch (failure) {
       setError(errorMessage(failure));
     } finally {
@@ -101,11 +106,10 @@ export function DunningPlanForm({ companyId, plan, canWrite, onSaved }: DunningP
   return (
     <form onSubmit={(event) => void handleSubmit(event)} className="settle-form">
       <div className="card-title">
-        <h2>Lembretes aos clientes</h2>
-        <InfoTip label="Como funcionam os lembretes">
+        <h2>{t("Reminders to customers")}</h2>
+        <InfoTip label={t("How reminders work")}>
           <p>
-            A cada hora o sistema lembra o cliente das parcelas a receber que ainda têm saldo: uma vez por regra,
-            pelo canal escolhido, com o link para pagar quando há cobrança aberta.
+            {t("Every hour the system reminds the customer of the receivable installments that still have a balance: once per rule, through the chosen channel, with the link to pay when a charge is open.")}
           </p>
         </InfoTip>
       </div>
@@ -118,28 +122,28 @@ export function DunningPlanForm({ companyId, plan, canWrite, onSaved }: DunningP
           disabled={!canWrite}
           onChange={(event) => setEnabled(event.target.checked)}
         />{" "}
-        Enviar lembretes
+        {t("Send reminders")}
       </label>
       {rows.map((row, index) => (
         <div key={row.key} className="rule-row">
           <label>
-            Quando
+            {t("When")}
             <select
-              aria-label={`Quando, lembrete ${index + 1}`}
+              aria-label={t("When, reminder {number}", { number: index + 1 })}
               value={row.when}
               disabled={!canWrite}
               onChange={(event) => change(row.key, { when: event.target.value as When })}
             >
-              <option value="before">Antes do vencimento</option>
-              <option value="on">No vencimento</option>
-              <option value="after">Depois do vencimento</option>
+              <option value="before">{t("Before the due date")}</option>
+              <option value="on">{t("On the due date")}</option>
+              <option value="after">{t("After the due date")}</option>
             </select>
           </label>
           {row.when !== "on" && (
             <label>
-              Dias
+              {t("Days")}
               <input
-                aria-label={`Dias, lembrete ${index + 1}`}
+                aria-label={t("Days, reminder {number}", { number: index + 1 })}
                 inputMode="numeric"
                 value={row.count}
                 disabled={!canWrite}
@@ -148,9 +152,9 @@ export function DunningPlanForm({ companyId, plan, canWrite, onSaved }: DunningP
             </label>
           )}
           <label>
-            Canal
+            {t("Channel")}
             <select
-              aria-label={`Canal, lembrete ${index + 1}`}
+              aria-label={t("Channel, reminder {number}", { number: index + 1 })}
               value={row.channel}
               disabled={!canWrite}
               onChange={(event) => change(row.key, { channel: event.target.value as DunningChannel })}
@@ -159,7 +163,7 @@ export function DunningPlanForm({ companyId, plan, canWrite, onSaved }: DunningP
                 .filter((channel) => channel !== "whatsapp" || plan.whatsapp_available || row.channel === "whatsapp")
                 .map((channel) => (
                   <option key={channel} value={channel}>
-                    {CHANNEL_LABELS[channel]}
+                    {t(CHANNEL_LABELS[channel])}
                   </option>
                 ))}
             </select>
@@ -170,15 +174,15 @@ export function DunningPlanForm({ companyId, plan, canWrite, onSaved }: DunningP
               iconOnly
               icon={XIcon}
               variant="ghost"
-              aria-label={`Remover o lembrete ${index + 1}`}
+              aria-label={t("Remove reminder {number}", { number: index + 1 })}
               onClick={() => setRows((current) => current.filter((candidate) => candidate.key !== row.key))}
             >
-              Remover
+              {t("Remove")}
             </Button>
           )}
         </div>
       ))}
-      {row_hint(rows.length, plan.whatsapp_available)}
+      {row_hint(rows.length, plan.whatsapp_available, t)}
       {canWrite && (
         <div className="form-actions">
           <Button
@@ -190,10 +194,10 @@ export function DunningPlanForm({ companyId, plan, canWrite, onSaved }: DunningP
               setNextKey(nextKey + 1);
             }}
           >
-            Adicionar lembrete
+            {t("Add reminder")}
           </Button>
           <Button type="submit" icon={CheckIcon} pending={saving}>
-            Salvar lembretes
+            {t("Save reminders")}
           </Button>
         </div>
       )}
@@ -201,12 +205,12 @@ export function DunningPlanForm({ companyId, plan, canWrite, onSaved }: DunningP
   );
 }
 
-function row_hint(count: number, whatsappAvailable: boolean) {
+function row_hint(count: number, whatsappAvailable: boolean, t: Translate) {
   return (
     <>
-      {count === 0 && <p className="muted">Nenhum lembrete: adicione um, por exemplo 3 dias antes por e-mail.</p>}
+      {count === 0 && <p className="muted">{t("No reminders: add one, for example 3 days before by e-mail.")}</p>}
       {!whatsappAvailable && (
-        <p className="muted">WhatsApp não está configurado nesta instalação: só o e-mail é enviado.</p>
+        <p className="muted">{t("WhatsApp is not set up in this installation: only e-mail is sent.")}</p>
       )}
     </>
   );

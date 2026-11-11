@@ -1,4 +1,5 @@
 import type { CashFlow } from "../api";
+import { DEFAULT_LANGUAGE, translate, type Translate } from "../i18n";
 import { centsToApi, sumCents } from "../lib/entryInstallments";
 import { addDays } from "../lib/termSplit";
 
@@ -15,9 +16,9 @@ const total = (amounts: (string | null)[]): string =>
 /**
  * What is still open, by how far its due day is from `today`: what fell due before (the cash flow's
  * `past_due`), today, the next week, up to 30 days and up to 60. `flow` is the daily cash flow from
- * `today` through 60 days after it, for every account.
+ * `today` through 60 days after it, for every account. The labels are in the language of `t`, the default one unless given.
  */
-export function dueBuckets(flow: CashFlow, today: string): DueBucket[] {
+export function dueBuckets(flow: CashFlow, today: string, t: Translate = (key) => translate(DEFAULT_LANGUAGE, key)): DueBucket[] {
   const week = addDays(today, 7);
   const month = addDays(today, 30);
   const within = (keep: (start: string) => boolean) => flow.periods.filter((period) => keep(period.start));
@@ -29,15 +30,15 @@ export function dueBuckets(flow: CashFlow, today: string): DueBucket[] {
   });
   return [
     {
-      label: "Vencidas",
+      label: t("Overdue"),
       overdue: true,
       receivable: flow.past_due?.to_receive ?? "0",
       payable: flow.past_due?.to_pay ?? "0",
     },
-    bucket("Hoje", false, within((start) => start === today)),
-    bucket("1 a 7 dias", false, within((start) => start > today && start <= week)),
-    bucket("8 a 30 dias", false, within((start) => start > week && start <= month)),
-    bucket("31 a 60 dias", false, within((start) => start > month)),
+    bucket(t("Today"), false, within((start) => start === today)),
+    bucket(t("1 to 7 days"), false, within((start) => start > today && start <= week)),
+    bucket(t("8 to 30 days"), false, within((start) => start > week && start <= month)),
+    bucket(t("31 to 60 days"), false, within((start) => start > month)),
   ];
 }
 

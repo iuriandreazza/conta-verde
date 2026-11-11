@@ -24,10 +24,11 @@ import { readUpTo } from "../lib/readUpTo";
 import { fitted, monthSpan } from "../lib/reports";
 import { difference } from "../lib/signedAmount";
 import { todayIso } from "../lib/settlement";
+import { msg, useT } from "../i18n";
 
 const SERIES: LegendItem[] = [
-  { name: "A receber", color: "var(--series-1)" },
-  { name: "A pagar", color: "var(--series-2)" },
+  { name: msg("To receive"), color: "var(--series-1)" },
+  { name: msg("To pay"), color: "var(--series-2)" },
 ];
 /** The bars show the biggest groups; the table has all of them. */
 const MAX_BARS = 8;
@@ -35,15 +36,16 @@ const MAX_BARS = 8;
 const MAX_NAMES = 5000;
 
 const GROUPS: { key: EntriesReportFilters["group"]; label: string; none: string }[] = [
-  { key: "category", label: "Categoria", none: "Sem categoria" },
-  { key: "cost_center", label: "Centro de custo", none: "Sem centro de custo" },
-  { key: "party", label: "Cliente ou fornecedor", none: "Sem cliente ou fornecedor" },
+  { key: "category", label: msg("Category"), none: msg("No category") },
+  { key: "cost_center", label: msg("Cost center"), none: msg("No cost center") },
+  { key: "party", label: msg("Customer or supplier"), none: msg("No customer or supplier") },
 ];
 
 const negative = (amount: string) => (amount.startsWith("-") ? "num negative" : "num");
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one instance.
 export function ReportsPage() {
+  const t = useT();
   const { companyId = "" } = useParams();
   const [view, setView] = useState<"entries" | "overdue" | "sales" | "dre">("entries");
   const [names, setNames] = useState<Map<string, string>>(new Map());
@@ -72,21 +74,21 @@ export function ReportsPage() {
   return (
     <>
       <PageHeader
-        title="Relatórios"
-        description="Para onde vai o dinheiro, o que está vencido, o que foi vendido e o resultado do período (DRE)."
+        title={t("Reports")}
+        description={t("Where the money goes, what is overdue, what was sold and the result of the period (income statement).")}
       />
-      <div className="segmented" role="group" aria-label="Relatório">
+      <div className="segmented" role="group" aria-label={t("Report")}>
         <button type="button" aria-pressed={view === "entries"} onClick={() => setView("entries")}>
-          Lançamentos por grupo
+          {t("Entries by group")}
         </button>
         <button type="button" aria-pressed={view === "overdue"} onClick={() => setView("overdue")}>
-          Em atraso
+          {t("Past due")}
         </button>
         <button type="button" aria-pressed={view === "sales"} onClick={() => setView("sales")}>
-          Vendas
+          {t("Sales")}
         </button>
         <button type="button" aria-pressed={view === "dre"} onClick={() => setView("dre")}>
-          DRE
+          {t("P&L")}
         </button>
       </div>
       <Notice message={namesError} />
@@ -104,6 +106,7 @@ export function ReportsPage() {
 }
 
 function EntriesReportView({ companyId, names }: { companyId: string; names: Map<string, string> }) {
+  const t = useT();
   // Today where the person is: the usual periods are counted from it.
   const [today] = useState(() => todayIso());
   const [filters, setFilters] = useState<EntriesReportFilters>(() => ({
@@ -115,9 +118,9 @@ function EntriesReportView({ companyId, names }: { companyId: string; names: Map
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const spanError = !isIsoDate(filters.from) || !isIsoDate(filters.to)
-    ? "Informe o primeiro e o último dia."
+    ? t("Give the first and the last day.")
     : filters.from > filters.to
-      ? "O primeiro dia não pode ser depois do último."
+      ? t("The first day cannot be after the last.")
       : null;
 
   useEffect(() => {
@@ -147,7 +150,9 @@ function EntriesReportView({ companyId, names }: { companyId: string; names: Map
 
   // What is drawn is the reply on screen, grouped as it was asked, not as the select says now.
   const group = GROUPS.find((item) => item.key === (report?.group ?? filters.group)) ?? GROUPS[0];
-  const label = (id: string | null) => (id === null ? group.none : (names.get(id) ?? "—"));
+  const label = (id: string | null) => (id === null ? t(group.none) : (names.get(id) ?? "—"));
+  const series = SERIES.map((item) => ({ ...item, name: t(item.name) }));
+  const groupLabel = t(group.label);
   const rows = report?.rows ?? [];
   const totals = useMemo(() => {
     const receivable = centsToApi(sumCents(rows.map((row) => row.receivable)) ?? 0n);
@@ -161,26 +166,26 @@ function EntriesReportView({ companyId, names }: { companyId: string; names: Map
         <PeriodFilter value={filters} onChange={(span) => setFilters({ ...filters, ...span })} today={today} />
         <div className="filters" role="search">
           <label>
-            Agrupar por
+            {t("Group by")}
             <select
               value={filters.group}
               onChange={(event) => setFilters({ ...filters, group: event.target.value as EntriesReportFilters["group"] })}
             >
               {GROUPS.map((item) => (
                 <option key={item.key} value={item.key}>
-                  {item.label}
+                  {t(item.label)}
                 </option>
               ))}
             </select>
           </label>
           <label>
-            Base
+            {t("Basis")}
             <select
               value={filters.basis}
               onChange={(event) => setFilters({ ...filters, basis: event.target.value as EntriesReportFilters["basis"] })}
             >
-              <option value="competence">Competência (o total de cada lançamento)</option>
-              <option value="due">Vencimento (as parcelas que vencem)</option>
+              <option value="competence">{t("Accrual date (the total of each entry)")}</option>
+              <option value="due">{t("Due date (the installments that fall due)")}</option>
             </select>
           </label>
         </div>
@@ -191,34 +196,34 @@ function EntriesReportView({ companyId, names }: { companyId: string; names: Map
         spanError === null &&
         loading && (
           <p role="status" className="status">
-            <Spinner /> Carregando…
+            <Spinner /> {t("Loading…")}
           </p>
         )
       ) : (
         <>
           <div className="kpi-row">
-            <StatTile label="A receber" value={formatMoney(totals.receivable)} note={`De ${formatDate(report.from)} a ${formatDate(report.to)}.`} />
-            <StatTile label="A pagar" value={formatMoney(totals.payable)} note={report.basis === "due" ? "Parcelas que vencem no período." : "Total dos lançamentos do período."} />
-            <StatTile label="Resultado" value={formatMoney(totals.net)} note="A receber menos a pagar: o que foi lançado, não o que foi pago." />
+            <StatTile label={t("To receive")} value={formatMoney(totals.receivable)} note={t("From {from} to {to}.", { from: formatDate(report.from), to: formatDate(report.to) })} />
+            <StatTile label={t("To pay")} value={formatMoney(totals.payable)} note={report.basis === "due" ? t("Installments due in the period.") : t("Total of the entries in the period.")} />
+            <StatTile label={t("Result")} value={formatMoney(totals.net)} note={t("Receivable minus payable: what was recorded, not what was paid.")} />
           </div>
           {rows.length === 0 ? (
             <div className="card empty">
-              <p role="status">Nenhum lançamento nesse período.</p>
+              <p role="status">{t("No entry in this period.")}</p>
             </div>
           ) : (
             <>
               <ChartCard
-                title={`Maiores grupos, por ${group.label.toLowerCase()}`}
-                description={`Os ${Math.min(MAX_BARS, rows.length)} maiores valores do período; a tabela abaixo tem todos.`}
-                legend={<Legend items={SERIES} kind="bar" />}
+                title={t("Biggest groups, by {group}", { group: groupLabel.toLowerCase() })}
+                description={t("The {count} biggest values of the period; the table below has all of them.", { count: Math.min(MAX_BARS, rows.length) })}
+                legend={<Legend items={series} kind="bar" />}
                 table={{
-                  columns: [group.label, "A receber", "A pagar"],
+                  columns: [groupLabel, t("To receive"), t("To pay")],
                   rows: rows.map((row) => [label(row.id), formatMoney(row.receivable), formatMoney(row.payable)]),
                 }}
               >
                 <BarChart
-                  label={`Maiores grupos por ${group.label.toLowerCase()}`}
-                  series={SERIES}
+                  label={t("Biggest groups by {group}", { group: groupLabel.toLowerCase() })}
+                  series={series}
                   groups={rows.slice(0, MAX_BARS).map((row) => ({
                     label: fitted(label(row.id)),
                     values: [row.receivable, row.payable],
@@ -226,16 +231,16 @@ function EntriesReportView({ companyId, names }: { companyId: string; names: Map
                 />
               </ChartCard>
               <section className="card list-card">
-                <h2>{group.label}</h2>
+                <h2>{groupLabel}</h2>
                 <div className="table-wrap">
                   <table>
                     <thead>
                       <tr>
-                        <th>{group.label}</th>
-                        <th className="num">A receber</th>
-                        <th className="num">A pagar</th>
-                        <th className="num">Resultado</th>
-                        <th className="num">Lançamentos</th>
+                        <th>{groupLabel}</th>
+                        <th className="num">{t("To receive")}</th>
+                        <th className="num">{t("To pay")}</th>
+                        <th className="num">{t("Result")}</th>
+                        <th className="num">{t("Entries")}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -261,6 +266,7 @@ function EntriesReportView({ companyId, names }: { companyId: string; names: Map
 }
 
 function OverdueView({ companyId, names }: { companyId: string; names: Map<string, string> }) {
+  const t = useT();
   const [today] = useState(() => todayIso());
   const [kind, setKind] = useState<"" | EntryKind>("");
   const [report, setReport] = useState<OverdueReport | null>(null);
@@ -290,11 +296,11 @@ function OverdueView({ companyId, names }: { companyId: string; names: Map<strin
       <section className="card filters-card">
         <div className="filters" role="search">
           <label>
-            Mostrar
+            {t("Show")}
             <select value={kind} onChange={(event) => setKind(event.target.value as "" | EntryKind)}>
-              <option value="">A receber e a pagar</option>
-              <option value="receivable">Só a receber</option>
-              <option value="payable">Só a pagar</option>
+              <option value="">{t("Receivable and payable")}</option>
+              <option value="receivable">{t("Receivables only")}</option>
+              <option value="payable">{t("Payables only")}</option>
             </select>
           </label>
         </div>
@@ -303,32 +309,32 @@ function OverdueView({ companyId, names }: { companyId: string; names: Map<strin
       {report === null ? (
         error === null && (
           <p role="status" className="status">
-            <Spinner /> Carregando…
+            <Spinner /> {t("Loading…")}
           </p>
         )
       ) : (
         <>
           <div className="kpi-row">
-            <StatTile tone={report.receivable !== "0" ? "critical" : undefined} label="A receber em atraso" value={formatMoney(report.receivable)} note="O que os clientes ainda devem." />
-            <StatTile label="A pagar em atraso" value={formatMoney(report.payable)} note="O que a empresa ainda deve." />
-            <StatTile label="Parcelas vencidas" value={String(report.count)} note={`Vencidas antes de ${formatDate(report.on)}.`} />
+            <StatTile tone={report.receivable !== "0" ? "critical" : undefined} label={t("Overdue receivables")} value={formatMoney(report.receivable)} note={t("What customers still owe.")} />
+            <StatTile label={t("Overdue payables")} value={formatMoney(report.payable)} note={t("What the company still owes.")} />
+            <StatTile label={t("Overdue installments")} value={String(report.count)} note={t("Overdue before {date}.", { date: formatDate(report.on) })} />
           </div>
           {report.items.length === 0 ? (
             <div className="card empty">
-              <p role="status">Nada em atraso.</p>
+              <p role="status">{t("Nothing overdue.")}</p>
             </div>
           ) : (
             <section className="card list-card">
-              <h2>Em atraso</h2>
+              <h2>{t("Past due")}</h2>
               <div className="table-wrap">
                 <table>
                   <thead>
                     <tr>
-                      <th>Vencimento</th>
-                      <th>Lançamento</th>
-                      <th>Cliente ou fornecedor</th>
-                      <th className="num">Em aberto</th>
-                      <th className="num">Atraso</th>
+                      <th>{t("Due date")}</th>
+                      <th>{t("Entry")}</th>
+                      <th>{t("Customer or supplier")}</th>
+                      <th className="num">{t("Open")}</th>
+                      <th className="num">{t("Delay")}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -338,12 +344,12 @@ function OverdueView({ companyId, names }: { companyId: string; names: Map<strin
                         <td>
                           <div className="cell-title">{item.description}</div>
                           <div className="muted">
-                            {item.kind === "receivable" ? "A receber" : "A pagar"} · parcela {item.installment}
+                            {t("{kind} · installment {number}", { kind: item.kind === "receivable" ? t("Receivable") : t("Payable"), number: item.installment })}
                           </div>
                         </td>
                         <td>{item.party_id === null ? "—" : (names.get(item.party_id) ?? "—")}</td>
                         <td className="num">{formatMoney(item.open)}</td>
-                        <td className="num">{item.days_late === 1 ? "1 dia" : `${item.days_late} dias`}</td>
+                        <td className="num">{item.days_late === 1 ? t("1 day") : t("{count} days", { count: item.days_late })}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -351,7 +357,7 @@ function OverdueView({ companyId, names }: { companyId: string; names: Map<strin
               </div>
               {report.count > report.items.length && (
                 <p className="muted">
-                  Mostrando as {report.items.length} mais antigas de {report.count}; os totais acima são de todas.
+                  {t("Showing the {shown} oldest of {count}; the totals above are of all of them.", { shown: report.items.length, count: report.count })}
                 </p>
               )}
             </section>

@@ -17,7 +17,7 @@ const FIELD_LABELS: Record<string, string> = {
   complement: msg("Complement"),
   district: msg("District"),
   city: msg("City"),
-  state: msg("State"),
+  state: msg("Address state"),
   tags: msg("Tags"),
   contacts: msg("Contacts"),
   document_check: msg("CNPJ check"),

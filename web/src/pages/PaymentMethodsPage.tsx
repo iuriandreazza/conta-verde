@@ -151,7 +151,7 @@ export function PaymentMethodsPage() {
             </select>
           </label>
           <label>
-            {t("Order")}
+            {t("Sort order")}
             <select
               value={filters.sort}
               onChange={(event) =>
@@ -225,7 +225,7 @@ export function PaymentMethodsPage() {
                               setSaved(null);
                             }}
                           >
-                            {t("Edit")}
+                            {t("Change")}
                           </Button>
                         )}
                         <Button

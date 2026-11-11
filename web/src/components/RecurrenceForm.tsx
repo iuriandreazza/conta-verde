@@ -10,6 +10,7 @@ import { CheckIcon } from "./icons/check";
 import { PlusIcon } from "./icons/plus";
 import { Notice } from "./Notice";
 import { HelpTitle } from "./HelpTitle";
+import { useT } from "../i18n";
 
 /** What a recurrence may point at, as the page or the sheet loaded it. */
 export interface RecurrenceTargets {
@@ -31,6 +32,7 @@ interface RecurrenceFormProps {
 
 /** Registers a recurrence, or changes one. Remount it (a `key`) to start over. */
 export function RecurrenceForm({ recurrence, targets, pending, error, onSubmit, onCancel }: RecurrenceFormProps) {
+  const t = useT();
   const [fieldError, setFieldError] = useState<string | null>(null);
   const { categories, costCenters, parties, names } = targets;
 
@@ -55,19 +57,19 @@ export function RecurrenceForm({ recurrence, targets, pending, error, onSubmit, 
     // `1.000` could be a thousand or one: the person says which, as in every amount field.
     const cents = isAmbiguousDecimal(typedAmount) ? null : toCents(typedAmount);
     if (cents === null || cents === 0n) {
-      setFieldError("Informe o valor em reais e centavos, por exemplo 1.234,50.");
+      setFieldError(t("Give the amount in reais and cents, for example 1.234,50."));
       return;
     }
     if (!isIsoDate(field("starts_on"))) {
-      setFieldError("Informe o primeiro vencimento.");
+      setFieldError(t("Give the first due date."));
       return;
     }
     if (field("ends_on") !== "" && !isIsoDate(field("ends_on"))) {
-      setFieldError("O último dia não é uma data.");
+      setFieldError(t("The last day is not a date."));
       return;
     }
     if (field("ends_on") !== "" && field("ends_on") < field("starts_on")) {
-      setFieldError("O último dia não pode ser antes do primeiro vencimento.");
+      setFieldError(t("The last day cannot be before the first due date."));
       return;
     }
     setFieldError(null);
@@ -88,24 +90,24 @@ export function RecurrenceForm({ recurrence, targets, pending, error, onSubmit, 
   return (
     <form className="record-form" onSubmit={handleSubmit}>
       <section className="form-section" aria-labelledby="recurrence-info">
-        <h3 id="recurrence-info">Informações da recorrência</h3>
+        <h3 id="recurrence-info">{t("Recurrence details")}</h3>
         <div className="field-grid">
           <label>
-            Tipo
+            {t("Type")}
             <select name="kind" defaultValue={recurrence?.kind ?? "payable"}>
-              <option value="payable">A pagar</option>
-              <option value="receivable">A receber</option>
+              <option value="payable">{t("Payable")}</option>
+              <option value="receivable">{t("Receivable")}</option>
             </select>
           </label>
           <label>
-            Descrição
+            {t("Description")}
             <input name="description" required maxLength={200} autoComplete="off" defaultValue={recurrence?.description} />
           </label>
           <label>
-            Categoria
+            {t("Category")}
             <select name="category_id" required defaultValue={recurrence?.category_id ?? ""}>
               <option value="" disabled>
-                Escolha uma categoria
+                {t("Choose a category")}
               </option>
               {categoryRows.map(({ category, depth }) => (
                 <option key={category.id} value={category.id}>
@@ -116,9 +118,9 @@ export function RecurrenceForm({ recurrence, targets, pending, error, onSubmit, 
             </select>
           </label>
           <label>
-            Centro de custo
+            {t("Cost center")}
             <select name="cost_center_id" defaultValue={recurrence?.cost_center_id ?? ""}>
-              <option value="">Nenhum</option>
+              <option value="">{t("None")}</option>
               {costCenterChoices.map((center) => (
                 <option key={center.id} value={center.id}>
                   {center.name}
@@ -127,9 +129,9 @@ export function RecurrenceForm({ recurrence, targets, pending, error, onSubmit, 
             </select>
           </label>
           <label>
-            Cliente ou fornecedor
+            {t("Customer or supplier")}
             <select name="party_id" defaultValue={recurrence?.party_id ?? ""}>
-              <option value="">Nenhum</option>
+              <option value="">{t("None")}</option>
               {partyChoices.map((party) => (
                 <option key={party.id} value={party.id}>
                   {party.name}
@@ -140,12 +142,12 @@ export function RecurrenceForm({ recurrence, targets, pending, error, onSubmit, 
         </div>
       </section>
       <section className="form-section" aria-labelledby="recurrence-when">
-        <HelpTitle id="recurrence-when" title="Valor e frequência">
-          <p>Mudar a recorrência vale para os próximos lançamentos; os que já foram gerados não mudam.</p>
+        <HelpTitle id="recurrence-when" title={t("Amount and frequency")}>
+          <p>{t("Changing the recurrence applies to the next entries; the ones already generated do not change.")}</p>
         </HelpTitle>
         <div className="field-grid">
           <label>
-            Valor de cada vez
+            {t("Amount each time")}
             <input
               name="amount"
               inputMode="decimal"
@@ -156,25 +158,25 @@ export function RecurrenceForm({ recurrence, targets, pending, error, onSubmit, 
             />
           </label>
           <label>
-            Frequência
+            {t("Frequency")}
             <select name="frequency" defaultValue={recurrence?.frequency ?? "monthly"}>
               {FREQUENCIES.map((option) => (
                 <option key={option.key} value={option.key}>
-                  {option.label}
+                  {t(option.label)}
                 </option>
               ))}
             </select>
           </label>
           <label>
-            Primeiro vencimento
+            {t("First due date")}
             <input name="starts_on" type="date" required defaultValue={recurrence?.starts_on ?? ""} />
           </label>
           <label>
-            Último dia (opcional)
+            {t("Last day (optional)")}
             <input name="ends_on" type="date" defaultValue={recurrence?.ends_on ?? ""} />
           </label>
           <label className="inline">
-            <input name="active" type="checkbox" defaultChecked={recurrence?.active ?? true} /> Ativa
+            <input name="active" type="checkbox" defaultChecked={recurrence?.active ?? true} /> {t("Running")}
           </label>
         </div>
       </section>
@@ -182,7 +184,7 @@ export function RecurrenceForm({ recurrence, targets, pending, error, onSubmit, 
       <div className="form-footer">
         <BackButton disabled={pending} onClick={onCancel} />
         <Button type="submit" icon={recurrence === null ? PlusIcon : CheckIcon} pending={pending}>
-          {recurrence === null ? "Adicionar" : "Salvar alterações"}
+          {recurrence === null ? t("Add") : t("Save changes")}
         </Button>
       </div>
     </form>
