@@ -148,6 +148,10 @@ Rules that are easy to break:
 - An import (ADR 0025, parties and products, one pipeline `import_rows` in `application`) checks every row before writing any, refuses the whole file if one row is refused, then writes row by row (each with its own audit entry) and **skips** a row whose document or SKU is registered, never overwriting. A price may use a decimal comma (`12,50`) and nothing else beyond the strict amount. It does not ask the CNPJ registry (`Unverified`, or `NotApplicable` when `CnpjRegistry::is_enabled` is false). CSV is read in `api` (`csv_import.rs`); use cases take drafts and know nothing of CSV.
 - A CEP is looked up only when the person presses "Buscar endereço" (ADR 0024): `GET /companies/{id}/postal-codes/{code}`, nothing stored or audited, `CEP_LOOKUP=off` switches it off. BrasilAPI answers `404` both for an unknown code and when its own sources are down, so a `404` proves nothing; the port takes a `PostalCode`, and a code that is not eight digits is refused before the directory is asked. Tests use `InMemoryPostalCodeDirectory` or the local fake in `brasil_api_postal_code.rs`.
 
+## Compatibility promises (ADR 0092)
+
+What 1.0 keeps, so a change that would break one needs its own ADR first: the `/v1` API only grows (a break is a `/v2` served beside it for 12 months), the webhook body and signature are part of `v1`; migrations are forward-only and applied at start, and the way back is restoring the backup taken before the upgrade; an env name in `.env.example` keeps its meaning (deprecate for one minor with a startup warning, then remove) and a safer default is never loosened; the layouts of the accountant's exports, the fiscal package and the importers' headers change only by a new ADR. The SPA's routes, the crates' APIs and the schema as an integration surface are **not** promises.
+
 ## Conventions
 
 - Reply to the user in Brazilian Portuguese. Code, identifiers, commits, branch names and user-facing docs are in **English**.
