@@ -7,11 +7,13 @@
 An open-source ERP for small businesses, inspired by cloud ERPs such as Conta Azul.
 Not affiliated with or endorsed by any commercial product.
 
-> Status: early development. The phases up to 6 are built (registers, finance, sales, collection, purchases and stock, and
-> the accountant: a period lock, the DRE, exports and a monthly notice); fiscal documents (phase 7) are next. See the
-> [macro plan](docs/macro-plan.md) for scope and releases, the [roadmap](docs/roadmap.md) for progress per phase, and the
-> [architecture decisions](docs/adr/README.md). Accounts and sessions exist, but the API still binds to loopback only and
-> needs a TLS proxy before it is exposed.
+> Status: feature-complete for the planned scope and in the **1.0 hardening** phase (row-level security, backup and restore,
+> importers, a performance baseline, user documentation). Registers, finance, sales, collection, purchases and stock, the
+> accountant's tools, fiscal documents through a gateway, a public API with webhooks and a PWA are built; nothing has been
+> tagged yet. See the [macro plan](docs/macro-plan.md) for scope, the [roadmap](docs/roadmap.md) for progress per phase,
+> [ADR 0092](docs/adr/0092-one-point-zero-hardening-plan.md) for what 1.0 will promise and the
+> [architecture decisions](docs/adr/README.md). The API binds to loopback by default and needs a TLS proxy
+> before it is exposed.
 
 ## Quick start
 
