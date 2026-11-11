@@ -198,7 +198,7 @@ private endpoint.
 - [ ] Backup and restore procedure, upgrade guide, published Docker image
 - [ ] Migration importers: entries, open or paid, from CSV (done, [ADR 0064](adr/0064-entry-import-from-a-file.md), with `scripts/export-to-entries-csv.py` to convert a reference product's export); stock balances from CSV; guidance for leaving the reference product
 - [ ] Performance baseline on a 5-year dataset; indexes reviewed
-- [ ] User documentation complete in English; Portuguese translation of the UI
+- [ ] User documentation complete in English; the UI behind an i18n layer with English and Portuguese catalogues ([ADR 0095](adr/0095-i18n.md): the layer, the checks and the shell and sign-in pages are in; **every other page is still Portuguese in both languages** until its area's pull request, and the English user guide is not written)
 
 Exit criteria: an operator upgrades two consecutive versions in place with a restored backup
 and all checks green.

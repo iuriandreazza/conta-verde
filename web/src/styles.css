@@ -2768,6 +2768,14 @@ tr.subtotal + tr.below-the-line td {
   overflow-wrap: anywhere;
 }
 
+/* The language of the screens, small among the actions of the top bar. */
+.language-switch {
+  width: auto;
+  min-height: 2rem;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.85rem;
+}
+
 /* A plain link among the actions of the top bar. */
 .topbar-link {
   font-size: 0.85rem;

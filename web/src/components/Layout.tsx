@@ -12,6 +12,7 @@ import { ChevronLeftIcon } from "./icons/chevron-left";
 import { ChevronRightIcon } from "./icons/chevron-right";
 import { XIcon } from "./icons/x";
 import { Logo } from "./Logo";
+import { useT } from "../i18n";
 
 const COLLAPSED_KEY = "conta-verde.sidebar-collapsed";
 
@@ -26,6 +27,7 @@ function readCollapsed(): boolean {
 
 export function Layout() {
   const { session, signOut } = useAuth();
+  const t = useT();
   const [signOutFailed, setSignOutFailed] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
@@ -112,15 +114,15 @@ export function Layout() {
       <CreationProvider companyId={undefined}>
       <div className="auth-shell">
         <aside className="auth-aside">
-          <Link to="/" className="brand" aria-label="conta-verde, início">
+          <Link to="/" className="brand" aria-label={t("conta-verde, start")}>
             <Logo size={34} animated />
           </Link>
           <div className="auth-pitch">
-            <p className="auth-pitch-title">Gestão simples para o seu negócio crescer.</p>
+            <p className="auth-pitch-title">{t("Simple management for your business to grow.")}</p>
             <ul>
-              <li>Clientes, fornecedores, produtos e serviços em um só lugar.</li>
-              <li>Cada alteração registrada: quem fez, o que mudou e quando.</li>
-              <li>Software livre: o código é seu para ler e conferir.</li>
+              <li>{t("Customers, suppliers, products and services in one place.")}</li>
+              <li>{t("Every change recorded: who made it, what changed and when.")}</li>
+              <li>{t("Free software: the code is yours to read and check.")}</li>
             </ul>
           </div>
         </aside>
@@ -154,23 +156,23 @@ export function Layout() {
         onKeyDown={(event) => event.key === "Escape" && navOpen && closeNav()}
       >
         <a href="#main" className="skip-link" onClick={skipToContent}>
-          Ir para o conteúdo
+          {t("Skip to the content")}
         </a>
         {companyId && (
-          <button type="button" className="sidebar-close" aria-label="Fechar o menu" onClick={closeNav}>
+          <button type="button" className="sidebar-close" aria-label={t("Close the menu")} onClick={closeNav}>
             <XIcon size={22} aria-hidden />
           </button>
         )}
         <div className="sidebar-head">
-          <Link to="/" className="brand" aria-label="conta-verde, início">
+          <Link to="/" className="brand" aria-label={t("conta-verde, start")}>
             <Logo size={30} />
           </Link>
         </div>
         {company && (
           <div className="company-switch">
-            <span className="company-switch-label">Empresa</span>
+            <span className="company-switch-label">{t("Company")}</span>
             <strong className="company-switch-name">{company.name}</strong>
-            {companies.length > 1 && <Link to="/">Trocar de empresa</Link>}
+            {companies.length > 1 && <Link to="/">{t("Switch company")}</Link>}
           </div>
         )}
         {companyId && (
@@ -187,8 +189,8 @@ export function Layout() {
             type="button"
             className="sidebar-toggle"
             aria-expanded={!collapsed}
-            aria-label={collapsed ? "Expandir o menu" : "Recolher o menu"}
-            title={collapsed ? "Expandir o menu" : "Recolher o menu"}
+            aria-label={collapsed ? t("Expand the menu") : t("Collapse the menu")}
+            title={collapsed ? t("Expand the menu") : t("Collapse the menu")}
             onClick={() => changeCollapsed(!collapsed)}
           >
             {collapsed ? <ChevronRightIcon size={18} aria-hidden /> : <ChevronLeftIcon size={18} aria-hidden />}

@@ -10,6 +10,7 @@ import { UserPlusIcon } from "../components/icons/user-plus";
 import { PasswordField } from "../components/PasswordField";
 import { Spinner } from "../components/Spinner";
 import { ROLE_LABELS } from "../lib/roles";
+import { useI18n } from "../i18n";
 import { usePageTitle } from "../lib/usePageTitle";
 
 /**
@@ -67,6 +68,7 @@ function withNext(path: string, next: string): string {
 
 export function AuthPage({ mode }: { mode: "login" | "register" }) {
   const { session, signIn, signUp } = useAuth();
+  const { t, rich } = useI18n();
   const [params] = useSearchParams();
   const next = nextAfterSignIn(params.get("next"));
   const [error, setError] = useState<string | null>(null);
@@ -75,7 +77,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
   const [submitting, setSubmitting] = useState(false);
   const shake = useAnimationControls();
   const registering = mode === "register";
-  usePageTitle(registering ? "Criar conta" : "Entrar");
+  usePageTitle(registering ? t("Create account") : t("Sign in"));
   const invitation = useInvitation(registering ? invitationToken(next) : null);
   // What the sign-up made, so that the person is not sent back to an invitation that is used up or
   // was never usable: one who joined is a member of that company and of no other, and goes there; one
@@ -126,40 +128,41 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
       animate={{ opacity: 1, y: 0, scale: 1 }}
       transition={{ type: "spring", stiffness: 260, damping: 24 }}
     >
-      <h1>{registering ? "Crie sua conta" : "Entrar"}</h1>
+      <h1>{registering ? t("Create your account") : t("Sign in")}</h1>
       {invitation.status === "ready" ? (
         <p className="page-lead">
-          Você foi convidado para <strong>{invitation.preview.company_name}</strong> como{" "}
-          <strong>{ROLE_LABELS[invitation.preview.role]}</strong>. Crie sua conta com o e-mail do convite
-          para entrar nela.
+          {rich("You were invited to {company} as {role}. Create your account with the invitation's e-mail to join it.", {
+            company: <strong>{invitation.preview.company_name}</strong>,
+            role: <strong>{t(ROLE_LABELS[invitation.preview.role])}</strong>,
+          })}
         </p>
       ) : (
         <p className="page-lead">
-          {registering ? "Leva um minuto e não pede cartão." : "Que bom ver você de novo."}
+          {registering ? t("It takes a minute and asks for no card.") : t("Good to see you again.")}
         </p>
       )}
       {invitation.status === "unavailable" && <Notice message={invitation.message} tone="warning" />}
       {invitation.status === "loading" ? (
         // The form waits for the invitation so that nothing typed is lost when the address is fixed.
         <p role="status" className="status">
-          <Spinner /> Carregando o convite…
+          <Spinner /> {t("Loading the invitation…")}
         </p>
       ) : (
         <motion.form onSubmit={handleSubmit} animate={shake}>
           {registering && (
             <label>
-              Seu nome
+              {t("Your name")}
               <input name="name" required autoComplete="name" />
             </label>
           )}
           {registering && invitation.status !== "ready" && (
             <label>
-              Nome da empresa
+              {t("Company name")}
               <input name="company_name" required autoComplete="organization" />
             </label>
           )}
           <label>
-            E-mail
+            {t("E-mail")}
             <input
               name="email"
               type="email"
@@ -173,27 +176,30 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
           <Notice message={error} />
           {addressTaken && (
             <p>
-              Esse e-mail já tem conta. <Link to="/login">Entrar</Link> ou <Link to="/forgot-password">recuperar a senha</Link>.
+              {rich("This e-mail already has an account. {signIn} or {recover}.", {
+                signIn: <Link to="/login">{t("Sign in")}</Link>,
+                recover: <Link to="/forgot-password">{t("recover the password")}</Link>,
+              })}
             </p>
           )}
           <Button type="submit" icon={registering ? UserPlusIcon : LogInIcon} pending={submitting}>
-            {registering ? "Criar conta" : "Entrar"}
+            {registering ? t("Create account") : t("Sign in")}
           </Button>
         </motion.form>
       )}
       {!registering && (
         <p>
-          <Link to="/forgot-password">Esqueci minha senha</Link>
+          <Link to="/forgot-password">{t("I forgot my password")}</Link>
         </p>
       )}
       <p>
         {registering ? (
           <>
-            Já tem conta? <Link to={withNext("/login", next)}>Entrar</Link>
+            {rich("Already have an account? {link}", { link: <Link to={withNext("/login", next)}>{t("Sign in")}</Link> })}
           </>
         ) : (
           <>
-            Primeira vez aqui? <Link to={withNext("/register", next)}>Criar conta</Link>
+            {rich("First time here? {link}", { link: <Link to={withNext("/register", next)}>{t("Create account")}</Link> })}
           </>
         )}
       </p>

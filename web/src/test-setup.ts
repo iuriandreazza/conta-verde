@@ -7,4 +7,8 @@ import { afterEach } from "vitest";
 // the final screen instead of racing exit transitions.
 MotionGlobalConfig.skipAnimations = true;
 
-afterEach(cleanup);
+// What a test chose (a language, the columns of a table) is not for the next one.
+afterEach(() => {
+  cleanup();
+  window.localStorage.clear();
+});

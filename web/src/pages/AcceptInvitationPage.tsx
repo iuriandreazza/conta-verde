@@ -7,6 +7,7 @@ import { CheckIcon } from "../components/icons/check";
 import { Notice } from "../components/Notice";
 import { Spinner } from "../components/Spinner";
 import { ROLE_LABELS } from "../lib/roles";
+import { useT } from "../i18n";
 
 type Loaded =
   | { status: "loading" }
@@ -18,6 +19,7 @@ type Loaded =
  * may not have an account yet; accepting needs the account of the address it was sent to.
  */
 export function AcceptInvitationPage() {
+  const t = useT();
   const { token = "" } = useParams();
   const { session, refresh } = useAuth();
   const navigate = useNavigate();
@@ -84,7 +86,7 @@ export function AcceptInvitationPage() {
       <h1>Convite para {preview.company_name}</h1>
       <p>
         Você foi convidado para participar de <strong>{preview.company_name}</strong> como{" "}
-        <strong>{ROLE_LABELS[preview.role]}</strong>. O convite é para{" "}
+        <strong>{t(ROLE_LABELS[preview.role])}</strong>. O convite é para{" "}
         <strong>{preview.email}</strong>.
       </p>
       {session.status === "authenticated" ? (

@@ -1,3 +1,4 @@
+import { msg, useT } from "../i18n";
 import { useEffect, useRef, useState, type FocusEvent, type PointerEvent } from "react";
 import { Link, NavLink, useLocation, type Location } from "react-router-dom";
 import { entryKindOf } from "../lib/entryKind";
@@ -50,91 +51,91 @@ interface NavArea {
 }
 
 const AREAS: NavArea[] = [
-  { key: "home", label: "Painel", icon: ChartLineIcon, link: { path: "", label: "Painel", icon: ChartLineIcon } },
+  { key: "home", label: msg("Dashboard"), icon: ChartLineIcon, link: { path: "", label: msg("Dashboard"), icon: ChartLineIcon } },
   {
     key: "commercial",
-    label: "Comercial",
+    label: msg("Commercial"),
     icon: HandCoinsIcon,
     items: [
-      { path: "/quotes", label: "Orçamentos", icon: FileTextIcon },
-      { path: "/sales", label: "Vendas", icon: HandCoinsIcon },
-      { path: "/pos", label: "Caixa", icon: HandCoinsIcon },
-      { path: "/contracts", label: "Contratos", icon: RotateCCWIcon },
-      { path: "/commissions", label: "Comissões", icon: CircleDollarSignIcon },
-      { path: "/price-lists", label: "Tabelas de preço", icon: LayersIcon },
+      { path: "/quotes", label: msg("Quotes"), icon: FileTextIcon },
+      { path: "/sales", label: msg("Sales"), icon: HandCoinsIcon },
+      { path: "/pos", label: msg("Point of sale"), icon: HandCoinsIcon },
+      { path: "/contracts", label: msg("Contracts"), icon: RotateCCWIcon },
+      { path: "/commissions", label: msg("Commissions"), icon: CircleDollarSignIcon },
+      { path: "/price-lists", label: msg("Price lists"), icon: LayersIcon },
     ],
   },
   {
     key: "purchases",
-    label: "Suprimentos",
+    label: msg("Supplies"),
     icon: BoxIcon,
     items: [
-      { path: "/purchases", label: "Compras", icon: BriefcaseBusinessIcon },
-      { path: "/stock", label: "Estoque", icon: BoxIcon },
-      { path: "/inventory-counts", label: "Inventários", icon: LayersIcon },
-      { path: "/stock-reports", label: "Relatórios de estoque", icon: FileTextIcon },
+      { path: "/purchases", label: msg("Purchases"), icon: BriefcaseBusinessIcon },
+      { path: "/stock", label: msg("Stock"), icon: BoxIcon },
+      { path: "/inventory-counts", label: msg("Inventory counts"), icon: LayersIcon },
+      { path: "/stock-reports", label: msg("Stock reports"), icon: FileTextIcon },
     ],
   },
   {
     key: "finance",
-    label: "Financeiro",
+    label: msg("Financial"),
     icon: WalletIcon,
     items: [
-      { path: "/entries", kind: "receivable", label: "Contas a receber", icon: HandCoinsIcon },
-      { path: "/entries", kind: "payable", label: "Contas a pagar", icon: CreditCardIcon },
-      { path: "/entries", label: "Lançamentos", icon: CircleDollarSignIcon },
-      { path: "/cash-flow", label: "Fluxo de caixa", icon: WavesIcon },
-      { path: "/transfers", label: "Transferências", icon: SendIcon },
-      { path: "/reconciliation", label: "Conciliação", icon: CheckIcon },
-      { path: "/bank-connections", label: "Conexões bancárias", icon: WalletIcon },
-      { path: "/recurrences", label: "Recorrências", icon: RotateCCWIcon },
-      { path: "/collection", label: "Cobrança", icon: CreditCardIcon },
-      { path: "/delinquency", label: "Inadimplência", icon: BadgeAlertIcon },
+      { path: "/entries", kind: "receivable", label: msg("Receivables"), icon: HandCoinsIcon },
+      { path: "/entries", kind: "payable", label: msg("Payables"), icon: CreditCardIcon },
+      { path: "/entries", label: msg("Entries"), icon: CircleDollarSignIcon },
+      { path: "/cash-flow", label: msg("Cash flow"), icon: WavesIcon },
+      { path: "/transfers", label: msg("Transfers"), icon: SendIcon },
+      { path: "/reconciliation", label: msg("Reconciliation"), icon: CheckIcon },
+      { path: "/bank-connections", label: msg("Bank connections"), icon: WalletIcon },
+      { path: "/recurrences", label: msg("Recurrences"), icon: RotateCCWIcon },
+      { path: "/collection", label: msg("Collection"), icon: CreditCardIcon },
+      { path: "/delinquency", label: msg("Delinquency"), icon: BadgeAlertIcon },
     ],
     registers: {
-      label: "Cadastros financeiros",
+      label: msg("Financial registers"),
       items: [
-        { path: "/categories", label: "Categorias", icon: FolderTreeIcon },
-        { path: "/cost-centers", label: "Centros de custo", icon: LayersIcon },
-        { path: "/bank-accounts", label: "Contas bancárias", icon: WalletIcon },
-        { path: "/payment-methods", label: "Formas de pagamento", icon: CreditCardIcon },
-        { path: "/payment-terms", label: "Prazos de pagamento", icon: CalendarDaysIcon },
+        { path: "/categories", label: msg("Categories"), icon: FolderTreeIcon },
+        { path: "/cost-centers", label: msg("Cost centers"), icon: LayersIcon },
+        { path: "/bank-accounts", label: msg("Bank accounts"), icon: WalletIcon },
+        { path: "/payment-methods", label: msg("Payment methods"), icon: CreditCardIcon },
+        { path: "/payment-terms", label: msg("Payment terms"), icon: CalendarDaysIcon },
       ],
     },
   },
   {
     key: "fiscal",
-    label: "Fiscal",
+    label: msg("Fiscal"),
     icon: FileTextIcon,
     items: [
-      { path: "/fiscal/documents", label: "Documentos", icon: FileTextIcon },
-      { path: "/fiscal/received", label: "Notas recebidas", icon: FileTextIcon },
-      { path: "/fiscal/settings", label: "Configurações fiscais", icon: LayersIcon },
+      { path: "/fiscal/documents", label: msg("Documents"), icon: FileTextIcon },
+      { path: "/fiscal/received", label: msg("Received invoices"), icon: FileTextIcon },
+      { path: "/fiscal/settings", label: msg("Fiscal settings"), icon: LayersIcon },
     ],
   },
   {
     key: "registers",
-    label: "Cadastros",
+    label: msg("Registers"),
     icon: UsersIcon,
     items: [
-      { path: "/parties", label: "Clientes e fornecedores", icon: UsersIcon },
-      { path: "/products", label: "Produtos e serviços", icon: BoxIcon },
+      { path: "/parties", label: msg("Customers and suppliers"), icon: UsersIcon },
+      { path: "/products", label: msg("Products and services"), icon: BoxIcon },
     ],
   },
-  { key: "reports", label: "Relatórios", icon: FileTextIcon, link: { path: "/reports", label: "Relatórios", icon: FileTextIcon } },
-  { key: "accounting", label: "Contador", icon: CheckIcon, link: { path: "/accounting", label: "Contador", icon: CheckIcon } },
+  { key: "reports", label: msg("Reports"), icon: FileTextIcon, link: { path: "/reports", label: msg("Reports"), icon: FileTextIcon } },
+  { key: "accounting", label: msg("Accountant"), icon: CheckIcon, link: { path: "/accounting", label: msg("Accountant"), icon: CheckIcon } },
 ];
 
 const SETTINGS: NavArea = {
   key: "settings",
-  label: "Configurações",
+  label: msg("Settings"),
   icon: UserPlusIcon,
   items: [
-    { path: "/members", label: "Membros", icon: UserPlusIcon },
-    { path: "/gateway", label: "Gateway fiscal", icon: LayersIcon },
-    { path: "/api-keys", label: "Chaves de API", icon: SendIcon },
-    { path: "/webhooks", label: "Webhooks", icon: SendIcon },
-    { path: "/connectors", label: "Conectores", icon: LayersIcon },
+    { path: "/members", label: msg("Members"), icon: UserPlusIcon },
+    { path: "/gateway", label: msg("Fiscal gateway"), icon: LayersIcon },
+    { path: "/api-keys", label: msg("API keys"), icon: SendIcon },
+    { path: "/webhooks", label: msg("Webhooks"), icon: SendIcon },
+    { path: "/connectors", label: msg("Connectors"), icon: LayersIcon },
   ],
 };
 
@@ -157,6 +158,7 @@ function areaHere(areas: NavArea[], base: string, location: Location): string | 
 }
 
 function ItemLink({ base, item }: { base: string; item: NavItem }) {
+  const t = useT();
   const Icon = item.icon;
   const location = useLocation();
   const current = isCurrent(base, item, location);
@@ -164,13 +166,14 @@ function ItemLink({ base, item }: { base: string; item: NavItem }) {
   return (
     <Link to={to} aria-current={current ? "page" : undefined}>
       <Icon size={18} aria-hidden />
-      <span>{item.label}</span>
+      <span>{t(item.label)}</span>
     </Link>
   );
 }
 
 /** The links of an area: its items, then its fold of registers (closed only by choice, so nothing hides by default). */
 function AreaLinks({ base, area, foldable }: { base: string; area: NavArea; foldable: boolean }) {
+  const t = useT();
   const [registersOpen, setRegistersOpen] = useState(true);
   const registers = area.registers;
   return (
@@ -182,11 +185,11 @@ function AreaLinks({ base, area, foldable }: { base: string; area: NavArea; fold
         <div className="nav-registers">
           {foldable ? (
             <button type="button" className="nav-registers-toggle" aria-expanded={registersOpen} onClick={() => setRegistersOpen(!registersOpen)}>
-              {registers.label}
+              {t(registers.label)}
               <ChevronDownIcon size={14} aria-hidden />
             </button>
           ) : (
-            <p className="nav-registers-toggle">{registers.label}</p>
+            <p className="nav-registers-toggle">{t(registers.label)}</p>
           )}
           {(!foldable || registersOpen) && registers.items.map((item) => <ItemLink key={item.path} base={base} item={item} />)}
         </div>
@@ -213,6 +216,7 @@ export function CompanyNav({
   /** Asked when an area is chosen on the shrunk rail: the panel comes back for it. */
   onExpand: () => void;
 }) {
+  const t = useT();
   const base = `/companies/${companyId}`;
   const location = useLocation();
   const areas = canSeeMembers ? [...AREAS, SETTINGS] : AREAS;
@@ -266,14 +270,14 @@ export function CompanyNav({
 
   return (
     <div className="nav-shell" data-level={level} ref={shell}>
-      <nav className="rail" aria-label="Áreas da empresa">
+      <nav className="rail" aria-label={t("Company areas")}>
         {areas.map((area) => {
           const Icon = area.icon;
           if (area.link) {
             return (
               <NavLink key={area.key} to={`${base}${area.link.path}`} end={area.link.path === ""} className="rail-item">
                 <Icon size={22} aria-hidden />
-                <span>{area.label}</span>
+                <span>{t(area.label)}</span>
               </NavLink>
             );
           }
@@ -296,12 +300,12 @@ export function CompanyNav({
                 onClick={() => choose(area)}
               >
                 <Icon size={22} aria-hidden />
-                <span>{area.label}</span>
+                <span>{t(area.label)}</span>
                 <ChevronRightIcon className="rail-chevron" size={16} aria-hidden />
               </button>
               {collapsed && (
-                <div className="flyout" role="group" aria-label={area.label}>
-                  <p className="flyout-title">{area.label}</p>
+                <div className="flyout" role="group" aria-label={t(area.label)}>
+                  <p className="flyout-title">{t(area.label)}</p>
                   <AreaLinks base={base} area={area} foldable={false} />
                 </div>
               )}
@@ -310,12 +314,12 @@ export function CompanyNav({
         })}
       </nav>
       {open && (
-        <nav className="panel" id="area-panel" aria-label={open.label}>
+        <nav className="panel" id="area-panel" aria-label={t(open.label)}>
           <div className="panel-head">
-            <button type="button" className="panel-back" aria-label="Voltar às áreas" onClick={goBack}>
+            <button type="button" className="panel-back" aria-label={t("Back to the areas")} onClick={goBack}>
               <ChevronLeftIcon size={20} aria-hidden />
             </button>
-            <h2 className="panel-title">{open.label}</h2>
+            <h2 className="panel-title">{t(open.label)}</h2>
           </div>
           <AreaLinks base={base} area={open} foldable />
         </nav>
