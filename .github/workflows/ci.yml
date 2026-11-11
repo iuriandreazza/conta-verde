@@ -42,6 +42,24 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: cargo test --workspace -- --ignored
+      # The real server and the real HTTP path as the runtime role: the extractor, the gate and the token lookups that narrow the
+      # scope (ADR 0093) are only exercised end to end here.
+      - name: Smoke the running server under row-level security
+        run: |
+          cargo build -p conta-verde-api
+          ./target/debug/conta-verde &
+          for attempt in $(seq 1 60); do
+            curl -sf http://127.0.0.1:3100/health && break
+            sleep 1
+          done
+          python3 scripts/e2e-areas.py http://127.0.0.1:3100
+          python3 scripts/e2e-accountant.py http://127.0.0.1:3100
+        env:
+          BIND_ADDR: 127.0.0.1:3100
+          CNPJ_LOOKUP: "off"
+          PUBLIC_URL: http://localhost:5173
+          ATTACHMENTS_DIR: ${{ runner.temp }}/attachments
+          PAYMENT_PROVIDER: fake
 
   web:
     runs-on: ubuntu-latest
