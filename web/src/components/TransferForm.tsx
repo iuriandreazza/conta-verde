@@ -7,6 +7,7 @@ import { Button } from "./Button";
 import { BackButton } from "./BackButton";
 import { SendIcon } from "./icons/send";
 import { Notice } from "./Notice";
+import { useT } from "../i18n";
 
 interface TransferFormProps {
   /** The accounts money can move between: the active ones. */
@@ -19,6 +20,7 @@ interface TransferFormProps {
 
 /** Moves money from one account of the company to another; a transfer is never edited, only undone. */
 export function TransferForm({ accounts, pending, error, onSubmit, onCancel }: TransferFormProps) {
+  const t = useT();
   const [fieldError, setFieldError] = useState<string | null>(null);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -31,15 +33,15 @@ export function TransferForm({ accounts, pending, error, onSubmit, onCancel }: T
     const typedAmount = field("amount");
     const cents = isAmbiguousDecimal(typedAmount) ? null : toCents(typedAmount);
     if (field("from_account_id") === field("to_account_id")) {
-      setFieldError("Escolha duas contas diferentes.");
+      setFieldError(t("Choose two different accounts."));
       return;
     }
     if (cents === null || cents === 0n) {
-      setFieldError("Informe o valor em reais e centavos, por exemplo 1.234,50.");
+      setFieldError(t("Give the amount in reais and cents, for example 1.234,50."));
       return;
     }
     if (!isIsoDate(field("occurred_on"))) {
-      setFieldError("Informe a data da transferência.");
+      setFieldError(t("Give the date of the transfer."));
       return;
     }
     setFieldError(null);
@@ -55,13 +57,13 @@ export function TransferForm({ accounts, pending, error, onSubmit, onCancel }: T
   return (
     <form className="record-form" onSubmit={handleSubmit}>
       <section className="form-section" aria-labelledby="transfer-info">
-        <h3 id="transfer-info">Dados da transferência</h3>
+        <h3 id="transfer-info">{t("Transfer details")}</h3>
         <div className="field-grid">
           <label>
-            De
+            {t("From")}
             <select name="from_account_id" required defaultValue="">
               <option value="" disabled>
-                Escolha a conta de origem
+                {t("Choose the source account")}
               </option>
               {accounts.map((account) => (
                 <option key={account.id} value={account.id}>
@@ -71,10 +73,10 @@ export function TransferForm({ accounts, pending, error, onSubmit, onCancel }: T
             </select>
           </label>
           <label>
-            Para
+            {t("To account")}
             <select name="to_account_id" required defaultValue="">
               <option value="" disabled>
-                Escolha a conta de destino
+                {t("Choose the destination account")}
               </option>
               {accounts.map((account) => (
                 <option key={account.id} value={account.id}>
@@ -84,16 +86,16 @@ export function TransferForm({ accounts, pending, error, onSubmit, onCancel }: T
             </select>
           </label>
           <label>
-            Valor
+            {t("Amount")}
             <input name="amount" inputMode="decimal" autoComplete="off" required placeholder="0,00" />
           </label>
           <label>
-            Data
+            {t("Date")}
             <input name="occurred_on" type="date" required defaultValue={todayIso()} />
           </label>
           <label>
-            Observação
-            <input name="note" maxLength={200} autoComplete="off" placeholder="Opcional" />
+            {t("Note")}
+            <input name="note" maxLength={200} autoComplete="off" placeholder={t("Optional")} />
           </label>
         </div>
       </section>
@@ -101,7 +103,7 @@ export function TransferForm({ accounts, pending, error, onSubmit, onCancel }: T
       <div className="form-footer">
         <BackButton disabled={pending} onClick={onCancel} />
         <Button type="submit" icon={SendIcon} pending={pending}>
-          Transferir
+          {t("Transfer")}
         </Button>
       </div>
     </form>

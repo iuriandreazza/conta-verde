@@ -9,9 +9,11 @@ import { PageHeader } from "../components/PageHeader";
 import { Spinner } from "../components/Spinner";
 import { useCanWrite } from "../lib/useCanWrite";
 import { useEntryTargets } from "../lib/useEntryTargets";
+import { useI18n } from "../i18n";
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one instance.
 export function CollectionPage() {
+  const { t, rich } = useI18n();
   const { companyId = "" } = useParams();
   const canWrite = useCanWrite("finance");
   const targets = useEntryTargets(companyId);
@@ -52,7 +54,7 @@ export function CollectionPage() {
     const bank = String(form.get("bank_account_id") ?? "");
     const category = String(form.get("fee_category_id") ?? "");
     if (bank === "") {
-      setError("Escolha a conta em que o dinheiro das cobranças cai.");
+      setError(t("Choose the account the money from the charges lands in."));
       return;
     }
     setSaving(true);
@@ -65,7 +67,7 @@ export function CollectionPage() {
           fee_category_id: category === "" ? null : category,
         }),
       );
-      setSaved("Configuração da cobrança salva.");
+      setSaved(t("Collection settings saved."));
     } catch (failure) {
       setError(errorMessage(failure));
     } finally {
@@ -87,32 +89,31 @@ export function CollectionPage() {
   return (
     <>
       <PageHeader
-        title="Cobrança"
-        description="Onde o dinheiro das cobranças cai e como a taxa do provedor é lançada."
+        title={t("Collection")}
+        description={t("Where the money from the charges lands and how the provider's fee is recorded.")}
       />
       <Notice message={error ?? targets.error} />
       <Notice message={saved} tone="success" />
       {!ready && error === null && targets.error === null ? (
         <p role="status" className="status">
-          <Spinner /> Carregando…
+          <Spinner /> {t("Loading…")}
         </p>
       ) : (
         ready && (
           <section className="card">
-            <h2>Provedor de pagamentos</h2>
+            <h2>{t("Payment provider")}</h2>
             {provider === null ? (
               <p className="muted">
-                Nenhum provedor está configurado nesta instalação (variável PAYMENT_PROVIDER): não é possível
-                emitir cobranças.
+                {t("No provider is set up in this installation (PAYMENT_PROVIDER variable): charges cannot be issued.")}
               </p>
             ) : (
               <>
                 <p>
-                  Provedor: <strong>{provider}</strong>
-                  {provider === "fake" && " (de teste: as cobranças são de mentira e não podem ser pagas)"}
+                  {rich("Provider: {name}", { name: <strong>{provider}</strong> })}
+                  {provider === "fake" && ` ${t("(test: the charges are fake and cannot be paid)")}`}
                 </p>
                 <p className="muted">
-                  Informe este endereço no painel do provedor para ele avisar quando uma cobrança for paga:
+                  {t("Give this address in the provider's panel so that it tells us when a charge is paid:")}
                 </p>
                 <p>
                   <code className="tabular">{webhook}</code>
@@ -120,9 +121,9 @@ export function CollectionPage() {
               </>
             )}
             <form onSubmit={(event) => void handleSubmit(event)} className="settle-form">
-              <h2>Recebimento</h2>
+              <h2>{t("Receiving payments")}</h2>
               <label>
-                Conta de recebimento
+                {t("Receiving account")}
                 <select
                   name="bank_account_id"
                   required
@@ -130,7 +131,7 @@ export function CollectionPage() {
                   defaultValue={settings.bank_account_id ?? ""}
                 >
                   <option value="" disabled>
-                    Escolha uma conta
+                    {t("Choose an account")}
                   </option>
                   {banks.map((bank) => (
                     <option key={bank.id} value={bank.id}>
@@ -140,9 +141,9 @@ export function CollectionPage() {
                 </select>
               </label>
               <label>
-                Categoria da taxa do provedor
+                {t("Provider fee category")}
                 <select name="fee_category_id" disabled={!canWrite} defaultValue={settings.fee_category_id ?? ""}>
-                  <option value="">Não lançar a taxa (fica só na cobrança)</option>
+                  <option value="">{t("Do not record the fee (it stays only on the charge)")}</option>
                   {categories.map((category) => (
                     <option key={category.id} value={category.id}>
                       {category.name}
@@ -152,7 +153,7 @@ export function CollectionPage() {
               </label>
               {canWrite && (
                 <Button type="submit" icon={CheckIcon} pending={saving}>
-                  Salvar
+                  {t("Save")}
                 </Button>
               )}
             </form>

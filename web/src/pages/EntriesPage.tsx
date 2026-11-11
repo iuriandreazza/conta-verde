@@ -40,6 +40,7 @@ import { formatDate } from "../lib/entryInstallments";
 import { usePagedList } from "../lib/usePagedList";
 import { useCanWrite } from "../lib/useCanWrite";
 import { importEntriesInPieces } from "../lib/entryImport";
+import { msg, useI18n, type Translate } from "../i18n";
 
 const STATUS_BADGES: Record<InstallmentStatus, string> = {
   open: "badge badge-dot badge-muted",
@@ -48,19 +49,33 @@ const STATUS_BADGES: Record<InstallmentStatus, string> = {
   overdue: "badge badge-dot badge-critical",
 };
 
-function describeDue(entry: Entry): string {
+function describeDue(entry: Entry, t: Translate): string {
   const [first] = entry.installments;
   const last = entry.installments[entry.installments.length - 1];
   return entry.installments.length === 1
     ? formatDate(first.due_date)
-    : `${entry.installments.length} parcelas, de ${formatDate(first.due_date)} a ${formatDate(last.due_date)}`;
+    : t("{count} installments, from {from} to {to}", {
+        count: entry.installments.length,
+        from: formatDate(first.due_date),
+        to: formatDate(last.due_date),
+      });
 }
 
-const ENTRY_COLUMNS = ["Tipo", "Descrição", "Cliente ou fornecedor", "Categoria", "Competência", "Parcelas", "Primeiro vencimento", "Total", "Situação"];
+const ENTRY_COLUMNS = [
+  msg("Type"),
+  msg("Description"),
+  msg("Customer or supplier"),
+  msg("Category"),
+  msg("Accrual date"),
+  msg("Installments"),
+  msg("First due date"),
+  msg("Total"),
+  msg("Status"),
+];
 
-function entryRow(entry: Entry, names: Map<string, string>): string[] {
+function entryRow(entry: Entry, names: Map<string, string>, t: Translate): string[] {
   return [
-    entry.kind === "receivable" ? "A receber" : "A pagar",
+    entry.kind === "receivable" ? t("Receivable") : t("Payable"),
     entry.description,
     entry.party_id === null ? "" : (names.get(entry.party_id) ?? ""),
     names.get(entry.category_id) ?? "",
@@ -68,27 +83,27 @@ function entryRow(entry: Entry, names: Map<string, string>): string[] {
     String(entry.installments.length),
     formatDate(entry.installments[0].due_date),
     toInputDecimal(entry.total),
-    entry.voided ? "Cancelado" : "",
+    entry.voided ? t("Voided") : "",
   ];
 }
 
 const PAGE_TEXT = {
   "": {
-    title: "Lançamentos",
-    description: "O que a empresa tem a receber e a pagar, dividido em parcelas.",
-    create: "Novo lançamento",
+    title: msg("Entries"),
+    description: msg("What the company has to receive and to pay, split into installments."),
+    create: msg("New entry"),
     file: "lancamentos",
   },
   receivable: {
-    title: "Contas a receber",
-    description: "O que os clientes ainda vão pagar, dividido em parcelas.",
-    create: "Nova receita",
+    title: msg("Receivables"),
+    description: msg("What customers are yet to pay, split into installments."),
+    create: msg("New revenue"),
     file: "contas-a-receber",
   },
   payable: {
-    title: "Contas a pagar",
-    description: "O que a empresa ainda vai pagar, dividido em parcelas.",
-    create: "Nova despesa",
+    title: msg("Payables"),
+    description: msg("What the company is yet to pay, split into installments."),
+    create: msg("New expense"),
     file: "contas-a-pagar",
   },
 } as const;
@@ -97,6 +112,7 @@ const PAGE_TEXT = {
 // instance: the old list is dropped and a reply still in flight for another company lands on an
 // unmounted component.
 export function EntriesPage() {
+  const { t, rich } = useI18n();
   const { companyId = "" } = useParams();
   const canWrite = useCanWrite("finance");
   // "Contas a receber" and "Contas a pagar" are this list with the kind in the address, as people expect to find them.
@@ -183,7 +199,7 @@ export function EntriesPage() {
     try {
       const updated = await api.updateEntry(companyId, editing.id, input);
       setEditing(null);
-      setSaved(`${updated.description} atualizado.`);
+      setSaved(t("{name} updated.", { name: updated.description }));
       // Read again, not changed in place: a new date, kind or category can move the entry to
       // another place in the list, or out of the filter the list is showing.
       await reload();
@@ -196,38 +212,38 @@ export function EntriesPage() {
 
   return (
     <>
-      <PageHeader title={PAGE_TEXT[pageKind].title} description={PAGE_TEXT[pageKind].description} />
+      <PageHeader title={t(PAGE_TEXT[pageKind].title)} description={t(PAGE_TEXT[pageKind].description)} />
       <div className="list-actions">
         {canWrite && (
           <Button type="button" icon={PlusIcon} onClick={() => openCreate("entry", pageKind === "" ? {} : { kind: pageKind })}>
-            {PAGE_TEXT[pageKind].create}
+            {t(PAGE_TEXT[pageKind].create)}
           </Button>
         )}
         <ListTools
           filename={PAGE_TEXT[pageKind].file}
-          header={ENTRY_COLUMNS}
+          header={ENTRY_COLUMNS.map((column) => t(column))}
           fetchPage={(after) => api.listEntries(companyId, applied, after)}
-          toRow={(entry) => entryRow(entry, names)}
+          toRow={(entry) => entryRow(entry, names, t)}
         />
       </div>
       <Notice message={saved} tone="success" />
       <div>
         <section className="card list-card">
-          <h2>Lançados</h2>
+          <h2>{t("Recorded")}</h2>
           <div className="filters" role="search">
             <label>
-              Buscar
+              {t("Search")}
               <input
                 type="search"
                 value={filters.q}
-                placeholder="Descrição"
+                placeholder={t("Description")}
                 autoComplete="off"
                 maxLength={100}
                 onChange={(event) => setFilters({ ...typedFilters, q: event.target.value })}
               />
             </label>
             <label>
-              Mostrar
+              {t("Show")}
               <select
                 value={filters.kind}
                 onChange={(event) => {
@@ -238,18 +254,18 @@ export function EntriesPage() {
                   setParams(next, { replace: true });
                 }}
               >
-                <option value="">Todos</option>
-                <option value="receivable">Só a receber</option>
-                <option value="payable">Só a pagar</option>
+                <option value="">{t("Any")}</option>
+                <option value="receivable">{t("Receivables only")}</option>
+                <option value="payable">{t("Payables only")}</option>
               </select>
             </label>
             <label>
-              Categoria
+              {t("Category")}
               <select
                 value={filters.category}
                 onChange={(event) => setFilters({ ...typedFilters, category: event.target.value })}
               >
-                <option value="">Todas</option>
+                <option value="">{t("All categories")}</option>
                 {treeRows(categories).map(({ category, depth }) => (
                   <option key={category.id} value={category.id}>
                     {"— ".repeat(depth)}
@@ -259,46 +275,45 @@ export function EntriesPage() {
               </select>
             </label>
             <label>
-              Ordem por competência
+              {t("Order by accrual date")}
               <select
                 value={filters.sort}
                 onChange={(event) =>
                   setFilters({ ...typedFilters, sort: event.target.value as EntryFilters["sort"] })
                 }
               >
-                <option value="-competence_date">Mais recentes</option>
-                <option value="competence_date">Mais antigas</option>
+                <option value="-competence_date">{t("Newest")}</option>
+                <option value="competence_date">{t("Oldest first")}</option>
               </select>
             </label>
           </div>
           <Notice message={error ?? targetsError} />
           {loading ? (
             <p role="status" className="status">
-              <Spinner /> Carregando…
+              <Spinner /> {t("Loading…")}
             </p>
           ) : entries.length === 0 && error ? (
             <Button type="button" variant="ghost" onClick={() => void reload()}>
-              Tentar de novo
+              {t("Try again")}
             </Button>
           ) : entries.length === 0 && isFiltered ? (
             <div className="empty">
               <BriefcaseBusinessIcon size={40} aria-hidden />
-              <p role="status">Nenhum lançamento encontrado.</p>
+              <p role="status">{t("No entry found.")}</p>
               <Button
                 type="button"
                 variant="ghost"
                 onClick={() => setFilters({ ...NO_ENTRY_FILTERS, sort: filters.sort })}
               >
-                Limpar filtros
+                {t("Clear filters")}
               </Button>
             </div>
           ) : entries.length === 0 ? (
             <div className="empty">
               <BriefcaseBusinessIcon size={40} aria-hidden />
-              <p>Nenhum lançamento ainda.</p>
+              <p>{t("No entries yet.")}</p>
               <p className="muted">
-                Uma venda a prazo, o aluguel do mês, uma conta de luz: cada um é um lançamento com
-                suas parcelas.
+                {t("A credit sale, the month's rent, an electricity bill: each one is an entry with its installments.")}
               </p>
             </div>
           ) : (
@@ -306,12 +321,12 @@ export function EntriesPage() {
               <table>
                 <thead>
                   <tr>
-                    <th>Descrição</th>
-                    <th>Competência</th>
-                    <th>Vencimento</th>
-                    <th className="num">Total</th>
+                    <th>{t("Description")}</th>
+                    <th>{t("Accrual date")}</th>
+                    <th>{t("Due date")}</th>
+                    <th className="num">{t("Total")}</th>
                     <th>
-                      <span className="visually-hidden">Ações</span>
+                      <span className="visually-hidden">{t("Actions")}</span>
                     </th>
                   </tr>
                 </thead>
@@ -325,19 +340,19 @@ export function EntriesPage() {
                           <div className="cell-title">{entry.description}</div>
                           <div className="muted">
                             {entry.voided ? (
-                              <span className="badge badge-dot badge-critical">Cancelado</span>
+                              <span className="badge badge-dot badge-critical">{t("Voided")}</span>
                             ) : (
-                              <span className={STATUS_BADGES[status]}>{STATUS_LABELS[status]}</span>
+                              <span className={STATUS_BADGES[status]}>{t(STATUS_LABELS[status])}</span>
                             )}{" "}
-                            {entry.kind === "receivable" ? "A receber" : "A pagar"} ·{" "}
+                            {entry.kind === "receivable" ? t("Receivable") : t("Payable")} ·{" "}
                             {names.get(entry.category_id) ?? ""}
-                            {entry.recurrence_id !== null && " · Recorrente"}
-                            {entry.sale_id !== null && " · De uma venda"}
-                            {entry.sale_return_id !== null && " · Devolução"}
+                            {entry.recurrence_id !== null && ` · ${t("Recurring")}`}
+                            {entry.sale_id !== null && ` · ${t("From a sale")}`}
+                            {entry.sale_return_id !== null && ` · ${t("Return")}`}
                           </div>
                         </td>
                         <td className="tabular">{formatDate(entry.competence_date)}</td>
-                        <td className="tabular">{describeDue(entry)}</td>
+                        <td className="tabular">{describeDue(entry, t)}</td>
                         <td className="num">{formatMoney(entry.total)}</td>
                         <td className="row-actions">
                           {canWrite && !entry.voided && entry.sale_id === null && entry.sale_return_id === null && (
@@ -346,7 +361,7 @@ export function EntriesPage() {
                               icon={SquarePenIcon}
                               type="button"
                               variant="ghost"
-                              aria-label={`Alterar ${entry.description}`}
+                              aria-label={t("Edit {name}", { name: entry.description })}
                               disabled={saving}
                               onClick={() => {
                                 setEditing(entry);
@@ -354,7 +369,7 @@ export function EntriesPage() {
                                 setSaved(null);
                               }}
                             >
-                              Alterar
+                              {t("Change")}
                             </Button>
                           )}
                           {!entry.voided && (
@@ -363,14 +378,14 @@ export function EntriesPage() {
                               icon={CircleDollarSignIcon}
                               type="button"
                               variant="ghost"
-                              aria-label={`Baixas de ${entry.description}`}
+                              aria-label={t("Settlements of {name}", { name: entry.description })}
                               aria-expanded={settlementsOpenFor === entry.id}
                               aria-controls={`settlements-${entry.id}`}
                               onClick={() =>
                                 setSettlementsOpenFor(settlementsOpenFor === entry.id ? null : entry.id)
                               }
                             >
-                              Baixas
+                              {t("Settlements")}
                             </Button>
                           )}
                           {!entry.voided && entry.kind === "receivable" && (
@@ -379,14 +394,14 @@ export function EntriesPage() {
                               icon={CreditCardIcon}
                               type="button"
                               variant="ghost"
-                              aria-label={`Cobranças de ${entry.description}`}
+                              aria-label={t("Charges of {name}", { name: entry.description })}
                               aria-expanded={chargesOpenFor === entry.id}
                               aria-controls={`charges-${entry.id}`}
                               onClick={() =>
                                 setChargesOpenFor(chargesOpenFor === entry.id ? null : entry.id)
                               }
                             >
-                              Cobranças
+                              {t("Charges")}
                             </Button>
                           )}
                           <Button
@@ -394,20 +409,20 @@ export function EntriesPage() {
                             icon={FileTextIcon}
                             type="button"
                             variant="ghost"
-                            aria-label={`Anexos de ${entry.description}`}
+                            aria-label={t("Attachments of {name}", { name: entry.description })}
                             aria-expanded={attachmentsOpenFor === entry.id}
                             aria-controls={`attachments-${entry.id}`}
                             onClick={() =>
                               setAttachmentsOpenFor(attachmentsOpenFor === entry.id ? null : entry.id)
                             }
                           >
-                            Anexos
+                            {t("Attachments")}
                           </Button>
                           <Button
                             iconOnly
                             type="button"
                             variant="ghost"
-                            aria-label={`Histórico de ${entry.description}`}
+                            aria-label={t("History of {name}", { name: entry.description })}
                             aria-expanded={historyOpenFor === entry.id}
                             aria-controls={`history-${entry.id}`}
                             icon={HistoryIcon}
@@ -415,13 +430,13 @@ export function EntriesPage() {
                               setHistoryOpenFor(historyOpenFor === entry.id ? null : entry.id)
                             }
                           >
-                            Histórico
+                            {t("History")}
                           </Button>
                         </td>
                       </ListRow>
                       {settlementsOpenFor === entry.id && (
                         <tr id={`settlements-${entry.id}`}>
-                          <td colSpan={5} role="region" aria-label={`Baixas de ${entry.description}`}>
+                          <td colSpan={5} role="region" aria-label={t("Settlements of {name}", { name: entry.description })}>
                             <SettlementPanel
                               companyId={companyId}
                               entry={entry}
@@ -435,7 +450,7 @@ export function EntriesPage() {
                       )}
                       {chargesOpenFor === entry.id && (
                         <tr id={`charges-${entry.id}`}>
-                          <td colSpan={5} role="region" aria-label={`Cobranças de ${entry.description}`}>
+                          <td colSpan={5} role="region" aria-label={t("Charges of {name}", { name: entry.description })}>
                             <ChargesPanel
                               // Remounted when the entry changes (a settlement moves the balances).
                               key={JSON.stringify(entry.installments)}
@@ -448,14 +463,14 @@ export function EntriesPage() {
                       )}
                       {attachmentsOpenFor === entry.id && (
                         <tr id={`attachments-${entry.id}`}>
-                          <td colSpan={5} role="region" aria-label={`Anexos de ${entry.description}`}>
+                          <td colSpan={5} role="region" aria-label={t("Attachments of {name}", { name: entry.description })}>
                             <AttachmentsPanel companyId={companyId} entryId={entry.id} canWrite={canWrite} />
                           </td>
                         </tr>
                       )}
                       {historyOpenFor === entry.id && (
                         <tr id={`history-${entry.id}`}>
-                          <td colSpan={5} role="region" aria-label={`Histórico de ${entry.description}`}>
+                          <td colSpan={5} role="region" aria-label={t("History of {name}", { name: entry.description })}>
                             <EntryHistory
                               // Remounted when the entry changes, so an open history follows an edit.
                               key={JSON.stringify(entry)}
@@ -476,7 +491,7 @@ export function EntriesPage() {
           {!loading && entries.length > 0 && (
             <ListFooter
               count={entries.length}
-              noun={["lançamento", "lançamentos"]}
+              noun={[t("entry"), t("entries")]}
               hasMore={nextCursor !== null}
               loadingMore={loadingMore}
               refreshing={refreshing}
@@ -486,10 +501,10 @@ export function EntriesPage() {
         </section>
         {canWrite && (
           <CsvImport
-            title="Importar de um arquivo CSV"
+            title={t("Import from a CSV file")}
             template={ENTRIES_TEMPLATE}
             templateName="lancamentos.csv"
-            created={["lançamento criado", "lançamentos criados"]}
+            created={[t("entry created"), t("entries created")]}
             run={async (file, dryRun) =>
               importEntriesInPieces(
                 await file.text(),
@@ -500,28 +515,49 @@ export function EntriesPage() {
             onImported={() => void reload()}
           >
             <p>
-              Cada linha é um lançamento de uma parcela. A primeira linha dá o nome das colunas, em
-              qualquer ordem. Obrigatórias: <code>reference</code> (o código da linha no arquivo, que não
-              se repete: é o que impede importar duas vezes), <code>kind</code> (<code>receivable</code> ou{" "}
-              <code>payable</code>), <code>description</code>, <code>category</code> (o caminho{" "}
-              <code>Raiz &gt; Filha</code>, ou só o nome de uma raiz), <code>competence_date</code> e{" "}
-              <code>due_date</code> (<code>AAAA-MM-DD</code>) e <code>amount</code> (com ponto decimal).
+              {rich(
+                "Each row is an entry of one installment. The first row names the columns, in any order. Required: {reference} (the row's code in the file, which does not repeat: it is what stops it being imported twice), {kind} ({receivable} or {payable}), {description}, {category} (the path {path}, or just the name of a root), {competence_date} and {due_date} ({format}) and {amount} (with a decimal point).",
+                {
+                  reference: <code>reference</code>,
+                  kind: <code>kind</code>,
+                  receivable: <code>receivable</code>,
+                  payable: <code>payable</code>,
+                  description: <code>description</code>,
+                  category: <code>category</code>,
+                  path: <code>{t("Root > Child")}</code>,
+                  competence_date: <code>competence_date</code>,
+                  due_date: <code>due_date</code>,
+                  format: <code>{t("YYYY-MM-DD")}</code>,
+                  amount: <code>amount</code>,
+                },
+              )}
             </p>
             <p>
-              Opcionais: <code>party_document</code> e <code>party_name</code>, <code>cost_center</code>. Para
-              um lançamento já pago, <code>settled_on</code> e <code>bank_account</code>, e se for o caso{" "}
-              <code>applied</code>, <code>interest</code>, <code>fine</code> e <code>discount</code>. Categoria, centro
-              de custo e conta precisam estar cadastrados e ativos.
+              {rich(
+                "Optional: {party_document} and {party_name}, {cost_center}. For an entry that is already paid, {settled_on} and {bank_account}, and where it applies {applied}, {interest}, {fine} and {discount}. The category, cost center and account must be registered and active.",
+                {
+                  party_document: <code>party_document</code>,
+                  party_name: <code>party_name</code>,
+                  cost_center: <code>cost_center</code>,
+                  settled_on: <code>settled_on</code>,
+                  bank_account: <code>bank_account</code>,
+                  applied: <code>applied</code>,
+                  interest: <code>interest</code>,
+                  fine: <code>fine</code>,
+                  discount: <code>discount</code>,
+                },
+              )}
             </p>
             <p>
-              Nada é importado enquanto uma linha tiver problema. Quem já foi importado, pelo mesmo{" "}
-              <code>reference</code>, é ignorado. Arquivos grandes são enviados em partes, todas verificadas
-              antes de gravar a primeira.
+              {rich(
+                "Nothing is imported while any row has a problem. A row already imported, by the same {reference}, is ignored. Large files are sent in parts, all checked before the first is written.",
+                { reference: <code>reference</code> },
+              )}
             </p>
           </CsvImport>
         )}
         {canWrite && (
-          <Sheet open={editing !== null} locked={saving} title={`Alterar ${shown?.description ?? ""}`} onClose={closeSheet}>
+          <Sheet open={editing !== null} locked={saving} title={t("Edit {name}", { name: shown?.description ?? "" })} onClose={closeSheet}>
             {shown !== null &&
               (targetsLoaded ? (
                 <EntryForm
@@ -535,7 +571,7 @@ export function EntriesPage() {
                 />
               ) : targetsError === null ? (
                 <p role="status" className="status">
-                  <Spinner /> Carregando…
+                  <Spinner /> {t("Loading…")}
                 </p>
               ) : (
                 <p role="alert">{targetsError}</p>

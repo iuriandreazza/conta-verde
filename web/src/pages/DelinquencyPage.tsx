@@ -8,14 +8,16 @@ import { formatMoney } from "../lib/decimal";
 import { formatDate, isIsoDate } from "../lib/entryInstallments";
 import { todayIso } from "../lib/settlement";
 import { useEntryTargets } from "../lib/useEntryTargets";
+import { useT, type Translate } from "../i18n";
 
 /** `1 a 30 dias`, `91 dias ou mais`. */
-function rangeLabel(from: number, to: number | null): string {
-  return to === null ? `${from} dias ou mais` : `${from} a ${to} dias`;
+function rangeLabel(from: number, to: number | null, t: Translate): string {
+  return to === null ? t("{from} days or more", { from }) : t("{from} to {to} days", { from, to });
 }
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one instance.
 export function DelinquencyPage() {
+  const t = useT();
   const { companyId = "" } = useParams();
   const targets = useEntryTargets(companyId);
   const [on, setOn] = useState(todayIso());
@@ -52,61 +54,61 @@ export function DelinquencyPage() {
   // what it is, never by a guess.
   const names = new Map(targets.parties.map((party) => [party.id, party.name]));
   const nameOf = (id: string) =>
-    names.get(id) ?? (targets.loaded ? `Cliente ${id.slice(0, 8)}` : "…");
+    names.get(id) ?? (targets.loaded ? t("Customer {id}", { id: id.slice(0, 8) }) : "…");
 
   return (
     <>
       <PageHeader
-        title="Inadimplência"
-        description="Quem deve, quanto e há quantos dias: parcelas a receber vencidas e ainda com saldo."
+        title={t("Delinquency")}
+        description={t("Who owes, how much and for how many days: overdue receivable installments that still have a balance.")}
       />
       <Notice message={error ?? targets.error} />
       <section className="card">
         <label>
-          Posição em
+          {t("Position on")}
           <input type="date" value={on} onChange={(event) => setOn(event.target.value)} />
         </label>
       </section>
       {report === null && error === null && isIsoDate(on) ? (
         <p role="status" className="status">
-          <Spinner /> Carregando…
+          <Spinner /> {t("Loading…")}
         </p>
       ) : (
         report !== null && (
           <>
-            <section className="card" aria-label="Por faixa de atraso">
-              <h2>Por faixa de atraso</h2>
+            <section className="card" aria-label={t("By days overdue")}>
+              <h2>{t("By days overdue")}</h2>
               <div className="tiles">
                 <div className="tile">
-                  <span className="muted">Total em atraso</span>
+                  <span className="muted">{t("Total overdue")}</span>
                   <strong className="num">{formatMoney(report.owed)}</strong>
-                  <span className="muted">{report.installments} parcelas</span>
+                  <span className="muted">{t("{count} installments", { count: report.installments })}</span>
                 </div>
                 {report.buckets.map((bucket) => (
                   <div className="tile" key={bucket.from_days}>
-                    <span className="muted">{rangeLabel(bucket.from_days, bucket.to_days)}</span>
+                    <span className="muted">{rangeLabel(bucket.from_days, bucket.to_days, t)}</span>
                     <strong className="num">{formatMoney(bucket.owed)}</strong>
-                    <span className="muted">{bucket.installments} parcelas</span>
+                    <span className="muted">{t("{count} installments", { count: bucket.installments })}</span>
                   </div>
                 ))}
               </div>
             </section>
             <section className="card">
-              <h2>Por cliente</h2>
+              <h2>{t("By customer")}</h2>
               {report.customers.length === 0 ? (
-                <p className="muted">Nada em atraso nesta data.</p>
+                <p className="muted">{t("Nothing overdue on this date.")}</p>
               ) : (
                 <div className="table-wrap">
                   <table>
                     <thead>
                       <tr>
-                        <th>Cliente</th>
-                        <th className="num">Em atraso</th>
-                        <th className="num">Parcelas</th>
-                        <th>Mais antiga</th>
+                        <th>{t("Customer")}</th>
+                        <th className="num">{t("Past due")}</th>
+                        <th className="num">{t("Installments")}</th>
+                        <th>{t("Oldest installment")}</th>
                         {report.buckets.map((bucket) => (
                           <th key={bucket.from_days} className="num">
-                            {rangeLabel(bucket.from_days, bucket.to_days)}
+                            {rangeLabel(bucket.from_days, bucket.to_days, t)}
                           </th>
                         ))}
                       </tr>
@@ -116,7 +118,7 @@ export function DelinquencyPage() {
                         <tr key={customer.party_id ?? "none"}>
                           <td>
                             {customer.party_id === null
-                              ? "Sem cliente"
+                              ? t("No customer")
                               : nameOf(customer.party_id)}
                           </td>
                           <td className="num">{formatMoney(customer.owed)}</td>

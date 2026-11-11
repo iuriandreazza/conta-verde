@@ -18,31 +18,32 @@ import { CopyButton } from "./CopyButton";
 import { CheckIcon } from "./icons/check";
 import { Notice } from "./Notice";
 import { Spinner } from "./Spinner";
+import { msg, useI18n, useT } from "../i18n";
 
 const METHOD_LABELS: Record<ChargeMethod, string> = {
-  boleto: "Boleto",
-  pix: "Pix",
-  card_link: "Link de cartão",
+  boleto: msg("Boleto"),
+  pix: msg("Pix"),
+  card_link: msg("Card link"),
 };
 
 const STATUS_LABELS: Record<ChargeStatus, string> = {
-  open: "Aberta",
-  paid: "Paga",
-  cancelled: "Cancelada",
-  expired: "Expirada",
+  open: msg("Charge open"),
+  paid: msg("Charge settled"),
+  cancelled: msg("Charge cancelled"),
+  expired: msg("Charge expired"),
 };
 
 /** What the server says in English when it kept a payment without settling it, in words for the person. */
 const NOTES: Record<string, string> = {
-  "the installment was already settled": "a parcela já estava baixada.",
-  "the installment was settled meanwhile": "a parcela foi baixada nesse meio tempo.",
-  "the charge was already paid": "a cobrança já tinha sido paga.",
-  "the notice says nothing was paid": "o aviso diz que nada foi pago.",
-  "the fee category can no longer be used": "a categoria da taxa não pode mais ser usada.",
-  "the bank account can no longer be used": "a conta de recebimento não pode mais ser usada.",
-  "the entry was cancelled": "o lançamento foi cancelado.",
-  "the account charges are paid into is not set": "a conta de recebimento não está configurada.",
-  "the installment no longer exists": "a parcela não existe mais.",
+  "the installment was already settled": msg("the installment was already settled."),
+  "the installment was settled meanwhile": msg("the installment was settled meanwhile."),
+  "the charge was already paid": msg("the charge was already paid."),
+  "the notice says nothing was paid": msg("the notice says nothing was paid."),
+  "the fee category can no longer be used": msg("the fee category can no longer be used."),
+  "the bank account can no longer be used": msg("the bank account can no longer be used."),
+  "the entry was cancelled": msg("the entry was cancelled."),
+  "the account charges are paid into is not set": msg("the account charges are paid into is not set."),
+  "the installment no longer exists": msg("the installment no longer exists."),
 };
 
 const STATUS_BADGES: Record<ChargeStatus, string> = {
@@ -64,6 +65,7 @@ interface ChargesPanelProps {
  * another. A charge is for what is left of its installment, and only one is open at a time.
  */
 export function ChargesPanel({ companyId, entry, canWrite }: ChargesPanelProps) {
+  const { t, rich } = useI18n();
   const [charges, setCharges] = useState<Charge[] | null>(null);
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [provider, setProvider] = useState<string | null | undefined>(undefined);
@@ -128,7 +130,7 @@ export function ChargesPanel({ companyId, entry, canWrite }: ChargesPanelProps) 
     const form = new FormData(event.currentTarget);
     const dueOn = String(form.get("due_on") ?? "");
     if (dueOn !== "" && !isIsoDate(dueOn)) {
-      setFormError("Informe o vencimento da cobrança como data.");
+      setFormError(t("Give the due date of the charge as a date."));
       return;
     }
     setIssuing(true);
@@ -141,7 +143,7 @@ export function ChargesPanel({ companyId, entry, canWrite }: ChargesPanelProps) 
         ...(dueOn === "" ? {} : { due_on: dueOn }),
       });
       await load();
-      setSaved(`Cobrança emitida para a parcela ${installment}.`);
+      setSaved(t("Charge issued for installment {number}.", { number: installment }));
     } catch (failure) {
       setFormError(errorMessage(failure));
     } finally {
@@ -194,34 +196,41 @@ export function ChargesPanel({ companyId, entry, canWrite }: ChargesPanelProps) 
       <Notice message={saved} tone="success" />
       {provider === "fake" && (
         <p className="muted">
-          Provedor de teste: as cobranças são de mentira e não podem ser pagas.
+          {t("Test provider: the charges are fake and cannot be paid.")}
         </p>
       )}
       {charges === null && error === null ? (
         <p role="status" className="status">
-          <Spinner /> Carregando…
+          <Spinner /> {t("Loading…")}
         </p>
       ) : charges === null ? (
         <Button type="button" variant="ghost" onClick={() => void load()}>
-          Tentar de novo
+          {t("Try again")}
         </Button>
       ) : (
         <>
           {charges.length === 0 ? (
-            <p className="muted">Nenhuma cobrança emitida.</p>
+            <p className="muted">{t("No charge issued.")}</p>
           ) : (
             <ul className="history">
               {charges.map((charge) => (
                 <li key={charge.id} className={charge.status === "open" ? undefined : "muted"}>
-                  Parcela {charge.installment} · {METHOD_LABELS[charge.method]} ·{" "}
-                  {formatMoney(charge.amount)}, vence em {formatDate(charge.due_on)}{" "}
-                  <span className={STATUS_BADGES[charge.status]}>{STATUS_LABELS[charge.status]}</span>
+                  {t("Installment {number} · {method} · {amount}, due on {date}", {
+                    number: charge.installment,
+                    method: t(METHOD_LABELS[charge.method]),
+                    amount: formatMoney(charge.amount),
+                    date: formatDate(charge.due_on),
+                  })}{" "}
+                  <span className={STATUS_BADGES[charge.status]}>{t(STATUS_LABELS[charge.status])}</span>
                   {charge.status === "open" && <PaymentDetails charge={charge} />}
                   {charge.paid_on !== null && charge.paid_amount !== null && charge.fee !== null && (
                     <span className="muted">
                       {" "}
-                      Paga em {formatDate(charge.paid_on)}: {formatMoney(charge.paid_amount)}, taxa{" "}
-                      {formatMoney(charge.fee)}.
+                      {t("Paid on {date}: {amount}, fee {fee}.", {
+                        date: formatDate(charge.paid_on),
+                        amount: formatMoney(charge.paid_amount),
+                        fee: formatMoney(charge.fee),
+                      })}
                     </span>
                   )}
                   <Notice
@@ -229,17 +238,19 @@ export function ChargesPanel({ companyId, entry, canWrite }: ChargesPanelProps) 
                     message={
                       charge.note === null
                         ? null
-                        : `Pagamento recebido, mas houve um problema ao lançá-lo: ${charge.note
-                            .split("; ")
-                            .map((note) => NOTES[note] ?? note)
-                            .join(" ")}`
+                        : t("Payment received, but there was a problem recording it: {notes}", {
+                            notes: charge.note
+                              .split("; ")
+                              .map((note) => (note in NOTES ? t(NOTES[note]) : note))
+                              .join(" "),
+                          })
                     }
                   />
                   {link?.chargeId === charge.id && (
                     <div className="charge-details">
-                      <span className="muted">Link para o cliente (aparece só agora):</span>
+                      <span className="muted">{t("Link for the customer (shown only now):")}</span>
                       <code className="tabular">{link.url}</code>
-                      <CopyButton text={link.url} label="Copiar o link de pagamento" />
+                      <CopyButton text={link.url} label={t("Copy the payment link")} />
                     </div>
                   )}
                   {canWrite && charge.status === "open" && (
@@ -247,12 +258,12 @@ export function ChargesPanel({ companyId, entry, canWrite }: ChargesPanelProps) 
                       type="button"
                       variant="ghost"
                       className="btn-small"
-                      aria-label={`Gerar o link de pagamento da parcela ${charge.installment}`}
+                      aria-label={t("Generate the payment link for installment {number}", { number: charge.installment })}
                       pending={linkingId === charge.id}
                       disabled={linkingId !== null}
                       onClick={() => void makeLink(charge)}
                     >
-                      Gerar link
+                      {t("Generate link")}
                     </Button>
                   )}
                   {canWrite && charge.status === "open" && (
@@ -260,12 +271,12 @@ export function ChargesPanel({ companyId, entry, canWrite }: ChargesPanelProps) 
                       type="button"
                       variant="ghost"
                       className="btn-small"
-                      aria-label={`Cancelar a cobrança da parcela ${charge.installment}`}
+                      aria-label={t("Cancel the charge for installment {number}", { number: charge.installment })}
                       pending={cancellingId === charge.id}
                       disabled={cancellingId !== null}
                       onClick={() => void cancel(charge)}
                     >
-                      Cancelar
+                      {t("Cancel")}
                     </Button>
                   )}
                 </li>
@@ -274,17 +285,22 @@ export function ChargesPanel({ companyId, entry, canWrite }: ChargesPanelProps) 
           )}
           {reminders.length > 0 && (
             <>
-              <h3>Lembretes enviados</h3>
+              <h3>{t("Reminders sent")}</h3>
               <ul className="history">
                 {reminders.map((reminder, index) => (
                   <li key={index} className={reminder.status === "sent" ? undefined : "muted"}>
-                    Parcela {reminder.installment} · {reminder.channel === "email" ? "E-mail" : "WhatsApp"} ·{" "}
-                    {describeRule(reminder.days)} · para {reminder.recipient} ·{" "}
-                    {reminder.status === "sent"
-                      ? "enviado"
-                      : reminder.status === "failed"
-                        ? `não enviado (tentativa ${reminder.attempts})`
-                        : "enviando"}
+                    {t("Installment {number} · {channel} · {rule} · to {recipient} · {status}", {
+                      number: reminder.installment,
+                      channel: reminder.channel === "email" ? t("E-mail") : "WhatsApp",
+                      rule: describeRule(reminder.days, t),
+                      recipient: reminder.recipient,
+                      status:
+                        reminder.status === "sent"
+                          ? t("sent")
+                          : reminder.status === "failed"
+                            ? t("not sent (attempt {attempts})", { attempts: reminder.attempts })
+                            : t("sending"),
+                    })}
                   </li>
                 ))}
               </ul>
@@ -292,24 +308,25 @@ export function ChargesPanel({ companyId, entry, canWrite }: ChargesPanelProps) 
           )}
           {provider === null && (
             <p className="muted">
-              Cobrança por boleto, Pix ou link de cartão não está configurada nesta instalação.
+              {t("Collection by boleto, Pix or card link is not set up in this installation.")}
             </p>
           )}
           {provider !== null && provider !== undefined && accountChosen === false && (
             <p className="muted">
-              Escolha antes a conta em que o dinheiro das cobranças cai, em{" "}
-              <Link to={`/companies/${companyId}/collection`}>Cobrança</Link>.
+              {rich("First choose the account the money from the charges lands in, at {link}.", {
+                link: <Link to={`/companies/${companyId}/collection`}>{t("Collection")}</Link>,
+              })}
             </p>
           )}
           {canIssue &&
             (chargeable.length === 0 ? (
-              <p className="muted">Nenhuma parcela com saldo e sem cobrança aberta.</p>
+              <p className="muted">{t("No installment with a balance and without an open charge.")}</p>
             ) : (
               <form onSubmit={handleSubmit} className="settle-form">
-                <h3>Emitir uma cobrança</h3>
+                <h3>{t("Issue a charge")}</h3>
                 <Notice message={formError} />
                 <label>
-                  Parcela
+                  {t("Installment")}
                   <select
                     name="installment"
                     value={installment}
@@ -317,28 +334,31 @@ export function ChargesPanel({ companyId, entry, canWrite }: ChargesPanelProps) 
                   >
                     {chargeable.map((item) => (
                       <option key={item.number} value={item.number}>
-                        {item.number} — vence em {formatDate(item.due_date)}, saldo{" "}
-                        {formatMoney(balance(item))}
+                        {t("{number} — due on {date}, balance {amount}", {
+                          number: item.number,
+                          date: formatDate(item.due_date),
+                          amount: formatMoney(balance(item)),
+                        })}
                       </option>
                     ))}
                   </select>
                 </label>
                 <label>
-                  Forma
+                  {t("Method")}
                   <select name="method" defaultValue="pix">
                     {(Object.keys(METHOD_LABELS) as ChargeMethod[]).map((method) => (
                       <option key={method} value={method}>
-                        {METHOD_LABELS[method]}
+                        {t(METHOD_LABELS[method])}
                       </option>
                     ))}
                   </select>
                 </label>
                 <label>
-                  Vencimento da cobrança
+                  {t("Charge due date")}
                   <input name="due_on" type="date" />
                 </label>
                 <Button type="submit" icon={CheckIcon} pending={issuing}>
-                  Emitir cobrança
+                  {t("Issue charge")}
                 </Button>
               </form>
             ))}
@@ -350,6 +370,7 @@ export function ChargesPanel({ companyId, entry, canWrite }: ChargesPanelProps) 
 
 /** What the customer pays with: a line, a text to paste or a link, each with what it takes to use it. */
 function PaymentDetails({ charge }: { charge: Charge }) {
+  const t = useT();
   const text = charge.digitable_line ?? charge.pix_payload;
   return (
     <div className="charge-details">
@@ -358,13 +379,13 @@ function PaymentDetails({ charge }: { charge: Charge }) {
           <code className="tabular">{text}</code>{" "}
           <CopyButton
             text={text}
-            label={`Copiar ${charge.method === "boleto" ? "a linha digitável" : "o código Pix"}`}
+            label={charge.method === "boleto" ? t("Copy the digitable line") : t("Copy the Pix code")}
           />
         </>
       )}
       {charge.payment_url !== null && (
         <a href={charge.payment_url} target="_blank" rel="noopener noreferrer">
-          {charge.method === "boleto" ? "Ver o boleto" : "Abrir o link de pagamento"}
+          {charge.method === "boleto" ? t("View the boleto") : t("Open the payment link")}
         </a>
       )}
     </div>
