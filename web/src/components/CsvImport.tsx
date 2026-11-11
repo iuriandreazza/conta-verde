@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { errorMessage, type ImportNote, type ImportResult } from "../api";
+import { useT } from "../i18n";
 import { Button } from "./Button";
 import { InfoTip } from "./InfoTip";
 import { Notice } from "./Notice";
@@ -14,11 +15,11 @@ interface CsvImportProps {
   /** The header and one example row, which the person downloads and fills in; none for a file a bank makes. */
   template?: string;
   templateName?: string;
-  /** What the file is, for the field: "Arquivo CSV" unless said. */
+  /** What the file is, for the field ("CSV file" unless said), already in the person's language. */
   fileLabel?: string;
   /** The kinds of file the picker offers. */
   accept?: string;
-  /** What an import makes, in words: "cadastro criado" / "cadastros criados" unless said. */
+  /** What an import makes, in words, singular and plural ("record created" / "records created" unless said), already in the person's language. */
   created?: [string, string];
   /** Holds the buttons back, because something the import needs is not chosen yet. */
   blocked?: boolean;
@@ -37,13 +38,14 @@ export function CsvImport({
   children,
   template,
   templateName,
-  fileLabel = "Arquivo CSV",
+  fileLabel,
   accept = ".csv,text/csv",
-  created = ["cadastro criado", "cadastros criados"],
+  created,
   blocked = false,
   run,
   onImported,
 }: CsvImportProps) {
+  const t = useT();
   const [file, setFile] = useState<File | null>(null);
   // A new key empties the file input once the rows were imported.
   const [inputKey, setInputKey] = useState(0);
@@ -103,10 +105,10 @@ export function CsvImport({
     <section className="card import-card" aria-labelledby="import-title">
       <div className="card-title">
         <h2 id="import-title">{title}</h2>
-        <InfoTip label="Como importar este arquivo">{children}</InfoTip>
+        <InfoTip label={t("How to import this file")}>{children}</InfoTip>
       </div>
       <label>
-        {fileLabel}
+        {fileLabel ?? t("CSV file")}
         <input
           key={inputKey}
           ref={input}
@@ -124,7 +126,7 @@ export function CsvImport({
           disabled={blocked || file === null || pending === "import"}
           onClick={() => void send(true)}
         >
-          Verificar arquivo
+          {t("Check file")}
         </Button>
         <Button
           type="button"
@@ -132,41 +134,45 @@ export function CsvImport({
           disabled={blocked || file === null || pending === "check"}
           onClick={() => void send(false)}
         >
-          Importar
+          {t("Import")}
         </Button>
         {template !== undefined && (
           <a className="import-template" href={templateHref} download={templateName}>
-            Baixar modelo
+            {t("Download template")}
           </a>
         )}
       </div>
       <Notice message={error} />
-      {result && <ImportOutcome result={result} created={created} />}
+      {result && <ImportOutcome result={result} created={created ?? [t("record created"), t("records created")]} />}
     </section>
   );
 }
 
 function ImportOutcome({ result, created }: { result: ImportResult; created: [string, string] }) {
+  const t = useT();
   const bad = result.refused.length > 0;
+  const skipped = result.skipped.length;
+  const skippedNote = skipped === 1 ? t("{count} row skipped", { count: skipped }) : t("{count} rows skipped", { count: skipped });
   const message = bad
-    ? `Nada foi importado: ${plural(result.refused.length, "linha tem", "linhas têm")} problema. Corrija o arquivo e envie de novo.`
+    ? result.refused.length === 1
+      ? t("Nothing was imported: {count} row has a problem. Fix the file and send it again.", { count: 1 })
+      : t("Nothing was imported: {count} rows have a problem. Fix the file and send it again.", { count: result.refused.length })
     : result.dry_run
-      ? `Arquivo em ordem: ${plural(result.valid, "linha válida", "linhas válidas")}. As que já estiverem cadastradas serão ignoradas.`
-      : `${plural(result.created, created[0], created[1])}${
-          result.skipped.length > 0
-            ? `; ${plural(result.skipped.length, "linha ignorada", "linhas ignoradas")}`
-            : ""
-        }.`;
+      ? result.valid === 1
+        ? t("File is in order: {count} valid row. The ones already registered will be skipped.", { count: 1 })
+        : t("File is in order: {count} valid rows. The ones already registered will be skipped.", { count: result.valid })
+      : `${result.created} ${result.created === 1 ? created[0] : created[1]}${skipped > 0 ? `; ${skippedNote}` : ""}.`;
   return (
     <>
       <Notice message={message} tone={bad ? "warning" : "success"} />
-      <NoteList title="Com problema" notes={result.refused} />
-      <NoteList title="Ignoradas, já cadastradas" notes={result.skipped} />
+      <NoteList title={t("With problems")} notes={result.refused} />
+      <NoteList title={t("Skipped, already registered")} notes={result.skipped} />
     </>
   );
 }
 
 function NoteList({ title, notes }: { title: string; notes: ImportNote[] }) {
+  const t = useT();
   if (notes.length === 0) {
     return null;
   }
@@ -176,17 +182,13 @@ function NoteList({ title, notes }: { title: string; notes: ImportNote[] }) {
       <ul>
         {notes.slice(0, MAX_LISTED_NOTES).map((note) => (
           <li key={`${note.row}-${note.message}`}>
-            Linha {note.row}: {note.message}
+            {t("Row {row}: {message}", { row: note.row, message: note.message })}
           </li>
         ))}
       </ul>
       {notes.length > MAX_LISTED_NOTES && (
-        <p className="muted">e mais {notes.length - MAX_LISTED_NOTES}.</p>
+        <p className="muted">{t("and {count} more.", { count: notes.length - MAX_LISTED_NOTES })}</p>
       )}
     </div>
   );
-}
-
-function plural(count: number, one: string, many: string): string {
-  return `${count} ${count === 1 ? one : many}`;
 }

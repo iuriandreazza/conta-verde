@@ -97,7 +97,7 @@ export function TransfersPage() {
       )}
       <div>
         <section className="card list-card">
-          <h2>{t("Registered")}</h2>
+          <h2>{t("Registered transfers")}</h2>
           <div className="filters" role="search">
             <label>
               {t("Account")}
@@ -144,7 +144,7 @@ export function TransfersPage() {
                   <tr>
                     <th>{t("Date")}</th>
                     <th>{t("From")}</th>
-                    <th>{t("To")}</th>
+                    <th>{t("To account")}</th>
                     <th className="num">{t("Amount")}</th>
                     <th>{t("Note")}</th>
                     <th>{t("Status")}</th>

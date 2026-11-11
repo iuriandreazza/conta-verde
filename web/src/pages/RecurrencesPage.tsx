@@ -219,7 +219,7 @@ export function RecurrencesPage() {
                         </td>
                         <td className="num">{formatMoney(recurrence.amount)}</td>
                         <td>
-                          <StatusBadge active={recurrence.active} feminine activeLabel={t("Running")} inactiveLabel={t("Paused")} />
+                          <StatusBadge active={recurrence.active} feminine activeLabel={t("Running")} inactiveLabel={t("Recurrence paused")} />
                         </td>
                         <td className="row-actions">
                           {canWrite && (
@@ -236,7 +236,7 @@ export function RecurrencesPage() {
                                 setSaved(null);
                               }}
                             >
-                              {t("Edit")}
+                              {t("Change")}
                             </Button>
                           )}
                           <Button
@@ -312,6 +312,6 @@ function displayValue(field: string, value: string | null, names: Map<string, st
   if (field === "frequency") return frequencyLabel(value as RecurrenceFrequency, t);
   if (field === "amount") return formatMoney(value);
   if (field === "starts_on" || field === "ends_on") return formatDate(value);
-  if (field === "active") return value === "true" ? t("Running") : t("Paused");
+  if (field === "active") return value === "true" ? t("Running") : t("Recurrence paused");
   return value;
 }

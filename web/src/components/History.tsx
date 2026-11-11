@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { errorMessage, type HistoryEntry } from "../api";
+import { useT } from "../i18n";
 import { Button } from "./Button";
 import { Notice } from "./Notice";
 import { Spinner } from "./Spinner";
@@ -18,6 +19,7 @@ interface HistoryProps {
 
 /** Newest first, as a person scanning for "what changed last" expects. */
 export function History({ load, fieldLabel, valueLabel, emptyMessage }: HistoryProps) {
+  const t = useT();
   const [entries, setEntries] = useState<HistoryEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Bumped by the retry button to load again.
@@ -41,7 +43,7 @@ export function History({ load, fieldLabel, valueLabel, emptyMessage }: HistoryP
       <>
         <Notice message={error} />
         <Button type="button" variant="ghost" className="btn-small" onClick={() => setAttempt(attempt + 1)}>
-          Tentar de novo
+          {t("Try again")}
         </Button>
       </>
     );
@@ -49,7 +51,7 @@ export function History({ load, fieldLabel, valueLabel, emptyMessage }: HistoryP
   if (entries === null) {
     return (
       <p role="status" className="status">
-        <Spinner size={16} /> Carregando histórico…
+        <Spinner size={16} /> {t("Loading history…")}
       </p>
     );
   }
@@ -62,7 +64,7 @@ export function History({ load, fieldLabel, valueLabel, emptyMessage }: HistoryP
         // The list is read-only and replaced as a whole, so the position is a stable key.
         <li key={index}>
           <p className="history-head">
-            <strong>{entry.actor.name}</strong> {entry.action === "created" ? "cadastrou" : "alterou"}
+            <strong>{entry.actor.name}</strong> {entry.action === "created" ? t("registered") : t("changed")}
             <time dateTime={new Date(entry.at).toISOString()}>
               {formatTime.format(new Date(entry.at))}
             </time>

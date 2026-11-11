@@ -73,7 +73,7 @@ export function TransferForm({ accounts, pending, error, onSubmit, onCancel }: T
             </select>
           </label>
           <label>
-            {t("To")}
+            {t("To account")}
             <select name="to_account_id" required defaultValue="">
               <option value="" disabled>
                 {t("Choose the destination account")}

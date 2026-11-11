@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api, errorMessage } from "../api";
 import { Button } from "../components/Button";
 import { Notice } from "../components/Notice";
+import { useT } from "../i18n";
 import { usePageTitle } from "../lib/usePageTitle";
 
 /**
@@ -10,7 +11,8 @@ import { usePageTitle } from "../lib/usePageTitle";
  * happens rather than whether the address has an account.
  */
 export function ForgotPasswordPage() {
-  usePageTitle("Esqueci minha senha");
+  const t = useT();
+  usePageTitle(t("I forgot my password"));
   const [asked, setAsked] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -32,32 +34,32 @@ export function ForgotPasswordPage() {
 
   return (
     <section className="card narrow">
-      <h1>Esqueci minha senha</h1>
+      <h1>{t("I forgot my password")}</h1>
       {asked !== null ? (
         <>
           <Notice
             tone="success"
-            message={`Se ${asked} tiver uma conta, enviamos um link para escolher uma nova senha. Ele vale por 1 hora e só funciona uma vez.`}
+            message={t("If {email} has an account, we sent a link to choose a new password. It is valid for 1 hour and works only once.", { email: asked })}
           />
           <p>
-            <Link to="/login">Voltar para entrar</Link>
+            <Link to="/login">{t("Back to sign in")}</Link>
           </p>
         </>
       ) : (
         <>
-          <p className="page-lead">Informe o e-mail da sua conta e enviamos um link para escolher uma nova senha.</p>
+          <p className="page-lead">{t("Enter your account's e-mail and we send a link to choose a new password.")}</p>
           <form onSubmit={handleSubmit}>
             <label>
-              E-mail
+              {t("E-mail")}
               <input name="email" type="email" required autoComplete="email" />
             </label>
             <Notice message={error} />
             <Button type="submit" pending={submitting}>
-              Enviar link
+              {t("Send link")}
             </Button>
           </form>
           <p>
-            <Link to="/login">Voltar para entrar</Link>
+            <Link to="/login">{t("Back to sign in")}</Link>
           </p>
         </>
       )}

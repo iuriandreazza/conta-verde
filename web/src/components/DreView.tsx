@@ -115,7 +115,7 @@ export function DreView({ companyId }: { companyId: string }) {
           <label>
             {t("Cost center")}
             <select value={costCenter} onChange={(event) => setCostCenter(event.target.value)}>
-              <option value="">{t("All")}</option>
+              <option value="">{t("Any")}</option>
               <option value="none">{t("No cost center")}</option>
               {centers.map((center) => (
                 <option key={center.id} value={center.id}>

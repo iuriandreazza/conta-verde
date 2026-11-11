@@ -5,6 +5,7 @@ import { CopyButton } from "../components/CopyButton";
 import { Notice } from "../components/Notice";
 import { PageHeader } from "../components/PageHeader";
 import { Spinner } from "../components/Spinner";
+import { useI18n } from "../i18n";
 import { formatMoney } from "../lib/decimal";
 import { formatDate } from "../lib/entryInstallments";
 
@@ -18,6 +19,7 @@ type Loaded =
  * link, with no account (ADR 0047). The token in the link is the only secret.
  */
 export function PaymentPage() {
+  const { t, rich } = useI18n();
   const { token = "" } = useParams();
   const [loaded, setLoaded] = useState<Loaded>({ status: "loading" });
 
@@ -32,7 +34,7 @@ export function PaymentPage() {
             status: "failed",
             message:
               failure instanceof ApiError && failure.status === 404
-                ? "Este link não leva a nenhuma cobrança. Peça um novo a quem enviou."
+                ? t("This link does not lead to any charge. Ask whoever sent it for a new one.")
                 : errorMessage(failure),
           });
         }
@@ -45,14 +47,14 @@ export function PaymentPage() {
   if (loaded.status === "loading") {
     return (
       <p role="status" className="status">
-        <Spinner /> Carregando…
+        <Spinner /> {t("Loading…")}
       </p>
     );
   }
   if (loaded.status === "failed") {
     return (
       <>
-        <PageHeader title="Pagamento" />
+        <PageHeader title={t("Payment")} />
         <Notice message={loaded.message} />
       </>
     );
@@ -61,45 +63,45 @@ export function PaymentPage() {
   return (
     <>
       <PageHeader
-        title={`Pagamento para ${charge.company_name}`}
-        subtitle={`${charge.description}${charge.installments > 1 ? ` — parcela ${charge.installment} de ${charge.installments}` : ""}`}
+        title={t("Payment to {company}", { company: charge.company_name })}
+        subtitle={`${charge.description}${charge.installments > 1 ? ` — ${t("installment {number} of {total}", { number: charge.installment, total: charge.installments })}` : ""}`}
       />
       <section className="card">
         <p>
-          Valor: <strong>{formatMoney(charge.amount)}</strong> · vencimento {formatDate(charge.due_on)}
+          {rich("Amount: {amount} · due {date}", { amount: <strong>{formatMoney(charge.amount)}</strong>, date: formatDate(charge.due_on) })}
         </p>
         {charge.state === "paid" && (
           <Notice
             tone="success"
-            message={`Pagamento confirmado${charge.paid_on === null ? "" : ` em ${formatDate(charge.paid_on)}`}. Obrigado!`}
+            message={charge.paid_on === null ? t("Payment confirmed. Thank you!") : t("Payment confirmed on {date}. Thank you!", { date: formatDate(charge.paid_on) })}
           />
         )}
         {charge.state === "unavailable" && (
           <Notice
             tone="warning"
-            message={`Esta cobrança não está mais disponível para pagamento. Fale com ${charge.company_name}.`}
+            message={t("This charge is no longer available for payment. Talk to {company}.", { company: charge.company_name })}
           />
         )}
         {charge.state === "payable" && (
           <>
             {charge.pix_payload !== null && (
               <div className="charge-details">
-                <h2>Pix copia e cola</h2>
+                <h2>{t("Pix copy and paste")}</h2>
                 <code className="tabular">{charge.pix_payload}</code>
-                <CopyButton text={charge.pix_payload} label="Copiar o código Pix" />
+                <CopyButton text={charge.pix_payload} label={t("Copy the Pix code")} />
               </div>
             )}
             {charge.digitable_line !== null && (
               <div className="charge-details">
-                <h2>Boleto</h2>
+                <h2>{t("Boleto")}</h2>
                 <code className="tabular">{charge.digitable_line}</code>
-                <CopyButton text={charge.digitable_line} label="Copiar a linha digitável" />
+                <CopyButton text={charge.digitable_line} label={t("Copy the digitable line")} />
               </div>
             )}
             {charge.payment_url !== null && (
               <p>
                 <a className="btn" href={charge.payment_url} target="_blank" rel="noopener noreferrer">
-                  {charge.method === "boleto" ? "Abrir o boleto (PDF)" : "Pagar com cartão"}
+                  {charge.method === "boleto" ? t("Open the boleto (PDF)") : t("Pay by card")}
                 </a>
               </p>
             )}

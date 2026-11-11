@@ -1,3 +1,5 @@
+import { useT } from "../../i18n";
+
 export interface LegendItem {
   name: string;
   color: string;
@@ -7,8 +9,9 @@ export interface LegendItem {
 
 /** A key mirrors its mark: a short stroke for lines, a small rectangle for bars. */
 export function Legend({ items, kind }: { items: LegendItem[]; kind: "line" | "bar" }) {
+  const t = useT();
   return (
-    <ul className="legend" aria-label="Legenda">
+    <ul className="legend" aria-label={t("Legend")}>
       {items.map((item) => (
         <li key={item.name}>
           <span className={`legend-key legend-key-${kind}`} style={{

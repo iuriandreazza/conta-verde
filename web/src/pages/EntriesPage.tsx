@@ -83,7 +83,7 @@ function entryRow(entry: Entry, names: Map<string, string>, t: Translate): strin
     String(entry.installments.length),
     formatDate(entry.installments[0].due_date),
     toInputDecimal(entry.total),
-    entry.voided ? t("Cancelled") : "",
+    entry.voided ? t("Voided") : "",
   ];
 }
 
@@ -254,7 +254,7 @@ export function EntriesPage() {
                   setParams(next, { replace: true });
                 }}
               >
-                <option value="">{t("All")}</option>
+                <option value="">{t("Any")}</option>
                 <option value="receivable">{t("Receivables only")}</option>
                 <option value="payable">{t("Payables only")}</option>
               </select>
@@ -283,7 +283,7 @@ export function EntriesPage() {
                 }
               >
                 <option value="-competence_date">{t("Newest")}</option>
-                <option value="competence_date">{t("Oldest")}</option>
+                <option value="competence_date">{t("Oldest first")}</option>
               </select>
             </label>
           </div>
@@ -340,7 +340,7 @@ export function EntriesPage() {
                           <div className="cell-title">{entry.description}</div>
                           <div className="muted">
                             {entry.voided ? (
-                              <span className="badge badge-dot badge-critical">{t("Cancelled")}</span>
+                              <span className="badge badge-dot badge-critical">{t("Voided")}</span>
                             ) : (
                               <span className={STATUS_BADGES[status]}>{t(STATUS_LABELS[status])}</span>
                             )}{" "}
@@ -369,7 +369,7 @@ export function EntriesPage() {
                                 setSaved(null);
                               }}
                             >
-                              {t("Edit")}
+                              {t("Change")}
                             </Button>
                           )}
                           {!entry.voided && (

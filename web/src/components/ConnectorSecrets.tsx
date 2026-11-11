@@ -1,37 +1,41 @@
+import { useI18n } from "../i18n";
 import { CopyButton } from "./CopyButton";
 import { Notice } from "./Notice";
 
 /** What the person must read once a connector was turned on: the two secrets exist only now, and where to put them. */
 export function ConnectorSecrets({ name, apiKey, webhookSecret, packageLink }: { name: string; apiKey: string; webhookSecret: string; packageLink: string }) {
+  const { t, rich } = useI18n();
   const base = `${window.location.origin}/api/v1`;
   return (
     <section className="form-section invite-result" aria-labelledby="connector-done">
-      <h3 id="connector-done">“{name}” ligado</h3>
-      <Notice tone="warning" message="Copie a chave e o segredo agora: eles não aparecem de novo. Se perder, desligue e ligue o conector." />
+      <h3 id="connector-done">{t("“{name}” turned on", { name })}</h3>
+      <Notice tone="warning" message={t("Copy the key and the secret now: they do not show again. If you lose them, turn the connector off and on.")} />
       <label>
-        Chave da API
+        {t("API key")}
         <input readOnly value={apiKey} onFocus={(event) => event.currentTarget.select()} />
       </label>
       <p>
-        <CopyButton text={apiKey} label={`Copiar a chave de ${name}`} />
+        <CopyButton text={apiKey} label={t("Copy the key of {name}", { name })} />
       </p>
       <label>
-        Segredo do webhook
+        {t("Webhook secret")}
         <input readOnly value={webhookSecret} onFocus={(event) => event.currentTarget.select()} />
       </label>
       <p>
-        <CopyButton text={webhookSecret} label={`Copiar o segredo do webhook de ${name}`} />
+        <CopyButton text={webhookSecret} label={t("Copy the webhook secret of {name}", { name })} />
       </p>
       <label>
-        Endereço da API
+        {t("API address")}
         <input readOnly value={base} onFocus={(event) => event.currentTarget.select()} />
       </label>
       <p className="muted">
-        Cole os três na configuração do pacote, junto com os dados da loja, que ficam só lá. O passo a passo está no{" "}
-        <a href={packageLink} target="_blank" rel="noreferrer">
-          README do pacote
-        </a>
-        .
+        {rich("Paste the three into the package's configuration, together with the store's data, which stays only there. The step by step is in the {link}.", {
+          link: (
+            <a href={packageLink} target="_blank" rel="noreferrer">
+              {t("package README")}
+            </a>
+          ),
+        })}
       </p>
     </section>
   );

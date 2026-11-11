@@ -50,5 +50,5 @@ export const STATUS_LABELS: Record<InstallmentStatus, string> = {
   open: msg("Open"),
   partial: msg("Partial"),
   settled: msg("Paid"),
-  overdue: msg("Overdue"),
+  overdue: msg("Installment past due"),
 };

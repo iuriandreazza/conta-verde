@@ -1,4 +1,5 @@
 import { useId, useState } from "react";
+import { useT } from "../i18n";
 import { EyeIcon } from "./icons/eye";
 import { EyeOffIcon } from "./icons/eye-off";
 
@@ -8,7 +9,8 @@ interface PasswordFieldProps {
   label?: string;
 }
 
-export function PasswordField({ registering, label = "Senha" }: PasswordFieldProps) {
+export function PasswordField({ registering, label }: PasswordFieldProps) {
+  const t = useT();
   const [visible, setVisible] = useState(false);
   const inputId = useId();
   const Icon = visible ? EyeOffIcon : EyeIcon;
@@ -16,7 +18,7 @@ export function PasswordField({ registering, label = "Senha" }: PasswordFieldPro
   // The toggle sits outside the <label> so it does not become part of the input's accessible name.
   return (
     <div className="field">
-      <label htmlFor={inputId}>{label}</label>
+      <label htmlFor={inputId}>{label ?? t("Password")}</label>
       <span className="field-with-action">
         <input
           id={inputId}
@@ -29,7 +31,7 @@ export function PasswordField({ registering, label = "Senha" }: PasswordFieldPro
         <button
           type="button"
           className="field-action"
-          aria-label={visible ? "Ocultar senha" : "Mostrar senha"}
+          aria-label={visible ? t("Hide password") : t("Show password")}
           aria-pressed={visible}
           onClick={() => setVisible((current) => !current)}
         >

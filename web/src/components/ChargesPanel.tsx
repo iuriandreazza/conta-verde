@@ -28,7 +28,7 @@ const METHOD_LABELS: Record<ChargeMethod, string> = {
 
 const STATUS_LABELS: Record<ChargeStatus, string> = {
   open: msg("Charge open"),
-  paid: msg("Charge paid"),
+  paid: msg("Charge settled"),
   cancelled: msg("Charge cancelled"),
   expired: msg("Charge expired"),
 };
