@@ -132,11 +132,21 @@ through its public link, a charge and its public page, the reports, the job queu
 Measured with `pgbench` on a database of 10 companies with 50,000 entries each (500,000 entries, about 750,000 installments), four
 clients, eight seconds each, PostgreSQL 17 in Docker on a laptop; the owner pays no policy, the runtime role pays it:
 
-MEASUREMENTS
+| Statement (one company of ten) | Owner, no policy | Runtime role, policy | Difference |
+|---|---|---|---|
+| One entry by its id | 0.068 ms | 0.109 ms | +0.04 ms |
+| A keyset page of 50 entries (company, competence date, id) | 0.105 ms | 0.211 ms | +0.11 ms |
+| A report: the year's receivable installments summed by category (joins 750,000 installments to the entries) | 63.4 ms | 48.8 ms | within noise (the runtime run came second, on a warm cache; it is not a speed-up) |
+| `SELECT set_config('app.company_ids', ...)` against `SELECT 1` | 0.020 ms | 0.020 ms | none |
 
-The round trip that sets the scope at each acquire is the second cost; it is measured as `SELECT set_config(...)` against `SELECT 1`
-on the same connection. A request takes several connections in turn (each repository call acquires one), so a request pays it per
-repository call, about as much as an extra empty statement.
+The policy is inlined into the index condition (`company_id = ANY (...)` beside the query's own `company_id = ...`), so every plan
+keeps its index scan; what it adds is a fixed cost per statement of about 0.04 to 0.1 ms, planning and evaluating `cv_company_ids()`
+(the plan of the page above shows 0.5 ms of planning). A statement that takes milliseconds does not notice; a point read doubles in
+a time nobody sees. The report shows no cost, because its time is spent reading rows, which the policy does not touch.
+
+The round trip that sets the scope at each acquire is the second cost: as cheap as an empty statement (the last row), and a
+request pays it once per repository call, since each acquires a connection. **Not measured here**: the system scope's list of
+companies with thousands of companies, and the whole API under load; the slice-5 baseline carries the policy and will show both.
 
 ## Consequences
 
