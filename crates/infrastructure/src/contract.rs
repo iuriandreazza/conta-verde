@@ -21955,3 +21955,209 @@ pub async fn follows_a_gateway_that_names_and_queues<D, S, P, Y, F, B, R>(
     assert_ne!(resent.status(), FiscalDocumentStatus::Rejected);
     assert_ne!(resent.gateway_reference().map(str::to_owned), old_name);
 }
+
+/// A file opens the stock of products once (ADR 0094): every row is checked before any is written, sending the same
+/// file again writes nothing, a product that already has movements is refused, and the ledger stays right (the balance
+/// and the average cost are what the rows said).
+#[allow(clippy::too_many_lines)]
+pub async fn imports_stock_balances<M, P, St>(
+    stock: &StockService<M, P, St>,
+    company: CompanyId,
+    other_company: CompanyId,
+    seed: &SalesSeed,
+) where
+    M: StockMovementRepository,
+    P: ProductRepository,
+    St: StockSettingsRepository,
+{
+    use conta_verde_application::StockImportDraft;
+    let ana = actor();
+    let row = |number: usize, sku: &str, quantity: &str, unit_cost: Option<&str>| {
+        (
+            number,
+            StockImportDraft {
+                sku: sku.into(),
+                quantity: quantity.into(),
+                unit_cost: unit_cost.map(Into::into),
+            },
+        )
+    };
+    let state = |balance: conta_verde_domain::StockBalance| {
+        (
+            balance.quantity().to_string(),
+            balance.value().to_string(),
+            balance.average_cost().map(|cost| cost.to_string()),
+        )
+    };
+    let coffee = || async { state(stock.balance_of(company, seed.product).await.unwrap()) };
+    let bread = || async { state(stock.balance_of(company, seed.other_product).await.unwrap()) };
+    let empty = ("0".to_owned(), "0".to_owned(), None);
+    let on = "2026-11-02";
+
+    // A row that cannot be used refuses the whole file, and every bad row is told at once: nothing is written.
+    let refused = stock
+        .import_balances(
+            company,
+            &ana,
+            "migration",
+            on,
+            vec![
+                row(2, "cafe-500", "10", Some("5")),
+                row(3, "NOPE-1", "1", Some("1")),
+                row(4, "PAO-1", "-2", Some("3")),
+                row(5, "CAFE-500", "1", Some("5")),
+                row(6, "PAO-1", "1,5", Some("3")),
+            ],
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(refused.created, 0);
+    assert_eq!(
+        refused
+            .refused
+            .iter()
+            .map(|note| note.row)
+            .collect::<Vec<_>>(),
+        [3, 4, 5, 6]
+    );
+    assert!(refused.refused[2].message.contains("row 2"));
+    assert_eq!(coffee().await, empty);
+    assert_eq!(bread().await, empty);
+
+    // A quantity of nothing opens nothing.
+    let zero = stock
+        .import_balances(
+            company,
+            &ana,
+            "migration",
+            on,
+            vec![row(2, "CAFE-500", "0", Some("5"))],
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!((zero.created, zero.valid, zero.skipped.len()), (0, 1, 1));
+    assert_eq!(coffee().await, empty);
+    // A zero row is still a row (its cost must be one), and a cost that makes the value less than a cent is no balance.
+    let odd = stock
+        .import_balances(
+            company,
+            &ana,
+            "migration",
+            on,
+            vec![
+                row(2, "CAFE-500", "0", Some("abc")),
+                row(3, "PAO-1", "0.5", Some("0.009")),
+            ],
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(odd.created, 0);
+    assert_eq!(
+        odd.refused.iter().map(|note| note.row).collect::<Vec<_>>(),
+        [2, 3]
+    );
+    assert!(odd.refused[1].message.contains("less than a cent"));
+
+    // A check writes nothing.
+    let file = || {
+        vec![
+            row(2, "CAFE-500", "10", Some("5")),
+            // No cost on the row: the product's own cost price (4) is the cost.
+            row(3, "pao-1", "3", None),
+        ]
+    };
+    let checked = stock
+        .import_balances(company, &ana, "migration", on, file(), true)
+        .await
+        .unwrap();
+    assert_eq!((checked.valid, checked.created), (2, 0));
+    assert_eq!(coffee().await, empty);
+
+    // The import: the balance and the average cost are what the rows said.
+    let done = stock
+        .import_balances(company, &ana, "migration", on, file(), false)
+        .await
+        .unwrap();
+    assert_eq!((done.valid, done.created, done.refused.len()), (2, 2, 0));
+    assert_eq!(coffee().await, ("10".into(), "50".into(), Some("5".into())));
+    assert_eq!(bread().await, ("3".into(), "12".into(), Some("4".into())));
+    let ledger = stock
+        .list(company, &StockMovementQuery::default(), None, None)
+        .await
+        .unwrap()
+        .items;
+    assert_eq!(ledger.len(), 2);
+    assert!(ledger.iter().all(|movement| {
+        movement
+            .origin()
+            .is_some_and(|origin| origin.kind == conta_verde_domain::StockOriginKind::Import)
+    }));
+
+    // The same file again, or the same rows in another file with the same reference, adds nothing.
+    let again = stock
+        .import_balances(company, &ana, "migration", on, file(), false)
+        .await
+        .unwrap();
+    assert_eq!((again.created, again.skipped.len()), (0, 2));
+    let reordered = stock
+        .import_balances(
+            company,
+            &ana,
+            "migration",
+            on,
+            vec![row(2, "PAO-1", "3", None)],
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!((reordered.created, reordered.skipped.len()), (0, 1));
+    assert_eq!(coffee().await.0, "10");
+
+    // Under another reference the product is no longer one with no movements: an opening balance is not a correction.
+    let another = stock
+        .import_balances(
+            company,
+            &ana,
+            "second-file",
+            on,
+            vec![row(2, "CAFE-500", "5", Some("5"))],
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(another.created, 0);
+    assert!(
+        another.refused[0]
+            .message
+            .contains("already has stock movements")
+    );
+
+    // Another company's products are not this company's: its SKU is unknown there, and nothing leaks either way.
+    let other = stock
+        .import_balances(
+            other_company,
+            &ana,
+            "migration",
+            on,
+            vec![row(2, "CAFE-500", "5", Some("5"))],
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(other.created, 0);
+    assert_eq!(other.refused.len(), 1);
+    assert_eq!(coffee().await.0, "10");
+
+    // The reference and the day must be sensible.
+    for (reference, day) in [("", on), ("x", "2026-13-40")] {
+        assert!(
+            stock
+                .import_balances(company, &ana, reference, day, file(), false)
+                .await
+                .is_err()
+        );
+    }
+}

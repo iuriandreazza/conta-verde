@@ -47,6 +47,8 @@ pub enum StockOriginKind {
     Sale,
     SaleReturn,
     InventoryCount,
+    /// The opening balance a file gave a product ([ADR 0094]).
+    Import,
 }
 
 impl StockOriginKind {
@@ -56,6 +58,7 @@ impl StockOriginKind {
             Self::Sale => "sale",
             Self::SaleReturn => "sale_return",
             Self::InventoryCount => "inventory_count",
+            Self::Import => "import",
         }
     }
 
@@ -65,6 +68,7 @@ impl StockOriginKind {
             "sale" => Some(Self::Sale),
             "sale_return" => Some(Self::SaleReturn),
             "inventory_count" => Some(Self::InventoryCount),
+            "import" => Some(Self::Import),
             _ => None,
         }
     }

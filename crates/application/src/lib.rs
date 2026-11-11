@@ -248,7 +248,8 @@ pub use stock_repository::{
     MovementTotals, StockFloor, StockMovementQuery, StockMovementRepository,
 };
 pub use stock_service::{
-    CountStock, DocumentStock, MovementSummary, PositionSummary, StockAlert, StockMovementPage,
+    CountStock, DocumentStock, MAX_STOCK_IMPORT_REFERENCE_CHARS, MAX_STOCK_IMPORT_ROWS,
+    MovementSummary, PositionSummary, StockAlert, StockImportDraft, StockMovementPage,
     StockPosition, StockPositionPage, StockService, StockValuation, ValuationRow,
 };
 pub use stock_settings_repository::StockSettingsRepository;

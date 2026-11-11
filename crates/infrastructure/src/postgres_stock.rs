@@ -521,6 +521,27 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires DATABASE_URL"]
+    async fn imports_stock_balances() {
+        let pool = contract::test_pool().await;
+        let company = contract::create_company(&pool).await;
+        let other_company = contract::create_company(&pool).await;
+        let seed = contract::seed_sales_records(
+            &PostgresPartyRepository::new(pool.clone()),
+            &PostgresProductRepository::new(pool.clone()),
+            &PostgresPaymentTermRepository::new(pool.clone()),
+            company,
+        )
+        .await;
+        let stock = StockService::new(
+            PostgresStockMovementRepository::new(pool.clone()),
+            PostgresProductRepository::new(pool.clone()),
+            PostgresStockSettingsRepository::new(pool.clone()),
+        );
+        contract::imports_stock_balances(&stock, company, other_company, &seed).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
     async fn stock_follows_purchases_and_sales() {
         let pool = contract::test_pool().await;
         let company = contract::create_company(&pool).await;

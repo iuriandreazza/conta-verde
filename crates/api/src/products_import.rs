@@ -40,7 +40,7 @@ fn kind_of(cell: Option<&str>) -> Result<ProductKind, String> {
 /// - one separator followed by exactly three digits, after one to three digits that do not start
 ///   with a zero (`1.234`, `1,234`), is a thousand in one locale and a decimal in another. `0,250`
 ///   cannot be a thousand, so it is a decimal. The person writes `1234`, or `1,2340` for the other.
-fn decimal(column: &str, cell: Option<&str>) -> Result<Option<String>, String> {
+pub(crate) fn decimal(column: &str, cell: Option<&str>) -> Result<Option<String>, String> {
     let Some(text) = cell else { return Ok(None) };
     let ambiguous = ['.', ','].iter().any(|separator| {
         text.matches(*separator).count() == 1
