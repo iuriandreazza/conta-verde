@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
+import { useT } from "../i18n";
 import { Button } from "./Button";
 
 /**
- * Copies a text to the clipboard, and says so for a moment: "Copiado" goes back to "Copiar" so a second
+ * Copies a text to the clipboard, and says so for a moment: "Copied" goes back to "Copy" so a second
  * copy gives feedback again, and the announcement is polite so a screen reader hears it.
  */
 export function CopyButton({ text, label }: { text: string; label: string }) {
+  const t = useT();
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -29,10 +31,10 @@ export function CopyButton({ text, label }: { text: string; label: string }) {
   return (
     <>
       <Button type="button" variant="ghost" className="btn-small" aria-label={label} onClick={() => void copy()}>
-        Copiar
+        {t("Copy")}
       </Button>
       <span role="status" className="muted">
-        {copied ? "Copiado." : ""}
+        {copied ? t("Copied.") : ""}
       </span>
     </>
   );

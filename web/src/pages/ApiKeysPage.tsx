@@ -9,7 +9,8 @@ import { PageHeader } from "../components/PageHeader";
 import { Spinner } from "../components/Spinner";
 import { SendIcon } from "../components/icons/send";
 import { useCreation, useOnCreated } from "../creation/CreationProvider";
-import { GRACE_OPTIONS, STATUS_LABELS, scopeLabel } from "../lib/apiKeys";
+import { useT } from "../i18n";
+import { GRACE_OPTIONS, scopeLabel, statusLabel } from "../lib/apiKeys";
 import { useCanWrite } from "../lib/useCanWrite";
 
 const BADGES: Record<ApiKey["status"], string> = { active: "badge-ok", expired: "badge-warning", revoked: "badge-muted" };
@@ -19,6 +20,7 @@ const formatMoment = (millis: number) => new Date(millis).toLocaleDateString("pt
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one instance.
 export function ApiKeysPage() {
+  const t = useT();
   const { companyId = "" } = useParams();
   const canWrite = useCanWrite("members");
   const { openCreate } = useCreation();
@@ -70,37 +72,37 @@ export function ApiKeysPage() {
   return (
     <>
       <PageHeader
-        title="Chaves de API"
-        description="Chaves para programas falarem com esta empresa pela API pública (lojas virtuais, automações). Cada chave tem seu escopo, aparece no histórico das alterações que fez e pode ser girada ou revogada."
+        title={t("API keys")}
+        description={t("Keys for programs to talk to this company through the public API (online stores, automations). Each key has its own scope, shows in the history of the changes it made and can be rotated or revoked.")}
       />
       {canWrite && (
         <div className="list-actions">
           <Button type="button" icon={SendIcon} onClick={() => openCreate("apiKey")}>
-            Nova chave
+            {t("New key")}
           </Button>
         </div>
       )}
-      {issued && <ApiKeySecret name={issued.key.name} secret={issued.secret} title="Nova chave" />}
+      {issued && <ApiKeySecret name={issued.key.name} secret={issued.secret} title={t("New key")} />}
       <section className="card list-card">
-        <h2>Chaves</h2>
+        <h2>{t("Keys")}</h2>
         <Notice message={error} />
         {loading ? (
           <p role="status" className="status">
-            <Spinner /> Carregando…
+            <Spinner /> {t("Loading…")}
           </p>
         ) : keys.length === 0 ? (
-          <p className="muted">Nenhuma chave ainda.</p>
+          <p className="muted">{t("No keys yet.")}</p>
         ) : (
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Nome</th>
-                  <th>O que pode fazer</th>
-                  <th>Estado</th>
-                  <th>Uso</th>
+                  <th>{t("Name")}</th>
+                  <th>{t("What it can do")}</th>
+                  <th>{t("Status")}</th>
+                  <th>{t("Use")}</th>
                   <th>
-                    <span className="visually-hidden">Ações</span>
+                    <span className="visually-hidden">{t("Actions")}</span>
                   </th>
                 </tr>
               </thead>
@@ -112,36 +114,36 @@ export function ApiKeysPage() {
                         {key.name}
                         <br />
                         <span className="muted">
-                          {key.label}… · criada por {key.created_by}
+                          {t("{label}… · created by {name}", { label: key.label, name: key.created_by })}
                         </span>
                       </td>
                       <td>
                         <ul className="plain-list">
                           {key.scopes.map((scope) => (
-                            <li key={scope}>{scopeLabel(scope)}</li>
+                            <li key={scope}>{scopeLabel(scope, t)}</li>
                           ))}
                         </ul>
                       </td>
                       <td>
-                        <span className={`badge ${BADGES[key.status]}`}>{STATUS_LABELS[key.status]}</span>
+                        <span className={`badge ${BADGES[key.status]}`}>{statusLabel(key.status, t)}</span>
                         {key.expires_at !== null && key.status === "active" && (
                           <>
                             <br />
-                            <span className="muted">até {formatMoment(key.expires_at)}</span>
+                            <span className="muted">{t("until {date}", { date: formatMoment(key.expires_at) })}</span>
                           </>
                         )}
                       </td>
-                      <td>{key.last_used_on ? `Usada em ${formatDay(key.last_used_on)}` : "Nunca usada"}</td>
+                      <td>{key.last_used_on ? t("Used on {date}", { date: formatDay(key.last_used_on) }) : t("Never used")}</td>
                       <td>
                         <span className="form-actions">
                           <Button
                             type="button"
                             variant="ghost"
                             className="btn-small"
-                            aria-label={`Histórico de ${key.name}`}
+                            aria-label={t("History of {name}", { name: key.name })}
                             onClick={() => setHistoryId(historyId === key.id ? null : key.id)}
                           >
-                            Histórico
+                            {t("History")}
                           </Button>
                           {canWrite && key.status === "active" && rotatingId !== key.id && revokingId !== key.id && (
                             <>
@@ -149,27 +151,27 @@ export function ApiKeysPage() {
                                 type="button"
                                 variant="ghost"
                                 className="btn-small"
-                                aria-label={`Girar ${key.name}`}
+                                aria-label={t("Rotate {name}", { name: key.name })}
                                 disabled={busyId !== null}
                                 onClick={() => {
                                   setRevokingId(null);
                                   setRotatingId(key.id);
                                 }}
                               >
-                                Girar
+                                {t("Rotate")}
                               </Button>
                               <Button
                                 type="button"
                                 variant="ghost"
                                 className="btn-small"
-                                aria-label={`Revogar ${key.name}`}
+                                aria-label={t("Revoke {name}", { name: key.name })}
                                 disabled={busyId !== null}
                                 onClick={() => {
                                   setRotatingId(null);
                                   setRevokingId(key.id);
                                 }}
                               >
-                                Revogar
+                                {t("Revoke")}
                               </Button>
                             </>
                           )}
@@ -177,11 +179,11 @@ export function ApiKeysPage() {
                         {rotatingId === key.id && (
                           <span className="form-actions">
                             <label>
-                              A chave antiga continua valendo
+                              {t("The old key keeps working")}
                               <select value={grace} onChange={(event) => setGrace(Number(event.target.value))}>
                                 {GRACE_OPTIONS.map((option, index) => (
                                   <option key={option.label} value={index}>
-                                    {option.label}
+                                    {t(option.label)}
                                   </option>
                                 ))}
                               </select>
@@ -189,7 +191,7 @@ export function ApiKeysPage() {
                             <Button
                               type="button"
                               className="btn-small"
-                              aria-label={`Confirmar a rotação de ${key.name}`}
+                              aria-label={t("Confirm rotating {name}", { name: key.name })}
                               pending={busyId === key.id}
                               disabled={busyId !== null}
                               onClick={() =>
@@ -198,10 +200,10 @@ export function ApiKeysPage() {
                                 })
                               }
                             >
-                              Girar
+                              {t("Rotate")}
                             </Button>
                             <Button type="button" variant="ghost" className="btn-small" onClick={() => setRotatingId(null)}>
-                              Cancelar
+                              {t("Cancel")}
                             </Button>
                           </span>
                         )}
@@ -210,7 +212,7 @@ export function ApiKeysPage() {
                             <Button
                               type="button"
                               className="btn-small"
-                              aria-label={`Confirmar a revogação de ${key.name}`}
+                              aria-label={t("Confirm revoking {name}", { name: key.name })}
                               pending={busyId === key.id}
                               disabled={busyId !== null}
                               onClick={() =>
@@ -219,10 +221,10 @@ export function ApiKeysPage() {
                                 })
                               }
                             >
-                              Revogar agora
+                              {t("Revoke now")}
                             </Button>
                             <Button type="button" variant="ghost" className="btn-small" onClick={() => setRevokingId(null)}>
-                              Cancelar
+                              {t("Cancel")}
                             </Button>
                           </span>
                         )}

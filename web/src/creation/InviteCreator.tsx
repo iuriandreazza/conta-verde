@@ -12,24 +12,27 @@ const formatDate = (millis: number) => new Date(millis).toLocaleDateString("pt-B
 
 /** What the person must read once the invitation exists: the link is shown only now. */
 function InviteResult({ invited }: { invited: Invited }) {
+  const t = useT();
   return (
     <section className="form-section invite-result" aria-labelledby="invite-done">
-      <h3 id="invite-done">Convite criado</h3>
+      <h3 id="invite-done">{t("Invitation created")}</h3>
       <Notice
         tone={invited.emailed ? "success" : "warning"}
         message={
           invited.emailed
-            ? `Convite criado: o e-mail para ${invited.email} está na fila de envio.`
-            : `Convite criado, mas o e-mail não foi enviado. Passe o link para ${invited.email}.`
+            ? t("Invitation created: the e-mail to {email} is in the sending queue.", { email: invited.email })
+            : t("Invitation created, but the e-mail was not sent. Pass the link on to {email}.", { email: invited.email })
         }
       />
       <label>
-        Link do convite
+        {t("Invitation link")}
         <input readOnly value={invited.link} onFocus={(event) => event.currentTarget.select()} />
       </label>
       <p className="muted">
-        Este link só aparece agora e só vale para quem entrar com {invited.email}. Vale até{" "}
-        {formatDate(invited.expires_at)}.
+        {t("This link only shows now and is only valid for whoever signs in with {email}. Valid until {date}.", {
+          email: invited.email,
+          date: formatDate(invited.expires_at),
+        })}
       </p>
     </section>
   );
@@ -54,7 +57,7 @@ export function InviteCreator({ companyId, onBusyChange, onCreated, onCancel }: 
     setError(null);
     try {
       const invited = await api.invite(companyId, email, role);
-      onCreated({ id: invited.id, message: `Convite criado para ${invited.email}.`, result: <InviteResult invited={invited} /> });
+      onCreated({ id: invited.id, message: t("Invitation created for {email}.", { email: invited.email }), result: <InviteResult invited={invited} /> });
     } catch (failure) {
       setError(errorMessage(failure));
       setSending(false);
@@ -64,14 +67,14 @@ export function InviteCreator({ companyId, onBusyChange, onCreated, onCancel }: 
   return (
     <form className="record-form" onSubmit={handleSubmit}>
       <section className="form-section" aria-labelledby="invite-info">
-        <h3 id="invite-info">Quem entra</h3>
+        <h3 id="invite-info">{t("Who joins")}</h3>
         <div className="field-grid">
           <label>
-            E-mail
+            {t("E-mail")}
             <input name="email" type="email" required autoComplete="off" />
           </label>
           <label>
-            Papel
+            {t("Role")}
             <select value={role} onChange={(event) => setRole(event.target.value as Role)}>
               {ASSIGNABLE_ROLES.map((option) => (
                 <option key={option} value={option}>
@@ -89,7 +92,7 @@ export function InviteCreator({ companyId, onBusyChange, onCreated, onCancel }: 
       <div className="form-footer">
         <BackButton disabled={sending} onClick={onCancel} />
         <Button type="submit" icon={UserPlusIcon} pending={sending}>
-          Convidar
+          {t("Invite")}
         </Button>
       </div>
     </form>

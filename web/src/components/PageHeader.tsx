@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useT } from "../i18n";
 import { usePageTitle } from "../lib/usePageTitle";
 import { InfoTip } from "./InfoTip";
 
@@ -12,6 +13,7 @@ interface PageHeaderProps {
 }
 
 export function PageHeader({ title, description, subtitle, actions }: PageHeaderProps) {
+  const t = useT();
   usePageTitle(title);
   return (
     <header className="page-header">
@@ -19,7 +21,7 @@ export function PageHeader({ title, description, subtitle, actions }: PageHeader
         <div className="title-with-tip">
           <h1>{title}</h1>
           {description && (
-            <InfoTip label={`Sobre esta tela: ${title}`} align="start">
+            <InfoTip label={t("About this screen: {title}", { title })} align="start">
               <p>{description}</p>
             </InfoTip>
           )}
