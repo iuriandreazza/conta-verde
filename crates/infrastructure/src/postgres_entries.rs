@@ -401,7 +401,7 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
         let rows = sqlx::query(&format!(
             "{SELECT_SETTLEMENTS} WHERE company_id = $1 AND NOT reversed \
              AND settled_on >= CAST($2 AS DATE) AND settled_on <= CAST($3 AS DATE) \
-             ORDER BY settled_on, id LIMIT $4"
+             ORDER BY entry_settlements.settled_on, id LIMIT $4"
         ))
         .bind(company_id.as_uuid())
         .bind(since.to_string())
@@ -912,8 +912,10 @@ impl FinancialEntryRepository for PostgresFinancialEntryRepository {
                 .push_bind(cursor.id)
                 .push(")");
         }
+        // The table's own column, not its name: the SELECT also outputs `competence_date` as text, and an unqualified ORDER BY would
+        // sort by that output column, which no index can serve (the list would read and sort the whole company, ADR 0097).
         sql.push(format!(
-            " ORDER BY competence_date {direction}, id {direction} LIMIT "
+            " ORDER BY financial_entries.competence_date {direction}, id {direction} LIMIT "
         ))
         .push_bind(i64::try_from(limit).unwrap_or(i64::MAX));
 
