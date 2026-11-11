@@ -41,8 +41,7 @@ role), a compose file for a development database, and nothing that said how to b
 `Dockerfile`: a web build stage, a release build of the API (it copies `docs/api`, which the API embeds, [ADR 0087](0087-public-api-v1.md)), and a final
 stage with nginx and the binary running as `conta-verde` (uid 10001), `VOLUME /data`, `EXPOSE 3080`, OCI labels (the version is the `VERSION` build argument),
 and a health check that reads `GET /api/health` over a plain socket (`curl` is not in the image). `GET /health` answers
-`{"status":"ok","version":"<Cargo version>"}` so an operator can tell which release is running. `deploy/entrypoint.sh` is unchanged in kind: it starts the API in the background and
-nginx in the foreground; **it still sets `ALLOW_PRIVILEGED_DATABASE_ROLE=true` when no `DATABASE_MIGRATE_URL` is given**, which is the development environment's single-role
+`{"status":"ok","version":"<Cargo version>"}` so an operator can tell which release is running. `deploy/entrypoint.sh` starts nginx and the API side by side, forwards a stop signal to both, and when the API dies either keeps the web server up (the development environment, so the platform can route to the container and the logs say why) or, with `EXIT_WITH_API=true` (the compose file), ends the container so the restart policy brings it back; **it still sets `ALLOW_PRIVILEGED_DATABASE_ROLE=true` when no `DATABASE_MIGRATE_URL` is given**, which is the development environment's single-role
 database (the platform injects one role); a production deployment gives both URLs and gets the barrier. This is a known compromise of one image serving two uses,
 written here and in `docs/operations/configuration.md`; the compose example always sets both.
 
@@ -75,6 +74,7 @@ for every table, its row count and a hash of every row, plus the number of polic
 - `scripts/ops/rehearse-upgrade.sh OLDEST [MIDDLE...] NEWEST` builds the refs, makes the installation with the oldest, backs it up, starts each following release **in place** on the same database (checking the books through the server and the
   row counts), shows that the oldest binary **refuses** the upgraded database, and restores the pre-upgrade backup and starts the oldest binary on it. A release before row-level security runs as the owner and one after it as the runtime role, so the move
   every existing operator makes is rehearsed. It is **run by hand before every tag** and its output kept with the release notes.
+- The whole production compose file was also run end to end by hand (db and app, a backup with the guide's `docker compose` commands, a restore into a fresh project, the books checked through the restored app): that sequence is not in CI.
 - Result of this slice's run: the oldest release of Phase 8 (`623cbdc`, before ADRs 0092 to 0096) upgraded in place to this slice (`HEAD`), then the same installation upgraded through a middle release (`194a01c`) to `HEAD`: books, balances, stock and the attached file checked through the server after each step, row counts equal, the oldest binary refusing the upgraded database, and the pre-upgrade backup restored and started with the oldest binary. See `docs/operations/upgrade.md` for what it does not prove
 
 ### What this does not settle

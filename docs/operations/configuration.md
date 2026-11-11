@@ -23,6 +23,7 @@ Everything is configured by environment variables, read once at start. A name, i
 | `COOKIE_SECURE` | `true` when the app is served over HTTPS, so the session cookie is only sent securely | `false` |
 | `ATTACHMENTS_DIR` | Where the files attached to entries and the fiscal files are kept: **the only copy**, back it up | `./data/attachments` (`/data/attachments` in the image) |
 | `SOURCE_URL` | The link to the source in the footer of e-mails (AGPL section 13): a fork running modified code points it at its own | upstream repository |
+| `EXIT_WITH_API` | Image only. `true` ends the container when the API stops, so a restart policy starts it again (the compose file sets it); otherwise the web server stays up and answers 502 | unset |
 | `RUST_LOG` | Log level (`info`, `debug`, or a filter) | `info` |
 
 ## Changing the application role's password
