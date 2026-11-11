@@ -1611,7 +1611,7 @@ export interface ReceiptInput {
 }
 
 export type StockMovementKind = "in" | "out" | "adjustment";
-export type StockOriginKind = "purchase_receipt" | "sale" | "sale_return" | "inventory_count";
+export type StockOriginKind = "purchase_receipt" | "sale" | "sale_return" | "inventory_count" | "import";
 
 /** What a product has on hand, on a day or now (ADR 0054). */
 export interface StockPosition {
@@ -2192,6 +2192,12 @@ export const api = {
   importProducts: (companyId: string, file: File, dryRun: boolean) =>
     request<ImportResult>(
       `/companies/${companyId}/products/import${dryRun ? "?dry_run=true" : ""}`,
+      { method: "POST", headers: { "Content-Type": "text/csv" }, body: file },
+    ),
+  /** Opens the stock of the products of a file (ADR 0094): the file goes as it is, and the name of this file and the day are part of the request. */
+  importStockBalances: (companyId: string, file: File, reference: string, on: string, dryRun: boolean) =>
+    request<ImportResult>(
+      `/companies/${companyId}/stock/import?reference=${encodeURIComponent(reference)}&on=${encodeURIComponent(on)}${dryRun ? "&dry_run=true" : ""}`,
       { method: "POST", headers: { "Content-Type": "text/csv" }, body: file },
     ),
   /** One piece of an entries file, sent as text; `importEntriesInPieces` cuts the file into them. */

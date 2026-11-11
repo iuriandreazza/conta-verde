@@ -4781,3 +4781,67 @@ describe("reports", () => {
     expect(await screen.findByText("Nada em atraso.")).toBeInTheDocument();
   });
 });
+
+describe("opening the stock from a CSV file", () => {
+  const stockApi = (extra?: (url: string) => ReturnType<Parameters<typeof mockApi>[0]> | undefined) =>
+    mockApi((url) => {
+      const own = extra?.(url);
+      if (own !== undefined) return own;
+      if (url === "/api/auth/me") return { status: 200, body: profile };
+      if (url.includes("/stock/alerts")) return { status: 200, body: { items: [] } };
+      if (url.includes("/stock/positions/summary")) {
+        return { status: 200, body: { total: 0, in_stock: 0, below_minimum: 0, depleted: 0, value: "0" } };
+      }
+      return { status: 200, body: { items: [], next_cursor: null } };
+    });
+
+  async function openImport() {
+    renderAt("/companies/c1/stock");
+    await userEvent.click(await screen.findByRole("button", { name: "Importar saldos" }));
+    await screen.findByRole("heading", { name: "Importar saldos de um arquivo CSV" });
+  }
+
+  it("holds the buttons back until the import has a name, and sends the name and the day with the file", async () => {
+    const fetchMock = stockApi((url) =>
+      url.includes("/stock/import")
+        ? { status: 200, body: { dry_run: true, valid: 2, created: 0, skipped: [], refused: [] } }
+        : undefined,
+    );
+    await openImport();
+    expect(screen.getByRole("link", { name: "Baixar modelo" })).toHaveAttribute("download", "saldos-de-estoque.csv");
+    await userEvent.upload(
+      screen.getByLabelText("Arquivo CSV"),
+      new File(["sku,quantity\nCAFE-500,10\n"], "saldos.csv", { type: "text/csv" }),
+    );
+    // No name, no way to send: the name is what makes sending the file again safe.
+    expect(screen.getByRole("button", { name: "Verificar arquivo" })).toBeDisabled();
+
+    await userEvent.type(screen.getByLabelText(/Nome desta importação/), "migração 2026");
+    await userEvent.click(screen.getByRole("button", { name: "Verificar arquivo" }));
+
+    expect(await screen.findByText(/2 linhas/)).toBeInTheDocument();
+    const [url, init] = fetchMock.mock.calls.find(([called]) => String(called).includes("/stock/import"))!;
+    expect(String(url)).toMatch(
+      /^\/api\/companies\/c1\/stock\/import\?reference=migra%C3%A7%C3%A3o%202026&on=\d{4}-\d{2}-\d{2}&dry_run=true$/,
+    );
+    expect(init?.method).toBe("POST");
+    expect(init?.body).toBeInstanceOf(File);
+  });
+
+  it("is offered only to those who may write the stock", async () => {
+    stockApi((url) =>
+      url === "/api/auth/me"
+        ? {
+            status: 200,
+            body: {
+              ...profile,
+              companies: [{ id: "c1", name: "Padaria", role: "viewer", permissions: { purchases: "read" } }],
+            },
+          }
+        : undefined,
+    );
+    renderAt("/companies/c1/stock");
+    await screen.findByRole("button", { name: "Posição" });
+    expect(screen.queryByRole("button", { name: "Importar saldos" })).not.toBeInTheDocument();
+  });
+});

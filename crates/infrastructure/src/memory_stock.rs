@@ -354,6 +354,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn imports_stock_balances() {
+        let registers = Registers::new();
+        let (products, terms) = (
+            InMemoryProductRepository::default(),
+            InMemoryPaymentTermRepository::default(),
+        );
+        let (company, other_company) = (CompanyId::generate(), CompanyId::generate());
+        let seed =
+            contract::seed_sales_records(&registers.parties, &products, &terms, company).await;
+        let stock = StockService::new(
+            InMemoryStockMovementRepository::default(),
+            products,
+            InMemoryStockSettingsRepository::default(),
+        );
+        contract::imports_stock_balances(&stock, company, other_company, &seed).await;
+    }
+
+    #[tokio::test]
     async fn stock_follows_purchases_and_sales() {
         let registers = Registers::new();
         let (products, terms) = (

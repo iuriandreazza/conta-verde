@@ -50,6 +50,7 @@ mod sales_reports;
 mod session;
 mod statements;
 mod stock;
+mod stock_import;
 mod stock_reports;
 mod transfers;
 mod v1;
@@ -1153,6 +1154,10 @@ pub fn router<X: Ports>(services: Services<X>, config: ApiConfig) -> Router {
         .route(
             "/companies/{company_id}/sales/{sale_id}/returns",
             get(sales::list_returns::<X>).post(sales::register_return::<X>),
+        )
+        .route(
+            "/companies/{company_id}/stock/import",
+            post(stock_import::import_stock_balances::<X>),
         )
         .route(
             "/companies/{company_id}/stock/movements",
@@ -5695,6 +5700,101 @@ mod tests {
 
     fn import_products_uri(company_id: Uuid, query: &str) -> String {
         format!("/companies/{company_id}/products/import{query}")
+    }
+
+    #[tokio::test]
+    async fn opens_the_stock_from_a_csv_file_once_however_often_it_is_sent() {
+        let app = entry_app();
+        let (cookie, company_id) = sign_up(&app, "ana@example.com").await;
+        let products = "name,unit,sku,cost_price\nPão francês,kg,pao-001,7\nCafé,un,cafe-1,4\n";
+        let reply = send(
+            &app,
+            csv_request(
+                &import_products_uri(company_id, ""),
+                Some(&cookie),
+                products,
+            ),
+        )
+        .await;
+        assert_eq!(reply.body["created"], 2, "{}", reply.body);
+
+        let uri = |query: &str| format!("/companies/{company_id}/stock/import{query}");
+        let file = "SKU;Quantity;Unit_Cost\nPAO-001;12,5;7,2\ncafe-1;3;\n";
+        let query = "?reference=migration&on=2026-11-02";
+        let checked = send(
+            &app,
+            csv_request(&uri(&format!("{query}&dry_run=true")), Some(&cookie), file),
+        )
+        .await;
+        assert_eq!(checked.status, StatusCode::OK, "{}", checked.body);
+        assert_eq!(
+            (
+                checked.body["valid"].clone(),
+                checked.body["created"].clone()
+            ),
+            (json!(2), json!(0))
+        );
+
+        let opened = send(&app, csv_request(&uri(query), Some(&cookie), file)).await;
+        assert_eq!(opened.body["created"], 2, "{}", opened.body);
+        let positions = send(
+            &app,
+            get_request(
+                &format!("{}/positions", stock_uri(company_id)),
+                Some(&cookie),
+            ),
+        )
+        .await;
+        let held: Vec<(String, String, String)> = positions.body["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| {
+                (
+                    item["sku"].as_str().unwrap().to_owned(),
+                    item["quantity"].as_str().unwrap().to_owned(),
+                    item["value"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            held,
+            [
+                ("CAFE-1".into(), "3".into(), "12".into()),
+                ("PAO-001".into(), "12.5".into(), "90".into())
+            ]
+        );
+
+        // Again, and nothing is added; a file with a row that cannot be used writes nothing.
+        let again = send(&app, csv_request(&uri(query), Some(&cookie), file)).await;
+        assert_eq!(
+            (
+                again.body["created"].clone(),
+                again.body["skipped"].as_array().unwrap().len()
+            ),
+            (json!(0), 2)
+        );
+        let broken = send(
+            &app,
+            csv_request(
+                &uri("?reference=other&on=2026-11-02"),
+                Some(&cookie),
+                "sku,quantity\nNOPE,1\n",
+            ),
+        )
+        .await;
+        assert_eq!(broken.body["refused"][0]["row"], 2, "{}", broken.body);
+
+        // The reference and the day are part of the request; a stranger to the company is refused.
+        let no_reference = send(
+            &app,
+            csv_request(&uri("?on=2026-11-02"), Some(&cookie), file),
+        )
+        .await;
+        assert_eq!(no_reference.status, StatusCode::BAD_REQUEST);
+        let (stranger, _) = sign_up(&app, "eva@example.com").await;
+        let foreign = send(&app, csv_request(&uri(query), Some(&stranger), file)).await;
+        assert_eq!(foreign.status, StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

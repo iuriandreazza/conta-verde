@@ -109,6 +109,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0091](0091-pwa-and-offline-reading.md) | The PWA: installable, with offline reading under written cache rules | accepted | 8 |
 | [0092](0092-one-point-zero-hardening-plan.md) | What 1.0 means, and the plan for Phase 9 (hardening) | accepted | 9 |
 | [0093](0093-row-level-security.md) | Row-level security as the second barrier | accepted | 9 |
+| [0094](0094-stock-balance-import.md) | Opening the stock from a file | accepted | 9 |
 | [0095](0095-i18n.md) | The screens in two languages | accepted | 9 |
 
 ## Template
