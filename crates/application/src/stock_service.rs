@@ -14,14 +14,42 @@ use crate::audit::audit_entry;
 use crate::list_query::{clamp_limit, split_page};
 use crate::period_lock_service::ensure_open;
 use crate::{
-    ApplicationError, DateCursor, NameCursor, NoPeriodLock, PeriodLockRepository, ProductQuery,
-    ProductRepository, RepositoryError, StockFloor, StockMovementQuery, StockMovementRepository,
-    StockSettingsRepository,
+    ApplicationError, DateCursor, ImportReport, NameCursor, NoPeriodLock, PeriodLockRepository,
+    ProductQuery, ProductRepository, RepositoryError, RowNote, StockFloor, StockMovementQuery,
+    StockMovementRepository, StockSettingsRepository,
 };
 use conta_verde_domain::AuditRecord;
 
+/// The most products one stock file may open: as for every import, a bigger file is cut by the person.
+pub const MAX_STOCK_IMPORT_ROWS: usize = 1000;
+
+/// The longest reference a stock file may carry: it is joined to the SKU to make what is written once.
+pub const MAX_STOCK_IMPORT_REFERENCE_CHARS: usize = 100;
+
+/// A row of a stock file ([ADR 0094]): what a product holds, as text, to be checked like what a person types.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StockImportDraft {
+    pub sku: String,
+    pub quantity: String,
+    /// What a unit cost, up to six decimals; blank means the product's own cost price.
+    pub unit_cost: Option<String>,
+}
+
 /// How many times a write is valued again when another one changed the stock under it.
 const ATTEMPTS: usize = 5;
+
+/// What a file's row is written under: the reference and the product, so a row is written once however often its
+/// file is sent, and by whichever place sends it.
+fn origin_of_import(company_id: CompanyId, reference: &str, sku: &str) -> StockOrigin {
+    StockOrigin {
+        kind: StockOriginKind::Import,
+        id: Uuid::new_v5(
+            &company_id.as_uuid(),
+            format!("stock-import\u{1f}{reference}\u{1f}{sku}").as_bytes(),
+        ),
+        line: 1,
+    }
+}
 
 /// What a count of the stock asks of it ([ADR 0056]).
 pub trait CountStock: Send + Sync {
@@ -359,6 +387,140 @@ where
             .into_iter()
             .next()
             .ok_or(ApplicationError::StockChanged)
+    }
+
+    /// Opens the stock of the products a file names, each with what it holds and what a unit cost, on the day `on`
+    /// ([ADR 0094]). Like every import it checks **every** row before writing any (`refused` rows stop it), and
+    /// then writes all the entries in one go, audited like any movement. Sending the same file again, or a row of
+    /// it, writes nothing: what a product was given under `reference` is its origin, so it is `skipped`. A product
+    /// that already has movements of its own is refused (an opening balance is not a correction: that is a count),
+    /// and a quantity of zero is skipped.
+    pub async fn import_balances(
+        &self,
+        company_id: CompanyId,
+        actor: &Actor,
+        reference: &str,
+        on: &str,
+        rows: Vec<(usize, StockImportDraft)>,
+        dry_run: bool,
+    ) -> Result<ImportReport, ApplicationError> {
+        let day = CalendarDate::parse(on).ok_or(DomainError::InvalidDate("on"))?;
+        let reference = reference.trim();
+        if reference.is_empty()
+            || reference.chars().count() > MAX_STOCK_IMPORT_REFERENCE_CHARS
+            || reference.chars().any(char::is_control)
+        {
+            return Err(DomainError::InvalidImportReference.into());
+        }
+        let by_sku: HashMap<String, Product> = self
+            .all_products(company_id, ProductQuery::default())
+            .await?
+            .into_iter()
+            .filter_map(|product| Some((product.sku()?.to_owned(), product)))
+            .collect();
+
+        let mut report = ImportReport::default();
+        let mut first_row_of: HashMap<ProductId, usize> = HashMap::new();
+        let mut items: Vec<NewMovement> = Vec::new();
+        for (row, draft) in rows {
+            let mut refuse = |message: String| report.refused.push(RowNote { row, message });
+            let sku = draft.sku.trim().to_ascii_uppercase();
+            let Some(product) = by_sku.get(&sku) else {
+                refuse(format!(
+                    "no product of this company has the SKU {sku} (services have no stock)"
+                ));
+                continue;
+            };
+            if let Some(first) = first_row_of.insert(product.id(), row) {
+                refuse(format!("the same SKU as row {first}"));
+                continue;
+            }
+            if draft
+                .quantity
+                .trim()
+                .parse::<Decimal>()
+                .is_ok_and(|quantity| quantity.is_zero())
+            {
+                report.skipped.push(RowNote {
+                    row,
+                    message: "nothing on hand, so nothing to open".to_owned(),
+                });
+                continue;
+            }
+            let Some(unit_cost) = draft
+                .unit_cost
+                .clone()
+                .or_else(|| product.cost_price().map(|price| price.to_string()))
+            else {
+                refuse("unit_cost is blank and the product has no cost price".to_owned());
+                continue;
+            };
+            let movement = StockMovementDraft {
+                product_id: product.id(),
+                kind: StockMovementKind::In,
+                quantity: draft.quantity.trim().to_owned(),
+                value: None,
+                unit_cost: Some(unit_cost),
+                occurred_on: day.to_string(),
+                note: Some(format!("Saldo inicial: {reference}")),
+            };
+            let origin = origin_of_import(company_id, reference, &sku);
+            // Whether the row would be accepted as typed: the movement is valued against the empty ledger the product
+            // must have, by the same rules as any other.
+            if let Err(error) = StockMovement::new(
+                StockMovementId::generate(),
+                company_id,
+                movement.clone(),
+                Some(origin),
+                &StockBalance::EMPTY,
+            ) {
+                refuse(error.to_string());
+                continue;
+            }
+            let done = self
+                .movements
+                .of_origin(company_id, StockOriginKind::Import, origin.id)
+                .await?
+                .iter()
+                .any(|stored| stored.reverses().is_none());
+            if done {
+                report.skipped.push(RowNote {
+                    row,
+                    message: "already opened by a file with this reference".to_owned(),
+                });
+                continue;
+            }
+            let has_movements = !self
+                .movements
+                .list_by_company(
+                    company_id,
+                    &StockMovementQuery::default().of_product(product.id()),
+                    None,
+                    1,
+                )
+                .await?
+                .is_empty();
+            if has_movements {
+                refuse(
+                    "the product already has stock movements: an opening balance is for a product with none (correct it with an inventory count)"
+                        .to_owned(),
+                );
+                continue;
+            }
+            items.push(NewMovement {
+                draft: movement,
+                origin: Some(origin),
+                counted: None,
+            });
+        }
+        report.valid = items.len() + report.skipped.len();
+        if dry_run || !report.refused.is_empty() {
+            return Ok(report);
+        }
+        report.created = items.len();
+        self.write(company_id, actor, items, StockFloor::Open)
+            .await?;
+        Ok(report)
     }
 
     /// Undoes a movement a person wrote by hand, once; the day is the person's.

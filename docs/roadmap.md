@@ -196,7 +196,7 @@ private endpoint.
 
 - [ ] PostgreSQL row-level security policies as a second barrier to the application checks ([ADR 0004](adr/0004-company-scoped-tenancy.md))
 - [ ] Backup and restore procedure, upgrade guide, published Docker image
-- [ ] Migration importers: entries, open or paid, from CSV (done, [ADR 0064](adr/0064-entry-import-from-a-file.md), with `scripts/export-to-entries-csv.py` to convert a reference product's export); stock balances from CSV; guidance for leaving the reference product
+- [x] Migration importers: entries, open or paid, from CSV (done, [ADR 0064](adr/0064-entry-import-from-a-file.md), with `scripts/export-to-entries-csv.py` to convert a reference product's export); stock balances from CSV ([ADR 0094](adr/0094-stock-balance-import.md): `POST /stock/import` opens the stock of products with none, once per file name, checked whole before any write); [guidance for leaving the reference product](migration/leaving-a-reference-product.md) (never tried against a real export of any vendor)
 - [ ] Performance baseline on a 5-year dataset; indexes reviewed
 - [ ] User documentation complete in English; Portuguese translation of the UI
 

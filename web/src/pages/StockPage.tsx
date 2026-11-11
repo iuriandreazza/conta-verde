@@ -15,6 +15,7 @@ import {
   type StockSettings,
 } from "../api";
 import { Button } from "../components/Button";
+import { CsvImport } from "../components/CsvImport";
 import { FilterTiles, type TileOption } from "../components/FilterTiles";
 import { History } from "../components/History";
 import { BoxIcon } from "../components/icons/box";
@@ -39,7 +40,7 @@ import { usePagedList } from "../lib/usePagedList";
 import { useStockProducts } from "../lib/useStockProducts";
 import { useParams } from "react-router-dom";
 
-type View = "positions" | "movements" | "alerts" | "settings";
+type View = "positions" | "movements" | "alerts" | "settings" | "import";
 
 const KIND_LABELS: Record<StockMovementKind, string> = {
   in: "Entrada",
@@ -52,6 +53,7 @@ const ORIGIN_LABELS: Record<StockOriginKind, string> = {
   sale: "Venda",
   sale_return: "Devolução",
   inventory_count: "Inventário",
+  import: "Saldo inicial",
 };
 
 /** A date field that is not a whole date yet (a year still being typed) asks nothing of the API. */
@@ -105,6 +107,11 @@ export function StockPage() {
           <button type="button" aria-pressed={view === "settings"} onClick={() => setView("settings")}>
             Configurações
           </button>
+          {canWrite && (
+            <button type="button" aria-pressed={view === "import"} onClick={() => setView("import")}>
+              Importar saldos
+            </button>
+          )}
         </div>
         <Notice message={productsError} />
         {view === "positions" ? (
@@ -113,6 +120,8 @@ export function StockPage() {
           <MovementsView companyId={companyId} products={products} canWrite={canWrite} />
         ) : view === "alerts" ? (
           <AlertsView alerts={alerts} error={alertsError} />
+        ) : view === "import" ? (
+          <ImportView companyId={companyId} onImported={loadAlerts} />
         ) : (
           <SettingsView companyId={companyId} canWrite={canWrite} />
         )}
@@ -557,6 +566,53 @@ const settingValue = (field: string, value: string | null) =>
   field === "block_sale_without_balance" ? (value === "true" ? "Ligado" : "Desligado") : (value ?? "—");
 
 /** The company's stock rules: today, whether a sale the stock cannot cover is refused. */
+const STOCK_TEMPLATE = ["sku,quantity,unit_cost", "CAFE-500,10,5.00", "PAO-1,3,"].join("\n");
+
+/** Opens the stock of products from a file, once: the name of the file and the day are what sending it again recognises. */
+function ImportView({ companyId, onImported }: { companyId: string; onImported: () => void }) {
+  const [reference, setReference] = useState("");
+  const [on, setOn] = useState(todayIso());
+  const ready = reference.trim() !== "" && isIsoDate(on);
+  return (
+    <>
+      <section className="card">
+        <div className="card-title">
+          <h2>Saldo inicial</h2>
+        </div>
+        <div className="form-grid">
+          <label>
+            Nome desta importação
+            <input value={reference} maxLength={100} onChange={(event) => setReference(event.target.value)} />
+            <span className="field-hint">
+              Enviar de novo um arquivo com o mesmo nome não soma nada. Use um nome novo para cada arquivo, como “migração 2026”.
+            </span>
+          </label>
+          <label>
+            Dia do saldo
+            <input type="date" value={on} onChange={(event) => setOn(event.target.value)} />
+          </label>
+        </div>
+      </section>
+      <CsvImport
+        title="Importar saldos de um arquivo CSV"
+        template={STOCK_TEMPLATE}
+        templateName="saldos-de-estoque.csv"
+        created={["saldo aberto", "saldos abertos"]}
+        blocked={!ready}
+        run={(file, dryRun) => api.importStockBalances(companyId, file, reference.trim(), on, dryRun)}
+        onImported={onImported}
+      >
+        <p>
+          A primeira linha dá o nome das colunas, em qualquer ordem; a vírgula ou o ponto e vírgula separam.{" "}
+          <code>sku</code> e <code>quantity</code> são obrigatórias; <code>unit_cost</code> é o custo de uma unidade (em
+          branco, vale o preço de custo do produto). Só abre o saldo de um produto que ainda não tem movimentos: para
+          corrigir um saldo existente, faça um inventário. Quantidade zero não abre nada.
+        </p>
+      </CsvImport>
+    </>
+  );
+}
+
 function SettingsView({ companyId, canWrite }: { companyId: string; canWrite: boolean }) {
   const [settings, setSettings] = useState<StockSettings | null>(null);
   const [error, setError] = useState<string | null>(null);
