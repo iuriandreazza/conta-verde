@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import type { CashFlowGroup, Category, DreGroup, NewCategory } from "../api";
 import { treeRows } from "../lib/categoryTree";
+import { useT } from "../i18n";
 import { CASH_FLOW_GROUPS, DRE_GROUPS, cashFlowLabel, dreLabel } from "../lib/groups";
 import { Button } from "./Button";
 import { BackButton } from "./BackButton";
@@ -50,6 +51,7 @@ export function CategoryForm({
   onChange,
   onCancel,
 }: CategoryFormProps) {
+  const t = useT();
   const [parentId, setParentId] = useState(initialParentId ?? "");
   const [dreGroup, setDreGroup] = useState<DreGroup>("operating_expenses");
   const [cashFlowGroup, setCashFlowGroup] = useState<CashFlowGroup>("operating");
@@ -80,10 +82,10 @@ export function CategoryForm({
   return (
     <form className="record-form" onSubmit={handleSubmit}>
       <section className="form-section" aria-labelledby="category-info">
-        <h3 id="category-info">Dados da categoria</h3>
+        <h3 id="category-info">{t("Category details")}</h3>
         <div className="field-grid">
       <label>
-        Nome
+        {t("Name")}
         <input
           name="name"
           required
@@ -95,9 +97,9 @@ export function CategoryForm({
       {editing === null ? (
         <>
           <label>
-            Subcategoria de
+            {t("Subcategory of")}
             <select value={parentId} onChange={(event) => setParentId(event.target.value)}>
-              <option value="">Nenhuma: categoria principal</option>
+              <option value="">{t("None: top-level category")}</option>
               {parents.map(({ category, depth }) => (
                 <option key={category.id} value={category.id}>
                   {"— ".repeat(depth)}
@@ -108,13 +110,16 @@ export function CategoryForm({
           </label>
           {parent ? (
             <p className="muted">
-              Herda de {parent.name}: {dreLabel(parent.dre_group)} no DRE,{" "}
-              {cashFlowLabel(parent.cash_flow_group).toLowerCase()} no fluxo de caixa.
+              {t("Inherits from {parent}: {dre} in the income statement, {cashFlow} in the cash flow.", {
+                parent: parent.name,
+                dre: dreLabel(parent.dre_group, t),
+                cashFlow: cashFlowLabel(parent.cash_flow_group, t).toLowerCase(),
+              })}
             </p>
           ) : (
             <>
               <label>
-                Grupo no DRE
+                {t("DRE group")}
                 <select
                   value={dreGroup}
                   onChange={(event) => {
@@ -125,13 +130,13 @@ export function CategoryForm({
                 >
                   {DRE_GROUPS.map((group) => (
                     <option key={group.key} value={group.key}>
-                      {group.label}
+                      {t(group.label)}
                     </option>
                   ))}
                 </select>
               </label>
               <label>
-                Grupo no fluxo de caixa
+                {t("Cash flow group")}
                 <select
                   value={cashFlowGroup}
                   // Moves between accounts are the transfers group in both, nothing else.
@@ -142,7 +147,7 @@ export function CategoryForm({
                     (group) => group.key !== "transfer" || dreGroup === "transfers",
                   ).map((group) => (
                     <option key={group.key} value={group.key}>
-                      {group.label}
+                      {t(group.label)}
                     </option>
                   ))}
                 </select>
@@ -153,9 +158,11 @@ export function CategoryForm({
       ) : (
         <>
           <p className="muted">
-            {editing.level > 1 ? "Subcategoria. " : ""}
-            {dreLabel(editing.dre_group)} no DRE, {cashFlowLabel(editing.cash_flow_group).toLowerCase()}{" "}
-            no fluxo de caixa. O lugar na árvore e os grupos não mudam.
+            {editing.level > 1 ? `${t("Subcategory.")} ` : ""}
+            {t("{dre} in the income statement, {cashFlow} in the cash flow. The place in the tree and the groups do not change.", {
+              dre: dreLabel(editing.dre_group, t),
+              cashFlow: cashFlowLabel(editing.cash_flow_group, t).toLowerCase(),
+            })}
           </p>
           <label className="inline">
             <input
@@ -164,10 +171,10 @@ export function CategoryForm({
               defaultChecked={editing.active}
               disabled={isTransfer(editing)}
             />{" "}
-            Ativa
+            {t("Active category")}
           </label>
           {isTransfer(editing) && (
-            <p className="muted">A categoria de transferências pode ser renomeada, mas não desativada.</p>
+            <p className="muted">{t("The transfers category can be renamed but not deactivated.")}</p>
           )}
         </>
       )}
@@ -177,7 +184,7 @@ export function CategoryForm({
       <div className="form-footer">
         <BackButton disabled={pending} onClick={onCancel} />
         <Button type="submit" icon={editing === null ? PlusIcon : CheckIcon} pending={pending}>
-          {editing === null ? "Adicionar" : "Salvar alterações"}
+          {editing === null ? t("Add") : t("Save changes")}
         </Button>
       </div>
     </form>

@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import { api, errorMessage, type PartyInput } from "../api";
 import { PartyForm } from "../components/PartyForm";
+import { useT } from "../i18n";
 import { registryNoticeFor } from "../lib/registryNotice";
 import type { CreatorProps } from "./CreationProvider";
 
 /** The form of a new client or supplier, and the call that saves it; what the registry said comes back in the confirmation. */
 export function PartyCreator({ companyId, onBusyChange, onCreated, onCancel }: CreatorProps) {
+  const t = useT();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -18,10 +20,10 @@ export function PartyCreator({ companyId, onBusyChange, onCreated, onCancel }: C
     setError(null);
     try {
       const created = await api.createParty(companyId, input);
-      const notice = registryNoticeFor(created, "registering");
+      const notice = registryNoticeFor(created, "registering", t);
       onCreated({
         id: created.id,
-        message: notice?.message ?? `${created.name} cadastrado.`,
+        message: notice?.message ?? t("{name} registered.", { name: created.name }),
         tone: notice?.tone === "warning" ? "warning" : "success",
       });
     } catch (failure) {

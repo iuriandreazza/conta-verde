@@ -1,5 +1,6 @@
 import type { FormEvent } from "react";
 import type { PaymentMethod, PaymentMethodInput, PaymentMethodKind } from "../api";
+import { useT } from "../i18n";
 import { PAYMENT_METHOD_KINDS } from "../lib/kinds";
 import { Button } from "./Button";
 import { BackButton } from "./BackButton";
@@ -18,6 +19,7 @@ interface PaymentMethodFormProps {
 
 /** Registers a payment method, or changes one. Remount it (a `key`) to start over. */
 export function PaymentMethodForm({ method, pending, error, onSubmit, onCancel }: PaymentMethodFormProps) {
+  const t = useT();
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (pending) return;
@@ -32,31 +34,31 @@ export function PaymentMethodForm({ method, pending, error, onSubmit, onCancel }
   return (
     <form className="record-form" onSubmit={handleSubmit}>
       <section className="form-section" aria-labelledby="method-info">
-        <h3 id="method-info">Dados da forma de pagamento</h3>
+        <h3 id="method-info">{t("Payment method details")}</h3>
         <div className="field-grid">
           <label>
-            Tipo
+            {t("Type")}
             <select name="kind" defaultValue={method?.kind ?? "pix"}>
               {PAYMENT_METHOD_KINDS.map((option) => (
                 <option key={option.key} value={option.key}>
-                  {option.label}
+                  {t(option.label)}
                 </option>
               ))}
             </select>
           </label>
           <label>
-            Nome
+            {t("Name")}
             <input
               name="name"
               required
               maxLength={200}
               autoComplete="off"
-              placeholder="Como aparece nas vendas, por exemplo Cartão Visa"
+              placeholder={t("How it shows in sales, for example Visa card")}
               defaultValue={method?.name}
             />
           </label>
           <label className="inline">
-            <input name="active" type="checkbox" defaultChecked={method?.active ?? true} /> Ativa
+            <input name="active" type="checkbox" defaultChecked={method?.active ?? true} /> {t("Active payment method")}
           </label>
         </div>
       </section>
@@ -64,7 +66,7 @@ export function PaymentMethodForm({ method, pending, error, onSubmit, onCancel }
       <div className="form-footer">
         <BackButton disabled={pending} onClick={onCancel} />
         <Button type="submit" icon={method === null ? PlusIcon : CheckIcon} pending={pending}>
-          {method === null ? "Adicionar" : "Salvar alterações"}
+          {method === null ? t("Add") : t("Save changes")}
         </Button>
       </div>
     </form>

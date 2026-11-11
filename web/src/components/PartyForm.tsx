@@ -10,6 +10,7 @@ import {
 import { Button } from "./Button";
 import { CheckIcon } from "./icons/check";
 import { PlusIcon } from "./icons/plus";
+import { useT } from "../i18n";
 import { Notice, type NoticeTone } from "./Notice";
 
 export const STATES = [
@@ -66,6 +67,7 @@ export function PartyForm({
   onCancel,
   lookupAddress,
 }: PartyFormProps) {
+  const t = useT();
   const formRef = useRef<HTMLFormElement>(null);
   // Controlled, unlike the other fields, because the lookup button waits for eight digits.
   const [postalCode, setPostalCode] = useState(
@@ -128,8 +130,8 @@ export function PartyForm({
       setLookupNotice({
         tone: "success",
         message: entry.street
-          ? "Endereço preenchido. Confira e informe o número."
-          : "Cidade e UF preenchidas: este CEP não tem rua. Informe o logradouro.",
+          ? t("Address filled in. Check it and enter the number.")
+          : t("City and state filled in: this postal code has no street. Enter the street."),
       });
     } catch (failure) {
       setLookupNotice({ tone: "warning", message: errorMessage(failure) });
@@ -191,7 +193,7 @@ export function PartyForm({
   return (
     <form ref={formRef} onSubmit={handleSubmit}>
       <label>
-        Nome
+        {t("Name")}
         <input
           name="name"
           required
@@ -200,7 +202,7 @@ export function PartyForm({
         />
       </label>
       <label>
-        CPF ou CNPJ
+        {t("CPF or CNPJ")}
         {/* No numeric keypad: a CNPJ may contain letters since July 2026. */}
         <input
           name="document"
@@ -211,32 +213,32 @@ export function PartyForm({
         />
       </label>
       <label>
-        E-mail
+        {t("E-mail")}
         <input name="email" type="email" defaultValue={party?.email ?? ""} />
       </label>
       <fieldset>
-        <legend>Tipo</legend>
+        <legend>{t("Type")}</legend>
         <label className="inline">
           <input name="is_customer" type="checkbox" defaultChecked={party?.is_customer ?? true} />{" "}
-          Cliente
+          {t("Customer")}
         </label>
         <label className="inline">
           <input name="is_supplier" type="checkbox" defaultChecked={party?.is_supplier ?? false} />{" "}
-          Fornecedor
+          {t("Supplier")}
         </label>
         <label className="inline">
           <input name="is_carrier" type="checkbox" defaultChecked={party?.is_carrier ?? false} />{" "}
-          Transportadora
+          {t("Carrier")}
         </label>
         <label className="inline">
           <input name="is_seller" type="checkbox" defaultChecked={party?.is_seller ?? false} />{" "}
-          Vendedor
+          {t("Seller")}
         </label>
       </fieldset>
       <fieldset className="address-fields">
-        <legend>Endereço</legend>
+        <legend>{t("Address")}</legend>
         <label className="span-4">
-          CEP
+          {t("Postal code")}
           <input
             name="postal_code"
             inputMode="numeric"
@@ -260,7 +262,7 @@ export function PartyForm({
             disabled={digitsOf(postalCode).length !== 8}
             onClick={() => void lookUp()}
           >
-            Buscar endereço
+            {t("Look up address")}
           </Button>
         </div>
         {lookupNotice && (
@@ -269,15 +271,15 @@ export function PartyForm({
           </div>
         )}
         <label className="span-4">
-          Logradouro
+          {t("Street")}
           <input name="street" maxLength={150} autoComplete="off" defaultValue={address?.street ?? ""} />
         </label>
         <label className="span-2">
-          Número
+          {t("Number")}
           <input name="number" maxLength={20} autoComplete="off" defaultValue={address?.number ?? ""} />
         </label>
         <label className="span-3">
-          Complemento
+          {t("Complement")}
           <input
             name="complement"
             maxLength={80}
@@ -286,15 +288,15 @@ export function PartyForm({
           />
         </label>
         <label className="span-3">
-          Bairro
+          {t("District")}
           <input name="district" maxLength={80} autoComplete="off" defaultValue={address?.district ?? ""} />
         </label>
         <label className="span-4">
-          Cidade
+          {t("City")}
           <input name="city" maxLength={80} autoComplete="off" defaultValue={address?.city ?? ""} />
         </label>
         <label className="span-2">
-          UF
+          {t("State")}
           <select name="state" defaultValue={address?.state ?? ""}>
             <option value=""></option>
             {STATES.map((state) => (
@@ -306,56 +308,56 @@ export function PartyForm({
         </label>
       </fieldset>
       <label>
-        Etiquetas
+        {t("Tags")}
         <input
           name="tags"
           autoComplete="off"
-          placeholder="Separadas por vírgula, como vip, atacado"
+          placeholder={t("Separated by commas, like vip, wholesale")}
           defaultValue={party?.tags.join(", ") ?? ""}
         />
       </label>
       <fieldset className="contacts">
-        <legend>Contatos</legend>
+        <legend>{t("Contacts")}</legend>
         {rows.map((row, index) => (
           <div className="contact-row" key={row.key}>
             <label className="span-2">
-              Nome
+              {t("Name")}
               <input
                 autoComplete="off"
                 maxLength={100}
                 autoFocus={row.key === addedKey}
-                aria-label={`Nome do contato ${index + 1}`}
+                aria-label={t("Name of contact {number}", { number: index + 1 })}
                 value={row.name}
                 onChange={(event) => update(row.key, { name: event.target.value })}
               />
             </label>
             <label>
-              Cargo
+              {t("Job title")}
               <input
                 autoComplete="off"
                 maxLength={80}
-                aria-label={`Cargo do contato ${index + 1}`}
+                aria-label={t("Job title of contact {number}", { number: index + 1 })}
                 value={row.job_title}
                 onChange={(event) => update(row.key, { job_title: event.target.value })}
               />
             </label>
             <label>
-              Telefone
+              {t("Phone")}
               <input
                 type="tel"
                 autoComplete="off"
                 maxLength={30}
-                aria-label={`Telefone do contato ${index + 1}`}
+                aria-label={t("Phone of contact {number}", { number: index + 1 })}
                 value={row.phone}
                 onChange={(event) => update(row.key, { phone: event.target.value })}
               />
             </label>
             <label className="span-2">
-              E-mail
+              {t("E-mail")}
               <input
                 type="email"
                 autoComplete="off"
-                aria-label={`E-mail do contato ${index + 1}`}
+                aria-label={t("E-mail of contact {number}", { number: index + 1 })}
                 value={row.email}
                 onChange={(event) => update(row.key, { email: event.target.value })}
               />
@@ -364,10 +366,10 @@ export function PartyForm({
               type="button"
               variant="ghost"
               className="btn-small"
-              aria-label={`Remover contato ${index + 1}`}
+              aria-label={t("Remove contact {number}", { number: index + 1 })}
               onClick={() => setRows((current) => current.filter((item) => item.key !== row.key))}
             >
-              Remover
+              {t("Remove")}
             </Button>
           </div>
         ))}
@@ -380,7 +382,7 @@ export function PartyForm({
             disabled={rows.length >= MAX_CONTACTS}
             onClick={addRow}
           >
-            Adicionar contato
+            {t("Add contact")}
           </Button>
         </div>
       </fieldset>
@@ -392,11 +394,11 @@ export function PartyForm({
           pending={pending}
           disabled={blocked}
         >
-          {party === null ? "Adicionar" : "Salvar alterações"}
+          {party === null ? t("Add") : t("Save changes")}
         </Button>
         {party !== null && (
           <Button type="button" variant="ghost" disabled={pending} onClick={onCancel}>
-            Cancelar
+            {t("Cancel")}
           </Button>
         )}
       </div>

@@ -27,11 +27,13 @@ import { usePagedList } from "../lib/usePagedList";
 import { useCanWrite } from "../lib/useCanWrite";
 import { SquarePenIcon } from "../components/icons/square-pen";
 import { StatusBadge } from "../components/StatusBadge";
+import { useT } from "../i18n";
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one
 // instance: the old list is dropped and a reply still in flight for another company lands on an
 // unmounted component.
 export function PaymentMethodsPage() {
+  const t = useT();
   const { companyId = "" } = useParams();
   const canWrite = useCanWrite("finance");
   const [filters, setFilters] = useState<PaymentMethodFilters>(NO_PAYMENT_METHOD_FILTERS);
@@ -85,7 +87,7 @@ export function PaymentMethodsPage() {
       // In place: the list keeps its page and its filters.
       setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)));
       setEditing(null);
-      setSaved(`${updated.name} atualizada.`);
+      setSaved(t("Payment method {name} updated.", { name: updated.name }));
     } catch (failure) {
       setFormError(errorMessage(failure));
     } finally {
@@ -95,109 +97,109 @@ export function PaymentMethodsPage() {
 
   return (
     <>
-      <PageHeader title="Formas de pagamento" description="Como a empresa paga e recebe: Pix, boleto, dinheiro, cartões." />
+      <PageHeader title={t("Payment methods")} description={t("How the company pays and gets paid: Pix, boleto, cash, cards.")} />
       {canWrite && (
         <div className="list-actions">
           <Button type="button" icon={PlusIcon} onClick={() => openCreate("paymentMethod")}>
-            Nova forma de pagamento
+            {t("New payment method")}
           </Button>
         </div>
       )}
       <Notice message={saved} tone="success" />
       <div>
       <section className="card list-card">
-        <h2>Cadastradas</h2>
+        <h2>{t("Registered methods")}</h2>
         <div className="filters" role="search">
           <label>
-            Buscar
+            {t("Search")}
             <input
               type="search"
               value={filters.q}
-              placeholder="Nome"
+              placeholder={t("Name")}
               autoComplete="off"
               maxLength={100}
               onChange={(event) => setFilters({ ...filters, q: event.target.value })}
             />
           </label>
           <label>
-            Mostrar
+            {t("Show")}
             <select
               value={filters.kind}
               onChange={(event) =>
                 setFilters({ ...filters, kind: event.target.value as PaymentMethodFilters["kind"] })
               }
             >
-              <option value="">Todas</option>
+              <option value="">{t("All methods")}</option>
               {PAYMENT_METHOD_KINDS.map((option) => (
                 <option key={option.key} value={option.key}>
-                  {option.label}
+                  {t(option.label)}
                 </option>
               ))}
             </select>
           </label>
           <label>
-            Situação
+            {t("Status")}
             <select
               value={filters.active}
               onChange={(event) =>
                 setFilters({ ...filters, active: event.target.value as PaymentMethodFilters["active"] })
               }
             >
-              <option value="">Ativas e inativas</option>
-              <option value="true">Só ativas</option>
-              <option value="false">Só inativas</option>
+              <option value="">{t("Active and inactive methods")}</option>
+              <option value="true">{t("Active methods only")}</option>
+              <option value="false">{t("Inactive methods only")}</option>
             </select>
           </label>
           <label>
-            Ordem
+            {t("Order")}
             <select
               value={filters.sort}
               onChange={(event) =>
                 setFilters({ ...filters, sort: event.target.value as PaymentMethodFilters["sort"] })
               }
             >
-              <option value="name">Nome (A–Z)</option>
-              <option value="-name">Nome (Z–A)</option>
+              <option value="name">{t("Name (A–Z)")}</option>
+              <option value="-name">{t("Name (Z–A)")}</option>
             </select>
           </label>
         </div>
         <Notice message={error} />
         {loading ? (
           <p role="status" className="status">
-            <Spinner /> Carregando…
+            <Spinner /> {t("Loading…")}
           </p>
         ) : methods.length === 0 && error ? (
           <Button type="button" variant="ghost" onClick={() => void reload()}>
-            Tentar de novo
+            {t("Try again")}
           </Button>
         ) : methods.length === 0 && isFiltered ? (
           <div className="empty">
             <BriefcaseBusinessIcon size={40} aria-hidden />
-            <p role="status">Nenhum cadastro encontrado.</p>
+            <p role="status">{t("No records found.")}</p>
             <Button
               type="button"
               variant="ghost"
               onClick={() => setFilters({ ...NO_PAYMENT_METHOD_FILTERS, sort: filters.sort })}
             >
-              Limpar filtros
+              {t("Clear filters")}
             </Button>
           </div>
         ) : methods.length === 0 ? (
           <div className="empty">
             <BriefcaseBusinessIcon size={40} aria-hidden />
-            <p>Nenhuma forma de pagamento ainda.</p>
-            <p className="muted">Pix, boleto, dinheiro, cada cartão que você aceita…</p>
+            <p>{t("No payment methods yet.")}</p>
+            <p className="muted">{t("Pix, boleto, cash, each card you accept…")}</p>
           </div>
         ) : (
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Nome</th>
-                  <th>Tipo</th>
-                  <th>Situação</th>
+                  <th>{t("Name")}</th>
+                  <th>{t("Type")}</th>
+                  <th>{t("Status")}</th>
                   <th>
-                    <span className="visually-hidden">Ações</span>
+                    <span className="visually-hidden">{t("Actions")}</span>
                   </th>
                 </tr>
               </thead>
@@ -206,7 +208,7 @@ export function PaymentMethodsPage() {
                   <Fragment key={method.id}>
                     <ListRow index={index} highlighted={method.id === highlightedId}>
                       <td>{method.name}</td>
-                      <td>{paymentMethodKindLabel(method.kind)}</td>
+                      <td>{paymentMethodKindLabel(method.kind, t)}</td>
                       <td><StatusBadge active={method.active} feminine /></td>
                       <td className="row-actions">
                         {canWrite && (
@@ -215,7 +217,7 @@ export function PaymentMethodsPage() {
                             icon={SquarePenIcon}
                             type="button"
                             variant="ghost"
-                            aria-label={`Alterar ${method.name}`}
+                            aria-label={t("Edit {name}", { name: method.name })}
                             disabled={saving}
                             onClick={() => {
                               setEditing(method);
@@ -223,14 +225,14 @@ export function PaymentMethodsPage() {
                               setSaved(null);
                             }}
                           >
-                            Alterar
+                            {t("Edit")}
                           </Button>
                         )}
                         <Button
                           iconOnly
                           type="button"
                           variant="ghost"
-                          aria-label={`Histórico de ${method.name}`}
+                          aria-label={t("History of {name}", { name: method.name })}
                           aria-expanded={historyOpenFor === method.id}
                           aria-controls={`history-${method.id}`}
                           icon={HistoryIcon}
@@ -238,13 +240,13 @@ export function PaymentMethodsPage() {
                             setHistoryOpenFor(historyOpenFor === method.id ? null : method.id)
                           }
                         >
-                          Histórico
+                          {t("History")}
                         </Button>
                       </td>
                     </ListRow>
                     {historyOpenFor === method.id && (
                       <tr id={`history-${method.id}`}>
-                        <td colSpan={4} role="region" aria-label={`Histórico de ${method.name}`}>
+                        <td colSpan={4} role="region" aria-label={t("History of {name}", { name: method.name })}>
                           <PaymentMethodHistory
                             // Remounted when the method changes, so an open history follows an edit.
                             key={JSON.stringify(method)}
@@ -268,12 +270,12 @@ export function PaymentMethodsPage() {
             pending={loadingMore}
             onClick={() => void loadMore()}
           >
-            Carregar mais
+            {t("Load more")}
           </Button>
         )}
       </section>
         {canWrite && (
-          <Sheet open={editing !== null} locked={saving} title={`Alterar ${shown?.name ?? ""}`} onClose={closeSheet}>
+          <Sheet open={editing !== null} locked={saving} title={t("Edit {name}", { name: shown?.name ?? "" })} onClose={closeSheet}>
             {shown !== null && (
               <PaymentMethodForm
                 key={shown.id}
