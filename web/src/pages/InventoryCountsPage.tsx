@@ -25,6 +25,7 @@ import { PageHeader } from "../components/PageHeader";
 import { Sheet } from "../components/Sheet";
 import { Spinner } from "../components/Spinner";
 import { useCreation, useOnCreated } from "../creation/CreationProvider";
+import { msg, useT, type Translate } from "../i18n";
 import { COUNT_STATUS_LABELS, countStatusClass } from "../lib/countStatus";
 import { formatDecimal } from "../lib/decimal";
 import { formatDate } from "../lib/entryInstallments";
@@ -35,31 +36,34 @@ import { usePagedList } from "../lib/usePagedList";
 import { useStockProducts } from "../lib/useStockProducts";
 
 const FIELD_LABELS: Record<string, string> = {
-  counted_on: "Data da contagem",
-  notes: "Observações",
-  lines: "Itens",
-  status: "Situação",
+  counted_on: msg("Count date"),
+  notes: msg("Notes"),
+  lines: msg("Items"),
+  status: msg("Status"),
 };
 
 type PanelKind = "details" | "apply" | "cancel" | "history";
 type Panel = { kind: PanelKind; id: string };
 type Action = "apply" | "cancel";
 
-const CONFIRMATIONS: Record<Action, { text: string; button: string; done: (count: InventoryCount) => string }> = {
+const CONFIRMATIONS: Record<Action, { text: string; button: string; done: (t: Translate, count: InventoryCount) => string }> = {
   apply: {
-    text: "Aplicar lança no estoque, na data da contagem, um ajuste para cada produto cuja contagem difere do saldo da hora da aplicação. Isso não se desfaz pelo inventário: o inventário fica aplicado e só um novo movimento corrige.",
-    button: "Aplicar inventário",
-    done: (count) => `Inventário nº ${count.number} aplicado: os ajustes foram lançados no estoque.`,
+    text: msg(
+      "Applying enters in the stock, on the count date, an adjustment for each product whose count differs from the balance at the time of applying. The count does not undo this: it stays applied and only a new movement corrects it.",
+    ),
+    button: msg("Apply inventory count"),
+    done: (t, count) => t("Inventory count no. {number} applied: the adjustments were entered in the stock.", { number: count.number }),
   },
   cancel: {
-    text: "Cancelar encerra o inventário sem mexer no estoque: ele não é reaberto.",
-    button: "Cancelar o inventário",
-    done: (count) => `Inventário nº ${count.number} cancelado.`,
+    text: msg("Cancelling closes the count without touching the stock: it is not reopened."),
+    button: msg("Cancel the inventory count"),
+    done: (t, count) => t("Inventory count no. {number} cancelled.", { number: count.number }),
   },
 };
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one instance.
 export function InventoryCountsPage() {
+  const t = useT();
   const { companyId = "" } = useParams();
   const canWrite = useCanWrite("purchases");
   const [filters, setFilters] = useState<InventoryCountFilters>(NO_COUNT_FILTERS);
@@ -107,7 +111,7 @@ export function InventoryCountsPage() {
       const updated = await api.updateInventoryCount(companyId, editing.id, input);
       replace(updated);
       setEditing(null);
-      setSaved(`Inventário nº ${updated.number} atualizado.`);
+      setSaved(t("Inventory count no. {number} updated.", { number: updated.number }));
     } catch (failure) {
       setFormError(errorMessage(failure));
     } finally {
@@ -124,7 +128,7 @@ export function InventoryCountsPage() {
       const updated = await (action === "apply" ? api.applyInventoryCount : api.cancelInventoryCount)(companyId, count.id);
       replace(updated);
       setPanel(null);
-      setSaved(CONFIRMATIONS[action].done(updated));
+      setSaved(CONFIRMATIONS[action].done(t, updated));
     } catch (failure) {
       setActionError(errorMessage(failure));
     } finally {
@@ -142,42 +146,42 @@ export function InventoryCountsPage() {
   return (
     <>
       <PageHeader
-        title="Inventários"
-        description="Contagens do que há nas prateleiras: aplicar uma contagem ajusta o estoque às quantidades encontradas."
+        title={t("Inventory counts")}
+        description={t("Counts of what is on the shelves: applying a count adjusts the stock to the quantities found.")}
       />
       {canWrite && (
         <div className="list-actions">
           <Button type="button" icon={PlusIcon} onClick={() => openCreate("inventoryCount")}>
-            Novo inventário
+            {t("New inventory count")}
           </Button>
           <Button type="button" variant="ghost" onClick={() => openCreate("inventoryCount", { viaSheet: true })}>
-            Novo inventário via planilha
+            {t("New inventory count from a spreadsheet")}
           </Button>
         </div>
       )}
       <Notice message={saved} tone="success" />
       <div>
         <section className="card list-card">
-          <h2>Contagens</h2>
+          <h2>{t("Counts")}</h2>
           <div className="filters" role="search">
             <label>
-              Buscar
+              {t("Search")}
               <input
                 type="search"
                 value={filters.q}
-                placeholder="Número ou observação"
+                placeholder={t("Number or notes")}
                 autoComplete="off"
                 maxLength={100}
                 onChange={(event) => setFilters({ ...filters, q: event.target.value })}
               />
             </label>
             <label>
-              Situação
+              {t("Status")}
               <select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value as InventoryCountFilters["status"] })}>
-                <option value="">Todas</option>
+                <option value="">{t("All")}</option>
                 {Object.entries(COUNT_STATUS_LABELS).map(([key, label]) => (
                   <option key={key} value={key}>
-                    {label}
+                    {t(label)}
                   </option>
                 ))}
               </select>
@@ -186,34 +190,34 @@ export function InventoryCountsPage() {
           <Notice message={error ?? productsError} />
           {loading ? (
             <p role="status" className="status">
-              <Spinner /> Carregando…
+              <Spinner /> {t("Loading…")}
             </p>
           ) : items.length === 0 && error ? (
             <Button type="button" variant="ghost" onClick={() => void reload()}>
-              Tentar de novo
+              {t("Try again")}
             </Button>
           ) : items.length === 0 && isFiltered ? (
             <div className="empty">
               <LayersIcon size={40} aria-hidden />
-              <p role="status">Nenhum inventário encontrado.</p>
+              <p role="status">{t("No inventory counts found.")}</p>
               <Button type="button" variant="ghost" onClick={() => setFilters({ ...NO_COUNT_FILTERS })}>
-                Limpar filtros
+                {t("Clear filters")}
               </Button>
             </div>
           ) : items.length === 0 ? (
             <div className="empty">
               <LayersIcon size={40} aria-hidden />
-              <h3>Realize um inventário para atualizar seu estoque</h3>
+              <h3>{t("Do an inventory count to update your stock")}</h3>
               <p className="muted">
-                Compare o estoque físico com o do sistema: informe o que foi contado e o sistema ajusta as diferenças, ao custo médio, na data da contagem.
+                {t("Compare the physical stock with the system's: enter what was counted and the system adjusts the differences, at average cost, on the count date.")}
               </p>
               {canWrite && (
                 <>
                   <Button type="button" icon={PlusIcon} onClick={() => openCreate("inventoryCount")}>
-                    Novo inventário
+                    {t("New inventory count")}
                   </Button>
                   <Button type="button" variant="ghost" onClick={() => openCreate("inventoryCount", { viaSheet: true })}>
-                    Novo inventário via planilha
+                    {t("New inventory count from a spreadsheet")}
                   </Button>
                 </>
               )}
@@ -223,12 +227,12 @@ export function InventoryCountsPage() {
               <table>
                 <thead>
                   <tr>
-                    <th>Nº</th>
-                    <th>Data</th>
-                    <th>Produtos</th>
-                    <th>Situação</th>
+                    <th>{t("No.")}</th>
+                    <th>{t("Date")}</th>
+                    <th>{t("Products")}</th>
+                    <th>{t("Status")}</th>
                     <th>
-                      <span className="visually-hidden">Ações</span>
+                      <span className="visually-hidden">{t("Actions")}</span>
                     </th>
                   </tr>
                 </thead>
@@ -242,10 +246,12 @@ export function InventoryCountsPage() {
                           {count.notes !== null && <div className="muted">{count.notes}</div>}
                         </td>
                         <td>
-                          {count.lines.length} {count.lines.length === 1 ? "produto" : "produtos"}
+                          {count.lines.length === 1
+                            ? t("{count} product", { count: count.lines.length })
+                            : t("{count} products", { count: count.lines.length })}
                         </td>
                         <td>
-                          <span className={countStatusClass(count.status)}>{COUNT_STATUS_LABELS[count.status]}</span>
+                          <span className={countStatusClass(count.status)}>{t(COUNT_STATUS_LABELS[count.status])}</span>
                         </td>
                         <td className="row-actions">
                           <Button
@@ -253,11 +259,11 @@ export function InventoryCountsPage() {
                             type="button"
                             variant="ghost"
                             icon={FileTextIcon}
-                            aria-label={`Detalhes do inventário ${count.number}`}
+                            aria-label={t("Details of inventory count {number}", { number: count.number })}
                             aria-expanded={isOpen("details", count.id)}
                             onClick={() => toggle("details", count.id)}
                           >
-                            Detalhes
+                            {t("Details")}
                           </Button>
                           {canWrite && count.status === "open" && (
                             <>
@@ -266,7 +272,7 @@ export function InventoryCountsPage() {
                                 icon={SquarePenIcon}
                                 type="button"
                                 variant="ghost"
-                                aria-label={`Alterar o inventário ${count.number}`}
+                                aria-label={t("Change inventory count {number}", { number: count.number })}
                                 disabled={saving || acting}
                                 onClick={() => {
                                   setEditing(count);
@@ -274,28 +280,28 @@ export function InventoryCountsPage() {
                                   setSaved(null);
                                 }}
                               >
-                                Alterar
+                                {t("Change")}
                               </Button>
                               <Button
                                 iconOnly
                                 icon={CheckIcon}
                                 type="button"
                                 variant="ghost"
-                                aria-label={`Aplicar o inventário ${count.number}`}
+                                aria-label={t("Apply inventory count {number}", { number: count.number })}
                                 aria-expanded={isOpen("apply", count.id)}
                                 onClick={() => toggle("apply", count.id)}
                               >
-                                Aplicar
+                                {t("Apply")}
                               </Button>
                               <Button
                                 type="button"
                                 variant="ghost"
                                 className="btn-small"
-                                aria-label={`Cancelar o inventário ${count.number}`}
+                                aria-label={t("Cancel inventory count {number}", { number: count.number })}
                                 aria-expanded={isOpen("cancel", count.id)}
                                 onClick={() => toggle("cancel", count.id)}
                               >
-                                Cancelar
+                                {t("Cancel")}
                               </Button>
                             </>
                           )}
@@ -303,34 +309,34 @@ export function InventoryCountsPage() {
                             iconOnly
                             type="button"
                             variant="ghost"
-                            aria-label={`Histórico do inventário ${count.number}`}
+                            aria-label={t("History of inventory count {number}", { number: count.number })}
                             aria-expanded={isOpen("history", count.id)}
                             icon={HistoryIcon}
                             onClick={() => toggle("history", count.id)}
                           >
-                            Histórico
+                            {t("History")}
                           </Button>
                         </td>
                       </ListRow>
                       {panel?.id === count.id && panel.kind === "details" && (
                         <tr>
-                          <td colSpan={5} role="region" aria-label={`Detalhes do inventário ${count.number}`}>
+                          <td colSpan={5} role="region" aria-label={t("Details of inventory count {number}", { number: count.number })}>
                             <DetailsPanel companyId={companyId} count={count} names={names} />
                           </td>
                         </tr>
                       )}
                       {panel?.id === count.id && (panel.kind === "apply" || panel.kind === "cancel") && (
                         <tr>
-                          <td colSpan={5} role="region" aria-label={`Confirmação do inventário ${count.number}`}>
+                          <td colSpan={5} role="region" aria-label={t("Confirmation of inventory count {number}", { number: count.number })}>
                             <div className="settlements">
-                              <p>{CONFIRMATIONS[panel.kind].text}</p>
+                              <p>{t(CONFIRMATIONS[panel.kind].text)}</p>
                               <Notice message={actionError} />
                               <div className="form-actions">
                                 <Button type="button" pending={acting} onClick={() => void act(count, panel.kind as Action)}>
-                                  {CONFIRMATIONS[panel.kind].button}
+                                  {t(CONFIRMATIONS[panel.kind].button)}
                                 </Button>
                                 <Button type="button" variant="ghost" disabled={acting} onClick={() => setPanel(null)}>
-                                  Voltar
+                                  {t("Back")}
                                 </Button>
                               </div>
                             </div>
@@ -339,12 +345,15 @@ export function InventoryCountsPage() {
                       )}
                       {panel?.id === count.id && panel.kind === "history" && (
                         <tr>
-                          <td colSpan={5} role="region" aria-label={`Histórico do inventário ${count.number}`}>
+                          <td colSpan={5} role="region" aria-label={t("History of inventory count {number}", { number: count.number })}>
                             <History
                               load={historyLoader(count.id)}
-                              fieldLabel={(field) => FIELD_LABELS[field] ?? field}
-                              valueLabel={(field, value) => displayValue(field, value, names)}
-                              emptyMessage="Sem registros."
+                              fieldLabel={(field) => {
+                                const label = FIELD_LABELS[field];
+                                return label === undefined ? field : t(label);
+                              }}
+                              valueLabel={(field, value) => displayValue(t, field, value, names)}
+                              emptyMessage={t("No records.")}
                             />
                           </td>
                         </tr>
@@ -357,13 +366,13 @@ export function InventoryCountsPage() {
           )}
           {nextCursor !== null && (
             <Button type="button" variant="ghost" icon={ChevronDownIcon} pending={loadingMore} onClick={() => void loadMore()}>
-              Carregar mais
+              {t("Load more")}
             </Button>
           )}
           {panel === null && <Notice message={actionError} />}
         </section>
         {canWrite && (
-          <Sheet open={editing !== null} locked={saving} title={`Alterar o inventário ${shown?.number ?? ""}`} onClose={closeSheet}>
+          <Sheet open={editing !== null} locked={saving} title={t("Change inventory count {number}", { number: shown?.number ?? "" })} onClose={closeSheet}>
             {shown !== null &&
               (productsLoaded ? (
                 <InventoryCountForm
@@ -377,7 +386,7 @@ export function InventoryCountsPage() {
                 />
               ) : productsError === null ? (
                 <p role="status" className="status">
-                  <Spinner /> Carregando…
+                  <Spinner /> {t("Loading…")}
                 </p>
               ) : (
                 <p role="alert">{productsError}</p>
@@ -393,6 +402,7 @@ const isZero = (quantity: string) => /^-?0(\.0+)?$/.test(quantity);
 
 /** What each product was found at, what the stock holds (or held, once applied) and the difference. */
 function DetailsPanel({ companyId, count, names }: { companyId: string; count: InventoryCount; names: Map<string, string> }) {
+  const t = useT();
   const [detail, setDetail] = useState<InventoryCount | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -413,7 +423,7 @@ function DetailsPanel({ companyId, count, names }: { companyId: string; count: I
       {detail === null ? (
         error === null && (
           <p role="status" className="status">
-            <Spinner /> Carregando…
+            <Spinner /> {t("Loading…")}
           </p>
         )
       ) : (
@@ -421,10 +431,10 @@ function DetailsPanel({ companyId, count, names }: { companyId: string; count: I
           <table>
             <thead>
               <tr>
-                <th>Produto</th>
-                <th className="num">Contado</th>
-                <th className="num">{detail.status === "applied" ? "Em estoque na aplicação" : "Em estoque"}</th>
-                <th className="num">Diferença</th>
+                <th>{t("Product")}</th>
+                <th className="num">{t("Counted")}</th>
+                <th className="num">{detail.status === "applied" ? t("In stock at the time of applying") : t("In stock")}</th>
+                <th className="num">{t("Difference")}</th>
               </tr>
             </thead>
             <tbody>
@@ -455,9 +465,12 @@ function DetailsPanel({ companyId, count, names }: { companyId: string; count: I
 }
 
 /** A value of the trail as a person reads it: words for keys. */
-function displayValue(field: string, value: string | null, names: Map<string, string>): string {
+function displayValue(t: Translate, field: string, value: string | null, names: Map<string, string>): string {
   if (value === null) return "—";
-  if (field === "status") return COUNT_STATUS_LABELS[value as InventoryCountStatus] ?? value;
+  if (field === "status") {
+    const label = COUNT_STATUS_LABELS[value as InventoryCountStatus];
+    return label === undefined ? value : t(label);
+  }
   if (field === "counted_on") return formatDate(value);
   if (field === "lines") {
     // One line per row, as `product:counted`.
@@ -465,7 +478,7 @@ function displayValue(field: string, value: string | null, names: Map<string, st
       .split("\n")
       .map((line) => {
         const [product, counted = ""] = line.split(":");
-        return `${names.get(product) ?? "produto"} × ${formatDecimal(counted)}`;
+        return `${names.get(product) ?? t("product")} × ${formatDecimal(counted)}`;
       })
       .join("; ");
   }

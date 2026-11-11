@@ -29,6 +29,7 @@ import { Notice } from "../components/Notice";
 import { PageHeader } from "../components/PageHeader";
 import { Spinner } from "../components/Spinner";
 import { useCreation, useOnCreated } from "../creation/CreationProvider";
+import { msg, useI18n, useT, type Translate } from "../i18n";
 import { formatDecimal, formatMoney, toInputDecimal } from "../lib/decimal";
 import { formatDate, isIsoDate, wholeDate } from "../lib/entryInstallments";
 import { todayIso } from "../lib/settlement";
@@ -43,23 +44,24 @@ import { useParams } from "react-router-dom";
 type View = "positions" | "movements" | "alerts" | "settings" | "import";
 
 const KIND_LABELS: Record<StockMovementKind, string> = {
-  in: "Entrada",
-  out: "Saída",
-  adjustment: "Ajuste",
+  in: msg("Entry"),
+  out: msg("Exit"),
+  adjustment: msg("Adjustment"),
 };
 
 const ORIGIN_LABELS: Record<StockOriginKind, string> = {
-  purchase_receipt: "Compra",
-  sale: "Venda",
-  sale_return: "Devolução",
-  inventory_count: "Inventário",
-  import: "Saldo inicial",
+  purchase_receipt: msg("Purchase"),
+  sale: msg("Sale"),
+  sale_return: msg("Return"),
+  inventory_count: msg("Inventory count"),
+  import: msg("Opening balance"),
 };
 
 /** A date field that is not a whole date yet (a year still being typed) asks nothing of the API. */
 
 // Layout remounts the page whenever the path changes, so `companyId` never changes within one instance.
 export function StockPage() {
+  const t = useT();
   const { companyId = "" } = useParams();
   const canWrite = useCanWrite("purchases");
   const { openCreate } = useCreation();
@@ -84,32 +86,33 @@ export function StockPage() {
   return (
     <>
         <PageHeader
-          title="Estoque"
-          description="O que há de cada produto, a que custo médio, e o livro de movimentações: compras, vendas e devoluções entram sozinhas; ajustes e entradas avulsas são lançados aqui."
+          title={t("Stock")}
+          description={t("What is on hand of each product, at what average cost, and the ledger of movements: purchases, sales and returns come in on their own; adjustments and one-off entries are made here.")}
         />
         {canWrite && (
           <div className="list-actions">
             <Button type="button" icon={PlusIcon} onClick={() => openCreate("stockMovement")}>
-              Novo movimento
+              {t("New movement")}
             </Button>
           </div>
         )}
-        <div className="segmented" role="group" aria-label="Visão do estoque">
+        <div className="segmented" role="group" aria-label={t("Stock view")}>
           <button type="button" aria-pressed={view === "positions"} onClick={() => setView("positions")}>
-            Posição
+            {t("Position")}
           </button>
           <button type="button" aria-pressed={view === "movements"} onClick={() => setView("movements")}>
-            Movimentações
+            {t("Movements")}
           </button>
           <button type="button" aria-pressed={view === "alerts"} onClick={() => setView("alerts")}>
-            Abaixo do mínimo{alerts !== null && alerts.length > 0 && ` (${alerts.length})`}
+            {t("Below minimum")}
+            {alerts !== null && alerts.length > 0 && ` (${alerts.length})`}
           </button>
           <button type="button" aria-pressed={view === "settings"} onClick={() => setView("settings")}>
-            Configurações
+            {t("Settings")}
           </button>
           {canWrite && (
             <button type="button" aria-pressed={view === "import"} onClick={() => setView("import")}>
-              Importar saldos
+              {t("Import balances")}
             </button>
           )}
         </div>
@@ -131,18 +134,20 @@ export function StockPage() {
 
 type PositionColumn = "minimum" | "cost" | "value";
 const POSITION_COLUMNS: ColumnDef<PositionColumn>[] = [
-  { key: "minimum", label: "Estoque mínimo", hiddenByDefault: true },
-  { key: "cost", label: "Custo médio" },
-  { key: "value", label: "Valor" },
+  { key: "minimum", label: msg("Minimum stock"), hiddenByDefault: true },
+  { key: "cost", label: msg("Average cost") },
+  { key: "value", label: msg("Value") },
 ];
 
 function PositionsView({ companyId, lowIds }: { companyId: string; lowIds: Set<string> }) {
+  const t = useT();
   const [filters, setFilters] = useState<StockPositionFilters>(NO_POSITION_FILTERS);
   const { items, nextCursor, loading, loadingMore, error, applied, reload, loadMore } = usePagedList<StockPosition, StockPositionFilters>(
     (applied, after) => api.listStockPositions(companyId, { ...applied, on: wholeDate(applied.on) }, after),
     filters,
   );
   const columns = useColumns("stock-position", POSITION_COLUMNS);
+  const columnDefs = POSITION_COLUMNS.map((column) => ({ ...column, label: t(column.label) }));
   useOnCreated("stockMovement", () => void reload());
   const isFiltered = applied.q !== "" || applied.on !== "" || applied.situation !== "";
   const summary = useCounts(
@@ -151,19 +156,19 @@ function PositionsView({ companyId, lowIds }: { companyId: string; lowIds: Set<s
     !loading,
   );
   const tiles: TileOption<StockPositionFilters["situation"]>[] = [
-    { key: "", label: "Todos", count: summary?.total ?? null },
-    { key: "in_stock", label: "Em estoque", count: summary?.in_stock ?? null },
-    { key: "below_minimum", label: "Abaixo do mínimo", count: summary?.below_minimum ?? null },
-    { key: "depleted", label: "Esgotado", count: summary?.depleted ?? null },
+    { key: "", label: t("All products"), count: summary?.total ?? null },
+    { key: "in_stock", label: t("In stock"), count: summary?.in_stock ?? null },
+    { key: "below_minimum", label: t("Below minimum"), count: summary?.below_minimum ?? null },
+    { key: "depleted", label: t("Depleted"), count: summary?.depleted ?? null },
   ];
 
   return (
     <>
       <div className="list-actions">
-        <ColumnChooser columns={POSITION_COLUMNS} isShown={columns.isShown} onToggle={columns.toggle} onReset={columns.reset} />
+        <ColumnChooser columns={columnDefs} isShown={columns.isShown} onToggle={columns.toggle} onReset={columns.reset} />
         <ListTools
-          filename="posicao-do-estoque"
-          header={["Produto", "SKU", "Unidade", "Quantidade", "Custo médio", "Valor"]}
+          filename={t("stock-position")}
+          header={[t("Product"), "SKU", t("Unit"), t("Quantity"), t("Average cost"), t("Value")]}
           fetchPage={(after) => api.listStockPositions(companyId, { ...applied, on: wholeDate(applied.on) }, after)}
           toRow={(position) => [
             position.name,
@@ -176,49 +181,49 @@ function PositionsView({ companyId, lowIds }: { companyId: string; lowIds: Set<s
         />
       </div>
       <section className="card list-card">
-        <h2>Posição do estoque</h2>
+        <h2>{t("Stock position")}</h2>
         <FilterTiles
-          label="Situação"
+          label={t("Status")}
           value={filters.situation}
           options={tiles}
           onChange={(situation) => setFilters({ ...filters, situation })}
         />
         <div className="filters" role="search">
           <label>
-            Buscar
+            {t("Search")}
             <input
               type="search"
               value={filters.q}
-              placeholder="Nome ou código"
+              placeholder={t("Name or code")}
               autoComplete="off"
               maxLength={100}
               onChange={(event) => setFilters({ ...filters, q: event.target.value })}
             />
           </label>
           <label>
-            Em
+            {t("As of")}
             <input type="date" value={filters.on} onChange={(event) => setFilters({ ...filters, on: event.target.value })} />
           </label>
         </div>
         <Notice message={error} />
         {loading ? (
           <p role="status" className="status">
-            <Spinner /> Carregando…
+            <Spinner /> {t("Loading…")}
           </p>
         ) : items.length === 0 && error ? (
           <Button type="button" variant="ghost" onClick={() => void reload()}>
-            Tentar de novo
+            {t("Try again")}
           </Button>
         ) : items.length === 0 ? (
           <div className="empty">
             <BoxIcon size={40} aria-hidden />
-            <p role={isFiltered ? "status" : undefined}>{isFiltered ? "Nenhum produto encontrado." : "Nenhum produto em estoque ainda."}</p>
+            <p role={isFiltered ? "status" : undefined}>{isFiltered ? t("No products found.") : t("No products in stock yet.")}</p>
             {isFiltered ? (
               <Button type="button" variant="ghost" onClick={() => setFilters({ ...NO_POSITION_FILTERS })}>
-                Limpar filtros
+                {t("Clear filters")}
               </Button>
             ) : (
-              <p className="muted">O estoque nasce das compras recebidas, das vendas e dos movimentos lançados aqui.</p>
+              <p className="muted">{t("Stock comes from received purchases, sales and the movements entered here.")}</p>
             )}
           </div>
         ) : (
@@ -226,11 +231,11 @@ function PositionsView({ companyId, lowIds }: { companyId: string; lowIds: Set<s
             <table>
               <thead>
                 <tr>
-                  <th>Produto</th>
-                  <th className="num">Quantidade</th>
-                  {columns.isShown("minimum") && <th className="num">Mínimo</th>}
-                  {columns.isShown("cost") && <th className="num">Custo médio</th>}
-                  {columns.isShown("value") && <th className="num">Valor</th>}
+                  <th>{t("Product")}</th>
+                  <th className="num">{t("Quantity")}</th>
+                  {columns.isShown("minimum") && <th className="num">{t("Minimum")}</th>}
+                  {columns.isShown("cost") && <th className="num">{t("Average cost")}</th>}
+                  {columns.isShown("value") && <th className="num">{t("Value")}</th>}
                 </tr>
               </thead>
               <tbody>
@@ -244,12 +249,12 @@ function PositionsView({ companyId, lowIds }: { companyId: string; lowIds: Set<s
                       {formatDecimal(position.quantity)} {position.unit}
                       {isNegative(position.quantity) ? (
                         <div>
-                          <span className="badge badge-dot badge-critical">Saldo negativo</span>
+                          <span className="badge badge-dot badge-critical">{t("Negative balance")}</span>
                         </div>
                       ) : (
                         lowIds.has(position.product_id) && (
                           <div>
-                            <span className="badge badge-dot badge-warning">Abaixo do mínimo</span>
+                            <span className="badge badge-dot badge-warning">{t("Below minimum")}</span>
                           </div>
                         )
                       )}
@@ -269,12 +274,14 @@ function PositionsView({ companyId, lowIds }: { companyId: string; lowIds: Set<s
         )}
         {summary !== null && summary.total > 0 && (
           <p className="muted list-summary" role="status">
-            Total: {summary.total} {summary.total === 1 ? "produto" : "produtos"} · Custo total {formatMoney(summary.value)}
+            {summary.total === 1
+              ? t("Total: {count} product · Total cost {value}", { count: summary.total, value: formatMoney(summary.value) })
+              : t("Total: {count} products · Total cost {value}", { count: summary.total, value: formatMoney(summary.value) })}
           </p>
         )}
         {nextCursor !== null && (
           <Button type="button" variant="ghost" icon={ChevronDownIcon} pending={loadingMore} onClick={() => void loadMore()}>
-            Carregar mais
+            {t("Load more")}
           </Button>
         )}
       </section>
@@ -283,6 +290,7 @@ function PositionsView({ companyId, lowIds }: { companyId: string; lowIds: Set<s
 }
 
 function MovementsView({ companyId, products, canWrite }: { companyId: string; products: Product[]; canWrite: boolean }) {
+  const t = useT();
   const [filters, setFilters] = useState<StockMovementFilters>(NO_MOVEMENT_FILTERS);
   const [reversing, setReversing] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
@@ -298,10 +306,10 @@ function MovementsView({ companyId, products, canWrite }: { companyId: string; p
     !loading,
   );
   const tiles: TileOption<StockMovementFilters["kind"]>[] = [
-    { key: "", label: "Todas", count: counts === null ? null : counts.in + counts.out + counts.adjustment },
-    { key: "in", label: "Entradas", count: counts?.in ?? null },
-    { key: "out", label: "Saídas", count: counts?.out ?? null },
-    { key: "adjustment", label: "Ajustes", count: counts?.adjustment ?? null },
+    { key: "", label: t("All"), count: counts === null ? null : counts.in + counts.out + counts.adjustment },
+    { key: "in", label: t("Stock entries"), count: counts?.in ?? null },
+    { key: "out", label: t("Exits"), count: counts?.out ?? null },
+    { key: "adjustment", label: t("Adjustments"), count: counts?.adjustment ?? null },
   ];
   const names = useMemo(() => new Map(products.map((product) => [product.id, product.name])), [products]);
   // What the loaded rows already undo: another page may hold an undoing, and then the API says so.
@@ -311,28 +319,28 @@ function MovementsView({ companyId, products, canWrite }: { companyId: string; p
     <>
       <div className="list-actions">
         <ListTools
-          filename="movimentacoes-de-estoque"
-          header={["Data", "Produto", "Tipo", "Quantidade", "Valor", "Origem", "Observação"]}
+          filename={t("stock-movements")}
+          header={[t("Date"), t("Product"), t("Type"), t("Quantity"), t("Value"), t("Origin"), t("Note")]}
           fetchPage={(after) => api.listStockMovements(companyId, { ...applied, from: wholeDate(applied.from), to: wholeDate(applied.to) }, after)}
           toRow={(movement) => [
             movement.occurred_on,
             names.get(movement.product_id) ?? "",
-            KIND_LABELS[movement.kind],
+            t(KIND_LABELS[movement.kind]),
             toInputDecimal(movement.quantity),
             toInputDecimal(movement.value),
-            movement.reverses !== null ? "Desfaz movimento" : movement.origin !== null ? ORIGIN_LABELS[movement.origin.kind] : "Manual",
+            movement.reverses !== null ? t("Undoes a movement") : movement.origin !== null ? t(ORIGIN_LABELS[movement.origin.kind]) : t("Manual"),
             movement.note ?? "",
           ]}
         />
       </div>
       <section className="card list-card">
-        <h2>Movimentações</h2>
-        <FilterTiles label="Tipo" value={filters.kind} options={tiles} onChange={(kind) => setFilters({ ...filters, kind })} />
+        <h2>{t("Movements")}</h2>
+        <FilterTiles label={t("Type")} value={filters.kind} options={tiles} onChange={(kind) => setFilters({ ...filters, kind })} />
         <div className="filters" role="search">
           <label>
-            Produto
+            {t("Product")}
             <select value={filters.product} onChange={(event) => setFilters({ ...filters, product: event.target.value })}>
-              <option value="">Todos</option>
+              <option value="">{t("All products")}</option>
               {products.map((product) => (
                 <option key={product.id} value={product.id}>
                   {product.name}
@@ -341,11 +349,11 @@ function MovementsView({ companyId, products, canWrite }: { companyId: string; p
             </select>
           </label>
           <label>
-            De
+            {t("From")}
             <input type="date" value={filters.from} onChange={(event) => setFilters({ ...filters, from: event.target.value })} />
           </label>
           <label>
-            Até
+            {t("To")}
             <input type="date" value={filters.to} onChange={(event) => setFilters({ ...filters, to: event.target.value })} />
           </label>
         </div>
@@ -353,19 +361,19 @@ function MovementsView({ companyId, products, canWrite }: { companyId: string; p
         <Notice message={saved} tone="success" />
         {loading ? (
           <p role="status" className="status">
-            <Spinner /> Carregando…
+            <Spinner /> {t("Loading…")}
           </p>
         ) : items.length === 0 && error ? (
           <Button type="button" variant="ghost" onClick={() => void reload()}>
-            Tentar de novo
+            {t("Try again")}
           </Button>
         ) : items.length === 0 ? (
           <div className="empty">
             <BoxIcon size={40} aria-hidden />
-            <p role={isFiltered ? "status" : undefined}>{isFiltered ? "Nenhuma movimentação encontrada." : "Nenhuma movimentação ainda."}</p>
+            <p role={isFiltered ? "status" : undefined}>{isFiltered ? t("No movements found.") : t("No movements yet.")}</p>
             {isFiltered && (
               <Button type="button" variant="ghost" onClick={() => setFilters({ ...NO_MOVEMENT_FILTERS })}>
-                Limpar filtros
+                {t("Clear filters")}
               </Button>
             )}
           </div>
@@ -374,14 +382,14 @@ function MovementsView({ companyId, products, canWrite }: { companyId: string; p
             <table>
               <thead>
                 <tr>
-                  <th>Data</th>
-                  <th>Produto</th>
-                  <th>Tipo</th>
-                  <th className="num">Quantidade</th>
-                  <th className="num">Valor</th>
-                  <th>Origem</th>
+                  <th>{t("Date")}</th>
+                  <th>{t("Product")}</th>
+                  <th>{t("Type")}</th>
+                  <th className="num">{t("Quantity")}</th>
+                  <th className="num">{t("Value")}</th>
+                  <th>{t("Origin")}</th>
                   <th>
-                    <span className="visually-hidden">Ações</span>
+                    <span className="visually-hidden">{t("Actions")}</span>
                   </th>
                 </tr>
               </thead>
@@ -397,19 +405,19 @@ function MovementsView({ companyId, products, canWrite }: { companyId: string; p
                           <div className="cell-title">{name}</div>
                           {movement.note !== null && <div className="muted">{movement.note}</div>}
                         </td>
-                        <td>{KIND_LABELS[movement.kind]}</td>
+                        <td>{t(KIND_LABELS[movement.kind])}</td>
                         <td className="num">{signedQuantity(formatDecimal(movement.quantity))}</td>
                         <td className="num">{formatMoney(movement.value)}</td>
                         <td>
                           {movement.reverses !== null
-                            ? "Desfaz movimento"
+                            ? t("Undoes a movement")
                             : movement.origin !== null
-                              ? ORIGIN_LABELS[movement.origin.kind]
-                              : "Manual"}
+                              ? t(ORIGIN_LABELS[movement.origin.kind])
+                              : t("Manual")}
                           {undone.has(movement.id) && (
                             <>
                               {" "}
-                              <span className="badge badge-dot badge-warning">Desfeito</span>
+                              <span className="badge badge-dot badge-warning">{t("Undone")}</span>
                             </>
                           )}
                         </td>
@@ -420,24 +428,24 @@ function MovementsView({ companyId, products, canWrite }: { companyId: string; p
                               variant="ghost"
                               icon={RotateCCWIcon}
                               className="btn-small"
-                              aria-label={`Desfazer o movimento de ${formatDate(movement.occurred_on)} de ${name}`}
+                              aria-label={t("Undo the movement of {date} for {name}", { date: formatDate(movement.occurred_on), name })}
                               aria-expanded={reversing === movement.id}
                               onClick={() => setReversing(reversing === movement.id ? null : movement.id)}
                             >
-                              Desfazer
+                              {t("Undo")}
                             </Button>
                           )}
                         </td>
                       </ListRow>
                       {reversing === movement.id && (
                         <tr>
-                          <td colSpan={7} role="region" aria-label={`Desfazer o movimento de ${formatDate(movement.occurred_on)} de ${name}`}>
+                          <td colSpan={7} role="region" aria-label={t("Undo the movement of {date} for {name}", { date: formatDate(movement.occurred_on), name })}>
                             <ReversePanel
                               companyId={companyId}
                               movement={movement}
                               onDone={() => {
                                 setReversing(null);
-                                setSaved("Movimento desfeito: um movimento contrário foi lançado.");
+                                setSaved(t("Movement undone: an opposite movement was entered."));
                                 void reload();
                               }}
                             />
@@ -453,7 +461,7 @@ function MovementsView({ companyId, products, canWrite }: { companyId: string; p
         )}
         {nextCursor !== null && (
           <Button type="button" variant="ghost" icon={ChevronDownIcon} pending={loadingMore} onClick={() => void loadMore()}>
-            Carregar mais
+            {t("Load more")}
           </Button>
         )}
       </section>
@@ -463,6 +471,7 @@ function MovementsView({ companyId, products, canWrite }: { companyId: string; p
 
 /** Undoing a movement writes another with the opposite quantity and value, on the day chosen here. */
 function ReversePanel({ companyId, movement, onDone }: { companyId: string; movement: StockMovement; onDone: () => void }) {
+  const t = useT();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -472,7 +481,7 @@ function ReversePanel({ companyId, movement, onDone }: { companyId: string; move
     const form = new FormData(event.currentTarget);
     const field = (name: string) => String(form.get(name) ?? "").trim();
     if (!isIsoDate(field("occurred_on"))) {
-      setError("Informe o dia em que o movimento é desfeito.");
+      setError(t("Enter the day the movement is undone."));
       return;
     }
     setSaving(true);
@@ -488,18 +497,20 @@ function ReversePanel({ companyId, movement, onDone }: { companyId: string; move
 
   return (
     <form className="settle-form" onSubmit={(event) => void submit(event)}>
-      <p>Desfazer lança um movimento contrário ao de {formatDate(movement.occurred_on)}; o original continua no livro.</p>
+      <p>
+        {t("Undoing enters a movement opposite to the one of {date}; the original stays in the ledger.", { date: formatDate(movement.occurred_on) })}
+      </p>
       <label>
-        Dia do desfazimento
+        {t("Reversal date")}
         <input name="occurred_on" type="date" required defaultValue={todayIso()} />
       </label>
       <label>
-        Observação
+        {t("Note")}
         <input name="note" maxLength={200} autoComplete="off" />
       </label>
       <Notice message={error} />
       <Button type="submit" pending={saving}>
-        Desfazer movimento
+        {t("Undo movement")}
       </Button>
     </form>
   );
@@ -507,31 +518,32 @@ function ReversePanel({ companyId, movement, onDone }: { companyId: string; move
 
 /** The products that have less than their minimum, as the server worked them out. */
 function AlertsView({ alerts, error }: { alerts: StockAlert[] | null; error: string | null }) {
+  const t = useT();
   return (
     <section className="card list-card">
-      <h2>Abaixo do mínimo</h2>
+      <h2>{t("Below minimum")}</h2>
       <Notice message={error} />
       {alerts === null ? (
         error === null && (
           <p role="status" className="status">
-            <Spinner /> Carregando…
+            <Spinner /> {t("Loading…")}
           </p>
         )
       ) : alerts.length === 0 ? (
         <div className="empty">
           <BoxIcon size={40} aria-hidden />
-          <p>Nenhum produto abaixo do mínimo.</p>
-          <p className="muted">O mínimo de cada produto é definido no cadastro de produtos.</p>
+          <p>{t("No product below the minimum.")}</p>
+          <p className="muted">{t("Each product's minimum is set in the product register.")}</p>
         </div>
       ) : (
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Produto</th>
-                <th className="num">Em estoque</th>
-                <th className="num">Mínimo</th>
-                <th className="num">Falta</th>
+                <th>{t("Product")}</th>
+                <th className="num">{t("In stock")}</th>
+                <th className="num">{t("Minimum")}</th>
+                <th className="num">{t("Shortfall")}</th>
               </tr>
             </thead>
             <tbody>
@@ -560,15 +572,16 @@ function AlertsView({ alerts, error }: { alerts: StockAlert[] | null; error: str
   );
 }
 
-const SETTING_LABELS: Record<string, string> = { block_sale_without_balance: "Bloquear venda sem saldo" };
+const SETTING_LABELS: Record<string, string> = { block_sale_without_balance: msg("Block sales without balance") };
 
-const settingValue = (field: string, value: string | null) =>
-  field === "block_sale_without_balance" ? (value === "true" ? "Ligado" : "Desligado") : (value ?? "—");
+const settingValue = (t: Translate, field: string, value: string | null) =>
+  field === "block_sale_without_balance" ? (value === "true" ? t("Switched on") : t("Switched off")) : (value ?? "—");
 
 const STOCK_TEMPLATE = ["sku,quantity,unit_cost", "CAFE-500,10,5.00", "PAO-1,3,"].join("\n");
 
 /** Opens the stock of products from a file, once: the name of the file and the day are what sending it again recognises. */
 function ImportView({ companyId, onImported }: { companyId: string; onImported: () => void }) {
+  const { t, rich } = useI18n();
   const [reference, setReference] = useState("");
   const [on, setOn] = useState(todayIso());
   const ready = reference.trim() !== "" && isIsoDate(on);
@@ -576,36 +589,36 @@ function ImportView({ companyId, onImported }: { companyId: string; onImported: 
     <>
       <section className="card">
         <div className="card-title">
-          <h2>Saldo inicial</h2>
+          <h2>{t("Opening balance")}</h2>
         </div>
         <div className="form-grid">
           <label>
-            Nome desta importação
+            {t("Name of this import")}
             <input value={reference} maxLength={100} onChange={(event) => setReference(event.target.value)} />
             <span className="field-hint">
-              Enviar de novo um arquivo com o mesmo nome não soma nada. Use um nome novo para cada arquivo, como “migração 2026”.
+              {t("Sending a file with the same name again adds nothing. Use a new name for each file, such as “migration 2026”.")}
             </span>
           </label>
           <label>
-            Dia do saldo
+            {t("Balance day")}
             <input type="date" value={on} onChange={(event) => setOn(event.target.value)} />
           </label>
         </div>
       </section>
       <CsvImport
-        title="Importar saldos de um arquivo CSV"
+        title={t("Import balances from a CSV file")}
         template={STOCK_TEMPLATE}
-        templateName="saldos-de-estoque.csv"
-        created={["saldo aberto", "saldos abertos"]}
+        templateName={t("stock-balances.csv")}
+        created={[t("opening balance"), t("opening balances")]}
         blocked={!ready}
         run={(file, dryRun) => api.importStockBalances(companyId, file, reference.trim(), on, dryRun)}
         onImported={onImported}
       >
         <p>
-          A primeira linha dá o nome das colunas, em qualquer ordem; a vírgula ou o ponto e vírgula separam.{" "}
-          <code>sku</code> e <code>quantity</code> são obrigatórias; <code>unit_cost</code> é o custo de uma unidade (em
-          branco, vale o preço de custo do produto). Só abre o saldo de um produto que ainda não tem movimentos: para
-          corrigir um saldo existente, faça um inventário. Quantidade zero não abre nada.
+          {rich(
+            "The first row names the columns, in any order; a comma or a semicolon separates them. {sku} and {quantity} are required; {unit_cost} is the cost of one unit (blank, the product's cost price applies). It only opens the balance of a product that has no movements yet: to correct an existing balance, make an inventory count. A quantity of zero opens nothing.",
+            { sku: <code>sku</code>, quantity: <code>quantity</code>, unit_cost: <code>unit_cost</code> },
+          )}
         </p>
       </CsvImport>
     </>
@@ -614,6 +627,7 @@ function ImportView({ companyId, onImported }: { companyId: string; onImported: 
 
 /** The company's stock rules: today, whether a sale the stock cannot cover is refused. */
 function SettingsView({ companyId, canWrite }: { companyId: string; canWrite: boolean }) {
+  const t = useT();
   const [settings, setSettings] = useState<StockSettings | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
@@ -640,7 +654,7 @@ function SettingsView({ companyId, canWrite }: { companyId: string; canWrite: bo
     try {
       setSettings(await api.putStockSettings(companyId, { block_sale_without_balance: block }));
       setVersion((current) => current + 1);
-      setSaved("Configuração salva.");
+      setSaved(t("Setting saved."));
     } catch (failure) {
       setError(errorMessage(failure));
     } finally {
@@ -653,13 +667,13 @@ function SettingsView({ companyId, canWrite }: { companyId: string; canWrite: bo
 
   return (
     <section className="card">
-      <h2>Configurações do estoque</h2>
+      <h2>{t("Stock settings")}</h2>
       <Notice message={error} />
       <Notice message={saved} tone="success" />
       {settings === null ? (
         error === null && (
           <p role="status" className="status">
-            <Spinner /> Carregando…
+            <Spinner /> {t("Loading…")}
           </p>
         )
       ) : (
@@ -672,18 +686,20 @@ function SettingsView({ companyId, canWrite }: { companyId: string; canWrite: bo
               disabled={!canWrite || saving}
               onChange={(event) => void change(event.target.checked)}
             />{" "}
-            Bloquear venda sem saldo
+            {t("Block sales without balance")}
           </label>
           <p className="muted">
-            Ligado, concluir uma venda que o estoque não cobre é recusado: o pedido continua aberto e nada é lançado.
-            Desligado, a venda sai e o saldo do produto pode ficar negativo.
+            {t("When on, finishing a sale the stock cannot cover is refused: the order stays open and nothing is entered. When off, the sale goes through and the product's balance may go negative.")}
           </p>
-          <h3>Histórico</h3>
+          <h3>{t("History")}</h3>
           <History
             load={historyLoader}
-            fieldLabel={(field) => SETTING_LABELS[field] ?? field}
-            valueLabel={settingValue}
-            emptyMessage="Sem registros."
+            fieldLabel={(field) => {
+              const label = SETTING_LABELS[field];
+              return label === undefined ? field : t(label);
+            }}
+            valueLabel={(field, value) => settingValue(t, field, value)}
+            emptyMessage={t("No records.")}
           />
         </>
       )}

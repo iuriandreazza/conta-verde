@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import type { Category, CostCenter, Party, PaymentTerm, Product, PurchaseOrder, PurchaseOrderInput } from "../api";
+import { useT } from "../i18n";
 import { treeRows } from "../lib/categoryTree";
 import { isIsoDate } from "../lib/entryInstallments";
 import { todayIso } from "../lib/settlement";
@@ -33,6 +34,7 @@ interface PurchaseFormProps {
 
 /** Makes a purchase order, or changes a draft. Remount it (a `key`) to start over. */
 export function PurchaseForm({ companyId, order, targets, pending, error, onSubmit, onCancel }: PurchaseFormProps) {
+  const t = useT();
   const [rows, setRowsState] = useState<LineRow[]>(() => (order === null ? [newLine()] : rowsFromLines(order.lines)));
   const [fieldError, setFieldError] = useState<string | null>(null);
   const markDirty = useSheetDirty();
@@ -58,11 +60,11 @@ export function PurchaseForm({ companyId, order, targets, pending, error, onSubm
     const form = new FormData(event.currentTarget);
     const field = (name: string) => String(form.get(name) ?? "").trim();
     if (!isIsoDate(field("ordered_on"))) {
-      setFieldError("Informe a data do pedido.");
+      setFieldError(t("Enter the order date."));
       return;
     }
     if (field("expected_on") !== "" && !isIsoDate(field("expected_on"))) {
-      setFieldError("A previsão de entrega precisa ser uma data válida.");
+      setFieldError(t("The expected delivery must be a valid date."));
       return;
     }
     const problem = linesProblem(rows);
@@ -86,13 +88,13 @@ export function PurchaseForm({ companyId, order, targets, pending, error, onSubm
   return (
     <form className="record-form" onSubmit={handleSubmit}>
       <section className="form-section" aria-labelledby="purchase-info">
-        <h3 id="purchase-info">Dados do pedido</h3>
+        <h3 id="purchase-info">{t("Order details")}</h3>
         <div className="field-grid">
           <label>
-            Fornecedor
+            {t("Supplier")}
             <select name="supplier_id" required defaultValue={order?.supplier_id ?? ""}>
               <option value="" disabled>
-                Escolha um fornecedor
+                {t("Choose a supplier")}
               </option>
               {suppliers.map((party) => (
                 <option key={party.id} value={party.id}>
@@ -102,22 +104,22 @@ export function PurchaseForm({ companyId, order, targets, pending, error, onSubm
             </select>
           </label>
           <label>
-            Data do pedido
+            {t("Order date")}
             <input name="ordered_on" type="date" required defaultValue={order?.ordered_on ?? todayIso()} />
           </label>
           <label>
-            Previsão de entrega
+            {t("Expected delivery")}
             <input name="expected_on" type="date" defaultValue={order?.expected_on ?? ""} />
           </label>
         </div>
       </section>
       <section className="form-section" aria-labelledby="purchase-billing">
-        <h3 id="purchase-billing">Como pagar</h3>
+        <h3 id="purchase-billing">{t("How to pay")}</h3>
         <div className="field-grid">
           <label>
-            Prazo de pagamento
+            {t("Payment term")}
             <select name="payment_term_id" defaultValue={order?.payment_term_id ?? ""}>
-              <option value="">À vista, no dia do recebimento</option>
+              <option value="">{t("Cash, on the day of receipt")}</option>
               {termChoices.map((term) => (
                 <option key={term.id} value={term.id}>
                   {term.name}
@@ -126,10 +128,10 @@ export function PurchaseForm({ companyId, order, targets, pending, error, onSubm
             </select>
           </label>
           <label>
-            Categoria da despesa
+            {t("Expense category")}
             <select name="category_id" required defaultValue={order?.category_id ?? ""}>
               <option value="" disabled>
-                Escolha uma categoria
+                {t("Choose a category")}
               </option>
               {categoryRows.map(({ category, depth }) => (
                 <option key={category.id} value={category.id}>
@@ -140,9 +142,9 @@ export function PurchaseForm({ companyId, order, targets, pending, error, onSubm
             </select>
           </label>
           <label>
-            Centro de custo
+            {t("Cost center")}
             <select name="cost_center_id" defaultValue={order?.cost_center_id ?? ""}>
-              <option value="">Nenhum</option>
+              <option value="">{t("None")}</option>
               {costCenterChoices.map((center) => (
                 <option key={center.id} value={center.id}>
                   {center.name}
@@ -153,13 +155,13 @@ export function PurchaseForm({ companyId, order, targets, pending, error, onSubm
         </div>
       </section>
       <section className="form-section" aria-labelledby="purchase-lines">
-        <h3 id="purchase-lines">Itens</h3>
+        <h3 id="purchase-lines">{t("Items")}</h3>
         <LinesEditor companyId={companyId} rows={rows} onChange={setRows} products={productChoices} pricing="cost" />
       </section>
       <section className="form-section" aria-labelledby="purchase-notes">
-        <h3 id="purchase-notes">Outras informações</h3>
+        <h3 id="purchase-notes">{t("Other information")}</h3>
         <label>
-          Observações
+          {t("Notes")}
           <textarea name="notes" rows={3} maxLength={2000} defaultValue={order?.notes ?? ""} />
         </label>
       </section>
@@ -167,7 +169,7 @@ export function PurchaseForm({ companyId, order, targets, pending, error, onSubm
       <div className="form-footer">
         <BackButton disabled={pending} onClick={onCancel} />
         <Button type="submit" icon={order === null ? PlusIcon : CheckIcon} pending={pending}>
-          {order === null ? "Criar pedido" : "Salvar alterações"}
+          {order === null ? t("Create order") : t("Save changes")}
         </Button>
       </div>
     </form>

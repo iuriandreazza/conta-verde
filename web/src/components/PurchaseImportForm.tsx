@@ -1,6 +1,7 @@
 import { useEffect, useState, type DragEvent, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import type { Category, CostCenter, InvoiceEntryParams, InvoicePreview, PaymentTerm, Product } from "../api";
+import { msg, useI18n, useT, type Translate } from "../i18n";
 import { treeRows } from "../lib/categoryTree";
 import { formatDecimal, formatMoney } from "../lib/decimal";
 import { formatDate, wholeDate } from "../lib/entryInstallments";
@@ -16,9 +17,9 @@ import { HelpTitle } from "./HelpTitle";
 export const MAX_INVOICE_BYTES = 1024 * 1024;
 
 /** Why the file cannot be an invoice, or `null` when the server may decide. */
-export function invoiceFileProblem(file: File): string | null {
-  if (!file.name.toLowerCase().endsWith(".xml")) return "Escolha o arquivo XML da nota (.xml).";
-  if (file.size > MAX_INVOICE_BYTES) return "O arquivo tem mais de 1 MiB: uma NF-e não é tão grande. Confira se é o XML certo.";
+export function invoiceFileProblem(file: File, t: Translate): string | null {
+  if (!file.name.toLowerCase().endsWith(".xml")) return t("Choose the invoice's XML file (.xml).");
+  if (file.size > MAX_INVOICE_BYTES) return t("The file is larger than 1 MiB: an NF-e is not that big. Check that it is the right XML.");
   return null;
 }
 
@@ -49,7 +50,7 @@ interface PurchaseImportFormProps {
  * Enters a supplier's NF-e as a purchase in five steps ([ADR 0057]): the file, what the invoice says, the nature of the
  * purchase (where the payables go), the products of the items, and a last look before it is entered.
  */
-const STEPS = ["Arquivo XML", "Dados da nota", "Natureza da compra", "Produtos", "Concluir"];
+const STEPS = [msg("XML file"), msg("Invoice details"), msg("Nature of the purchase"), msg("Products"), msg("Finish")];
 
 /** Enters a supplier's NF-e as a purchase, step by step. */
 export function PurchaseImportForm(props: PurchaseImportFormProps) {
@@ -57,6 +58,7 @@ export function PurchaseImportForm(props: PurchaseImportFormProps) {
 }
 
 function ChooseFile({ pending, error, onRead, onCancel }: PurchaseImportFormProps) {
+  const t = useT();
   const [file, setFile] = useState<File | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   // Something is being dragged over the box: it says where to let go.
@@ -64,7 +66,7 @@ function ChooseFile({ pending, error, onRead, onCancel }: PurchaseImportFormProp
 
   function choose(chosen: File | null) {
     setFile(chosen);
-    setProblem(chosen === null ? null : invoiceFileProblem(chosen));
+    setProblem(chosen === null ? null : invoiceFileProblem(chosen, t));
   }
 
   function drop(event: DragEvent<HTMLDivElement>) {
@@ -80,11 +82,11 @@ function ChooseFile({ pending, error, onRead, onCancel }: PurchaseImportFormProp
 
   return (
     <form className="record-form" onSubmit={submit}>
-      <Stepper steps={STEPS} current={0} />
+      <Stepper steps={STEPS.map((name) => t(name))} current={0} />
       <section className="form-section" aria-labelledby="import-file">
-        <HelpTitle id="import-file" title="Arquivo da nota">
+        <HelpTitle id="import-file" title={t("Invoice file")}>
           <p>
-            A NF-e fica salva no seu computador como um arquivo XML. Ao ler o arquivo, você vê a nota, o fornecedor e os produtos antes de lançar a compra.
+            {t("The NF-e is saved on your computer as an XML file. When you read the file you see the invoice, the supplier and the products before entering the purchase.")}
           </p>
         </HelpTitle>
         <div
@@ -98,16 +100,16 @@ function ChooseFile({ pending, error, onRead, onCancel }: PurchaseImportFormProp
           onDrop={drop}
         >
           <label>
-            Escolha um arquivo
+            {t("Choose a file")}
             <input
               type="file"
-              aria-label="Arquivo XML da NF-e"
+              aria-label={t("NF-e XML file")}
               accept=".xml,application/xml,text/xml"
               disabled={pending}
               onChange={(event) => choose(event.target.files?.[0] ?? null)}
             />
           </label>
-          <p className="muted">Ou arraste o XML para este espaço</p>
+          <p className="muted">{t("Or drag the XML into this area")}</p>
           {file !== null && <p className="dropzone-file">{file.name}</p>}
         </div>
       </section>
@@ -115,7 +117,7 @@ function ChooseFile({ pending, error, onRead, onCancel }: PurchaseImportFormProp
       <div className="form-footer">
         <BackButton disabled={pending} onClick={onCancel} />
         <Button type="submit" pending={pending} disabled={file === null || problem !== null}>
-          Ler arquivo
+          {t("Read file")}
         </Button>
       </div>
     </form>
@@ -123,6 +125,7 @@ function ChooseFile({ pending, error, onRead, onCancel }: PurchaseImportFormProp
 }
 
 function EnterInvoice({ companyId, targets, preview, pending, error, onEnter, onChangeFile, onCancel }: PurchaseImportFormProps & { preview: InvoicePreview }) {
+  const { t, rich } = useI18n();
   // Step 1 of STEPS is the file, which is behind us: the first one here is index 1.
   const [step, setStep] = useState(1);
   const [chosen, setChosen] = useState<string[]>(() => preview.items.map((item) => item.product_id ?? ""));
@@ -149,9 +152,14 @@ function EnterInvoice({ companyId, targets, preview, pending, error, onEnter, on
 
   // What lets each step go on: the rest is chosen on the steps after it.
   const stepProblem: Record<number, string | null> = {
-    1: unregistered ? "Cadastre o fornecedor para continuar." : alreadyEntered ? "Esta nota já foi entrada." : null,
-    2: categoryId === "" ? "Escolha a categoria das contas a pagar." : wholeDate(receivedOn) === "" ? "Informe o dia em que a mercadoria chegou." : null,
-    3: withoutProduct > 0 ? "Escolha o produto de cada item." : null,
+    1: unregistered ? t("Register the supplier to continue.") : alreadyEntered ? t("This invoice has already been entered.") : null,
+    2:
+      categoryId === ""
+        ? t("Choose the category of the payables.")
+        : wholeDate(receivedOn) === ""
+          ? t("Enter the day the goods arrived.")
+          : null,
+    3: withoutProduct > 0 ? t("Choose the product of each item.") : null,
   };
 
   function change<T>(setter: (value: T) => void, value: T) {
@@ -184,41 +192,52 @@ function EnterInvoice({ companyId, targets, preview, pending, error, onEnter, on
 
   return (
     <form className="record-form" onSubmit={submit}>
-      <Stepper steps={STEPS} current={step} />
+      <Stepper steps={STEPS.map((name) => t(name))} current={step} />
       {step === 1 && (
         <section className="form-section" aria-labelledby="invoice-info">
-          <h3 id="invoice-info">O que a nota diz</h3>
+          <h3 id="invoice-info">{t("What the invoice says")}</h3>
           <p>
             <strong>{preview.issuer.name}</strong> · {preview.issuer.document}
           </p>
           <p>
-            NF-e nº {preview.number}, série {preview.series} · emitida em {formatDate(preview.issued_on)} · total{" "}
-            <strong>{formatMoney(preview.total)}</strong>
+            {rich("NF-e no. {number}, series {series} · issued on {date} · total {amount}", {
+              number: preview.number,
+              series: preview.series,
+              date: formatDate(preview.issued_on),
+              amount: <strong>{formatMoney(preview.total)}</strong>,
+            })}
           </p>
-          <p className="muted tabular">Chave: {preview.access_key}</p>
+          <p className="muted tabular">{t("Key: {key}", { key: preview.access_key })}</p>
           {unregistered && (
             <Notice
               tone="warning"
-              message={`Fornecedor não cadastrado: cadastre o fornecedor com o documento ${preview.issuer.document} antes de entrar a nota.`}
+              message={t("Supplier not registered: register the supplier with the document {document} before entering the invoice.", {
+                document: preview.issuer.document,
+              })}
             />
           )}
           {preview.entered !== null && (
             <>
-              <Notice tone="warning" message={`Esta nota já foi entrada como a compra nº ${preview.entered.number}.`} />
+              <Notice
+                tone="warning"
+                message={t("This invoice has already been entered as purchase no. {number}.", { number: preview.entered.number })}
+              />
               <p>
                 <Link to={`/companies/${companyId}/purchases`} onClick={onCancel}>
-                  Ver nas compras
+                  {t("See in purchases")}
                 </Link>
               </p>
             </>
           )}
           {unfinished && (
             <p className="muted" role="status">
-              A entrada desta nota ficou incompleta (compra nº {preview.entered?.number}): entrar de novo conclui o que faltou.
+              {t("The entry of this invoice was left incomplete (purchase no. {number}): entering it again finishes what was missing.", {
+                number: preview.entered?.number ?? "",
+              })}
             </p>
           )}
           {hasInstallments ? (
-            <ul className="history" aria-label="Parcelas da nota">
+            <ul className="history" aria-label={t("Invoice installments")}>
               {preview.installments.map((installment, index) => (
                 <li key={index}>
                   {formatDate(installment.due_date)} · {formatMoney(installment.amount)}
@@ -226,19 +245,19 @@ function EnterInvoice({ companyId, targets, preview, pending, error, onEnter, on
               ))}
             </ul>
           ) : (
-            <p className="muted">A nota não informa parcelas.</p>
+            <p className="muted">{t("The invoice gives no installments.")}</p>
           )}
         </section>
       )}
       {step === 2 && (
         <section className="form-section" aria-labelledby="invoice-where">
-          <h3 id="invoice-where">Natureza da compra</h3>
+          <h3 id="invoice-where">{t("Nature of the purchase")}</h3>
           <div className="field-grid">
             <label>
-              Categoria das contas a pagar
+              {t("Category of the payables")}
               <select value={categoryId} onChange={(event) => change(setCategoryId, event.target.value)}>
                 <option value="" disabled>
-                  Escolha uma categoria
+                  {t("Choose a category")}
                 </option>
                 {categoryRows.map(({ category: row, depth }) => (
                   <option key={row.id} value={row.id}>
@@ -249,9 +268,9 @@ function EnterInvoice({ companyId, targets, preview, pending, error, onEnter, on
               </select>
             </label>
             <label>
-              Centro de custo
+              {t("Cost center")}
               <select value={costCenterId} onChange={(event) => change(setCostCenterId, event.target.value)}>
-                <option value="">Nenhum</option>
+                <option value="">{t("None")}</option>
                 {targets.costCenters
                   .filter((center) => center.active)
                   .map((center) => (
@@ -263,9 +282,9 @@ function EnterInvoice({ companyId, targets, preview, pending, error, onEnter, on
             </label>
             {!hasInstallments && (
               <label>
-                Prazo de pagamento
+                {t("Payment term")}
                 <select value={termId} onChange={(event) => change(setTermId, event.target.value)}>
-                  <option value="">À vista, no dia do recebimento</option>
+                  <option value="">{t("Cash, on the day of receipt")}</option>
                   {targets.terms
                     .filter((item) => item.active)
                     .map((item) => (
@@ -277,7 +296,7 @@ function EnterInvoice({ companyId, targets, preview, pending, error, onEnter, on
               </label>
             )}
             <label>
-              Dia em que a mercadoria chegou
+              {t("Day the goods arrived")}
               <input type="date" value={receivedOn} onChange={(event) => change(setReceivedOn, event.target.value)} />
             </label>
           </div>
@@ -285,17 +304,17 @@ function EnterInvoice({ companyId, targets, preview, pending, error, onEnter, on
       )}
       {step === 3 && (
         <section className="form-section" aria-labelledby="invoice-items">
-          <h3 id="invoice-items">Produtos da NF-e</h3>
+          <h3 id="invoice-items">{t("NF-e products")}</h3>
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Código</th>
-                  <th>Descrição</th>
-                  <th className="num">Quantidade</th>
-                  <th className="num">Custo</th>
+                  <th>{t("Code")}</th>
+                  <th>{t("Description")}</th>
+                  <th className="num">{t("Quantity")}</th>
+                  <th className="num">{t("Cost")}</th>
                   <th className="num">IPI</th>
-                  <th>Produto</th>
+                  <th>{t("Product")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -310,12 +329,12 @@ function EnterInvoice({ companyId, targets, preview, pending, error, onEnter, on
                     <td className="num">{formatMoney(item.ipi)}</td>
                     <td>
                       <select
-                        aria-label={`Produto do item ${item.number}`}
+                        aria-label={t("Product of item {number}", { number: item.number })}
                         value={chosen[index]}
                         onChange={(event) => change(setChosen, chosen.map((id, place) => (place === index ? event.target.value : id)))}
                       >
                         <option value="" disabled>
-                          Escolha o produto
+                          {t("Choose the product")}
                         </option>
                         {products.map((product) => (
                           <option key={product.id} value={product.id}>
@@ -324,7 +343,7 @@ function EnterInvoice({ companyId, targets, preview, pending, error, onEnter, on
                           </option>
                         ))}
                       </select>
-                      {chosen[index] === "" && <span className="badge badge-dot badge-warning">Sem produto</span>}
+                      {chosen[index] === "" && <span className="badge badge-dot badge-warning">{t("No product")}</span>}
                     </td>
                   </tr>
                 ))}
@@ -333,36 +352,39 @@ function EnterInvoice({ companyId, targets, preview, pending, error, onEnter, on
           </div>
           {withoutProduct > 0 && (
             <p className="muted">
-              {withoutProduct === 1 ? "Um item está sem produto" : `${withoutProduct} itens estão sem produto`}: o código da nota não é o código de nenhum produto.
-              Escolha o produto de cada um.
+              {withoutProduct === 1
+                ? t("One item has no product: the code on the invoice is not the code of any product. Choose the product of each one.")
+                : t("{count} items have no product: the code on the invoice is not the code of any product. Choose the product of each one.", {
+                    count: withoutProduct,
+                  })}
             </p>
           )}
         </section>
       )}
       {step === 4 && (
         <section className="form-section" aria-labelledby="invoice-done">
-          <h3 id="invoice-done">Concluir a entrada</h3>
+          <h3 id="invoice-done">{t("Finish the entry")}</h3>
           <dl className="summary">
-            <dt>Fornecedor</dt>
+            <dt>{t("Supplier")}</dt>
             <dd>{preview.issuer.name}</dd>
-            <dt>Nota</dt>
-            <dd>
-              nº {preview.number}, série {preview.series} · {formatMoney(preview.total)}
-            </dd>
-            <dt>Itens</dt>
+            <dt>{t("Invoice")}</dt>
+            <dd>{t("no. {number}, series {series} · {total}", { number: preview.number, series: preview.series, total: formatMoney(preview.total) })}</dd>
+            <dt>{t("Items")}</dt>
             <dd>{preview.items.length}</dd>
-            <dt>Contas a pagar</dt>
+            <dt>{t("Payables")}</dt>
             <dd>
               {hasInstallments
-                ? `${preview.installments.length} ${preview.installments.length === 1 ? "parcela" : "parcelas"}, as da nota`
-                : (term?.name ?? "À vista, no dia do recebimento")}
+                ? preview.installments.length === 1
+                  ? t("{count} installment, the invoice's", { count: preview.installments.length })
+                  : t("{count} installments, the invoice's", { count: preview.installments.length })
+                : (term?.name ?? t("Cash, on the day of receipt"))}
             </dd>
-            <dt>Categoria</dt>
+            <dt>{t("Category")}</dt>
             <dd>{category?.name}</dd>
-            <dt>Chegou em</dt>
+            <dt>{t("Arrived on")}</dt>
             <dd>{formatDate(receivedOn)}</dd>
           </dl>
-          <p className="muted">Ao entrar, a compra é criada como recebida: as contas a pagar são lançadas e o estoque aumenta.</p>
+          <p className="muted">{t("On entering, the purchase is created as received: the payables are entered and the stock goes up.")}</p>
         </section>
       )}
       {stepProblem[step] !== null && stepProblem[step] !== undefined && step !== 1 && <p className="muted">{stepProblem[step]}</p>}
@@ -372,21 +394,21 @@ function EnterInvoice({ companyId, targets, preview, pending, error, onEnter, on
           <>
             <BackButton disabled={pending} onClick={onCancel} />
             <Button type="button" variant="ghost" disabled={pending} onClick={onChangeFile}>
-              Trocar arquivo
+              {t("Change file")}
             </Button>
           </>
         ) : (
           <Button type="button" variant="ghost" disabled={pending} onClick={() => goTo(step - 1)}>
-            Voltar
+            {t("Back")}
           </Button>
         )}
         {step < STEPS.length - 1 ? (
           <Button type="submit" disabled={stepProblem[step] !== null}>
-            Continuar
+            {t("Continue")}
           </Button>
         ) : (
           <Button type="submit" icon={CheckIcon} pending={pending}>
-            Entrar compra
+            {t("Enter purchase")}
           </Button>
         )}
       </div>

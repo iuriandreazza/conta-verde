@@ -1,10 +1,11 @@
 import type { InventoryCountStatus } from "../api";
+import { msg } from "../i18n";
 
 /** How an inventory count's status reads to a person; the keys are the API's and never change. */
 export const COUNT_STATUS_LABELS: Record<InventoryCountStatus, string> = {
-  open: "Aberto",
-  applied: "Aplicado",
-  cancelled: "Cancelado",
+  open: msg("Open"),
+  applied: msg("Applied"),
+  cancelled: msg("Cancelled"),
 };
 
 /** The badge of a status: the dot and the word say it, the color only helps. */
