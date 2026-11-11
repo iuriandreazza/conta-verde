@@ -98,6 +98,8 @@ mod postgres_sale_claims;
 mod postgres_sales;
 mod postgres_statement_lines;
 mod postgres_stock;
+#[cfg(test)]
+mod postgres_tenancy;
 mod postgres_transfers;
 mod postgres_webhooks;
 mod recording_events;
@@ -105,6 +107,7 @@ mod secret_cipher;
 mod secrets;
 mod smtp_email_sender;
 mod stripe;
+pub mod tenant;
 mod webhook_signature;
 
 pub use asaas::AsaasProvider;
