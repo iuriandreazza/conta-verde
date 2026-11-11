@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import type { Product, StockMovementInput, StockMovementKind } from "../api";
+import { msg, useT } from "../i18n";
 import { toApiDecimal } from "../lib/decimal";
 import { isAmbiguousSigned, toSignedDecimal } from "../lib/stock";
 import { isIsoDate } from "../lib/entryInstallments";
@@ -11,15 +12,15 @@ import { Notice } from "./Notice";
 import { useSheetDirty } from "./Sheet";
 
 const KIND_LABELS: Record<StockMovementKind, string> = {
-  in: "Entrada",
-  out: "Saída",
-  adjustment: "Ajuste",
+  in: msg("Stock entry"),
+  out: msg("Exit"),
+  adjustment: msg("Adjustment"),
 };
 
 const QUANTITY_HINTS: Record<StockMovementKind, string> = {
-  in: "Quantidade que entrou, até 3 casas.",
-  out: "Quantidade que saiu, até 3 casas.",
-  adjustment: "Use sinal: positivo aumenta o saldo, negativo diminui.",
+  in: msg("Quantity that came in, up to 3 decimals."),
+  out: msg("Quantity that went out, up to 3 decimals."),
+  adjustment: msg("Use a sign: positive raises the balance, negative lowers it."),
 };
 
 type CostMode = "value" | "unit_cost";
@@ -35,6 +36,7 @@ interface StockMovementFormProps {
 
 /** Writes a movement by hand: an entry (with its cost), an exit or an adjustment of the balance. */
 export function StockMovementForm({ products, pending, error, onSubmit, onCancel }: StockMovementFormProps) {
+  const t = useT();
   const [kind, setKind] = useState<StockMovementKind>("in");
   const [costMode, setCostMode] = useState<CostMode>("value");
   const [fieldError, setFieldError] = useState<string | null>(null);
@@ -47,25 +49,25 @@ export function StockMovementForm({ products, pending, error, onSubmit, onCancel
     const field = (name: string) => String(form.get(name) ?? "").trim();
     const signed = kind === "adjustment";
     if (isAmbiguousSigned(field("quantity")) || isAmbiguousSigned(field("cost"))) {
-      setFieldError("Use vírgula nas casas decimais: 1.500 pode ser mil e quinhentos ou um e meio. Escreva 1500 ou 1,5.");
+      setFieldError(t("Use a comma for decimals: 1.500 could be fifteen hundred or one and a half. Write 1500 or 1,5."));
       return;
     }
     const quantity = toSignedDecimal(field("quantity"));
     if (quantity === undefined || !(signed ? /^-?\d+(\.\d{1,3})?$/ : /^\d+(\.\d{1,3})?$/).test(quantity)) {
       setFieldError(
         signed
-          ? "Informe a quantidade do ajuste, com sinal e até 3 casas."
-          : "Informe a quantidade, maior que zero e com até 3 casas.",
+          ? t("Enter the adjustment quantity, with a sign and up to 3 decimals.")
+          : t("Enter the quantity, above zero and with up to 3 decimals."),
       );
       return;
     }
     const cost = toApiDecimal(field("cost"));
     if (kind === "in" && cost === undefined) {
-      setFieldError(costMode === "value" ? "Informe o custo total da entrada." : "Informe o custo unitário da entrada.");
+      setFieldError(costMode === "value" ? t("Enter the total cost of the entry.") : t("Enter the unit cost of the entry."));
       return;
     }
     if (!isIsoDate(field("occurred_on"))) {
-      setFieldError("Informe a data do movimento.");
+      setFieldError(t("Enter the movement date."));
       return;
     }
     setFieldError(null);
@@ -82,25 +84,25 @@ export function StockMovementForm({ products, pending, error, onSubmit, onCancel
   return (
     <form className="record-form" onSubmit={handleSubmit}>
       <section className="form-section" aria-labelledby="stock-info">
-        <h3 id="stock-info">O que mudou</h3>
+        <h3 id="stock-info">{t("What changed")}</h3>
         <fieldset className="segmented">
-          <legend>Tipo de movimento</legend>
+          <legend>{t("Movement type")}</legend>
           {(Object.keys(KIND_LABELS) as StockMovementKind[]).map((key) => (
             <label key={key}>
               <input type="radio" name="kind" value={key} checked={kind === key} onChange={() => {
                   markDirty();
                   setKind(key);
                 }} />
-              <span>{KIND_LABELS[key]}</span>
+              <span>{t(KIND_LABELS[key])}</span>
             </label>
           ))}
         </fieldset>
         <div className="field-grid">
           <label>
-            Produto
+            {t("Product")}
             <select name="product_id" required defaultValue="">
               <option value="" disabled>
-                Escolha um produto
+                {t("Choose a product")}
               </option>
               {products.map((product) => (
                 <option key={product.id} value={product.id}>
@@ -110,49 +112,51 @@ export function StockMovementForm({ products, pending, error, onSubmit, onCancel
             </select>
           </label>
           <label>
-            Quantidade
-            <input name="quantity" aria-label="Quantidade" inputMode="decimal" autoComplete="off" placeholder="0" />
-            <span className="muted">{QUANTITY_HINTS[kind]}</span>
+            {t("Quantity")}
+            <input name="quantity" aria-label={t("Quantity")} inputMode="decimal" autoComplete="off" placeholder="0" />
+            <span className="muted">{t(QUANTITY_HINTS[kind])}</span>
           </label>
           <label>
-            Data
+            {t("Date")}
             <input name="occurred_on" type="date" required defaultValue={todayIso()} />
           </label>
         </div>
       </section>
       {kind === "in" && (
         <section className="form-section" aria-labelledby="stock-cost">
-          <h3 id="stock-cost">Custo da entrada</h3>
+          <h3 id="stock-cost">{t("Cost of the entry")}</h3>
           <fieldset className="segmented">
-            <legend>Como informar o custo</legend>
+            <legend>{t("How to enter the cost")}</legend>
             <label>
               <input type="radio" name="cost_mode" value="value" checked={costMode === "value"} onChange={() => {
                   markDirty();
                   setCostMode("value");
                 }} />
-              <span>Custo total</span>
+              <span>{t("Total cost")}</span>
             </label>
             <label>
               <input type="radio" name="cost_mode" value="unit_cost" checked={costMode === "unit_cost"} onChange={() => {
                   markDirty();
                   setCostMode("unit_cost");
                 }} />
-              <span>Custo unitário</span>
+              <span>{t("Unit cost")}</span>
             </label>
           </fieldset>
           <label>
-            {costMode === "value" ? "Custo total" : "Custo unitário"}
-            <input name="cost" aria-label={costMode === "value" ? "Valor do custo total" : "Valor do custo unitário"} inputMode="decimal" autoComplete="off" placeholder="0,00" />
+            {costMode === "value" ? t("Total cost") : t("Unit cost")}
+            <input name="cost" aria-label={costMode === "value" ? t("Total cost value") : t("Unit cost value")} inputMode="decimal" autoComplete="off" placeholder="0,00" />
             <span className="muted">
-              {costMode === "value" ? "O que a quantidade custou, em reais e centavos." : "Até 6 casas decimais; o total é arredondado ao centavo."}
+              {costMode === "value"
+                ? t("What the quantity cost, in reais and cents.")
+                : t("Up to 6 decimals; the total is rounded to the cent.")}
             </span>
           </label>
         </section>
       )}
       <section className="form-section" aria-labelledby="stock-notes">
-        <h3 id="stock-notes">Outras informações</h3>
+        <h3 id="stock-notes">{t("Other information")}</h3>
         <label>
-          Observação
+          {t("Note")}
           <input name="note" maxLength={200} autoComplete="off" />
         </label>
       </section>
@@ -160,7 +164,7 @@ export function StockMovementForm({ products, pending, error, onSubmit, onCancel
       <div className="form-footer">
         <BackButton disabled={pending} onClick={onCancel} />
         <Button type="submit" icon={PlusIcon} pending={pending}>
-          Registrar movimento
+          {t("Record movement")}
         </Button>
       </div>
     </form>

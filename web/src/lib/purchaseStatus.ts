@@ -1,12 +1,13 @@
 import type { PurchaseStatus } from "../api";
+import { msg } from "../i18n";
 
 /** How a purchase order's status reads to a person; the keys are the API's and never change. */
 export const PURCHASE_STATUS_LABELS: Record<PurchaseStatus, string> = {
-  draft: "Rascunho",
-  approved: "Aprovado",
-  partially_received: "Recebido em parte",
-  received: "Recebido",
-  cancelled: "Cancelado",
+  draft: msg("Draft"),
+  approved: msg("Approved"),
+  partially_received: msg("Partially received"),
+  received: msg("Received"),
+  cancelled: msg("Purchase cancelled"),
 };
 
 /** The badge of a status: the dot and the word say it, the color only helps. */

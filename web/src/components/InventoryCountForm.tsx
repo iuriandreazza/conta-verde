@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import type { InventoryCount, InventoryCountInput, Product } from "../api";
+import { useT } from "../i18n";
 import { toInputDecimal } from "../lib/decimal";
 import { MAX_SHEET_BYTES, countTemplate, readCountSheet } from "../lib/countSheet";
 import { downloadCsv } from "../lib/csv";
@@ -45,6 +46,7 @@ interface InventoryCountFormProps {
 
 /** Makes an inventory count, or changes one that is open. Remount it (a `key`) to start over. */
 export function InventoryCountForm({ products, count, viaSheet = false, pending, error, onSubmit, onCancel }: InventoryCountFormProps) {
+  const t = useT();
   const [rows, setRowsState] = useState<CountRow[]>(() =>
     count === null ? [newRow()] : count.lines.map((line) => newRow(line.product_id, toInputDecimal(line.counted))),
   );
@@ -75,10 +77,10 @@ export function InventoryCountForm({ products, count, viaSheet = false, pending,
   async function readSheet(file: File | undefined) {
     if (file === undefined) return;
     if (file.size > MAX_SHEET_BYTES) {
-      setSheetProblems(["O arquivo tem mais de 1 MiB: uma planilha de contagem não é tão grande. Confira se é o arquivo certo."]);
+      setSheetProblems([t("The file is larger than 1 MiB: a count sheet is not that big. Check that it is the right file.")]);
       return;
     }
-    const { lines, problems } = readCountSheet(await file.text(), products.filter((product) => product.active));
+    const { lines, problems } = readCountSheet(await file.text(), products.filter((product) => product.active), t);
     setSheetProblems(problems);
     if (lines.length > 0) {
       setRows(lines.slice(0, MAX_LINES).map((line) => newRow(line.product_id, line.counted)));
@@ -92,7 +94,7 @@ export function InventoryCountForm({ products, count, viaSheet = false, pending,
     const form = new FormData(event.currentTarget);
     const field = (name: string) => String(form.get(name) ?? "").trim();
     if (!isIsoDate(field("counted_on"))) {
-      setFieldError("Informe a data da contagem.");
+      setFieldError(t("Enter the count date."));
       return;
     }
     const lines: InventoryCountInput["lines"] = [];
@@ -100,22 +102,22 @@ export function InventoryCountForm({ products, count, viaSheet = false, pending,
     for (const [index, row] of rows.entries()) {
       if (row.counted.trim() === "") continue;
       if (row.product_id === "") {
-        setFieldError(`Escolha o produto do item ${index + 1}.`);
+        setFieldError(t("Choose the product of item {number}.", { number: index + 1 }));
         return;
       }
       if (isAmbiguousSigned(row.counted)) {
-        setFieldError(`A quantidade do item ${index + 1} é ambígua: 1.500 pode ser mil e quinhentos ou um e meio. Escreva 1500 ou 1,5.`);
+        setFieldError(t("The quantity of item {number} is ambiguous: 1.500 could be fifteen hundred or one and a half. Write 1500 or 1,5.", { number: index + 1 }));
         return;
       }
       const counted = toSignedDecimal(row.counted);
       if (counted === undefined || !/^\d+(\.\d{1,3})?$/.test(counted)) {
-        setFieldError(`A quantidade do item ${index + 1} precisa ser zero ou mais, com até 3 casas.`);
+        setFieldError(t("The quantity of item {number} must be zero or more, with up to 3 decimals.", { number: index + 1 }));
         return;
       }
       lines.push({ product_id: row.product_id, counted });
     }
     if (lines.length === 0) {
-      setFieldError("Informe a quantidade contada de pelo menos um produto.");
+      setFieldError(t("Enter the counted quantity of at least one product."));
       return;
     }
     setFieldError(null);
@@ -125,39 +127,39 @@ export function InventoryCountForm({ products, count, viaSheet = false, pending,
   return (
     <form className="record-form" onSubmit={handleSubmit}>
       <section className="form-section" aria-labelledby="count-info">
-        <h3 id="count-info">Dados do inventário</h3>
+        <h3 id="count-info">{t("Count details")}</h3>
         <div className="field-grid">
           <label>
-            Data da contagem
+            {t("Count date")}
             <input name="counted_on" type="date" required defaultValue={count?.counted_on ?? todayIso()} />
           </label>
           <label>
-            Observações
+            {t("Notes")}
             <input name="notes" maxLength={200} autoComplete="off" defaultValue={count?.notes ?? ""} />
           </label>
         </div>
       </section>
       {count === null && (
         <section className="form-section" aria-labelledby="count-sheet">
-          <h3 id="count-sheet">Planilha</h3>
+          <h3 id="count-sheet">{t("Spreadsheet")}</h3>
           <p className="muted">
-            Baixe o modelo, preencha a coluna Contado de cada produto (deixe em branco o que ainda não foi contado) e escolha o arquivo.
+            {t("Download the template, fill in the Counted column for each product (leave blank what has not been counted yet) and choose the file.")}
           </p>
           <div className="form-actions">
             <Button
               type="button"
               variant="ghost"
               className="btn-small"
-              onClick={() => downloadCsv("modelo-de-inventario.csv", countTemplate(products))}
+              onClick={() => downloadCsv(t("inventory-count-template.csv"), countTemplate(products, t))}
             >
-              Baixar modelo
+              {t("Download template")}
             </Button>
             <label>
-              Arquivo da planilha
+              {t("Spreadsheet file")}
               <input
                 type="file"
                 accept=".csv,text/csv"
-                aria-label="Arquivo da planilha de contagem"
+                aria-label={t("Count spreadsheet file")}
                 disabled={pending}
                 onChange={(event) => {
                   void readSheet(event.target.files?.[0]);
@@ -172,35 +174,35 @@ export function InventoryCountForm({ products, count, viaSheet = false, pending,
             message={
               sheetProblems.length === 0
                 ? null
-                : `Não foi possível usar ${sheetProblems.length === 1 ? "uma linha" : `${sheetProblems.length} linhas`} da planilha. ${sheetProblems.slice(0, 5).join(" ")}${sheetProblems.length > 5 ? ` E mais ${sheetProblems.length - 5}.` : ""}`
+                : `${sheetProblems.length === 1 ? t("Could not use one row of the sheet.") : t("Could not use {count} rows of the sheet.", { count: sheetProblems.length })} ${sheetProblems.slice(0, 5).join(" ")}${sheetProblems.length > 5 ? ` ${t("And {count} more.", { count: sheetProblems.length - 5 })}` : ""}`
             }
           />
           {!typing && (
             <Button type="button" variant="ghost" className="btn-small" onClick={() => setTyping(true)}>
-              Preencher à mão
+              {t("Fill in by hand")}
             </Button>
           )}
         </section>
       )}
       {typing && (
       <section className="form-section" aria-labelledby="count-lines">
-        <h3 id="count-lines">Produtos contados</h3>
+        <h3 id="count-lines">{t("Counted products")}</h3>
         <p className="muted">
-          Informe o que foi encontrado em cada produto, zero se não há nada. O que ficar em branco não entra no inventário.
+          {t("Enter what was found for each product, zero if there is nothing. What is left blank is not part of the count.")}
         </p>
         <fieldset className="lines">
-          <legend>Itens</legend>
+          <legend>{t("Items")}</legend>
           {rows.map((row, index) => (
             <div className="line-row" key={row.key}>
               <label className="span-all">
-                Produto
+                {t("Product")}
                 <select
-                  aria-label={`Produto do item ${index + 1}`}
+                  aria-label={t("Product of item {number}", { number: index + 1 })}
                   value={row.product_id}
                   onChange={(event) => change(row.key, { product_id: event.target.value })}
                 >
                   <option value="" disabled>
-                    Escolha
+                    {t("Choose")}
                   </option>
                   {choices
                     .filter((product) => product.id === row.product_id || !inCount.has(product.id))
@@ -213,9 +215,9 @@ export function InventoryCountForm({ products, count, viaSheet = false, pending,
                 </select>
               </label>
               <label>
-                Contado
+                {t("Counted")}
                 <input
-                  aria-label={`Quantidade contada do item ${index + 1}`}
+                  aria-label={t("Counted quantity of item {number}", { number: index + 1 })}
                   inputMode="decimal"
                   autoComplete="off"
                   placeholder="0"
@@ -227,11 +229,11 @@ export function InventoryCountForm({ products, count, viaSheet = false, pending,
                 type="button"
                 variant="ghost"
                 className="btn-small"
-                aria-label={`Remover item ${index + 1}`}
+                aria-label={t("Remove item {number}", { number: index + 1 })}
                 disabled={rows.length === 1}
                 onClick={() => setRows(rows.filter((item) => item.key !== row.key))}
               >
-                Remover
+                {t("Remove")}
               </Button>
             </div>
           ))}
@@ -244,10 +246,10 @@ export function InventoryCountForm({ products, count, viaSheet = false, pending,
               disabled={rows.length >= MAX_LINES}
               onClick={() => setRows([...rows, newRow()])}
             >
-              Adicionar item
+              {t("Add item")}
             </Button>
             <Button type="button" variant="ghost" className="btn-small" disabled={missing.length === 0} onClick={loadAll}>
-              Carregar todos os produtos
+              {t("Load all products")}
             </Button>
           </div>
         </fieldset>
@@ -257,7 +259,7 @@ export function InventoryCountForm({ products, count, viaSheet = false, pending,
       <div className="form-footer">
         <BackButton disabled={pending} onClick={onCancel} />
         <Button type="submit" icon={count === null ? PlusIcon : CheckIcon} pending={pending}>
-          {count === null ? "Criar inventário" : "Salvar alterações"}
+          {count === null ? t("Create count") : t("Save changes")}
         </Button>
       </div>
     </form>
