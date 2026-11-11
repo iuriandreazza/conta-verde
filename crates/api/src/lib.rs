@@ -1326,10 +1326,15 @@ async fn tenant_scope(
 #[derive(Serialize)]
 struct Health {
     status: &'static str,
+    /// What is running, so an operator can tell which release answered (the upgrade guide, ADR 0096).
+    version: &'static str,
 }
 
 async fn health() -> Json<Health> {
-    Json(Health { status: "ok" })
+    Json(Health {
+        status: "ok",
+        version: env!("CARGO_PKG_VERSION"),
+    })
 }
 
 #[cfg(test)]
@@ -2553,6 +2558,7 @@ mod tests {
         let reply = send(&app(), get_request("/health", None)).await;
         assert_eq!(reply.status, StatusCode::OK);
         assert_eq!(reply.body["status"], "ok");
+        assert_eq!(reply.body["version"], env!("CARGO_PKG_VERSION"));
     }
 
     #[tokio::test]
