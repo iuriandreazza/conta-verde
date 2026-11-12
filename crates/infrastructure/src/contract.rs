@@ -15139,6 +15139,21 @@ pub async fn imports_entries_from_a_file<R, F, C>(
     assert!(ambiguous.refused[0].message.contains("Root > Child"));
     assert!(imported_entry(service, company, "a-6").await.is_none());
 
+    // Deeper than two levels, a category is named by its whole path from the root, as the exports write it.
+    let grandchild = child_category(&child, "Anuais");
+    save_category(categories, &grandchild).await;
+    service
+        .import_entries(
+            company,
+            &ana,
+            vec![(2, import_row("a-7", "Vendas > Mensalidades > Anuais", "5"))],
+            false,
+        )
+        .await
+        .unwrap();
+    let deep = imported_entry(service, company, "a-7").await.expect("deep");
+    assert_eq!(deep.category_id(), grandchild.id());
+
     // One refused row refuses the file: every problem is named by its row and nothing is written.
     let mut too_much = import_row("b-3", "Vendas", "10");
     too_much.settlement = paid_on("2026-03-16", "Conta principal");

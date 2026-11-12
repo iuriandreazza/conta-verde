@@ -1,7 +1,7 @@
 # conta-verde
 
-Open-source ERP for small businesses (inspired by cloud ERPs such as Conta Azul): a Rust API (`crates/`) and a React SPA (`web/`).
-License: **AGPL-3.0-or-later** (ADR 0001). Never use the Conta Azul name, logo or screenshots in code, docs or UI.
+Open-source ERP for small businesses (inspired by the cloud ERPs of the market): a Rust API (`crates/`) and a React SPA (`web/`).
+License: **AGPL-3.0-or-later** (ADR 0001). Never use the name, logo or screenshots of the ERP we take as reference in code, docs or UI; the addresses of its API are read from the environment (`ERP_*`, `.env.example`), never written in the code.
 
 Read `docs/macro-plan.md` for scope (the reference module map and release plan), `docs/roadmap.md` for
 phase order and progress, and `docs/adr/README.md` for the index of decisions. A phase starts by

@@ -88,6 +88,7 @@ Status values: `proposed` (agreed direction, accepted when its phase starts),
 | [0070](0070-income-statement.md) | The managerial income statement (DRE) | accepted | 6 |
 | [0071](0071-accountant-exports.md) | Exports for the accountant | accepted | 6 |
 | [0072](0072-monthly-package-notice.md) | The monthly package notice, by e-mail to the accountants | accepted | 6 |
+| [0090](0090-cloud-erp-api-reader.md) | Reading a company's books from the cloud ERP's API (migration tooling, outside the phases) | accepted | — |
 | [0073](0073-fiscal-module-plan.md) | The fiscal module: plan, shared rules and what it changes underneath | accepted | 7 |
 | [0074](0074-fiscal-settings.md) | Fiscal settings per company | accepted | 7 |
 | [0075](0075-fiscal-gateway-port.md) | The fiscal gateway port, its fake and the Focus NFe adapter | accepted | 7 |

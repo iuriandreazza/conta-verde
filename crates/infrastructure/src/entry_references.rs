@@ -281,20 +281,36 @@ where
             .categories
             .list_by_company(company_id, Some(true))
             .await?;
-        let parent_names: HashMap<CategoryId, String> = categories
+        let by_id: HashMap<CategoryId, &conta_verde_domain::Category> = categories
             .iter()
-            .map(|category| (category.id(), category.name().to_owned()))
+            .map(|category| (category.id(), category))
             .collect();
         for category in &categories {
-            let path = match category.parent_id() {
-                None => category.name().to_owned(),
-                Some(parent) => match parent_names.get(&parent) {
-                    Some(parent_name) => format!("{parent_name} > {}", category.name()),
+            // The whole path from the root, as the exports write it: a subcategory of a subcategory is
+            // `Root > Child > Grandchild`. The tree is at most five deep; the bound only keeps a cycle,
+            // which cannot be stored, from looping.
+            let mut path = vec![category.name()];
+            let mut parent = category.parent_id();
+            let mut complete = true;
+            while let Some(above) = parent {
+                match by_id.get(&above).filter(|_| path.len() < 16) {
+                    Some(found) => {
+                        path.push(found.name());
+                        parent = found.parent_id();
+                    }
                     // An active child of an inactive parent is not meant to exist (the use case
                     // refuses it, the database does not): it cannot be named, so it is left out.
-                    None => continue,
-                },
-            };
+                    None => {
+                        complete = false;
+                        break;
+                    }
+                }
+            }
+            if !complete {
+                continue;
+            }
+            path.reverse();
+            let path = path.join(" > ");
             names.add_category(
                 &path,
                 category.name(),
