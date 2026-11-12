@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { errorMessage, type Mailed, type SentMail } from "../api";
+import { useT } from "../i18n";
 import { Button } from "./Button";
 import { SendIcon } from "./icons/send";
 import { Notice } from "./Notice";
 
 interface MailPanelProps {
-  /** What is sent, as it reads in "Enviar {what} por e-mail": "o pedido", "o comprovante". */
+  /** What is sent, already translated, as it reads in "Send {what} by e-mail": "the order", "the receipt". */
   what: string;
   /** Sends it to the address, or to the one the register has when it is empty. */
   send: (to: string) => Promise<Mailed>;
@@ -19,6 +20,7 @@ interface MailPanelProps {
  * taken for sending, not sent because no mail server is set up, or why it was refused (no address anywhere, say).
  */
 export function MailPanel({ what, send, loadHistory, onClose }: MailPanelProps) {
+  const t = useT();
   const [sending, setSending] = useState(false);
   const [history, setHistory] = useState<SentMail[]>([]);
   // The record is a help, not a gate: when it cannot be read the panel still sends.
@@ -46,8 +48,8 @@ export function MailPanel({ what, send, loadHistory, onClose }: MailPanelProps) 
       refreshHistory();
       setResult(
         mailed.emailed
-          ? { message: `Enviado para ${mailed.to}.`, tone: "success" }
-          : { message: "Nada foi enviado: o servidor de e-mail não está configurado.", tone: "warning" },
+          ? { message: t("Sent to {to}.", { to: mailed.to }), tone: "success" }
+          : { message: t("Nothing was sent: the mail server is not set up."), tone: "warning" },
       );
     } catch (failure) {
       setResult({ message: errorMessage(failure), tone: "error" });
@@ -60,25 +62,22 @@ export function MailPanel({ what, send, loadHistory, onClose }: MailPanelProps) 
     <form className="settlements" onSubmit={handleSubmit}>
       {history.length > 0 && (
         <p className="muted">
-          Já enviado: {history.map((mail) => `${formatMoment(mail.sent_at_millis)} para ${mail.to}`).join("; ")}.
+          {t("Already sent: {sent}.", {
+            sent: history.map((mail) => t("{moment} to {to}", { moment: formatMoment(mail.sent_at_millis), to: mail.to })).join("; "),
+          })}
         </p>
       )}
       <label>
-        Enviar para
-        <input
-          name="to"
-          type="email"
-          autoComplete="off"
-          placeholder="Deixe vazio para usar o e-mail do cadastro"
-        />
+        {t("Send to")}
+        <input name="to" type="email" autoComplete="off" placeholder={t("Leave empty to use the e-mail on the record")} />
       </label>
       <Notice message={result?.message ?? null} tone={result?.tone} />
       <div className="form-actions">
         <Button type="submit" icon={SendIcon} pending={sending} disabled={done}>
-          Enviar {what} por e-mail
+          {t("Send {what} by e-mail", { what })}
         </Button>
         <Button type="button" variant="ghost" disabled={sending} onClick={onClose}>
-          Fechar
+          {t("Close")}
         </Button>
       </div>
     </form>
